@@ -24,7 +24,8 @@ message ChatRequestEvent  {
   string session_id = 2;
   map<string, string> metadata = 3;
   int32 timeout_ms = 4;
-  repeated ChatContentPart input_parts = 5;
+  string scope_id = 5;
+  repeated ChatContentPart input_parts = 6;
 }
 message ChatResponseEvent { string content = 1; string session_id = 2; }
 

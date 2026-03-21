@@ -69,11 +69,6 @@ public sealed class ChatQueryEndpointsTests
             {
                 RootNodeId = "actor-1",
             },
-            EnrichedSnapshot = new WorkflowActorGraphEnrichedSnapshot
-            {
-                Snapshot = new WorkflowActorSnapshot { ActorId = "actor-1", WorkflowName = "direct" },
-                Subgraph = new WorkflowActorGraphSubgraph { RootNodeId = "actor-1" },
-            },
         };
 
         var edgesResult = await ChatQueryEndpoints.ListActorGraphEdges(
@@ -91,26 +86,16 @@ public sealed class ChatQueryEndpointsTests
             direction: "invalid",
             edgeTypes: ["child", "child", "  "],
             ct: CancellationToken.None);
-        var enrichedResult = await ChatQueryEndpoints.GetActorGraphEnrichedSnapshot(
-            "actor-1",
-            service,
-            depth: 4,
-            take: 5,
-            direction: null,
-            edgeTypes: null,
-            ct: CancellationToken.None);
 
         (await ExecuteAsync(edgesResult)).Should().Contain("edge-1");
         (await ExecuteAsync(subgraphResult)).Should().Contain("actor-1");
-        (await ExecuteAsync(enrichedResult)).Should().Contain("direct");
         service.Calls.Should().ContainInOrder(
             "ListActorGraphEdges:actor-1:12:Outbound:child,sibling",
-            "GetActorGraphSubgraph:actor-1:3:8:Both:child",
-            "GetActorGraphEnrichedSnapshot:actor-1:4:5:Both:");
+            "GetActorGraphSubgraph:actor-1:3:8:Both:child");
     }
 
     [Fact]
-    public async Task TimelineAndEnrichedSnapshot_ShouldReturnResults()
+    public async Task Timeline_ShouldReturnResults()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService
         {
@@ -122,15 +107,11 @@ public sealed class ChatQueryEndpointsTests
                     StepId = "step-1",
                 },
             ],
-            EnrichedSnapshot = null,
         };
 
         var timelineResult = await ChatQueryEndpoints.ListActorTimeline("actor-1", service, 15, CancellationToken.None);
-        var enrichedResult = await ChatQueryEndpoints.GetActorGraphEnrichedSnapshot("actor-1", service, ct: CancellationToken.None);
 
         (await ExecuteAsync(timelineResult)).Should().Contain("step-1");
-        var enrichedHttp = await ExecuteWithContextAsync(enrichedResult);
-        enrichedHttp.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         service.Calls.Should().Contain("ListActorTimeline:actor-1:15");
     }
 
@@ -173,7 +154,6 @@ public sealed class ChatQueryEndpointsTests
         public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowActorGraphEdge> GraphEdges { get; init; } = [];
         public WorkflowActorGraphSubgraph GraphSubgraph { get; init; } = new();
-        public WorkflowActorGraphEnrichedSnapshot? EnrichedSnapshot { get; init; } = new();
         public List<string> Calls { get; } = [];
 
         public Task<IReadOnlyList<WorkflowAgentSummary>> ListAgentsAsync(CancellationToken ct = default)
@@ -228,12 +208,6 @@ public sealed class ChatQueryEndpointsTests
         {
             Calls.Add($"GetActorGraphSubgraph:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
             return Task.FromResult(GraphSubgraph);
-        }
-
-        public Task<WorkflowActorGraphEnrichedSnapshot?> GetActorGraphEnrichedSnapshotAsync(string actorId, int depth = 2, int take = 200, WorkflowActorGraphQueryOptions? options = null, CancellationToken ct = default)
-        {
-            Calls.Add($"GetActorGraphEnrichedSnapshot:{actorId}:{depth}:{take}:{options?.Direction}:{string.Join(",", options?.EdgeTypes ?? [])}");
-            return Task.FromResult(EnrichedSnapshot);
         }
     }
 }

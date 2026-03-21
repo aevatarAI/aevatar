@@ -61,6 +61,7 @@ fi
 
 if rg -n "EventEnvelope\.Metadata|StepCompletedEvent\.Metadata|CompletionMetadata|WorkflowRunCommandMetadataKeys\.SessionId|EventEnvelope\.CorrelationId" \
   docs src/Aevatar.Foundation.Core/README.md \
+  -g '!docs/architecture/archive/**' \
   -g '!docs/architecture/*blueprint*.md'
 then
   echo "Legacy documentation terminology is forbidden. Use typed envelope fields, Annotations, and current session sourcing."
@@ -76,8 +77,43 @@ bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
 
+if rg -n "ExecuteDeclaredQueryAsync|ExecuteReadModelQueryAsync" src; then
+  echo "Declared readmodel query execution is forbidden. Query must read persisted snapshots/documents only."
+  exit 1
+fi
+
+if rg -n "OnQuery<|ScriptQuerySemanticsSpec|QueryTypeUrls|QueryResultTypeUrls|ExecuteQueryAsync\(|GetReadModelSnapshotAsync\(" src/Aevatar.Scripting.*; then
+  echo "Scripting declared-query authoring/runtime contracts and runtime readmodel side-reads are forbidden on the production path."
+  exit 1
+fi
+
+if rg -n "ProjectReadModel\(" src test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
+  echo "Legacy event-driven scripting readmodel projection is forbidden. Use ProjectState(...) and BuildReadModel(...)."
+  exit 1
+fi
+
+if rg -n "project:\s*static|project:\s*\(" test/Aevatar.Scripting.Core.Tests test/Aevatar.Integration.Tests; then
+  echo "Legacy OnEvent(..., project: ...) scripting authoring is forbidden. Register ProjectState(...) explicitly."
+  exit 1
+fi
+
+if rg -n "IScriptBehaviorArtifactResolver|ScriptBehaviorArtifactRequest|IScriptReadModelMaterializationCompiler" src/Aevatar.Scripting.Projection; then
+  echo "Scripting projection must not resolve behavior artifacts or compile native materialization plans. Consume committed durable facts only."
+  exit 1
+fi
+
+if rg -n "IProjectionEventReducer|AddAIDefaultProjectionLayer|AddAllAIProjectionEventReducers|EnableWorkflowAIProjection" src; then
+  echo "Reducer-era projection abstractions and workflow AI projection toggles are forbidden on the production path."
+  exit 1
+fi
+
 if rg -n "WorkflowExecutionReadModelProjector|IWorkflowProjectionReadModelUpdater|WorkflowProjectionReadModelUpdater|WorkflowExecutionReportDocumentMetadataProvider|AddWorkflowExecutionProjectionReducer|AddWorkflowExecutionProjectionProjector|AddWorkflowExecutionProjectionExtensionsFromAssembly|WorkflowExecutionReportSnapshotMapper|WorkflowExecutionEventReducerBase|WorkflowExecutionProjectionMutations" src/workflow test/Aevatar.Workflow.Host.Api.Tests; then
   echo "Legacy workflow readmodel naming is forbidden. Use artifact-oriented workflow projection names."
+  exit 1
+fi
+
+if rg -n "IWorkflowExecutionReportArtifactSink|NoopWorkflowExecutionReportArtifactSink|FileSystemWorkflowExecutionReportArtifactSink|WorkflowExecutionReportArtifactOptions|WorkflowExecutionReportArtifacts" src test docs -g '!docs/architecture/archive/**'; then
+  echo "Legacy workflow report artifact export naming is forbidden. Use WorkflowRunReportExport terminology."
   exit 1
 fi
 
@@ -451,7 +487,6 @@ fi
 
 stateful_replay_contract_requirements=(
   "WorkflowGAgent:test/Aevatar.Integration.Tests/WorkflowGAgentCoverageTests.cs"
-  "ProjectionOwnershipCoordinatorGAgent:test/Aevatar.CQRS.Projection.Core.Tests/ProjectionOwnershipAndSessionHubTests.cs"
   "RoleGAgent:test/Aevatar.AI.Tests/RoleGAgentReplayContractTests.cs"
 )
 
@@ -642,15 +677,17 @@ if rg -n "SemaphoreSlim" src/workflow/Aevatar.Workflow.Projection/Orchestration/
   exit 1
 fi
 
-if rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
+if [ -f "src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs" ] && \
+  rg -n "Dictionary<|ConcurrentDictionary<" src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionSubscriptionRegistry.cs; then
   echo "ProjectionSubscriptionRegistry must not keep in-memory dictionary state."
   exit 1
 fi
 
 lifecycle_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionPort.cs"
-query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionProjectionQueryPort.cs"
+current_state_query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionCurrentStateQueryPort.cs"
+artifact_query_port="src/workflow/Aevatar.Workflow.Application.Abstractions/Projections/IWorkflowExecutionArtifactQueryPort.cs"
 
-if [ ! -f "${lifecycle_port}" ] || [ ! -f "${query_port}" ]; then
+if [ ! -f "${lifecycle_port}" ] || [ ! -f "${current_state_query_port}" ] || [ ! -f "${artifact_query_port}" ]; then
   echo "Workflow projection ports must be split into lifecycle/query contracts."
   exit 1
 fi
@@ -668,9 +705,24 @@ if ! rg -n "IWorkflowExecutionProjectionLease" "${lifecycle_port}" >/dev/null; t
 fi
 
 if rg -n "EnsureActorProjectionAsync|AttachLiveSinkAsync|DetachLiveSinkAsync|ReleaseActorProjectionAsync" \
-  "${query_port}"
+  "${current_state_query_port}" \
+  "${artifact_query_port}"
 then
   echo "Workflow projection query port must not include lifecycle operations."
+  exit 1
+fi
+
+if rg -n "ListActorTimelineAsync|GetActorGraphEdgesAsync|GetActorGraphSubgraphAsync" \
+  "${current_state_query_port}"
+then
+  echo "Workflow current-state query port must not include artifact queries."
+  exit 1
+fi
+
+if rg -n "GetActorSnapshotAsync|ListActorSnapshotsAsync|GetActorProjectionStateAsync" \
+  "${artifact_query_port}"
+then
+  echo "Workflow artifact query port must not include current-state queries."
   exit 1
 fi
 
@@ -780,7 +832,7 @@ fi
 
 projection_provider_store_files=(
   "src/Aevatar.CQRS.Projection.Providers.InMemory/Stores/InMemoryProjectionDocumentStore.cs"
-  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchProjectionDocumentStore.cs"
+  "src/Aevatar.CQRS.Projection.Providers.Elasticsearch/Stores/ElasticsearchOptimisticWriter.cs"
 )
 
 for provider_store_file in "${projection_provider_store_files[@]}"; do

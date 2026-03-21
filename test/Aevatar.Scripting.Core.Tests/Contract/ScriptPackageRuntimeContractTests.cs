@@ -14,7 +14,7 @@ namespace Aevatar.Scripting.Core.Tests.Contract;
 public sealed class ScriptPackageRuntimeContractTests
 {
     [Fact]
-    public async Task CompiledBehavior_ShouldSupportDispatchApplyProjectAndQuery()
+    public async Task CompiledBehavior_ShouldSupportDispatchApplyAndProject()
     {
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
@@ -39,11 +39,35 @@ public sealed class ScriptPackageRuntimeContractTests
                                     apply: static (state, evt, _) => new ScriptProfileState
                                     {
                                         CommandCount = (state?.CommandCount ?? 0) + 1,
+                                        ActorId = evt.Current?.ActorId ?? string.Empty,
+                                        PolicyId = evt.Current?.PolicyId ?? string.Empty,
                                         LastCommandId = evt.CommandId ?? string.Empty,
+                                        InputText = evt.Current?.InputText ?? string.Empty,
                                         NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
-                                    },
-                                    project: static (_, evt, _) => evt.Current)
-                                .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                                        Tags = { evt.Current == null ? global::System.Array.Empty<string>() : (global::System.Collections.Generic.IEnumerable<string>)evt.Current.Tags },
+                                    })
+                                .ProjectState(static (state, _) => state == null
+                                    ? new ScriptProfileReadModel()
+                                    : new ScriptProfileReadModel
+                                    {
+                                        HasValue = true,
+                                        ActorId = state.ActorId,
+                                        PolicyId = state.PolicyId,
+                                        LastCommandId = state.LastCommandId,
+                                        InputText = state.InputText,
+                                        NormalizedText = state.NormalizedText,
+                                        Search = new ScriptProfileSearchIndex
+                                        {
+                                            LookupKey = $"{state.ActorId}:{state.PolicyId}".ToLowerInvariant(),
+                                            SortKey = state.NormalizedText ?? string.Empty,
+                                        },
+                                        Refs = new ScriptProfileDocumentRef
+                                        {
+                                            ActorId = state.ActorId ?? string.Empty,
+                                            PolicyId = state.PolicyId ?? string.Empty,
+                                        },
+                                        Tags = { state.Tags },
+                                    });
                         }
 
                         private static Task HandleAsync(
@@ -180,9 +204,8 @@ public sealed class ScriptPackageRuntimeContractTests
                     fact.StateVersion,
                     fact.EventType,
                     fact.OccurredAtUnixTimeMs));
-            var readModel = behavior.ProjectReadModel(
+            var readModel = behavior.BuildReadModel(
                 state,
-                fact.DomainEventPayload!.Unpack<ScriptProfileUpdated>(),
                 new ScriptFactContext(
                     fact.ActorId,
                     fact.DefinitionActorId,
@@ -195,26 +218,10 @@ public sealed class ScriptPackageRuntimeContractTests
                     fact.StateVersion,
                     fact.EventType,
                     fact.OccurredAtUnixTimeMs));
-            var queryResult = await behavior.ExecuteQueryAsync(
-                new ScriptProfileQueryRequested { RequestId = "request-1" },
-                new ScriptTypedReadModelSnapshot(
-                    ActorId: "runtime-1",
-                    ScriptId: "script-contract",
-                    DefinitionActorId: "definition-1",
-                    Revision: "rev-1",
-                    ReadModelTypeUrl: Any.Pack(new ScriptProfileReadModel()).TypeUrl,
-                    ReadModel: readModel,
-                    StateVersion: 1,
-                    LastEventId: "evt-1",
-                    UpdatedAt: DateTimeOffset.UtcNow),
-                CancellationToken.None);
-
             state.Should().NotBeNull();
             state.Should().BeOfType<ScriptProfileState>().Which.CommandCount.Should().Be(1);
             readModel.Should().NotBeNull();
             readModel.Should().BeOfType<ScriptProfileReadModel>().Which.NormalizedText.Should().Be("HELLO");
-            queryResult.Should().NotBeNull();
-            queryResult.Should().BeOfType<ScriptProfileQueryResponded>().Which.Current.NormalizedText.Should().Be("HELLO");
         }
         finally
         {

@@ -1,11 +1,7 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
-using Aevatar.Scripting.Infrastructure.Compilation;
-using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -23,9 +19,6 @@ public sealed class ScriptReadModelProjectorNeutralityTests
         var dispatcher = new InMemoryProjectionDocumentStore<ScriptReadModelDocument>();
         var projector = new ScriptReadModelProjector(
             dispatcher,
-            new StaticUppercaseDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec(),
             new FixedProjectionClock(DateTimeOffset.UtcNow));
         var readModel = new SimpleTextReadModel
         {
@@ -54,12 +47,13 @@ public sealed class ScriptReadModelProjectorNeutralityTests
                 Current = readModel.Clone(),
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
-        var context = new ScriptExecutionProjectionContext
+        var context = new ScriptExecutionMaterializationContext
         {
-            ProjectionId = "runtime-1:read-model",
             RootActorId = "runtime-1",
+            ProjectionKind = "script-execution-read-model",
         };
 
         await projector.ProjectAsync(
@@ -77,31 +71,5 @@ public sealed class ScriptReadModelProjectorNeutralityTests
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {
         public DateTimeOffset UtcNow => now;
-    }
-
-    private sealed class StaticUppercaseDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: "rev-1",
-                SourceText: ScriptSources.UppercaseBehavior,
-                SourceHash: ScriptSources.UppercaseBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.UppercaseBehavior),
-                StateTypeUrl: Any.Pack(new SimpleTextState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new SimpleTextReadModel()).TypeUrl,
-                ReadModelSchemaVersion: string.Empty,
-                ReadModelSchemaHash: string.Empty,
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: SimpleTextState.Descriptor.FullName,
-                ReadModelDescriptorFullName: SimpleTextReadModel.Descriptor.FullName));
-        }
     }
 }

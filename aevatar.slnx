@@ -16,6 +16,7 @@
     <File Path="docs\PROJECT_SPLIT_STRATEGY.md" />
     <File Path="docs\STREAM_FORWARD_ARCHITECTURE.md" />
   </Folder>
+  <Folder Name="/docs/00-overview/" />
   <Folder Name="/resources/">
     <File Path="Directory.Packages.props" />
     <File Path="Directory.Build.props" />
@@ -23,10 +24,8 @@
   <Folder Name="/src/">
     <Project Path="src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
-    <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.MassTransit.csproj" />
+    <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
-    <Project Path="src/Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit/Aevatar.Foundation.Runtime.Streaming.Implementations.MassTransit.csproj" />
-    <Project Path="src/Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka/Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
@@ -45,7 +44,6 @@
     <Project Path="src\Aevatar.CQRS.Projection.Providers.InMemory\Aevatar.CQRS.Projection.Providers.InMemory.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Providers.Neo4j\Aevatar.CQRS.Projection.Providers.Neo4j.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
-    <Project Path="src\Aevatar.CQRS.Projection.StateMirror\Aevatar.CQRS.Projection.StateMirror.csproj" />
     <Project Path="src\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <Project Path="src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
     <Project Path="src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
@@ -79,6 +77,7 @@
     <Project Path="src/platform/Aevatar.GAgentService.Governance.Projection/Aevatar.GAgentService.Governance.Projection.csproj" />
   </Folder>
   <Folder Name="/src/workflow/">
+    <File Path="src\workflow\README.md" />
     <Project Path="src/workflow/Aevatar.Workflow.Abstractions/Aevatar.Workflow.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application.Abstractions/Aevatar.Workflow.Application.Abstractions.csproj" />
     <Project Path="src/workflow/Aevatar.Workflow.Application/Aevatar.Workflow.Application.csproj" />
@@ -90,11 +89,12 @@
     <Project Path="src\workflow\Aevatar.Workflow.Projection\Aevatar.Workflow.Projection.csproj" />
   </Folder>
   <Folder Name="/src/workflow/extensions/">
-    <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.AIProjection/Aevatar.Workflow.Extensions.AIProjection.csproj" />
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Hosting/Aevatar.Workflow.Extensions.Hosting.csproj" />
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Maker/Aevatar.Workflow.Extensions.Maker.csproj" />
+    <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/Aevatar.Workflow.Extensions.Bridge.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Aevatar.App.Tests/Aevatar.App.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
@@ -113,6 +113,7 @@
     <Project Path="test\Aevatar.Workflow.Extensions.Maker.Tests\Aevatar.Workflow.Extensions.Maker.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Sdk.Tests\Aevatar.Workflow.Sdk.Tests.csproj" />
+    <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />

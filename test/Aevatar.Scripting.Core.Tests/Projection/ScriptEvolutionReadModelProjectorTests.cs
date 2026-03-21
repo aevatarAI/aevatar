@@ -22,14 +22,11 @@ public class ScriptEvolutionReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        var context = new ScriptEvolutionMaterializationContext
         {
-            ProjectionId = "projection-evolution-1",
             RootActorId = "evolution-manager-1",
-            ProposalId = "proposal-1",
+            ProjectionKind = "script-evolution-session",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         await projector.ProjectAsync(
             context,
@@ -136,14 +133,11 @@ public class ScriptEvolutionReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        var context = new ScriptEvolutionMaterializationContext
         {
-            ProjectionId = "projection-evolution-2",
             RootActorId = "evolution-manager-2",
-            ProposalId = "proposal-2",
+            ProjectionKind = "script-evolution-session",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         await projector.ProjectAsync(
             context,
@@ -240,14 +234,11 @@ public class ScriptEvolutionReadModelProjectorTests
             dispatcher,
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
 
-        var context = new ScriptEvolutionSessionProjectionContext
+        var context = new ScriptEvolutionMaterializationContext
         {
-            ProjectionId = "projection-evolution-3",
             RootActorId = "evolution-manager-3",
-            ProposalId = "proposal-3",
+            ProjectionKind = "script-evolution-session",
         };
-
-        await projector.InitializeAsync(context, CancellationToken.None);
 
         await projector.ProjectAsync(
             context,

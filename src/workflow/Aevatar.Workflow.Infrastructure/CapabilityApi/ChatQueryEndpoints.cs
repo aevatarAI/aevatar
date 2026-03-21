@@ -38,9 +38,6 @@ public static class ChatQueryEndpoints
         group.MapGet("/actors/{actorId}/graph-subgraph", GetActorGraphSubgraph)
             .Produces(StatusCodes.Status200OK);
 
-        group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnrichedSnapshot)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status404NotFound);
     }
 
     internal static async Task<IResult> ListAgents(
@@ -112,20 +109,6 @@ public static class ChatQueryEndpoints
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
         var subgraph = await queryService.GetActorGraphSubgraphAsync(actorId, depth, take, graphOptions, ct);
         return Results.Ok(MapGraphSubgraph(subgraph));
-    }
-
-    internal static async Task<IResult> GetActorGraphEnrichedSnapshot(
-        string actorId,
-        IWorkflowExecutionQueryApplicationService queryService,
-        int depth = 2,
-        int take = 200,
-        string? direction = null,
-        string[]? edgeTypes = null,
-        CancellationToken ct = default)
-    {
-        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
-        var graphEnriched = await queryService.GetActorGraphEnrichedSnapshotAsync(actorId, depth, take, graphOptions, ct);
-        return graphEnriched == null ? Results.NotFound() : Results.Ok(MapGraphEnrichedSnapshot(graphEnriched));
     }
 
     private static WorkflowActorGraphQueryOptions BuildGraphQueryOptions(
@@ -211,10 +194,6 @@ public static class ChatQueryEndpoints
             subgraph.Nodes.Select(MapGraphNode).ToList(),
             subgraph.Edges.Select(MapGraphEdge).ToList());
 
-    private static WorkflowActorGraphEnrichedSnapshotHttpResponse MapGraphEnrichedSnapshot(WorkflowActorGraphEnrichedSnapshot snapshot) =>
-        new(
-            MapSnapshot(snapshot.Snapshot ?? new WorkflowActorSnapshot()),
-            MapGraphSubgraph(snapshot.Subgraph ?? new WorkflowActorGraphSubgraph()));
 }
 
 public sealed record WorkflowActorSnapshotHttpResponse(
@@ -261,7 +240,3 @@ public sealed record WorkflowActorGraphSubgraphHttpResponse(
     string RootNodeId,
     List<WorkflowActorGraphNodeHttpResponse> Nodes,
     List<WorkflowActorGraphEdgeHttpResponse> Edges);
-
-public sealed record WorkflowActorGraphEnrichedSnapshotHttpResponse(
-    WorkflowActorSnapshotHttpResponse Snapshot,
-    WorkflowActorGraphSubgraphHttpResponse Subgraph);

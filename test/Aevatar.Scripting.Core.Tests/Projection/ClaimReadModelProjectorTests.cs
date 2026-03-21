@@ -2,11 +2,7 @@ using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
-using Aevatar.Scripting.Infrastructure.Compilation;
-using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -61,6 +57,7 @@ public sealed class ClaimReadModelProjectorTests
                 },
             }),
             ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+            ReadModelPayload = Any.Pack(readModel),
             StateVersion = 1,
         };
         var state = ScriptCommittedEnvelopeFactory.CreateState(
@@ -131,46 +128,17 @@ public sealed class ClaimReadModelProjectorTests
         InMemoryProjectionDocumentStore<ScriptReadModelDocument> dispatcher) =>
         new(
             dispatcher,
-            new StaticClaimDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ProtobufMessageCodec(),
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 14, 0, 0, 0, TimeSpan.Zero)));
 
-    private static ScriptExecutionProjectionContext CreateContext(string rootActorId) =>
+    private static ScriptExecutionMaterializationContext CreateContext(string rootActorId) =>
         new()
         {
-            ProjectionId = rootActorId + ":projection",
             RootActorId = rootActorId,
+            ProjectionKind = "script-execution-read-model",
         };
 
     private sealed class FixedProjectionClock(DateTimeOffset now) : IProjectionClock
     {
         public DateTimeOffset UtcNow => now;
-    }
-
-    private sealed class StaticClaimDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-claim-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "claim_orchestrator",
-                Revision: "rev-claim-1",
-                SourceText: ClaimScriptSources.DecisionBehavior,
-                SourceHash: ClaimScriptSources.DecisionBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ClaimScriptSources.DecisionBehavior),
-                StateTypeUrl: Any.Pack(new ClaimState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new ClaimReadModel()).TypeUrl,
-                ReadModelSchemaVersion: "3",
-                ReadModelSchemaHash: "claim-schema",
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: ClaimState.Descriptor.FullName,
-                ReadModelDescriptorFullName: ClaimReadModel.Descriptor.FullName));
-        }
     }
 }

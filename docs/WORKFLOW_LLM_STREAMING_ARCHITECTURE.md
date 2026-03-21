@@ -40,7 +40,7 @@
 | Host | `WorkflowCapabilityEndpoints`、`ChatSseResponseWriter`、`ChatWebSocketRunCoordinator` | 协议适配（HTTP/SSE/WS），不编排业务 |
 | Application | `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>`、`WorkflowRunCommandTargetResolver`、`WorkflowRunCommandTargetBinder` | 命令目标解析、dispatch 编排、输出帧流化 |
 | Domain/AI | `WorkflowGAgent`、`LLMCallModule`、`RoleGAgent`、`ChatRuntime` | 触发 LLM 调用、发布文本/工具/媒体事件 |
-| Projection | `WorkflowExecutionReadModelProjector`、`WorkflowExecutionAGUIEventProjector` | 读模型更新 + 实时事件分发 |
+| Projection | `WorkflowExecutionCurrentStateProjector`、`WorkflowRunInsightReportArtifactProjector`、`WorkflowRunTimelineArtifactProjector`、`WorkflowRunGraphArtifactProjector`、`WorkflowExecutionAGUIEventProjector` | committed observation 到 current-state + durable artifacts 的物化 + 实时事件分发 |
 | Streaming | `ProjectionSessionEventHub<WorkflowRunEvent>`、`EventChannel<WorkflowRunEvent>` | 会话事件总线与 live sink 通道 |
 
 关键代码锚点：
@@ -70,7 +70,10 @@ flowchart TB
     DSP --> ACT["WorkflowRunGAgent / RoleGAgent"]
     ACT --> EVT["Actor Envelope Stream"]
     EVT --> COOR["ProjectionCoordinator"]
-    COOR --> RM["WorkflowExecutionReadModelProjector"]
+    COOR --> RM1["WorkflowExecutionCurrentStateProjector"]
+    COOR --> RM2["WorkflowRunInsightReportArtifactProjector"]
+    COOR --> RM3["WorkflowRunTimelineArtifactProjector"]
+    COOR --> RM4["WorkflowRunGraphArtifactProjector"]
     COOR --> AGP["WorkflowExecutionAGUIEventProjector"]
     AGP --> MAP["EventEnvelopeToAGUIEventMapper"]
     MAP --> HUB["ProjectionSessionEventHub\nworkflow-run:{actorId}:{commandId}"]
@@ -230,10 +233,16 @@ POST /api/workflows/signal
 flowchart LR
     EV["EventEnvelope"] --> DIS["ProjectionDispatcher"]
     DIS --> CO["ProjectionCoordinator"]
-    CO --> P1["WorkflowExecutionReadModelProjector"]
-    CO --> P2["WorkflowExecutionAGUIEventProjector"]
+    CO --> P1["WorkflowExecutionCurrentStateProjector"]
+    CO --> P2["WorkflowRunInsightReportArtifactProjector"]
+    CO --> P3["WorkflowRunTimelineArtifactProjector"]
+    CO --> P4["WorkflowRunGraphArtifactProjector"]
+    CO --> P5["WorkflowExecutionAGUIEventProjector"]
     P1 --> STORE["IProjectionStoreDispatcher"]
-    P2 --> HUB["ProjectionSessionEventHub"]
+    P2 --> STORE
+    P3 --> STORE
+    P4 --> STORE
+    P5 --> HUB["ProjectionSessionEventHub"]
     CO --> AGG["ProjectionDispatchAggregateException?"]
     AGG --> REP["WorkflowProjectionDispatchFailureReporter"]
     REP --> HUB
@@ -243,7 +252,7 @@ flowchart LR
 
 1. `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:19`
 2. `src/Aevatar.CQRS.Projection.Core/Orchestration/ProjectionCoordinator.cs:40`
-3. `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionReadModelProjector.cs:60`
+3. `src/workflow/Aevatar.Workflow.Projection/Projectors/WorkflowExecutionCurrentStateProjector.cs`
 4. `src/workflow/Aevatar.Workflow.Presentation.AGUIAdapter/WorkflowExecutionAGUIEventProjector.cs:45`
 5. `src/workflow/Aevatar.Workflow.Projection/Orchestration/WorkflowProjectionDispatchFailureReporter.cs:38`
 

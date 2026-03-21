@@ -4,8 +4,10 @@ using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Application.Runtime;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
+using Aevatar.Scripting.Infrastructure.Compilation;
 using Aevatar.Scripting.Infrastructure.Serialization;
 using FluentAssertions;
 using Google.Protobuf;
@@ -26,9 +28,11 @@ public sealed class ScriptBehaviorDispatcherTests
     {
         Action act = parameterName switch
         {
-            "artifactResolver" => () => _ = new ScriptBehaviorDispatcher(null!, new ProtobufMessageCodec()),
+            "artifactResolver" => () => _ = new ScriptBehaviorDispatcher(null!, new ScriptReadModelMaterializationCompiler(), new ScriptNativeProjectionBuilder(), new ProtobufMessageCodec()),
             "codec" => () => _ = new ScriptBehaviorDispatcher(
                 new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())),
+                new ScriptReadModelMaterializationCompiler(),
+                new ScriptNativeProjectionBuilder(),
                 null!),
             _ => throw new InvalidOperationException("Unexpected parameter name."),
         };
@@ -40,10 +44,9 @@ public sealed class ScriptBehaviorDispatcherTests
     public async Task DispatchAsync_ShouldEmitCommittedFactsWithResolvedContract()
     {
         var behavior = new UppercaseBehavior();
-        var dispatcher = new ScriptBehaviorDispatcher(
+        var dispatcher = CreateDispatcher(
             new StaticArtifactResolver(
-                CreateArtifact(behavior)),
-            new ProtobufMessageCodec());
+                CreateArtifact(behavior)));
         var envelope = new EventEnvelope
         {
             Id = "command-1",
@@ -99,14 +102,81 @@ public sealed class ScriptBehaviorDispatcherTests
         fact.ReadModelTypeUrl.Should().Be(SimpleTextReadModelTypeUrl);
         fact.DomainEventPayload.Should().NotBeNull();
         fact.DomainEventPayload.Unpack<SimpleTextEvent>().Current.Value.Should().Be("HELLO");
+        fact.ReadModelPayload.Should().NotBeNull();
+        fact.ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("HELLO");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldEmitNativeMaterializations_WhenSchemaIsDeclared()
+    {
+        var dispatcher = CreateDispatcher(
+            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())));
+        var envelope = new EventEnvelope
+        {
+            Id = "profile-command-1",
+            Payload = Any.Pack(new RunScriptRequestedEvent
+            {
+                RunId = "profile-run-1",
+                DefinitionActorId = "definition-structured-1",
+                ScriptRevision = "rev-structured-1",
+                RequestedEventType = ScriptSources.StructuredProfileCommandTypeUrl,
+                InputPayload = Any.Pack(new ScriptProfileUpdateCommand
+                {
+                    CommandId = "profile-command-1",
+                    ActorId = "actor-1",
+                    PolicyId = "policy-1",
+                    InputText = " hello ",
+                    Tags = { "gold", "vip" },
+                }),
+                CommandId = "profile-command-1",
+                CorrelationId = "profile-correlation-1",
+            }),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "profile-correlation-1",
+            },
+        };
+
+        var facts = await dispatcher.DispatchAsync(
+            new ScriptBehaviorDispatchRequest(
+                ActorId: "profile-runtime-1",
+                DefinitionActorId: "definition-structured-1",
+                ScriptId: "script-profile-1",
+                Revision: "rev-structured-1",
+                SourceText: ScriptSources.StructuredProfileBehavior,
+                SourceHash: ScriptSources.StructuredProfileBehaviorHash,
+                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
+                StateTypeUrl: ScriptSources.StructuredProfileStateTypeUrl,
+                ReadModelTypeUrl: ScriptSources.StructuredProfileReadModelTypeUrl,
+                CurrentStateRoot: null,
+                CurrentStateVersion: 4,
+                Envelope: envelope,
+                Capabilities: new NoOpCapabilities())
+            {
+                ReadModelSchemaVersion = "3",
+                ReadModelSchemaHash = "structured-schema",
+            },
+            CancellationToken.None);
+
+        facts.Should().ContainSingle();
+        var fact = facts[0];
+        fact.NativeDocument.Should().NotBeNull();
+        fact.NativeGraph.Should().NotBeNull();
+        fact.NativeDocument!.SchemaId.Should().Be("script_profile");
+        fact.NativeDocument.FieldsValue.Fields["actor_id"].StringValue.Should().Be("actor-1");
+        fact.NativeGraph!.GraphScope.Should().Be("script-native-script_profile");
+        fact.NativeGraph.NodeEntries.Should().Contain(x => x.NodeId == "script:script_profile:profile-runtime-1");
+        fact.NativeGraph.EdgeEntries.Should().Contain(x =>
+            x.FromNodeId == "script:script_profile:profile-runtime-1" &&
+            x.EdgeType == "rel_policy");
     }
 
     [Fact]
     public async Task DispatchAsync_ShouldAcceptDirectCommandEnvelope_AndUseEnvelopeFallbackIdentifiers()
     {
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())));
 
         var facts = await dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -151,10 +221,9 @@ public sealed class ScriptBehaviorDispatcherTests
     public async Task DispatchAsync_ShouldRejectRun_WhenCommandPayloadTypeIsNotDeclared()
     {
         var behavior = new UppercaseBehavior();
-        var dispatcher = new ScriptBehaviorDispatcher(
+        var dispatcher = CreateDispatcher(
             new StaticArtifactResolver(
-                CreateArtifact(behavior)),
-            new ProtobufMessageCodec());
+                CreateArtifact(behavior)));
 
         var act = () => dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -196,10 +265,9 @@ public sealed class ScriptBehaviorDispatcherTests
     public async Task DispatchAsync_ShouldReject_WhenBehaviorEmitsUndeclaredDomainEventType()
     {
         var behavior = new InvalidEventBehavior();
-        var dispatcher = new ScriptBehaviorDispatcher(
+        var dispatcher = CreateDispatcher(
             new StaticArtifactResolver(
-                CreateArtifact(behavior)),
-            new ProtobufMessageCodec());
+                CreateArtifact(behavior)));
 
         var act = () => dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -238,12 +306,18 @@ public sealed class ScriptBehaviorDispatcherTests
             .WithMessage("*undeclared domain event type*" + "type.googleapis.com/aevatar.scripting.tests.SimpleTextUnexpectedEvent*");
     }
 
+    private static ScriptBehaviorDispatcher CreateDispatcher(IScriptBehaviorArtifactResolver artifactResolver) =>
+        new(
+            artifactResolver,
+            new ScriptReadModelMaterializationCompiler(),
+            new ScriptNativeProjectionBuilder(),
+            new ProtobufMessageCodec());
+
     [Fact]
     public async Task DispatchAsync_ShouldRejectDirectEnvelope_WhenPayloadTypeIsUndeclared()
     {
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())));
 
         var act = () => dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -277,9 +351,8 @@ public sealed class ScriptBehaviorDispatcherTests
     [Fact]
     public async Task DispatchAsync_ShouldReturnEmpty_WhenEnvelopePayloadIsMissing()
     {
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new UppercaseBehavior())));
 
         var facts = await dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -308,9 +381,8 @@ public sealed class ScriptBehaviorDispatcherTests
     [Fact]
     public async Task DispatchAsync_ShouldAcceptRunEnvelope_WhenSignalPayloadIsDeclared()
     {
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(new SignalEchoBehavior())),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new SignalEchoBehavior())));
 
         var facts = await dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -352,9 +424,8 @@ public sealed class ScriptBehaviorDispatcherTests
     [Fact]
     public async Task DispatchAsync_ShouldAcceptDirectSignalEnvelope_WhenSignalPayloadIsDeclared()
     {
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(new SignalEchoBehavior())),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new SignalEchoBehavior())));
 
         var facts = await dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -387,12 +458,52 @@ public sealed class ScriptBehaviorDispatcherTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldMaterializeEachFactFromItsOwnPostEventState()
+    {
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(new SequentialProjectionBehavior())));
+
+        var facts = await dispatcher.DispatchAsync(
+            new ScriptBehaviorDispatchRequest(
+                ActorId: "runtime-sequential",
+                DefinitionActorId: "definition-1",
+                ScriptId: "script-1",
+                Revision: "rev-1",
+                SourceText: "ignored",
+                SourceHash: "hash-1",
+                ScriptPackage: new ScriptPackageSpec(),
+                StateTypeUrl: string.Empty,
+                ReadModelTypeUrl: string.Empty,
+                CurrentStateRoot: null,
+                CurrentStateVersion: 10,
+                Envelope: new EventEnvelope
+                {
+                    Id = "command-sequential",
+                    Payload = Any.Pack(new SimpleTextCommand
+                    {
+                        CommandId = "command-sequential",
+                        Value = "hello",
+                    }),
+                    Route = EnvelopeRouteSemantics.CreateTopologyPublication("test", TopologyAudience.Self),
+                },
+                Capabilities: new NoOpCapabilities()),
+            CancellationToken.None);
+
+        facts.Should().HaveCount(2);
+        facts[0].EventSequence.Should().Be(1);
+        facts[0].StateVersion.Should().Be(11);
+        facts[0].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("FIRST");
+        facts[1].EventSequence.Should().Be(2);
+        facts[1].StateVersion.Should().Be(12);
+        facts[1].ReadModelPayload.Unpack<SimpleTextReadModel>().Value.Should().Be("SECOND");
+    }
+
+    [Fact]
     public async Task DispatchAsync_ShouldReturnEmpty_WhenBehaviorReturnsOnlyNullDomainEvents()
     {
         var behavior = new NullEventBehavior();
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(behavior)),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(behavior)));
 
         var facts = await dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -435,9 +546,8 @@ public sealed class ScriptBehaviorDispatcherTests
     public async Task DispatchAsync_ShouldDisposeSyncBehavior_WhenDispatchCompletes()
     {
         var behavior = new DisposableBehavior();
-        var dispatcher = new ScriptBehaviorDispatcher(
-            new StaticArtifactResolver(CreateArtifact(behavior)),
-            new ProtobufMessageCodec());
+        var dispatcher = CreateDispatcher(
+            new StaticArtifactResolver(CreateArtifact(behavior)));
 
         var facts = await dispatcher.DispatchAsync(
             new ScriptBehaviorDispatchRequest(
@@ -700,9 +810,14 @@ public sealed class ScriptBehaviorDispatcherTests
             builder
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
 
         private static Task HandleAsync(
@@ -744,9 +859,14 @@ public sealed class ScriptBehaviorDispatcherTests
             builder
                 .OnCommand<SimpleTextCommand>(HandleAsync)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
 
         private static Task HandleAsync(
@@ -779,9 +899,14 @@ public sealed class ScriptBehaviorDispatcherTests
             builder
                 .OnSignal<SimpleTextSignal>(HandleSignalAsync)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
 
         private static Task HandleSignalAsync(
@@ -816,6 +941,50 @@ public sealed class ScriptBehaviorDispatcherTests
         }
     }
 
+    private sealed class SequentialProjectionBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
+    {
+        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
+        {
+            builder
+                .OnCommand<SimpleTextCommand>(HandleAsync)
+                .OnEvent<SimpleTextEvent>(
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => new SimpleTextReadModel
+                {
+                    HasValue = !string.IsNullOrWhiteSpace(state?.Value),
+                    Value = state?.Value ?? string.Empty,
+                });
+        }
+
+        private static Task HandleAsync(
+            SimpleTextCommand inbound,
+            ScriptCommandContext<SimpleTextState> context,
+            CancellationToken ct)
+        {
+            _ = inbound;
+            ct.ThrowIfCancellationRequested();
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = context.CommandId,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "FIRST",
+                },
+            });
+            context.Emit(new SimpleTextEvent
+            {
+                CommandId = context.CommandId,
+                Current = new SimpleTextReadModel
+                {
+                    HasValue = true,
+                    Value = "SECOND",
+                },
+            });
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class NullEventBehavior : IScriptBehaviorBridge, IAsyncDisposable
     {
         public bool DisposeAsyncCalled { get; private set; }
@@ -841,10 +1010,9 @@ public sealed class ScriptBehaviorDispatcherTests
             return null;
         }
 
-        public IMessage? ProjectReadModel(IMessage? currentState, IMessage domainEvent, ScriptFactContext context)
+        public IMessage? BuildReadModel(IMessage? currentState, ScriptFactContext context)
         {
             _ = currentState;
-            _ = domainEvent;
             _ = context;
             return null;
         }
@@ -889,10 +1057,9 @@ public sealed class ScriptBehaviorDispatcherTests
             return null;
         }
 
-        public IMessage? ProjectReadModel(IMessage? currentState, IMessage domainEvent, ScriptFactContext context)
+        public IMessage? BuildReadModel(IMessage? currentState, ScriptFactContext context)
         {
             _ = currentState;
-            _ = domainEvent;
             _ = context;
             return null;
         }

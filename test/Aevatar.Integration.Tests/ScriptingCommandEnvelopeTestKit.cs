@@ -21,9 +21,8 @@ internal static class ScriptingCommandEnvelopeTestKit
                 builder
                     .OnCommand<TextNormalizationRequested>(HandleAsync)
                     .OnEvent<TextNormalizationCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static Task HandleAsync(

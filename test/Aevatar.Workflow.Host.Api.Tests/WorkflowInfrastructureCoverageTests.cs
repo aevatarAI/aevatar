@@ -31,7 +31,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton<IWorkflowExecutionReportArtifactSink, FakeReportSink>();
+        services.AddSingleton<IWorkflowRunReportExportPort, FakeReportExporter>();
 
         services.AddWorkflowInfrastructure(options =>
         {
@@ -40,12 +40,12 @@ public sealed class WorkflowInfrastructureCoverageTests
         });
 
         using var provider = services.BuildServiceProvider();
-        var options = provider.GetRequiredService<IOptions<WorkflowExecutionReportArtifactOptions>>().Value;
+        var options = provider.GetRequiredService<IOptions<WorkflowRunReportExportOptions>>().Value;
 
         options.Enabled.Should().BeFalse();
         options.OutputDirectory.Should().Be("/tmp/workflow-reports");
-        provider.GetRequiredService<IWorkflowExecutionReportArtifactSink>()
-            .Should().BeOfType<FileSystemWorkflowExecutionReportArtifactSink>();
+        provider.GetRequiredService<IWorkflowRunReportExportPort>()
+            .Should().BeOfType<FileSystemWorkflowRunReportExporter>();
         services.Should().Contain(x =>
             x.ServiceType == typeof(IWorkflowRunActorPort) &&
             x.ImplementationType == typeof(WorkflowRunActorPort));
@@ -58,7 +58,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     public void AddWorkflowDefinitionFileSource_ShouldRegisterLoaderAndHostedService()
     {
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkflowDefinitionRegistry>(new WorkflowDefinitionRegistry());
+        services.AddSingleton<IWorkflowDefinitionCatalog>(new WorkflowDefinitionCatalog());
 
         services.AddWorkflowDefinitionFileSource(options =>
         {
@@ -125,8 +125,8 @@ public sealed class WorkflowInfrastructureCoverageTests
             var options = new WorkflowDefinitionFileSourceOptions();
             options.WorkflowDirectories.Add(tempDir);
 
-            var registry = new WorkflowDefinitionRegistry();
-            registry.Register("direct", WorkflowDefinitionRegistry.BuiltInDirectYaml);
+            var registry = new WorkflowDefinitionCatalog();
+            registry.Register("direct", WorkflowDefinitionCatalog.BuiltInDirectYaml);
             registry.Register("repo_install", File.ReadAllText(yamlPath));
 
             var port = new FileBackedWorkflowCatalogPort(registry, Options.Create(options));
@@ -162,7 +162,7 @@ public sealed class WorkflowInfrastructureCoverageTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["WorkflowExecutionProjection:Enabled"] = "true",
-                ["WorkflowExecutionReportArtifacts:Enabled"] = "true",
+                ["WorkflowRunReportExport:Enabled"] = "true",
             })
             .Build();
 
@@ -173,8 +173,8 @@ public sealed class WorkflowInfrastructureCoverageTests
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowExecutionQueryApplicationService));
         services.Should().Contain(x => x.ServiceType == typeof(IWorkflowActorBindingReader));
         services.Should().Contain(x =>
-            x.ServiceType == typeof(IWorkflowExecutionReportArtifactSink) &&
-            x.ImplementationType == typeof(FileSystemWorkflowExecutionReportArtifactSink));
+            x.ServiceType == typeof(IWorkflowRunReportExportPort) &&
+            x.ImplementationType == typeof(FileSystemWorkflowRunReportExporter));
         services.Should().Contain(x =>
             x.ServiceType == typeof(IHostedService) &&
             x.ImplementationType == typeof(WorkflowDefinitionBootstrapHostedService));
@@ -199,7 +199,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     [Fact]
     public async Task RegistryWorkflowDefinitionResolver_ShouldTrimLookup_AndReturnNullForBlank()
     {
-        var registry = new WorkflowDefinitionRegistry();
+        var registry = new WorkflowDefinitionCatalog();
         registry.Register("direct", "name: direct");
         var resolver = new RegistryWorkflowDefinitionResolver(registry);
 
@@ -210,7 +210,7 @@ public sealed class WorkflowInfrastructureCoverageTests
     [Fact]
     public async Task RegistryWorkflowDefinitionResolver_ShouldHonorCancellation()
     {
-        var resolver = new RegistryWorkflowDefinitionResolver(new WorkflowDefinitionRegistry());
+        var resolver = new RegistryWorkflowDefinitionResolver(new WorkflowDefinitionCatalog());
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -220,33 +220,33 @@ public sealed class WorkflowInfrastructureCoverageTests
     }
 
     [Fact]
-    public async Task FileSystemWorkflowExecutionReportArtifactSink_ShouldSkipWhenDisabled_AndWriteToConfiguredDirectory()
+    public async Task FileSystemWorkflowRunReportExporter_ShouldSkipWhenDisabled_AndWriteToConfiguredDirectory()
     {
         var disabledDir = Path.Combine(Path.GetTempPath(), "wf-report-disabled-" + Guid.NewGuid().ToString("N"));
         var enabledDir = Path.Combine(Path.GetTempPath(), "wf-report-enabled-" + Guid.NewGuid().ToString("N"));
 
         try
         {
-            var disabledSink = new FileSystemWorkflowExecutionReportArtifactSink(
-                Options.Create(new WorkflowExecutionReportArtifactOptions
+            var disabledExporter = new FileSystemWorkflowRunReportExporter(
+                Options.Create(new WorkflowRunReportExportOptions
                 {
                     Enabled = false,
                     OutputDirectory = disabledDir,
                 }),
-                NullLogger<FileSystemWorkflowExecutionReportArtifactSink>.Instance);
+                NullLogger<FileSystemWorkflowRunReportExporter>.Instance);
 
-            await disabledSink.PersistAsync(BuildReport(), CancellationToken.None);
+            await disabledExporter.ExportAsync(BuildReport(), CancellationToken.None);
             Directory.Exists(disabledDir).Should().BeFalse();
 
-            var enabledSink = new FileSystemWorkflowExecutionReportArtifactSink(
-                Options.Create(new WorkflowExecutionReportArtifactOptions
+            var enabledExporter = new FileSystemWorkflowRunReportExporter(
+                Options.Create(new WorkflowRunReportExportOptions
                 {
                     Enabled = true,
                     OutputDirectory = enabledDir,
                 }),
-                NullLogger<FileSystemWorkflowExecutionReportArtifactSink>.Instance);
+                NullLogger<FileSystemWorkflowRunReportExporter>.Instance);
 
-            await enabledSink.PersistAsync(BuildReport(), CancellationToken.None);
+            await enabledExporter.ExportAsync(BuildReport(), CancellationToken.None);
 
             Directory.Exists(enabledDir).Should().BeTrue();
             Directory.EnumerateFiles(enabledDir, "*.json").Should().ContainSingle();
@@ -271,7 +271,7 @@ public sealed class WorkflowInfrastructureCoverageTests
         try
         {
             File.WriteAllText(Path.Combine(tempDir, "review.yaml"), "name: review");
-            var registry = new WorkflowDefinitionRegistry();
+            var registry = new WorkflowDefinitionCatalog();
             var options = new WorkflowDefinitionFileSourceOptions
             {
                 DuplicatePolicy = WorkflowDefinitionDuplicatePolicy.Override,
@@ -299,9 +299,9 @@ public sealed class WorkflowInfrastructureCoverageTests
         }
     }
 
-    private sealed class FakeReportSink : IWorkflowExecutionReportArtifactSink
+    private sealed class FakeReportExporter : IWorkflowRunReportExportPort
     {
-        public Task PersistAsync(WorkflowRunReport report, CancellationToken ct = default)
+        public Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
         {
             _ = report;
             ct.ThrowIfCancellationRequested();

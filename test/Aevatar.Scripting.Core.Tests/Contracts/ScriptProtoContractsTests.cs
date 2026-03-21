@@ -92,17 +92,7 @@ public class ScriptProtoContractsTests
             ReadModelSchemaHash = "schema-hash-1",
             StateDescriptorFullName = "Example.State",
             ReadModelDescriptorFullName = "Example.ReadModel",
-            RuntimeSemantics = new ScriptRuntimeSemanticsSpec
-            {
-                Queries =
-                {
-                    new ScriptQuerySemanticsSpec
-                    {
-                        QueryTypeUrl = "type.googleapis.com/example.Query",
-                        ResultTypeUrl = "type.googleapis.com/example.Response",
-                    },
-                },
-            },
+            RuntimeSemantics = new ScriptRuntimeSemanticsSpec(),
         };
 
         bind.DefinitionActorId.Should().Be("definition-1");
@@ -112,7 +102,7 @@ public class ScriptProtoContractsTests
         bind.ReadModelSchemaVersion.Should().Be("2");
         bind.StateDescriptorFullName.Should().Be("Example.State");
         bind.ReadModelDescriptorFullName.Should().Be("Example.ReadModel");
-        bind.RuntimeSemantics.Queries.Should().ContainSingle();
+        bind.RuntimeSemantics.Messages.Should().BeEmpty();
     }
 
     [Fact]

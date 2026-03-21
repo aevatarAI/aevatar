@@ -18,11 +18,13 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         {
             Prompt = command.Prompt,
             SessionId = sessionId,
+            ScopeId = command.ScopeId ?? string.Empty,
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
         AppendMetadata(chatRequest.Metadata, context.Headers);
         AppendMetadata(chatRequest.Metadata, command.Metadata);
+        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
         chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
         var envelope = new EventEnvelope
@@ -74,8 +76,14 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             var normalizedValue = string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
             if (normalizedKey.Length == 0 || normalizedValue.Length == 0)
                 continue;
+            if (IsScopeMetadataKey(normalizedKey))
+                continue;
 
             destination[normalizedKey] = normalizedValue;
         }
     }
+
+    private static bool IsScopeMetadataKey(string key) =>
+        string.Equals(key, "scope_id", StringComparison.Ordinal) ||
+        string.Equals(key, WorkflowRunCommandMetadataKeys.ScopeId, StringComparison.Ordinal);
 }

@@ -2,6 +2,7 @@ using System.Collections;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,7 +11,7 @@ namespace Aevatar.CQRS.Projection.Providers.InMemory.Stores;
 public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
     : IProjectionDocumentReader<TReadModel, TKey>,
       IProjectionDocumentWriter<TReadModel>
-    where TReadModel : class, IProjectionReadModel
+    where TReadModel : class, IProjectionReadModel<TReadModel>, new()
 {
     private const string ProviderName = "InMemory";
     private readonly object _gate = new();
@@ -314,7 +315,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
 
             var property = current.GetType().GetProperty(
                 segment,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.IgnoreCase);
+                BindingFlags.Instance | BindingFlags.Public);
             if (property == null)
                 return null;
 
@@ -329,20 +330,7 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         string key,
         out object? value)
     {
-        if (dictionary.TryGetValue(key, out value))
-            return true;
-
-        foreach (var pair in dictionary)
-        {
-            if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                value = pair.Value;
-                return true;
-            }
-        }
-
-        value = null;
-        return false;
+        return dictionary.TryGetValue(key, out value);
     }
 
     private static bool TryGetDictionaryValue(
@@ -350,14 +338,10 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         string key,
         out object? value)
     {
-        foreach (DictionaryEntry entry in dictionary)
+        if (dictionary.Contains(key))
         {
-            if (entry.Key is string stringKey &&
-                string.Equals(stringKey, key, StringComparison.OrdinalIgnoreCase))
-            {
-                value = entry.Value;
-                return true;
-            }
+            value = dictionary[key];
+            return true;
         }
 
         value = null;
@@ -467,12 +451,5 @@ public sealed class InMemoryProjectionDocumentStore<TReadModel, TKey>
         throw new InvalidOperationException("Invalid InMemory projection document query cursor.");
     }
 
-    private TReadModel Clone(TReadModel source)
-    {
-        if (source is IProjectionReadModelCloneable<TReadModel> cloneable)
-            return cloneable.DeepClone();
-
-        throw new InvalidOperationException(
-            $"Read model '{typeof(TReadModel).FullName}' must implement '{typeof(IProjectionReadModelCloneable<TReadModel>).FullName}' for InMemory projection storage.");
-    }
+    private static TReadModel Clone(TReadModel source) => source.Clone();
 }

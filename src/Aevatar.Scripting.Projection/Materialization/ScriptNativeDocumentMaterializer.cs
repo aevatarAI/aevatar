@@ -1,7 +1,5 @@
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Projection.ReadModels;
-using Google.Protobuf;
 
 namespace Aevatar.Scripting.Projection.Materialization;
 
@@ -15,23 +13,12 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
         ScriptDomainFactCommitted fact,
         string sourceEventId,
         DateTimeOffset updatedAt,
-        IMessage? semanticReadModel,
-        ScriptReadModelMaterializationPlan plan)
+        ScriptNativeDocumentProjection nativeDocument)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(fact);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceEventId);
-        ArgumentNullException.ThrowIfNull(plan);
-
-        var fields = new Dictionary<string, object?>(StringComparer.Ordinal);
-        foreach (var field in plan.DocumentFields)
-        {
-            var value = field.Accessor.ExtractValue(semanticReadModel);
-            if (value == null)
-                continue;
-
-            AssignFieldValue(fields, field.Path, ScriptProjectionReadModelSupport.CloneObjectGraph(value));
-        }
+        ArgumentNullException.ThrowIfNull(nativeDocument);
 
         return new ScriptNativeDocumentReadModel
         {
@@ -39,53 +26,14 @@ public sealed class ScriptNativeDocumentMaterializer : IScriptNativeDocumentMate
             ScriptId = scriptId ?? string.Empty,
             DefinitionActorId = definitionActorId ?? string.Empty,
             Revision = revision ?? string.Empty,
-            SchemaId = plan.SchemaId,
-            SchemaVersion = plan.SchemaVersion,
-            SchemaHash = plan.SchemaHash,
-            DocumentIndexScope = plan.DocumentIndexScope,
-            Fields = fields,
+            SchemaId = nativeDocument.SchemaId ?? string.Empty,
+            SchemaVersion = nativeDocument.SchemaVersion ?? string.Empty,
+            SchemaHash = nativeDocument.SchemaHash ?? string.Empty,
+            DocumentIndexScope = nativeDocument.DocumentIndexScope ?? string.Empty,
+            FieldsValue = nativeDocument.FieldsValue?.Clone() ?? new Google.Protobuf.WellKnownTypes.Struct(),
             StateVersion = fact.StateVersion,
             LastEventId = sourceEventId,
             UpdatedAt = updatedAt,
         };
     }
-
-    private static void AssignFieldValue(
-        IDictionary<string, object?> current,
-        string path,
-        object? value)
-    {
-        var segments = path
-            .Split('.', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length == 0)
-            return;
-
-        IDictionary<string, object?> cursor = current;
-        for (var i = 0; i < segments.Length; i++)
-        {
-            var rawSegment = segments[i];
-            var segment = rawSegment.EndsWith("[]", StringComparison.Ordinal)
-                ? rawSegment[..^2]
-                : rawSegment;
-            if (segment.Length == 0)
-                return;
-
-            var isLeaf = i == segments.Length - 1;
-            if (isLeaf)
-            {
-                cursor[segment] = value;
-                return;
-            }
-
-            if (!cursor.TryGetValue(segment, out var existing) ||
-                existing is not IDictionary<string, object?> existingMap)
-            {
-                existingMap = new Dictionary<string, object?>(StringComparer.Ordinal);
-                cursor[segment] = existingMap;
-            }
-
-            cursor = existingMap;
-        }
-    }
-
 }

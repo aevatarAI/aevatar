@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Projection.Projectors;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -51,6 +52,59 @@ public sealed class ProjectionScriptCatalogQueryPort : IScriptCatalogQueryPort
             document.ActiveSourceHash,
             document.PreviousRevision,
             document.RevisionHistory.ToArray(),
-            document.LastProposalId);
+            document.LastProposalId,
+            document.CatalogActorId,
+            document.ScopeId,
+            document.UpdatedAt.ToUnixTimeMilliseconds());
+    }
+
+    public async Task<IReadOnlyList<ScriptCatalogEntrySnapshot>> ListCatalogEntriesAsync(
+        string? catalogActorId,
+        int take,
+        CancellationToken ct)
+    {
+        if (_queryAsync != null)
+            throw new NotSupportedException("Custom script catalog query delegates do not support listing.");
+
+        var resolvedCatalogActorId = string.IsNullOrWhiteSpace(catalogActorId)
+            ? _addressResolver!.GetCatalogActorId()
+            : catalogActorId;
+        var boundedTake = Math.Clamp(take, 1, 1000);
+        var result = await _documentReader!.QueryAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+                Filters =
+                [
+                    new ProjectionDocumentFilter
+                    {
+                        FieldPath = nameof(ScriptCatalogEntryDocument.CatalogActorId),
+                        Operator = ProjectionDocumentFilterOperator.Eq,
+                        Value = ProjectionDocumentValue.FromString(resolvedCatalogActorId),
+                    },
+                ],
+                Sorts =
+                [
+                    new ProjectionDocumentSort
+                    {
+                        FieldPath = nameof(ScriptCatalogEntryDocument.UpdatedAt),
+                        Direction = ProjectionDocumentSortDirection.Desc,
+                    },
+                ],
+            },
+            ct);
+        return result.Items
+            .Select(static document => new ScriptCatalogEntrySnapshot(
+                document.ScriptId,
+                document.ActiveRevision,
+                document.ActiveDefinitionActorId,
+                document.ActiveSourceHash,
+                document.PreviousRevision,
+                document.RevisionHistory.ToArray(),
+                document.LastProposalId,
+                document.CatalogActorId,
+                document.ScopeId,
+                document.UpdatedAt.ToUnixTimeMilliseconds()))
+            .ToArray();
     }
 }

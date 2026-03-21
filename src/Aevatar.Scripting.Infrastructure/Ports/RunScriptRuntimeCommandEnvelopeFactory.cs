@@ -28,6 +28,7 @@ public sealed class RunScriptRuntimeCommandEnvelopeFactory
                 RequestedEventType = command.RequestedEventType ?? string.Empty,
                 CommandId = context.CommandId ?? string.Empty,
                 CorrelationId = context.CorrelationId ?? string.Empty,
+                ScopeId = command.ScopeId ?? string.Empty,
             });
     }
 }

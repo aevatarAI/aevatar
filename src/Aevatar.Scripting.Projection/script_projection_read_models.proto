@@ -19,6 +19,7 @@ message ScriptReadModelDocument {
   int64 state_version = 7;
   string last_event_id = 8;
   google.protobuf.Timestamp updated_at_utc_value = 9;
+  string scope_id = 10;
 }
 
 message ScriptDefinitionSnapshotDocument {
@@ -41,6 +42,7 @@ message ScriptDefinitionSnapshotDocument {
   string state_descriptor_full_name = 17;
   string read_model_descriptor_full_name = 18;
   aevatar.scripting.ScriptRuntimeSemanticsSpec runtime_semantics = 19;
+  string scope_id = 20;
 }
 
 message ScriptCatalogEntryDocument {
@@ -57,6 +59,7 @@ message ScriptCatalogEntryDocument {
   string previous_revision = 11;
   repeated string revision_history_entries = 12;
   string last_proposal_id = 13;
+  string scope_id = 14;
 }
 
 message ScriptEvolutionReadModel {

@@ -13,7 +13,7 @@ public sealed record ScriptBehaviorDescriptor(
     IReadOnlyDictionary<string, ScriptCommandRegistration> Commands,
     IReadOnlyDictionary<string, ScriptSignalRegistration> Signals,
     IReadOnlyDictionary<string, ScriptDomainEventRegistration> DomainEvents,
-    IReadOnlyDictionary<string, ScriptQueryRegistration> Queries,
+    Func<IMessage?, ScriptFactContext, IMessage?>? ReadModelProjector,
     ByteString? ProtocolDescriptorSet,
     ScriptRuntimeSemanticsSpec? RuntimeSemantics = null)
 {
@@ -31,18 +31,11 @@ public sealed record ScriptBehaviorDescriptor(
 
     public ScriptGAgentContract ToContract()
     {
-        var queryResultTypeUrls = Queries.ToDictionary(
-            static pair => pair.Key,
-            static pair => ScriptMessageTypes.GetTypeUrl(pair.Value.ResultClrType),
-            StringComparer.Ordinal);
-
         return new ScriptGAgentContract(
             StateTypeUrl: StateTypeUrl,
             ReadModelTypeUrl: ReadModelTypeUrl,
             CommandTypeUrls: Commands.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
             DomainEventTypeUrls: DomainEvents.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
-            QueryTypeUrls: Queries.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
-            QueryResultTypeUrls: queryResultTypeUrls,
             InternalSignalTypeUrls: Signals.Keys.OrderBy(static x => x, StringComparer.Ordinal).ToArray(),
             StateDescriptorFullName: StateDescriptor.FullName ?? string.Empty,
             ReadModelDescriptorFullName: ReadModelDescriptor.FullName ?? string.Empty,

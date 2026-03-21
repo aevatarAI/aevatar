@@ -54,21 +54,19 @@ public static class WorkflowCapabilityEndpoints
             .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
+        group.MapPost("/workflows/stop", HandleStop)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound);
     }
 
-    internal static async Task HandleChat(
+    public static async Task HandleChat(
         HttpContext http,
         ChatInput input,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct = default)
     {
         using var scope = ApiRequestScope.BeginHttp();
-        if (!HasAnyInput(input))
-        {
-            http.Response.StatusCode = StatusCodes.Status400BadRequest;
-            return;
-        }
-
         var writer = new ChatSseResponseWriter(http.Response);
         var serviceProvider = http.Features.Get<IServiceProvidersFeature>()?.RequestServices;
         var loggerFactory = serviceProvider?.GetService(typeof(ILoggerFactory)) as ILoggerFactory;
@@ -147,15 +145,6 @@ public static class WorkflowCapabilityEndpoints
         using var scope = ApiRequestScope.BeginHttp();
         var logger = loggerFactory.CreateLogger("Aevatar.Workflow.Host.Api.Command");
 
-        if (!HasAnyInput(input))
-        {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_PROMPT",
-                message = "Prompt or inputParts is required.",
-            });
-        }
-
         var normalizedRequest = ChatRunRequestNormalizer.Normalize(input, defaultMetadata: defaultMetadata);
         if (!normalizedRequest.Succeeded)
         {
@@ -198,10 +187,6 @@ public static class WorkflowCapabilityEndpoints
                 statusCode: StatusCodes.Status500InternalServerError);
         }
     }
-
-    private static bool HasAnyInput(ChatInput input) =>
-        !string.IsNullOrWhiteSpace(input.Prompt) ||
-        input.InputParts is { Count: > 0 };
 
     internal static async Task<IResult> HandleResume(
         WorkflowResumeInput input,
@@ -307,6 +292,61 @@ public static class WorkflowCapabilityEndpoints
                 runId = dispatch.Receipt.RunId,
                 signalName,
                 stepId,
+                commandId = dispatch.Receipt.CommandId,
+                correlationId = dispatch.Receipt.CorrelationId,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return Results.StatusCode(499);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            scope.MarkError();
+            throw;
+        }
+    }
+
+    public static async Task<IResult> HandleStop(
+        WorkflowStopInput input,
+        [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
+        CancellationToken ct = default)
+    {
+        using var scope = ApiRequestScope.BeginHttp();
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(stopService);
+
+        try
+        {
+            var actorId = (input.ActorId ?? string.Empty).Trim();
+            var runId = (input.RunId ?? string.Empty).Trim();
+            var commandId = NormalizeOptional(input.CommandId);
+            var reason = NormalizeOptional(input.Reason);
+            if (string.IsNullOrWhiteSpace(actorId) ||
+                string.IsNullOrWhiteSpace(runId))
+            {
+                scope.MarkResult(StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = "actorId and runId are required." });
+            }
+
+            var dispatch = await stopService.DispatchAsync(
+                new WorkflowStopCommand(
+                    actorId,
+                    runId,
+                    commandId,
+                    reason),
+                ct);
+            if (!dispatch.Succeeded || dispatch.Receipt == null)
+            {
+                return MapRunControlDispatchFailure(dispatch.Error, scope);
+            }
+
+            return Results.Ok(new
+            {
+                accepted = true,
+                actorId = dispatch.Receipt.ActorId,
+                runId = dispatch.Receipt.RunId,
+                reason,
                 commandId = dispatch.Receipt.CommandId,
                 correlationId = dispatch.Receipt.CorrelationId,
             });

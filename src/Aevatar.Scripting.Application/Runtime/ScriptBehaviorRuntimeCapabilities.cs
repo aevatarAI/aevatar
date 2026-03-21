@@ -20,8 +20,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly Func<RuntimeCallbackLease, CancellationToken, Task> _cancelCallbackAsync;
     private readonly IAICapability _aiCapability;
     private readonly IActorRuntime _runtime;
-    private readonly IScriptExecutionProjectionPort _executionProjectionPort;
-    private readonly IScriptReadModelQueryPort _readModelQueryPort;
     private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
     private readonly IScriptEvolutionProposalPort _proposalPort;
     private readonly IScriptDefinitionCommandPort _definitionCommandPort;
@@ -31,6 +29,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
     private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
         new(StringComparer.Ordinal);
+    private readonly string _scopeId;
     private readonly string _runId;
     private readonly string _correlationId;
 
@@ -44,8 +43,45 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         Func<RuntimeCallbackLease, CancellationToken, Task> cancelCallbackAsync,
         IAICapability aiCapability,
         IActorRuntime runtime,
-        IScriptExecutionProjectionPort executionProjectionPort,
-        IScriptReadModelQueryPort readModelQueryPort,
+        IScriptDefinitionSnapshotPort definitionSnapshotPort,
+        IScriptEvolutionProposalPort proposalPort,
+        IScriptDefinitionCommandPort definitionCommandPort,
+        IScriptRuntimeProvisioningPort runtimeProvisioningPort,
+        IScriptRuntimeCommandPort runtimeCommandPort,
+        IScriptCatalogCommandPort catalogCommandPort,
+        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
+        : this(
+            scopeId: string.Empty,
+            runId,
+            correlationId,
+            publishAsync,
+            sendToAsync,
+            publishToSelfAsync,
+            scheduleSelfSignalAsync,
+            cancelCallbackAsync,
+            aiCapability,
+            runtime,
+            definitionSnapshotPort,
+            proposalPort,
+            definitionCommandPort,
+            runtimeProvisioningPort,
+            runtimeCommandPort,
+            catalogCommandPort,
+            authorityReadModelActivationPort)
+    {
+    }
+
+    public ScriptBehaviorRuntimeCapabilities(
+        string scopeId,
+        string runId,
+        string correlationId,
+        Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
+        Func<string, IMessage, CancellationToken, Task> sendToAsync,
+        Func<IMessage, CancellationToken, Task> publishToSelfAsync,
+        Func<string, TimeSpan, IMessage, CancellationToken, Task<RuntimeCallbackLease>> scheduleSelfSignalAsync,
+        Func<RuntimeCallbackLease, CancellationToken, Task> cancelCallbackAsync,
+        IAICapability aiCapability,
+        IActorRuntime runtime,
         IScriptDefinitionSnapshotPort definitionSnapshotPort,
         IScriptEvolutionProposalPort proposalPort,
         IScriptDefinitionCommandPort definitionCommandPort,
@@ -54,6 +90,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptCatalogCommandPort catalogCommandPort,
         IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
     {
+        _scopeId = scopeId?.Trim() ?? string.Empty;
         _runId = runId ?? string.Empty;
         _correlationId = correlationId ?? string.Empty;
         _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
@@ -63,8 +100,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _cancelCallbackAsync = cancelCallbackAsync ?? throw new ArgumentNullException(nameof(cancelCallbackAsync));
         _aiCapability = aiCapability ?? throw new ArgumentNullException(nameof(aiCapability));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _executionProjectionPort = executionProjectionPort ?? throw new ArgumentNullException(nameof(executionProjectionPort));
-        _readModelQueryPort = readModelQueryPort ?? throw new ArgumentNullException(nameof(readModelQueryPort));
         _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
         _proposalPort = proposalPort ?? throw new ArgumentNullException(nameof(proposalPort));
         _definitionCommandPort = definitionCommandPort ?? throw new ArgumentNullException(nameof(definitionCommandPort));
@@ -117,12 +152,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     public Task UnlinkAgentAsync(string childActorId, CancellationToken ct) =>
         _runtime.UnlinkAsync(childActorId, ct);
 
-    public Task<ScriptReadModelSnapshot?> GetReadModelSnapshotAsync(string actorId, CancellationToken ct) =>
-        _readModelQueryPort.GetSnapshotAsync(actorId, ct);
-
-    public Task<Any?> ExecuteReadModelQueryAsync(string actorId, Any queryPayload, CancellationToken ct) =>
-        _readModelQueryPort.ExecuteDeclaredQueryAsync(actorId, queryPayload, ct);
-
     public Task<ScriptPromotionDecision> ProposeScriptEvolutionAsync(
         ScriptEvolutionProposal proposal,
         CancellationToken ct) =>
@@ -149,8 +178,8 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             scriptRevision,
             runtimeActorId,
             definitionSnapshot,
+            _scopeId,
             ct);
-        await EnsureProjectedRuntimeAsync(resolvedRuntimeActorId, ct);
         return resolvedRuntimeActorId;
     }
 
@@ -163,7 +192,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string requestedEventType,
         CancellationToken ct)
     {
-        await EnsureProjectedRuntimeAsync(runtimeActorId, ct);
         await _runtimeCommandPort.RunRuntimeAsync(
             runtimeActorId,
             runId,
@@ -171,6 +199,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             scriptRevision,
             definitionActorId,
             requestedEventType,
+            _scopeId,
             ct);
     }
 
@@ -190,6 +219,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             definitionActorId,
             sourceHash,
             proposalId,
+            _scopeId,
             ct);
 
     public Task RollbackRevisionAsync(
@@ -206,14 +236,8 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             reason,
             proposalId,
             string.Empty,
+            _scopeId,
             ct);
-
-    private async Task EnsureProjectedRuntimeAsync(
-        string runtimeActorId,
-        CancellationToken ct)
-    {
-        _ = await _executionProjectionPort.EnsureActorProjectionAsync(runtimeActorId, ct);
-    }
 
     private async Task<ScriptPromotionDecision> ProposeAndRememberAsync(
         ScriptEvolutionProposal proposal,
@@ -245,6 +269,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             sourceText,
             sourceHash,
             definitionActorId,
+            _scopeId,
             ct);
         RememberDefinitionSnapshot(result.ActorId, result.Snapshot.Revision, result.Snapshot);
         return result.ActorId;

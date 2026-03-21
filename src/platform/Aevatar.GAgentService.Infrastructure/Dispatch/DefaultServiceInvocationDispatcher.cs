@@ -84,12 +84,13 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 target.Service.PrimaryActorId,
                 plan.WorkflowName,
                 plan.WorkflowYaml,
-                plan.InlineWorkflowYamls),
+                plan.InlineWorkflowYamls,
+                ResolveScopeId(chatRequest)),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
         var envelope = CreateEnvelope(run.Actor.Id, Any.Pack(chatRequest), commandId, correlationId);
-        await run.Actor.HandleEventAsync(envelope, ct);
+        await _dispatchPort.DispatchAsync(run.Actor.Id, envelope, ct);
         return CreateReceipt(target, run.Actor.Id, commandId, correlationId);
     }
 
@@ -151,4 +152,24 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         string.IsNullOrWhiteSpace(request.CorrelationId)
             ? commandId
             : request.CorrelationId;
+
+    private static string ResolveScopeId(ChatRequestEvent chatRequest)
+    {
+        ArgumentNullException.ThrowIfNull(chatRequest);
+
+        if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
+            return chatRequest.ScopeId.Trim();
+
+        var metadata = chatRequest.Metadata;
+
+        if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
+            !string.IsNullOrWhiteSpace(workflowScopeId))
+        {
+            return workflowScopeId.Trim();
+        }
+
+        return metadata.TryGetValue("scope_id", out var scopeId) && !string.IsNullOrWhiteSpace(scopeId)
+            ? scopeId.Trim()
+            : string.Empty;
+    }
 }

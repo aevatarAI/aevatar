@@ -52,7 +52,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
-    public async Task QueryAsync_WhenSortFieldNotConfigured_ShouldUseDeterministicDefaultSort()
+    public async Task QueryAsync_WhenSortFieldNotConfigured_ShouldUseProjectionDocumentIdAsDeterministicTiebreakSort()
     {
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
@@ -73,7 +73,11 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         searchRequest.PathAndQuery.Should().EndWith("/_search");
         searchRequest.Body.Should().Contain("\"sort\"");
         searchRequest.Body.Should().Contain("\"CreatedAt\"");
-        searchRequest.Body.Should().Contain("\"_id\"");
+        searchRequest.Body.Should().Contain("\"ProjectionDocumentId\"");
+        searchRequest.Body.Should().Contain("\"unmapped_type\":\"keyword\"");
+        searchRequest.Body.Should().Contain("\"missing\":\"_last\"");
+        searchRequest.Body.Should().NotContain("\"_id\"");
+        searchRequest.Body.Should().NotContain("\"Id.keyword\"");
     }
 
     [Fact]
@@ -96,7 +100,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         };
         options.Endpoints = ["http://localhost:9200"];
 
-        using var store = new ElasticsearchProjectionDocumentStore<StoreReadModel, string>(
+        using var store = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: "projection-core-tests",
@@ -129,9 +133,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             keyFormatter: key => key,
             httpMessageHandler: handler);
 
-        await store.UpsertAsync(new StoreReadModel
+        await store.UpsertAsync(new TestStoreReadModel
         {
             Id = "actor-1",
+            ActorId = "actor-1",
             Value = "v1",
         });
 
@@ -143,10 +148,46 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         handler.CapturedRequests[2].PathAndQuery.Should().EndWith("/aevatar-projection-core-tests/_create/actor-1");
         handler.CapturedRequests[0].Body.Should().Contain("\"mappings\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"properties\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"ProjectionDocumentId\"");
+        handler.CapturedRequests[0].Body.Should().Contain("\"type\":\"keyword\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"Value\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"number_of_shards\":1");
         handler.CapturedRequests[0].Body.Should().Contain("\"projection-core-tests-alias\"");
         handler.CapturedRequests[0].Body.Should().Contain("\"is_write_index\":true");
+        handler.CapturedRequests[2].Body.Should().Contain("\"ProjectionDocumentId\":\"actor-1\"");
+    }
+
+    [Fact]
+    public void Constructor_WhenStableSortFieldMappingIsNotKeyword_ShouldThrow()
+    {
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = false,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        Action act = () => _ = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["ProjectionDocumentId"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "long",
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: new ScriptedHttpMessageHandler());
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*ProjectionDocumentId*keyword*");
     }
 
     [Fact]
@@ -155,7 +196,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         var handler = new ScriptedHttpMessageHandler();
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
-            """{"_seq_no":7,"_primary_term":3,"_source":{"Id":"actor-1","ActorId":"actor-1","StateVersion":1,"LastEventId":"evt-1","UpdatedAt":"2026-03-16T00:00:00Z","Value":"v1"}}"""));
+            """{"_seq_no":7,"_primary_term":3,"_source":{"id":"actor-1","actor_id":"actor-1","state_version":"1","last_event_id":"evt-1","updated_at_utc_value":"2026-03-16T00:00:00Z","value":"v1"}}"""));
         handler.EnqueueResponse(_ => CreateJsonResponse(
             HttpStatusCode.OK,
             """{"result":"updated"}"""));
@@ -167,9 +208,10 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             },
             handler);
 
-        await store.UpsertAsync(new StoreReadModel
+        await store.UpsertAsync(new TestStoreReadModel
         {
             Id = "actor-1",
+            ActorId = "actor-1",
             StateVersion = 2,
             LastEventId = "evt-2",
             UpdatedAt = DateTimeOffset.Parse("2026-03-16T00:00:01Z"),
@@ -199,7 +241,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         };
         options.Endpoints = ["http://localhost:9200"];
 
-        using var store = new ElasticsearchProjectionDocumentStore<DynamicStoreReadModel, string>(
+        using var store = new ElasticsearchProjectionDocumentStore<TestDynamicStoreReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: "script-native-read-models",
@@ -211,14 +253,16 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             indexScopeSelector: model => model.DocumentIndexScope,
             httpMessageHandler: handler);
 
-        await store.UpsertAsync(new DynamicStoreReadModel
+        await store.UpsertAsync(new TestDynamicStoreReadModel
         {
             Id = "actor-1",
+            ActorId = "actor-1",
             DocumentIndexScope = "dynamic-alpha",
         });
-        await store.UpsertAsync(new DynamicStoreReadModel
+        await store.UpsertAsync(new TestDynamicStoreReadModel
         {
             Id = "actor-2",
+            ActorId = "actor-2",
             DocumentIndexScope = "dynamic-beta",
         });
 
@@ -240,7 +284,7 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
         };
         options.Endpoints = ["http://localhost:9200"];
 
-        using var store = new ElasticsearchProjectionDocumentStore<DynamicStoreReadModel, string>(
+        using var store = new ElasticsearchProjectionDocumentStore<TestDynamicStoreReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: "script-native-read-models",
@@ -258,12 +302,12 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
             .WithMessage("*dynamically indexed read model*");
     }
 
-    private static ElasticsearchProjectionDocumentStore<StoreReadModel, string> CreateStore(
+    private static ElasticsearchProjectionDocumentStore<TestStoreReadModel, string> CreateStore(
         ElasticsearchProjectionDocumentStoreOptions options,
         HttpMessageHandler handler)
     {
         options.Endpoints = ["http://localhost:9200"];
-        return new ElasticsearchProjectionDocumentStore<StoreReadModel, string>(
+        return new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
             options,
             new DocumentIndexMetadata(
                 IndexName: "projection-core-tests",
@@ -319,33 +363,4 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
 
     private sealed record CapturedRequest(string Method, string PathAndQuery, string Body);
 
-    private sealed class StoreReadModel : IProjectionReadModel
-    {
-        public string Id { get; set; } = "";
-
-        public string ActorId => Id;
-
-        public long StateVersion { get; set; }
-
-        public string LastEventId { get; set; } = "";
-
-        public DateTimeOffset UpdatedAt { get; set; }
-
-        public string Value { get; set; } = "";
-    }
-
-    private sealed class DynamicStoreReadModel : IProjectionReadModel
-    {
-        public string Id { get; set; } = string.Empty;
-
-        public string ActorId => Id;
-
-        public long StateVersion { get; set; }
-
-        public string LastEventId { get; set; } = string.Empty;
-
-        public DateTimeOffset UpdatedAt { get; set; }
-
-        public string DocumentIndexScope { get; set; } = string.Empty;
-    }
 }

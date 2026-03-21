@@ -23,8 +23,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -70,8 +70,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -116,8 +116,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -159,8 +159,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -205,8 +205,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 2, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -251,8 +251,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 3, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -297,8 +297,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 4, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -383,8 +383,8 @@ public sealed class ScriptCatalogEntryProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 5, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "script-catalog:authority",
             RootActorId = "script-catalog",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(

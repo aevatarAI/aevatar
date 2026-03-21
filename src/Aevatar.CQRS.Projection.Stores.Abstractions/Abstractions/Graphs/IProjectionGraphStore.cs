@@ -2,6 +2,10 @@ namespace Aevatar.CQRS.Projection.Stores.Abstractions;
 
 public interface IProjectionGraphStore
 {
+    Task ReplaceOwnerGraphAsync(
+        ProjectionOwnedGraph graph,
+        CancellationToken ct = default);
+
     Task UpsertNodeAsync(ProjectionGraphNode node, CancellationToken ct = default);
 
     Task UpsertEdgeAsync(ProjectionGraphEdge edge, CancellationToken ct = default);

@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace Aevatar.Scripting.Infrastructure.Compilation;
 
-internal static class ScriptCompilationMetadataReferences
+public static class ScriptCompilationMetadataReferences
 {
     public static IReadOnlyList<MetadataReference> Build()
     {

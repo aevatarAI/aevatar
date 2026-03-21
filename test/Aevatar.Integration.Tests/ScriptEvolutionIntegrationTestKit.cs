@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Streaming;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
@@ -152,8 +153,7 @@ internal static class ScriptEvolutionIntegrationTestKit
                 ct);
 
             var fact = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, runId, ct);
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, ct)
-                ?? throw new InvalidOperationException($"Script read model snapshot not found. actor_id={runtimeActorId}");
+            var snapshot = await WaitForSnapshotAsync(provider, runtimeActorId, ct);
             return (fact, snapshot);
         }
         finally
@@ -169,25 +169,7 @@ internal static class ScriptEvolutionIntegrationTestKit
         string requestId,
         CancellationToken ct)
     {
-        var queryPayload = Any.Pack(new TextNormalizationQueryRequested
-        {
-            RequestId = requestId,
-            ReplyStreamId = $"reply-{requestId}",
-        });
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-        try
-        {
-            var immediateResult = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
-            if (immediateResult != null)
-                return immediateResult.Unpack<TextNormalizationQueryResponded>().Current;
-        }
-        catch (InvalidOperationException)
-        {
-        }
-        catch (ArgumentException)
-        {
-        }
-
         var projectionPort = provider.GetRequiredService<IScriptExecutionProjectionPort>();
         var lease = await projectionPort.EnsureActorProjectionAsync(runtimeActorId, ct)
             ?? throw new InvalidOperationException($"Failed to ensure script execution projection. actor_id={runtimeActorId}");
@@ -220,16 +202,113 @@ internal static class ScriptEvolutionIntegrationTestKit
                 }
             }
 
-            var result = await queryService.ExecuteDeclaredQueryAsync(runtimeActorId, queryPayload, ct);
-
-            if (result == null)
-                throw new InvalidOperationException($"Script query returned null. actor_id={runtimeActorId}");
-
-            return result.Unpack<TextNormalizationQueryResponded>().Current;
+            return snapshot!.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
         }
         finally
         {
             await projectionPort.ReleaseActorProjectionAsync(lease, ct);
+        }
+    }
+
+    public static async Task<ScriptReadModelSnapshot> WaitForSnapshotAsync(
+        IServiceProvider provider,
+        string runtimeActorId,
+        CancellationToken ct)
+    {
+        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        ScriptReadModelSnapshot? last = null;
+        try
+        {
+            while (true)
+            {
+                last = await queryService.GetSnapshotAsync(runtimeActorId, timeoutCts.Token);
+                if (last != null && last.ReadModelPayload != null)
+                    return last;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Script read model snapshot not found. actor_id={runtimeActorId}");
+        }
+    }
+
+    public static async Task<T> WaitForAsync<T>(
+        Func<CancellationToken, Task<T>> probeAsync,
+        Func<T, bool> isReady,
+        string timeoutMessage,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(probeAsync);
+        ArgumentNullException.ThrowIfNull(isReady);
+        ArgumentException.ThrowIfNullOrWhiteSpace(timeoutMessage);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        try
+        {
+            while (true)
+            {
+                var current = await probeAsync(timeoutCts.Token);
+                if (isReady(current))
+                    return current;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(timeoutMessage);
+        }
+    }
+
+    public static async Task<ProjectionGraphSubgraph> WaitForGraphSubgraphAsync(
+        IServiceProvider provider,
+        string scope,
+        string rootNodeId,
+        Func<ProjectionGraphSubgraph, bool> isReady,
+        CancellationToken ct,
+        int depth = 1,
+        int take = 20)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootNodeId);
+        ArgumentNullException.ThrowIfNull(isReady);
+
+        var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ObservationTimeout);
+
+        ProjectionGraphSubgraph? last = null;
+        try
+        {
+            while (true)
+            {
+                last = await graphStore.GetSubgraphAsync(
+                    new ProjectionGraphQuery
+                    {
+                        Scope = scope,
+                        RootNodeId = rootNodeId,
+                        Depth = depth,
+                        Take = take,
+                    },
+                    timeoutCts.Token);
+                if (isReady(last))
+                    return last;
+
+                await Task.Delay(ObservationPollInterval, timeoutCts.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException(
+                $"Script graph subgraph not ready. scope={scope}, root_node_id={rootNodeId}");
         }
     }
 

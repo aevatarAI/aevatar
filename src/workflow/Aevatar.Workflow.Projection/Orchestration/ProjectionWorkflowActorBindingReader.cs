@@ -70,7 +70,8 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             string.Empty,
             string.Empty,
             string.Empty,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            string.Empty);
 
     private static WorkflowActorBinding MapDocument(
         WorkflowActorBindingDocument document,
@@ -96,6 +97,7 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.RunId ?? string.Empty,
             document.WorkflowName ?? string.Empty,
             document.WorkflowYaml ?? string.Empty,
-            new Dictionary<string, string>(document.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase));
+            new Dictionary<string, string>(document.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase),
+            document.ScopeId ?? string.Empty);
     }
 }

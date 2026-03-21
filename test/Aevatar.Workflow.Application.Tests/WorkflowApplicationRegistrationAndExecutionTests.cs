@@ -30,7 +30,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var yaml = registry.GetYaml("direct");
         yaml.Should().NotBeNullOrWhiteSpace();
         registry.GetDefinition("direct")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("direct"));
@@ -44,7 +44,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication(options => options.RegisterBuiltInDirectWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         registry.GetYaml("direct").Should().BeNull();
     }
 
@@ -56,7 +56,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var yaml = registry.GetYaml("auto");
         yaml.Should().NotBeNullOrWhiteSpace();
         registry.GetDefinition("auto")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto"));
@@ -74,7 +74,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication(options => options.RegisterBuiltInAutoWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         registry.GetYaml("auto").Should().BeNull();
     }
 
@@ -86,7 +86,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var yaml = registry.GetYaml("auto_review");
         yaml.Should().NotBeNullOrWhiteSpace();
         registry.GetDefinition("auto_review")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto_review"));
@@ -105,7 +105,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication(options => options.RegisterBuiltInAutoReviewWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         registry.GetYaml("auto_review").Should().BeNull();
     }
 
@@ -183,8 +183,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             x.ServiceType == typeof(ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
             x.ImplementationFactory != null);
         services.Should().Contain(x =>
-            x.ServiceType == typeof(WorkflowRunDetachedDispatchService) &&
-            x.ImplementationType == typeof(WorkflowRunDetachedDispatchService));
+            x.ServiceType == typeof(DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>) &&
+            x.ImplementationType == typeof(DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>));
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>) &&
             x.ImplementationFactory != null);
@@ -197,6 +197,9 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.Should().Contain(x =>
             x.ServiceType == typeof(ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
             x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowSignalCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
+        services.Should().Contain(x =>
+            x.ServiceType == typeof(ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>) &&
+            x.ImplementationType == typeof(DefaultCommandDispatchService<WorkflowStopCommand, WorkflowRunControlCommandTarget, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>));
     }
 
     [Fact]
@@ -238,8 +241,8 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
             Metadata: new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 [WorkflowRunCommandMetadataKeys.ChannelId] = "slack#request",
-                [WorkflowRunCommandMetadataKeys.UserId] = "u-1001",
-            });
+            },
+            ScopeId: "u-1001");
 
         var envelope = factory.CreateEnvelope(command, context);
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
@@ -250,9 +253,56 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         envelope.Route.PublisherActorId.Should().Be("api");
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
+        request.ScopeId.Should().Be("u-1001");
         request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
-        request.Metadata[WorkflowRunCommandMetadataKeys.UserId].Should().Be("u-1001");
         request.Metadata["source"].Should().Be("headers");
+        request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        request.Metadata.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryInputParts_AlongsideTypedScopeId()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "describe this",
+            null,
+            "actor-1",
+            InputParts:
+            [
+                new WorkflowChatInputPart
+                {
+                    Kind = WorkflowChatInputPartKind.Text,
+                    Text = "describe this",
+                },
+                new WorkflowChatInputPart
+                {
+                    Kind = WorkflowChatInputPartKind.Image,
+                    Uri = "https://example.com/cat.png",
+                    MediaType = "image/png",
+                    Name = "cat",
+                },
+            ],
+            ScopeId: "scope-7");
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+
+        request.ScopeId.Should().Be("scope-7");
+        request.InputParts.Should().HaveCount(2);
+        request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
+        request.InputParts[0].Text.Should().Be("describe this");
+        request.InputParts[1].Kind.Should().Be(ChatContentPartKind.Image);
+        request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
+        request.InputParts[1].MediaType.Should().Be("image/png");
+        request.InputParts[1].Name.Should().Be("cat");
     }
 
     [Fact]

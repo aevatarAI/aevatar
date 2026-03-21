@@ -5,6 +5,7 @@
 
 # dotenv files
 .env
+local-dev/
 
 # User-specific files
 *.rsuser
@@ -492,3 +493,4 @@ scripts/.pids/
 docs/agents-working-space/*
 .tools/*
 .plan/
+.claude/ralph-loop.local.md

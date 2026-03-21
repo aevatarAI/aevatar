@@ -43,7 +43,7 @@ public class AppToolHostTests
 
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
+            services.AddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
             services.AddSingleton<IConnectorBuilder, CliConnectorBuilder>();
             using var provider = services.BuildServiceProvider();
 
@@ -82,7 +82,7 @@ public class AppToolHostTests
         {
             var services = new ServiceCollection();
             services.AddLogging();
-            services.AddSingleton<IConnectorRegistry, InMemoryConnectorRegistry>();
+            services.AddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
             services.AddSingleton<IConnectorBuilder, CliConnectorBuilder>();
             using var provider = services.BuildServiceProvider();
 

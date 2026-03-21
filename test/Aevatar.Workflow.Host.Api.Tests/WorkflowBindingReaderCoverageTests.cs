@@ -24,8 +24,8 @@ public sealed class WorkflowActorBindingProjectorTests
             new StaticClock(new DateTimeOffset(2026, 3, 14, 12, 0, 0, TimeSpan.Zero)));
         var context = new WorkflowBindingProjectionContext
         {
-            ProjectionId = "actor-1:binding",
             RootActorId = "actor-1",
+            ProjectionKind = "workflow-binding",
         };
 
         await projector.ProjectAsync(
@@ -62,8 +62,8 @@ public sealed class WorkflowActorBindingProjectorTests
         var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
-            ProjectionId = "actor-2:binding",
             RootActorId = "actor-2",
+            ProjectionKind = "workflow-binding",
         };
 
         await projector.ProjectAsync(
@@ -99,8 +99,8 @@ public sealed class WorkflowActorBindingProjectorTests
         var projector = new WorkflowActorBindingProjector(dispatcher, dispatcher, new StaticClock(DateTimeOffset.UtcNow));
         var context = new WorkflowBindingProjectionContext
         {
-            ProjectionId = "actor-3:binding",
             RootActorId = "actor-3",
+            ProjectionKind = "workflow-binding",
         };
 
         await projector.ProjectAsync(
@@ -127,14 +127,14 @@ public sealed class WorkflowActorBindingProjectorTests
         public Task<ProjectionWriteResult> UpsertAsync(WorkflowActorBindingDocument readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            Documents[readModel.Id] = readModel.DeepClone();
+            Documents[readModel.Id] = readModel.Clone();
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
 
         public Task<WorkflowActorBindingDocument?> GetAsync(string key, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.DeepClone() : null);
+            return Task.FromResult(Documents.TryGetValue(key, out var document) ? document.Clone() : null);
         }
 
         public Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>> QueryAsync(
@@ -146,7 +146,7 @@ public sealed class WorkflowActorBindingProjectorTests
             {
                 Items = Documents.Values
                     .Take(query.Take <= 0 ? 50 : query.Take)
-                    .Select(static x => x.DeepClone())
+                    .Select(static x => x.Clone())
                     .ToList(),
             });
         }

@@ -5,6 +5,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
 using Aevatar.Scripting.Abstractions.Queries;
+using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
@@ -130,9 +131,13 @@ public class ScriptBehaviorGAgentReplayContractTests
         var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
         var artifactResolver = new CachedScriptBehaviorArtifactResolver(compiler);
         var codec = new ProtobufMessageCodec();
-        var dispatcher = new Aevatar.Scripting.Application.Runtime.ScriptBehaviorDispatcher(artifactResolver, codec);
+        var dispatcher = new Aevatar.Scripting.Application.Runtime.ScriptBehaviorDispatcher(
+            artifactResolver,
+            new ScriptReadModelMaterializationCompiler(),
+            new ScriptNativeProjectionBuilder(),
+            codec);
         var publisher = new RecordingEventPublisher();
-        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, codec)
+        var agent = new ScriptBehaviorGAgent(dispatcher, new StaticCapabilityFactory(), artifactResolver, new ScriptReadModelMaterializationCompiler(), codec)
         {
             EventPublisher = publisher,
             EventSourcingBehaviorFactory = new DefaultEventSourcingBehaviorFactory<ScriptBehaviorState>(
@@ -260,11 +265,35 @@ public class ScriptBehaviorGAgentReplayContractTests
                         apply: static (state, evt, _) => new ScriptProfileState
                         {
                             CommandCount = (state?.CommandCount ?? 0) + 1,
+                            ActorId = evt.Current?.ActorId ?? string.Empty,
+                            PolicyId = evt.Current?.PolicyId ?? string.Empty,
                             LastCommandId = evt.CommandId ?? string.Empty,
+                            InputText = evt.Current?.InputText ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
-                        },
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                            Tags = { evt.Current == null ? global::System.Array.Empty<string>() : (global::System.Collections.Generic.IEnumerable<string>)evt.Current.Tags },
+                        })
+                    .ProjectState(static (state, _) => state == null
+                        ? new ScriptProfileReadModel()
+                        : new ScriptProfileReadModel
+                        {
+                            HasValue = true,
+                            ActorId = state.ActorId,
+                            PolicyId = state.PolicyId,
+                            LastCommandId = state.LastCommandId,
+                            InputText = state.InputText,
+                            NormalizedText = state.NormalizedText,
+                            Search = new ScriptProfileSearchIndex
+                            {
+                                LookupKey = $"{state.ActorId}:{state.PolicyId}".ToLowerInvariant(),
+                                SortKey = state.NormalizedText ?? string.Empty,
+                            },
+                            Refs = new ScriptProfileDocumentRef
+                            {
+                                ActorId = state.ActorId ?? string.Empty,
+                                PolicyId = state.PolicyId ?? string.Empty,
+                            },
+                            Tags = { state.Tags },
+                        });
             }
 
             private static Task HandleCommandAsync(

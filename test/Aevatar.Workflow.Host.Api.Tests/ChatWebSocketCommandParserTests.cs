@@ -43,15 +43,30 @@ public class ChatWebSocketCommandParserTests
     }
 
     [Fact]
-    public void TryParse_EmptyPrompt_ShouldReturnPromptErrorWithRequestId()
+    public void TryParse_EmptyPrompt_ShouldAllowEmptyPrompt()
     {
         var frame = TextFrame("""{"type":"chat.command","requestId":"req-1","payload":{"prompt":""}}""");
 
-        var ok = ChatWebSocketCommandParser.TryParse(frame, out _, out var error);
+        var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
 
-        ok.Should().BeFalse();
-        error.Code.Should().Be("INVALID_PROMPT");
-        error.RequestId.Should().Be("req-1");
+        ok.Should().BeTrue();
+        envelope.RequestId.Should().Be("req-1");
+        envelope.Input.Prompt.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TryParse_InputPartsWithoutPrompt_ShouldReturnEnvelope()
+    {
+        var frame = TextFrame(
+            """{"type":"chat.command","requestId":"req-mm","payload":{"inputParts":[{"type":"image","uri":"https://example.com/cat.png","mediaType":"image/png"}]}}""");
+
+        var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
+
+        ok.Should().BeTrue();
+        envelope.RequestId.Should().Be("req-mm");
+        envelope.Input.Prompt.Should().BeNull();
+        envelope.Input.InputParts.Should().ContainSingle();
+        envelope.Input.InputParts![0].Type.Should().Be("image");
     }
 
     [Fact]

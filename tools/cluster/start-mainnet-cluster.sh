@@ -1,11 +1,19 @@
- #!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
 
+if [[ -z "${NEO4J_PASSWORD:-}" ]]; then
+  echo "Set NEO4J_PASSWORD before starting the mainnet cluster." >&2
+  exit 1
+fi
+
+export NEO4J_PASSWORD
+
 docker compose \
   -f docker-compose.yml \
+  -f docker-compose.projection-providers.yml \
   -f docker-compose.mainnet-cluster.yml \
   up -d --build
 
@@ -15,8 +23,11 @@ echo "  node1: http://localhost:19081/"
 echo "  node2: http://localhost:19082/"
 echo "  node3: http://localhost:19083/"
 echo "  garnet: localhost:6379"
+echo "  elasticsearch: http://localhost:9200"
+echo "  neo4j: bolt://localhost:7687"
 echo
 docker compose \
   -f docker-compose.yml \
+  -f docker-compose.projection-providers.yml \
   -f docker-compose.mainnet-cluster.yml \
   ps

@@ -14,6 +14,22 @@ public interface IScriptDefinitionCommandPort
         string? definitionActorId,
         CancellationToken ct);
 
+    Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
+        string scriptId,
+        string scriptRevision,
+        string sourceText,
+        string sourceHash,
+        string? definitionActorId,
+        string? scopeId,
+        CancellationToken ct) =>
+        UpsertDefinitionWithSnapshotAsync(
+            scriptId,
+            scriptRevision,
+            sourceText,
+            sourceHash,
+            definitionActorId,
+            ct);
+
     async Task<string> UpsertDefinitionAsync(
         string scriptId,
         string scriptRevision,
@@ -27,5 +43,22 @@ public interface IScriptDefinitionCommandPort
             sourceText,
             sourceHash,
             definitionActorId,
+            ct)).ActorId;
+
+    async Task<string> UpsertDefinitionAsync(
+        string scriptId,
+        string scriptRevision,
+        string sourceText,
+        string sourceHash,
+        string? definitionActorId,
+        string? scopeId,
+        CancellationToken ct) =>
+        (await UpsertDefinitionWithSnapshotAsync(
+            scriptId,
+            scriptRevision,
+            sourceText,
+            sourceHash,
+            definitionActorId,
+            scopeId,
             ct)).ActorId;
 }

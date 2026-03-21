@@ -383,11 +383,15 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         public Task DestroyAsync(string actorId, CancellationToken ct = default) => Task.CompletedTask;
 
+        public Task MarkStoppedAsync(string actorId, string runId, string reason, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task BindWorkflowDefinitionAsync(
             IActor actor,
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default)
         {
             BindCalls.Add((actor.Id, workflowName, workflowYaml));

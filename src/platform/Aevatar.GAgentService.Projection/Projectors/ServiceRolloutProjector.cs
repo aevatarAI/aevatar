@@ -10,7 +10,7 @@ using Aevatar.GAgentService.Projection.ReadModels;
 namespace Aevatar.GAgentService.Projection.Projectors;
 
 public sealed class ServiceRolloutProjector
-    : IProjectionProjector<ServiceRolloutProjectionContext, IReadOnlyList<string>>
+    : IProjectionArtifactMaterializer<ServiceRolloutProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ServiceRolloutReadModel> _storeDispatcher;
     private readonly IProjectionDocumentReader<ServiceRolloutReadModel, string> _documentReader;
@@ -24,13 +24,6 @@ public sealed class ServiceRolloutProjector
         _storeDispatcher = storeDispatcher ?? throw new ArgumentNullException(nameof(storeDispatcher));
         _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(ServiceRolloutProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(ServiceRolloutProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
@@ -164,17 +157,6 @@ public sealed class ServiceRolloutProjector
                 readModel.UpdatedAt = ServiceProjectionMapping.FromTimestamp(evt.OccurredAt, _clock.UtcNow);
             });
         }
-    }
-
-    public ValueTask CompleteAsync(
-        ServiceRolloutProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
     }
 
     private async Task MutateAsync(

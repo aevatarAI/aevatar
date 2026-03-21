@@ -23,8 +23,8 @@ public sealed class ScriptDefinitionSnapshotProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 16, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "definition-1:authority",
             RootActorId = "definition-1",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -81,8 +81,8 @@ public sealed class ScriptDefinitionSnapshotProjectorTests
             new FixedProjectionClock(new DateTimeOffset(2026, 3, 16, 0, 0, 0, TimeSpan.Zero)));
         var context = new ScriptAuthorityProjectionContext
         {
-            ProjectionId = "definition-1:authority",
             RootActorId = "definition-1",
+            ProjectionKind = "script-authority-read-model",
         };
 
         await projector.ProjectAsync(
@@ -138,7 +138,7 @@ public sealed class ScriptDefinitionSnapshotProjectorTests
             CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel.DeepClone();
+            LastUpsert = readModel.Clone();
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

@@ -7,4 +7,5 @@ public sealed record ProposeScriptEvolutionRequest(
     string CandidateSource,
     string CandidateSourceHash,
     string Reason,
-    string ProposalId);
+    string ProposalId,
+    string ScopeId = "");

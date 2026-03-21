@@ -6,8 +6,11 @@ namespace Aevatar.CQRS.Projection.Providers.Elasticsearch.Stores;
 
 internal static class ElasticsearchProjectionDocumentStorePayloadSupport
 {
+    internal const string StableSortDocumentIdField = "ProjectionDocumentId";
     private const string DefaultQueryPrimarySortField = "CreatedAt";
-    private const string DefaultQueryTiebreakSortField = "_id";
+    // Elasticsearch forbids sorting on `_id`. For search_after pagination we persist
+    // a provider-owned duplicate key with doc_values instead of falling back to `_id` or `_doc`.
+    private const string DefaultQueryTiebreakSortField = StableSortDocumentIdField;
 
     internal static string BuildQueryPayloadJson(
         ProjectionDocumentQuery query,
@@ -63,8 +66,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
     }
 
     internal static string BuildIndexInitializationPayload(
-        DocumentIndexMetadata indexMetadata,
-        JsonSerializerOptions jsonOptions)
+        DocumentIndexMetadata indexMetadata)
     {
         var mappings = indexMetadata.Mappings.Count == 0
             ? new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -92,7 +94,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
                 StringComparer.Ordinal);
         }
 
-        return JsonSerializer.Serialize(root, jsonOptions);
+        return JsonSerializer.Serialize(root);
     }
 
     private static object BuildFilterSpec(ProjectionDocumentQuery query)
@@ -164,17 +166,18 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
             var primarySortField = string.IsNullOrWhiteSpace(defaultSortField)
                 ? DefaultQueryPrimarySortField
                 : defaultSortField.Trim();
-            return
-            [
+            var defaultClauses = new List<object>
+            {
                 BuildSortClause(primarySortField, ProjectionDocumentSortDirection.Desc, includeMissingHints: true),
-                BuildTiebreakSortClause(),
-            ];
+            };
+            defaultClauses.AddRange(BuildTiebreakSortClauses());
+            return defaultClauses.ToArray();
         }
 
         var clauses = query.Sorts
             .Select(sort => BuildSortClause(sort.FieldPath, sort.Direction, includeMissingHints: false))
             .ToList();
-        clauses.Add(BuildTiebreakSortClause());
+        clauses.AddRange(BuildTiebreakSortClauses());
         return clauses.ToArray();
     }
 
@@ -200,15 +203,22 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         };
     }
 
-    private static object BuildTiebreakSortClause()
+    private static IEnumerable<object> BuildTiebreakSortClauses()
     {
-        return new Dictionary<string, object?>
+        var spec = new Dictionary<string, object?>
         {
-            [DefaultQueryTiebreakSortField] = new Dictionary<string, object?>
-            {
-                ["order"] = "desc",
-            },
+            ["order"] = "desc",
+            ["missing"] = "_last",
+            ["unmapped_type"] = "keyword",
         };
+
+        return
+        [
+            new Dictionary<string, object?>
+            {
+                [DefaultQueryTiebreakSortField] = spec,
+            },
+        ];
     }
 
     private static string ResolveRangeOperator(ProjectionDocumentFilterOperator filterOperator)

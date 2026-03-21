@@ -32,9 +32,8 @@ internal static class TextNormalizationProtocolSampleActors
                 builder
                     .OnCommand<TextNormalizationRequested>(HandleRequestedAsync)
                     .OnEvent<TextNormalizationCompleted>(
-                        apply: static (_, evt, _) => evt.Current,
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<TextNormalizationQueryRequested, TextNormalizationQueryResponded>(HandleQueryAsync);
+                        apply: static (_, evt, _) => evt.Current)
+                    .ProjectState(static (state, _) => state);
             }
 
             private static Task HandleRequestedAsync(
@@ -274,13 +273,15 @@ public sealed class TextNormalizationScriptingProtocolGAgent : GAgentBase<TextNo
                 definitionActorId,
                 TextNormalizationRequested.Descriptor.FullName,
                 CancellationToken.None);
-            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
                 sink,
                 runId,
                 CancellationToken.None);
 
-            var snapshot = await _queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None)
-                ?? throw new InvalidOperationException("Text normalization script read model snapshot was not produced.");
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => _queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
+                CancellationToken.None);
 
             await PersistDomainEventAsync(new TextNormalizationCompleted
             {

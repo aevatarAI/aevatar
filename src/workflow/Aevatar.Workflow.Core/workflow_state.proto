@@ -12,6 +12,8 @@ message WorkflowState
     string workflow_name = 1;
     string child_actor_id = 2;
     string lifecycle = 3;
+    string definition_actor_id = 4;
+    int32 definition_version = 5;
   }
 
   message PendingSubWorkflowInvocation
@@ -23,6 +25,22 @@ message WorkflowState
     string child_actor_id = 5;
     string child_run_id = 6;
     string lifecycle = 7;
+    string definition_actor_id = 8;
+    int32 definition_version = 9;
+  }
+
+  message PendingSubWorkflowDefinitionResolution
+  {
+    string invocation_id = 1;
+    string parent_run_id = 2;
+    string parent_step_id = 3;
+    string workflow_name = 4;
+    string definition_actor_id = 5;
+    string input = 6;
+    string lifecycle = 7;
+    WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+    string timeout_callback_id = 9;
+    int32 timeout_ms = 10;
   }
 
   message ChildRunIdSet
@@ -44,6 +62,7 @@ message WorkflowState
   map<string, string> inline_workflow_yamls = 11;
   map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 12;
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 13;
+  string scope_id = 14;
 }
 
 message WorkflowRunState
@@ -53,6 +72,8 @@ message WorkflowRunState
     string workflow_name = 1;
     string child_actor_id = 2;
     string lifecycle = 3;
+    string definition_actor_id = 4;
+    int32 definition_version = 5;
   }
 
   message PendingSubWorkflowInvocation
@@ -64,6 +85,22 @@ message WorkflowRunState
     string child_actor_id = 5;
     string child_run_id = 6;
     string lifecycle = 7;
+    string definition_actor_id = 8;
+    int32 definition_version = 9;
+  }
+
+  message PendingSubWorkflowDefinitionResolution
+  {
+    string invocation_id = 1;
+    string parent_run_id = 2;
+    string parent_step_id = 3;
+    string workflow_name = 4;
+    string definition_actor_id = 5;
+    string input = 6;
+    string lifecycle = 7;
+    WorkflowRuntimeCallbackLeaseState timeout_lease = 8;
+    string timeout_callback_id = 9;
+    int32 timeout_ms = 10;
   }
 
   message ChildRunIdSet
@@ -88,6 +125,10 @@ message WorkflowRunState
   repeated PendingSubWorkflowInvocation pending_sub_workflow_invocations = 14;
   map<string, int32> pending_sub_workflow_invocation_index_by_child_run_id = 15;
   map<string, ChildRunIdSet> pending_child_run_ids_by_parent_run_id = 16;
+  string last_command_id = 17;
+  string scope_id = 18;
+  repeated PendingSubWorkflowDefinitionResolution pending_sub_workflow_definition_resolutions = 19;
+  map<string, int32> pending_sub_workflow_definition_resolution_index_by_invocation_id = 20;
 }
 
 enum WorkflowRuntimeCallbackBackendState

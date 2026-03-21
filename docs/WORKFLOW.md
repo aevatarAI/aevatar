@@ -217,7 +217,7 @@ POST /api/chat { prompt, workflow?, workflowYaml?, agentId? }
   │     └── 无下一步 → 发布 WorkflowCompletedEvent
   │
   ├── run actor envelope 流进入统一 Projection Pipeline（一对多分发）
-  │     ├── WorkflowExecutionReadModelProjector: reducer 链更新 ReadModel
+  │     ├── WorkflowExecutionCurrentStateProjector / WorkflowRunInsightReportArtifactProjector / WorkflowRunTimelineArtifactProjector / WorkflowRunGraphArtifactProjector: 按消费场景物化 current-state + durable artifacts
   │     └── WorkflowExecutionAGUIEventProjector: 映射 AGUI 事件 → run event sink
   │
   ├── DefaultEventOutputStream + IdentityEventFrameMapper: 从 sink 读事件 → 透传 WorkflowRunEventEnvelope → emitAsync
@@ -313,7 +313,7 @@ services.TryAddEnumerable(ServiceDescriptor.Singleton<IWorkflowModuleDependencyE
 | 组件 | 位置 |
 |------|------|
 | 契约 | `Aevatar.Foundation.Abstractions/Connectors/IConnector.cs` |
-| 注册表 | `Aevatar.Workflow.Core/Connectors/InMemoryConnectorRegistry.cs` |
+| 注册表 | `Aevatar.Workflow.Core/Connectors/ConfiguredConnectorRegistry.cs` |
 | 执行模块 | `Aevatar.Workflow.Core/Modules/ConnectorCallModule.cs` |
 | 配置加载 | `Aevatar.Configuration/AevatarConnectorConfig.cs` → `~/.aevatar/connectors.json` |
 

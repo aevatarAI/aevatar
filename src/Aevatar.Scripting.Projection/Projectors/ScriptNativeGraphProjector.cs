@@ -1,11 +1,6 @@
 using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Core.Ports;
-using Aevatar.Scripting.Core.Runtime;
-using Aevatar.Scripting.Core.Serialization;
 using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.ReadModels;
@@ -13,106 +8,51 @@ using Aevatar.Scripting.Projection.ReadModels;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptNativeGraphProjector
-    : IProjectionProjector<ScriptExecutionProjectionContext, IReadOnlyList<string>>
+    : ICurrentStateProjectionMaterializer<ScriptExecutionMaterializationContext>
 {
-    private readonly IProjectionWriteDispatcher<ScriptNativeGraphReadModel> _graphWriteDispatcher;
-    private readonly IScriptDefinitionSnapshotPort _definitionSnapshotPort;
-    private readonly IScriptBehaviorArtifactResolver _artifactResolver;
-    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
+    private readonly IProjectionGraphWriter<ScriptNativeGraphReadModel> _graphWriter;
     private readonly IScriptNativeGraphMaterializer _materializer;
-    private readonly IProtobufMessageCodec _codec;
 
     public ScriptNativeGraphProjector(
-        IProjectionWriteDispatcher<ScriptNativeGraphReadModel> graphWriteDispatcher,
-        IScriptDefinitionSnapshotPort definitionSnapshotPort,
-        IScriptBehaviorArtifactResolver artifactResolver,
-        IScriptReadModelMaterializationCompiler materializationCompiler,
-        IScriptNativeGraphMaterializer materializer,
-        IProtobufMessageCodec codec)
+        IProjectionGraphWriter<ScriptNativeGraphReadModel> graphWriter,
+        IScriptNativeGraphMaterializer materializer)
     {
-        _graphWriteDispatcher = graphWriteDispatcher ?? throw new ArgumentNullException(nameof(graphWriteDispatcher));
-        _definitionSnapshotPort = definitionSnapshotPort ?? throw new ArgumentNullException(nameof(definitionSnapshotPort));
-        _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
-        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
+        _graphWriter = graphWriter ?? throw new ArgumentNullException(nameof(graphWriter));
         _materializer = materializer ?? throw new ArgumentNullException(nameof(materializer));
-        _codec = codec ?? throw new ArgumentNullException(nameof(codec));
-    }
-
-    public ValueTask InitializeAsync(
-        ScriptExecutionProjectionContext context,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(
-        ScriptExecutionProjectionContext context,
+        ScriptExecutionMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
-        if (!CommittedStateEventEnvelope.TryUnpackState<ScriptBehaviorState>(
+        if (!CommittedStateEventEnvelope.TryGetObservedPayload(
                 envelope,
-                out _,
-                out var stateEvent,
-                out var state) ||
-            stateEvent?.EventData?.Is(ScriptDomainFactCommitted.Descriptor) != true ||
-            state == null)
+                out var observedPayload,
+                out var sourceEventId,
+                out _) ||
+            observedPayload?.Is(ScriptDomainFactCommitted.Descriptor) != true)
         {
             return;
         }
 
-        var fact = stateEvent.EventData.Unpack<ScriptDomainFactCommitted>();
-        var snapshot = await _definitionSnapshotPort.GetRequiredAsync(
-            state.DefinitionActorId,
-            state.Revision,
-            ct);
-        var scriptPackage = ScriptPackageModel.ResolveDeclaredPackage(
-            snapshot.ScriptPackage,
-            snapshot.SourceText);
-        var artifact = _artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
-            snapshot.ScriptId,
-            snapshot.Revision,
-            scriptPackage,
-            snapshot.SourceHash));
-        var plan = _materializationCompiler.GetOrCompile(
-            artifact,
-            snapshot.ReadModelSchemaHash,
-            snapshot.ReadModelSchemaVersion);
-        if (!plan.SupportsGraph)
+        var fact = observedPayload.Unpack<ScriptDomainFactCommitted>();
+        if (fact.NativeGraph == null)
             return;
 
-        var semanticReadModel = await ScriptCommittedStateProjectionSupport.BuildSemanticReadModelAsync(
-            context.RootActorId,
-            state,
-            fact,
-            artifact,
-            _codec);
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(
             envelope,
             DateTimeOffset.FromUnixTimeMilliseconds(fact.OccurredAtUnixTimeMs));
         var graphReadModel = _materializer.Materialize(
             context.RootActorId,
-            state.ScriptId,
-            state.DefinitionActorId,
-            state.Revision,
+            fact.ScriptId ?? string.Empty,
+            fact.DefinitionActorId ?? string.Empty,
+            fact.Revision ?? string.Empty,
             fact,
-            string.IsNullOrWhiteSpace(stateEvent.EventId) ? envelope.Id ?? string.Empty : stateEvent.EventId,
+            sourceEventId,
             updatedAt,
-            semanticReadModel,
-            plan);
-        await _graphWriteDispatcher.UpsertAsync(graphReadModel, ct);
+            fact.NativeGraph);
+        await _graphWriter.UpsertAsync(graphReadModel, ct);
     }
 
-    public ValueTask CompleteAsync(
-        ScriptExecutionProjectionContext context,
-        IReadOnlyList<string> topology,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = topology;
-        _ = ct;
-        return ValueTask.CompletedTask;
-    }
 }

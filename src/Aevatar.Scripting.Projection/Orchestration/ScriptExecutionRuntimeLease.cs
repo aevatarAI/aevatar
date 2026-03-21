@@ -7,7 +7,7 @@ using Aevatar.Scripting.Abstractions.Queries;
 namespace Aevatar.Scripting.Projection.Orchestration;
 
 public sealed class ScriptExecutionRuntimeLease
-    : ProjectionRuntimeLeaseBase<IEventSink<EventEnvelope>>,
+    : EventSinkProjectionRuntimeLeaseBase<EventEnvelope>,
       IScriptExecutionProjectionLease,
       IProjectionPortSessionLease,
       IProjectionContextRuntimeLease<ScriptExecutionProjectionContext>
@@ -24,5 +24,5 @@ public sealed class ScriptExecutionRuntimeLease
 
     public string ScopeId => RootEntityId;
 
-    public string SessionId => RootEntityId;
+    public string SessionId => Context.SessionId;
 }

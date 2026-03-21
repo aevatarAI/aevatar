@@ -3,6 +3,7 @@ using Aevatar.CQRS.Projection.Core.Orchestration;
 using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Governance.Projection.Orchestration;
 using Aevatar.GAgentService.Projection.Orchestration;
 
 namespace Aevatar.GAgentService.Tests.Projection;
@@ -92,8 +93,8 @@ internal sealed class RecordingDocumentStore<TReadModel> :
 }
 
 internal sealed class RecordingProjectionActivationService<TContext>
-    : IProjectionPortActivationService<ServiceProjectionRuntimeLease<TContext>>
-    where TContext : class, IProjectionContext
+    : IProjectionScopeActivationService<ServiceProjectionRuntimeLease<TContext>>
+    where TContext : class, IProjectionMaterializationContext
 {
     private readonly Func<string, string, TContext> _contextFactory;
 
@@ -102,45 +103,50 @@ internal sealed class RecordingProjectionActivationService<TContext>
         _contextFactory = contextFactory;
     }
 
-    public List<(string rootEntityId, string projectionName, string input, string commandId)> Calls { get; } = [];
+    public List<(string rootEntityId, string projectionName)> Calls { get; } = [];
 
     public Task<ServiceProjectionRuntimeLease<TContext>> EnsureAsync(
-        string rootEntityId,
-        string projectionName,
-        string input,
-        string commandId,
+        ProjectionScopeStartRequest request,
         CancellationToken ct = default)
     {
-        Calls.Add((rootEntityId, projectionName, input, commandId));
+        Calls.Add((request.RootActorId, request.ProjectionKind));
         return Task.FromResult(new ServiceProjectionRuntimeLease<TContext>(
-            rootEntityId,
-            _contextFactory(rootEntityId, projectionName)));
+            request.RootActorId,
+            _contextFactory(request.RootActorId, request.ProjectionKind)));
     }
 }
 
-internal sealed class RecordingProjectionLifecycle<TContext>
-    : IProjectionLifecycleService<TContext, IReadOnlyList<string>>
-    where TContext : class, IProjectionContext
+internal sealed class RecordingProjectionReleaseService<TLease>
+    : IProjectionScopeReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
 {
-    public List<TContext> StartedContexts { get; } = [];
+    public List<TLease> Released { get; } = [];
 
-    public List<TContext> StoppedContexts { get; } = [];
-
-    public Task StartAsync(TContext context, CancellationToken ct = default)
+    public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
     {
-        StartedContexts.Add(context);
+        ArgumentNullException.ThrowIfNull(lease);
+        Released.Add(lease);
         return Task.CompletedTask;
     }
+}
 
-    public Task ProjectAsync(TContext context, EventEnvelope envelope, CancellationToken ct = default) =>
-        Task.CompletedTask;
-
-    public Task StopAsync(TContext context, CancellationToken ct = default)
+internal sealed class NoOpProjectionReleaseService<TLease>
+    : IProjectionScopeReleaseService<TLease>
+    where TLease : class, IProjectionRuntimeLease
+{
+    public Task ReleaseIfIdleAsync(TLease lease, CancellationToken ct = default)
     {
-        StoppedContexts.Add(context);
+        ArgumentNullException.ThrowIfNull(lease);
         return Task.CompletedTask;
     }
+}
 
-    public Task CompleteAsync(TContext context, IReadOnlyList<string> completion, CancellationToken ct = default) =>
-        Task.CompletedTask;
+internal sealed class NoOpServiceConfigurationReleaseService
+    : IProjectionScopeReleaseService<ServiceConfigurationRuntimeLease>
+{
+    public Task ReleaseIfIdleAsync(ServiceConfigurationRuntimeLease lease, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return Task.CompletedTask;
+    }
 }

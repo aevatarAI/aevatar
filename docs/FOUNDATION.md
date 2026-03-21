@@ -157,29 +157,28 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
 当前实现已经收敛为一套统一链路：
 
 - **订阅与编排内核** 在 `Aevatar.CQRS.Projection.Core`：
-  - `ActorStreamSubscriptionHub<TMessage>`：按 `actorId` 复用底层 stream 订阅
-  - `ProjectionSubscriptionRegistry<,>`：维护 actor 级投影上下文激活态
-  - `ProjectionCoordinator<,>`：一对多分发 projector
-  - `ProjectionLifecycleService<,>`：统一 `start/wait/complete`
+  - `ProjectionScopeGAgentBase`：scope actor 基类，持有唯一运行态事实
+  - `ProjectionMaterializationScopeGAgentBase`：durable materialization scope actor 基类
+  - `ProjectionSessionScopeGAgentBase`：session observation scope actor 基类
+  - `ProjectionScopeActorRuntime`：scope actor 的统一 dispatch / replay / observation 入口
 - **读模型抽象分层**：
   - `Aevatar.Foundation.Projection`：提供读模型最小公共字段（`RootActorId/CommandId/StateVersion/LastEventId`）与通用能力接口（Timeline / RoleReplies）
   - `Aevatar.AI.Projection`：提供 AI 通用事件 reducer（`TextMessage*` / `Tool*`）和 `IProjectionEventApplier<,,>` 扩展模式
 - **WorkflowExecution 业务扩展** 在 `Aevatar.Workflow.Projection`：
-  - `WorkflowExecutionProjectionPort`（投影端口）与 `WorkflowProjectionQueryReader`（查询端口实现）
-  - 两者复用 `Aevatar.CQRS.Projection.Core` 的通用基类：`ProjectionLifecyclePortServiceBase<>` / `ProjectionQueryPortServiceBase<>`
-  - `ContextProjectionActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>` 负责 projection 启动与上下文激活
-  - `ContextProjectionReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>` 负责 idle 检测与 stop/release；workflow-specific 清理由 `WorkflowExecutionRuntimeLease` 自身承担
-  - `IProjectionOwnershipCoordinator` 负责 ownership acquire/release（由 Core 抽象直接注入）
-  - `EventSinkProjectionSessionSubscriptionManager<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 live sink attach/detach
-  - `EventSinkProjectionLiveForwarder<WorkflowExecutionRuntimeLease, WorkflowRunEvent>` 负责 run-event 推送与失败策略桥接
-  - `WorkflowProjectionSinkFailurePolicy` 负责 sink 异常降级与错误事件发布
-  - `WorkflowProjectionReadModelUpdater` 负责 read model 元信息更新
-  - `WorkflowProjectionQueryReader` 负责 read model 查询映射
-  - `WorkflowExecutionReadModelProjector` 负责事件驱动 read model 落库
-  - 业务字段映射通过 `IProjectionEventApplier<WorkflowExecutionReport, WorkflowExecutionProjectionContext, TEvent>` 扩展
+  - `WorkflowExecutionProjectionPort`（投影端口）与 `WorkflowExecutionCurrentStateQueryPort` / `WorkflowExecutionArtifactQueryPort`（查询端口实现）
+  - 生命周期复用 `Aevatar.CQRS.Projection.Core` 的通用 event-sink port 基类：`EventSinkProjectionLifecyclePortBase<>`
+  - `ProjectionSessionScopeActivationService<WorkflowExecutionRuntimeLease, WorkflowExecutionProjectionContext, WorkflowExecutionSessionScopeGAgent>` 负责 session scope actor 激活
+  - `ProjectionSessionScopeReleaseService<WorkflowExecutionRuntimeLease, WorkflowExecutionSessionScopeGAgent>` 负责 session scope actor 释放
+  - `ProjectionMaterializationScopeActivationService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationContext, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 激活
+  - `ProjectionMaterializationScopeReleaseService<WorkflowExecutionMaterializationRuntimeLease, WorkflowExecutionMaterializationScopeGAgent>` 负责 durable scope actor 释放
+  - `ProjectionSessionEventHub<WorkflowRunEventEnvelope>` 负责 session stream 分发
+  - `WorkflowExecutionCurrentStateQueryPort` 负责 authority current-state 查询映射
+  - `WorkflowExecutionArtifactQueryPort` 负责 artifact 查询映射
+  - `WorkflowExecutionCurrentStateProjector` 负责 authority current-state replica
+  - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 负责 derived durable artifacts
 - **Workflow 应用编排** 在 `Aevatar.Workflow.Application`：
   - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责完整交互路径（dispatch + sink consume + finalize）
-  - `WorkflowRunDetachedDispatchService` 负责 accepted-only 路径（detach live sink 后按 durable completion 收敛）
+  - `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 负责 accepted-only 路径
   - `ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` / `ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>` 负责 run control 命令入口
   - `WorkflowRunCommandTargetResolver` 负责 workflow source 解析与 run target 构建
   - `WorkflowRunCommandTargetBinder` 负责 projection lease/live sink 绑定与清理兜底
@@ -190,14 +189,15 @@ Agent 收到 `EventEnvelope` 后，会将两类处理器合并执行：
   - 仅依赖 `Aevatar.Workflow.Application.Abstractions`
   - 暴露 `/api/agents`、`/api/workflows`（运行查询按配置开关）
 - **输出分支**：
-  - `WorkflowExecutionReadModelProjector` 写入 read model store
+  - `WorkflowExecutionCurrentStateProjector` 写入 canonical current-state store
+  - `WorkflowRunInsightReportArtifactProjector` / `WorkflowRunTimelineArtifactProjector` / `WorkflowRunGraphArtifactProjector` 写入各自 artifact store
   - `WorkflowExecutionAGUIEventProjector`（位于 `Aevatar.Workflow.Presentation.AGUIAdapter`）输出 AG-UI 实时事件（SSE/WS），与 CQRS 读模型共享同一输入 envelope 流
 
 运行语义约束（当前实现）：
 
 - Stream 订阅粒度是 actor 级；run 输出分发粒度是 command/correlation 级。
 - `WorkflowExecutionAGUIEventProjector` 仅在 `EventEnvelope.Propagation.CorrelationId` 非空时发布 run-event，并按 `workflow-run:{actorId}:{commandId}` 事件流路由。
-- `WorkflowExecutionReadModelProjector` 仅在 read model 发生实际变更时记录 `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
+- 各 workflow readmodel projector 都只记录 committed `StateVersion` 与 `LastEventId`，用于读侧一致性观察。
 - Projection 消费的是 Actor 运行时 envelope 流；EventStore 仍只用于写侧事实持久化与重放。
 - 编排层守卫：
   - `tools/ci/architecture_guards.sh` 强制关键编排类保持轻量（行数与依赖数上限），防止职责反弹。

@@ -45,6 +45,11 @@ public sealed record ChatInput
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
 
     /// <summary>
+    /// Optional workflow scope identifier. Prefer this typed field over metadata keys.
+    /// </summary>
+    public string? ScopeId { get; init; }
+
+    /// <summary>
     /// Optional run metadata passthrough for internal bridge integrations.
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
@@ -79,6 +84,14 @@ public sealed record WorkflowSignalInput
     public string? StepId { get; init; }
     public string? CommandId { get; init; }
     public string? Payload { get; init; }
+}
+
+public sealed record WorkflowStopInput
+{
+    public required string ActorId { get; init; }
+    public required string RunId { get; init; }
+    public string? CommandId { get; init; }
+    public string? Reason { get; init; }
 }
 
 internal sealed record ChatWsCommand

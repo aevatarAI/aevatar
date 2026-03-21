@@ -15,6 +15,10 @@ namespace Aevatar.Integration.Tests;
 [Trait("Feature", "ScriptingReadModelProviders")]
 public sealed class ScriptReadModelProductionProvidersIntegrationTests
 {
+    private static readonly TimeSpan ElasticsearchClientTimeout = TimeSpan.FromSeconds(60);
+    private const int ElasticsearchRequestTimeoutMs = 30000;
+    private const int Neo4jRequestTimeoutMs = 15000;
+
     [ElasticsearchIntegrationFact]
     public async Task RunClaimAsync_ShouldPersistSemanticAndNativeDocumentsIntoElasticsearch()
     {
@@ -73,9 +77,9 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 runtimeActorId,
                 CancellationToken.None);
             nativeDocument.GetProperty("schema_id").GetString().Should().Be("claim_case");
-            nativeDocument.GetProperty("fields").GetProperty("case_id").GetString().Should().Be("Case-ES");
-            nativeDocument.GetProperty("fields").GetProperty("policy_id").GetString().Should().Be("POLICY-ES");
-            nativeDocument.GetProperty("fields").GetProperty("search").GetProperty("lookup_key").GetString()
+            nativeDocument.GetProperty("fields_value").GetProperty("case_id").GetString().Should().Be("Case-ES");
+            nativeDocument.GetProperty("fields_value").GetProperty("policy_id").GetString().Should().Be("POLICY-ES");
+            nativeDocument.GetProperty("fields_value").GetProperty("search").GetProperty("lookup_key").GetString()
                 .Should().Be("case-es:policy-es");
         }
         finally
@@ -118,14 +122,17 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
             },
             CancellationToken.None);
 
-        var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
-        var subgraph = await graphStore.GetSubgraphAsync(new ProjectionGraphQuery
-        {
-            Scope = "script-native-claim_case",
-            RootNodeId = $"script:claim_case:{runtimeActorId}",
-            Depth = 1,
-            Take = 20,
-        }, CancellationToken.None);
+        var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
+            provider,
+            scope: "script-native-claim_case",
+            rootNodeId: $"script:claim_case:{runtimeActorId}",
+            isReady: graph =>
+                graph.Nodes.Any(x => x.NodeId == "ref:policy:POLICY-N4J") &&
+                graph.Edges.Any(x =>
+                    x.FromNodeId == $"script:claim_case:{runtimeActorId}" &&
+                    x.ToNodeId == "ref:policy:POLICY-N4J" &&
+                    x.EdgeType == "rel_policy"),
+            CancellationToken.None);
 
         subgraph.Nodes.Should().Contain(x => x.NodeId == $"script:claim_case:{runtimeActorId}");
         subgraph.Nodes.Should().Contain(x => x.NodeId == "ref:policy:POLICY-N4J");
@@ -175,7 +182,10 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 CancellationToken.None);
 
             var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
+            var snapshot = await ScriptEvolutionIntegrationTestKit.WaitForSnapshotAsync(
+                provider,
+                runtimeActorId,
+                CancellationToken.None);
             snapshot.Should().NotBeNull();
             snapshot!.ReadModelPayload.Should().NotBeNull();
             snapshot.ReadModelPayload!.Unpack<ClaimCaseReadModel>().CaseId.Should().Be("Case-PROD");
@@ -185,16 +195,18 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 $"{indexPrefix}-script-native-*",
                 runtimeActorId,
                 CancellationToken.None);
-            nativeDocument.GetProperty("fields").GetProperty("policy_id").GetString().Should().Be("POLICY-PROD");
+            nativeDocument.GetProperty("fields_value").GetProperty("policy_id").GetString().Should().Be("POLICY-PROD");
 
-            var graphStore = provider.GetRequiredService<IProjectionGraphStore>();
-            var subgraph = await graphStore.GetSubgraphAsync(new ProjectionGraphQuery
-            {
-                Scope = "script-native-claim_case",
-                RootNodeId = $"script:claim_case:{runtimeActorId}",
-                Depth = 1,
-                Take = 20,
-            }, CancellationToken.None);
+            var subgraph = await ScriptEvolutionIntegrationTestKit.WaitForGraphSubgraphAsync(
+                provider,
+                scope: "script-native-claim_case",
+                rootNodeId: $"script:claim_case:{runtimeActorId}",
+                isReady: graph =>
+                    graph.Edges.Any(x =>
+                        x.FromNodeId == $"script:claim_case:{runtimeActorId}" &&
+                        x.ToNodeId == "ref:policy:POLICY-PROD" &&
+                        x.EdgeType == "rel_policy"),
+                CancellationToken.None);
             subgraph.Edges.Should().ContainSingle(x =>
                 x.FromNodeId == $"script:claim_case:{runtimeActorId}" &&
                 x.ToNodeId == "ref:policy:POLICY-PROD" &&
@@ -218,6 +230,20 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
         string documentId,
         CancellationToken ct)
     {
+        var document = await ScriptEvolutionIntegrationTestKit.WaitForAsync(
+            token => TryFindSingleElasticsearchDocumentAsync(client, indexPattern, documentId, token),
+            static candidate => candidate.HasValue,
+            $"Expected Elasticsearch document `{documentId}` in `{indexPattern}`, but no matching document was found.",
+            ct);
+        return document.Value;
+    }
+
+    private static async Task<JsonElement?> TryFindSingleElasticsearchDocumentAsync(
+        HttpClient client,
+        string indexPattern,
+        string documentId,
+        CancellationToken ct)
+    {
         var indices = indexPattern.Contains('*', StringComparison.Ordinal)
             ? await ResolveElasticsearchIndicesAsync(client, indexPattern, ct)
             : new[] { indexPattern };
@@ -227,7 +253,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                 HttpMethod.Get,
                 $"{indexName}/_doc/{Uri.EscapeDataString(documentId)}");
             using var response = await client.SendAsync(request, ct);
-            if (response.StatusCode == HttpStatusCode.NotFound)
+            if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable)
                 continue;
 
             var payload = await response.Content.ReadAsStringAsync(ct);
@@ -240,8 +266,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
             return document.RootElement.GetProperty("_source").Clone();
         }
 
-        throw new InvalidOperationException(
-            $"Expected Elasticsearch document `{documentId}` in `{indexPattern}`, but no matching document was found.");
+        return null;
     }
 
     private static async Task DeleteElasticsearchIndicesAsync(
@@ -327,6 +352,8 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                     GetRequiredEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_ENDPOINT");
                 values["Projection:Document:Providers:Elasticsearch:IndexPrefix"] = indexPrefix;
                 values["Projection:Document:Providers:Elasticsearch:AutoCreateIndex"] = "true";
+                values["Projection:Document:Providers:Elasticsearch:RequestTimeoutMs"] =
+                    ElasticsearchRequestTimeoutMs.ToString();
 
                 var username = Environment.GetEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_USERNAME");
                 var password = Environment.GetEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_PASSWORD");
@@ -344,6 +371,8 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
                     GetRequiredEnvironmentVariable("AEVATAR_TEST_NEO4J_USERNAME");
                 values["Projection:Graph:Providers:Neo4j:Password"] =
                     GetRequiredEnvironmentVariable("AEVATAR_TEST_NEO4J_PASSWORD");
+                values["Projection:Graph:Providers:Neo4j:RequestTimeoutMs"] =
+                    Neo4jRequestTimeoutMs.ToString();
 
                 var database = Environment.GetEnvironmentVariable("AEVATAR_TEST_NEO4J_DATABASE");
                 if (!string.IsNullOrWhiteSpace(database))
@@ -361,7 +390,7 @@ public sealed class ScriptReadModelProductionProvidersIntegrationTests
             var client = new HttpClient
             {
                 BaseAddress = endpoint,
-                Timeout = TimeSpan.FromSeconds(30),
+                Timeout = ElasticsearchClientTimeout,
             };
             var username = Environment.GetEnvironmentVariable("AEVATAR_TEST_ELASTICSEARCH_USERNAME");
             if (!string.IsNullOrWhiteSpace(username))

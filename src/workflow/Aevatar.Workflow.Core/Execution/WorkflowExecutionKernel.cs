@@ -37,6 +37,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         return payload != null &&
                (payload.Is(StartWorkflowEvent.Descriptor) ||
                 payload.Is(StepCompletedEvent.Descriptor) ||
+                payload.Is(WorkflowStoppedEvent.Descriptor) ||
                 payload.Is(WorkflowStepTimeoutFiredEvent.Descriptor) ||
                 payload.Is(WorkflowStepRetryBackoffFiredEvent.Descriptor));
     }
@@ -66,6 +67,12 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
         }
 
+        if (payload.Is(WorkflowStoppedEvent.Descriptor))
+        {
+            await HandleWorkflowStoppedAsync(payload.Unpack<WorkflowStoppedEvent>(), workflowContext, ct);
+            return;
+        }
+
         if (payload.Is(StepCompletedEvent.Descriptor))
             await HandleStepCompletedAsync(payload.Unpack<StepCompletedEvent>(), workflowContext, ct);
     }
@@ -85,13 +92,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 return;
             }
 
-            await ctx.PublishAsync(new WorkflowCompletedEvent
-            {
-                WorkflowName = _workflow.Name,
-                RunId = runId,
-                Success = false,
-                Error = "workflow run is already active",
-            }, TopologyAudience.ParentAndChildren, ct);
+            await PublishWorkflowCompletedAsync(
+                ctx,
+                new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = runId,
+                    Success = false,
+                    Error = "workflow run is already active",
+                },
+                ct);
             return;
         }
 
@@ -113,13 +123,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (entry == null)
         {
             await CleanupRunAsync(state, ctx, ct);
-            await ctx.PublishAsync(new WorkflowCompletedEvent
-            {
-                WorkflowName = _workflow.Name,
-                RunId = runId,
-                Success = false,
-                Error = "无步骤",
-            }, TopologyAudience.ParentAndChildren, ct);
+            await PublishWorkflowCompletedAsync(
+                ctx,
+                new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = runId,
+                    Success = false,
+                    Error = "无步骤",
+                },
+                ct);
             return;
         }
 
@@ -285,13 +298,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     evt.StepId,
                     evt.Error);
                 await CleanupRunAsync(state, ctx, ct);
-                await ctx.PublishAsync(new WorkflowCompletedEvent
-                {
-                    WorkflowName = _workflow.Name,
-                    RunId = runId,
-                    Success = false,
-                    Error = evt.Error,
-                }, TopologyAudience.ParentAndChildren, ct);
+                await PublishWorkflowCompletedAsync(
+                    ctx,
+                    new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = runId,
+                        Success = false,
+                        Error = evt.Error,
+                    },
+                    ct);
                 return;
             }
 
@@ -306,13 +322,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 evt.StepId,
                 evt.Error);
             await CleanupRunAsync(state, ctx, ct);
-            await ctx.PublishAsync(new WorkflowCompletedEvent
-            {
-                WorkflowName = _workflow.Name,
-                RunId = runId,
-                Success = false,
-                Error = evt.Error,
-            }, TopologyAudience.ParentAndChildren, ct);
+            await PublishWorkflowCompletedAsync(
+                ctx,
+                new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = runId,
+                    Success = false,
+                    Error = evt.Error,
+                },
+                ct);
             return;
         }
 
@@ -333,13 +352,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                     current.Id,
                     directNextStepId);
                 await CleanupRunAsync(state, ctx, ct);
-                await ctx.PublishAsync(new WorkflowCompletedEvent
-                {
-                    WorkflowName = _workflow.Name,
-                    RunId = runId,
-                    Success = false,
-                    Error = $"invalid next_step '{directNextStepId}' from step '{current.Id}'",
-                }, TopologyAudience.ParentAndChildren, ct);
+                await PublishWorkflowCompletedAsync(
+                    ctx,
+                    new WorkflowCompletedEvent
+                    {
+                        WorkflowName = _workflow.Name,
+                        RunId = runId,
+                        Success = false,
+                        Error = $"invalid next_step '{directNextStepId}' from step '{current.Id}'",
+                    },
+                    ct);
                 return;
             }
         }
@@ -351,17 +373,40 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         if (next == null)
         {
             await CleanupRunAsync(state, ctx, ct);
-            await ctx.PublishAsync(new WorkflowCompletedEvent
-            {
-                WorkflowName = _workflow.Name,
-                RunId = runId,
-                Success = true,
-                Output = evt.Output,
-            }, TopologyAudience.ParentAndChildren, ct);
+            await PublishWorkflowCompletedAsync(
+                ctx,
+                new WorkflowCompletedEvent
+                {
+                    WorkflowName = _workflow.Name,
+                    RunId = runId,
+                    Success = true,
+                    Output = evt.Output,
+                },
+                ct);
             return;
         }
 
         await DispatchStepAsync(next, evt.Output ?? string.Empty, state, ctx, ct);
+    }
+
+    private async Task HandleWorkflowStoppedAsync(
+        WorkflowStoppedEvent evt,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        var runId = NormalizeRunId(evt.RunId);
+        if (string.IsNullOrWhiteSpace(runId))
+            return;
+
+        var state = LoadState(ctx);
+        if (!IsActiveRun(state, runId))
+            return;
+
+        ctx.Logger.LogInformation(
+            "workflow_loop: stopping run={RunId} reason={Reason}",
+            runId,
+            string.IsNullOrWhiteSpace(evt.Reason) ? "(none)" : evt.Reason);
+        await CleanupRunAsync(state, ctx, ct);
     }
 
     private async Task<bool> TryRetryAsync(
@@ -602,13 +647,16 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 if (next == null)
                 {
                     await CleanupRunAsync(state, ctx, ct);
-                    await ctx.PublishAsync(new WorkflowCompletedEvent
-                    {
-                        WorkflowName = _workflow.Name,
-                        RunId = state.RunId,
-                        Success = true,
-                        Output = output,
-                    }, TopologyAudience.ParentAndChildren, ct);
+                    await PublishWorkflowCompletedAsync(
+                        ctx,
+                        new WorkflowCompletedEvent
+                        {
+                            WorkflowName = _workflow.Name,
+                            RunId = state.RunId,
+                            Success = true,
+                            Output = output,
+                        },
+                        ct);
                 }
                 else
                 {
@@ -641,6 +689,18 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         }
     }
 
+    private static async Task PublishWorkflowCompletedAsync(
+        IWorkflowExecutionContext ctx,
+        WorkflowCompletedEvent completed,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(ctx);
+        ArgumentNullException.ThrowIfNull(completed);
+
+        await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
+        await ctx.PublishAsync(completed.Clone(), TopologyAudience.Parent, ct);
+    }
+
     private async Task DispatchStepAsync(
         StepDefinition step,
         string input,
@@ -648,26 +708,6 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
-        var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
-        if (_workflow?.Configuration.ClosedWorldMode == true &&
-            WorkflowPrimitiveCatalog.IsClosedWorldBlocked(canonicalStepType))
-        {
-            state.CurrentStepId = step.Id;
-            state.CurrentStepInput = input;
-            state.CurrentStepDispatchPending = false;
-            state.CurrentStepTimeoutCallbackId = string.Empty;
-            await SaveStateAsync(state, ctx, ct);
-
-            await ctx.PublishAsync(new StepCompletedEvent
-            {
-                StepId = step.Id,
-                RunId = state.RunId,
-                Success = false,
-                Error = $"step type '{canonicalStepType}' is blocked in closed_world_mode",
-            }, TopologyAudience.Self, ct);
-            return;
-        }
-
         var request = BuildStepRequest(step, input, state, ctx);
         var timeoutCallbackId = step.TimeoutMs is > 0
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))

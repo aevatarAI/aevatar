@@ -27,7 +27,8 @@ public sealed record WorkflowChatRunRequest(
     IReadOnlyList<WorkflowChatInputPart>? InputParts = null,
     // Inline workflow YAML bundle; first item is the entry workflow.
     IReadOnlyList<string>? WorkflowYamls = null,
-    IReadOnlyDictionary<string, string>? Metadata = null);
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    string? ScopeId = null);
 
 public enum WorkflowChatRunStartError
 {
@@ -40,7 +41,8 @@ public enum WorkflowChatRunStartError
     AgentWorkflowNotConfigured = 6,
     InvalidWorkflowYaml = 7,
     WorkflowNameMismatch = 8,
-    DetachedCleanupUnavailable = 9,
+    PromptRequired = 9,
+    ConflictingScopeId = 10,
 }
 
 public enum WorkflowProjectionCompletionStatus

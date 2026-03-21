@@ -15,7 +15,7 @@ services:
       KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_NUM_PARTITIONS: 4
+      KAFKA_CFG_NUM_PARTITIONS: 8
       KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
       KAFKA_CFG_LOG_RETENTION_HOURS: 24
     volumes:
@@ -46,27 +46,39 @@ services:
         condition: service_healthy
       garnet:
         condition: service_started
+      elasticsearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
-      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
       AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
-      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
-      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
-      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
-      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_ActorRuntime__KafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__KafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__KafkaConsumerGroup: aevatar-mainnet-host-api
       AEVATAR_Orleans__ClusteringMode: Development
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
       AEVATAR_Orleans__SiloHost: mainnet-node1
-      AEVATAR_Orleans__PrimarySiloEndpoint: ""
+      AEVATAR_Orleans__PrimarySiloEndpoint: mainnet-node1:11111
       AEVATAR_Orleans__SiloPort: 11111
       AEVATAR_Orleans__GatewayPort: 30000
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
       AEVATAR_Orleans__QueueCacheSize: 4096
+      Projection__Document__Providers__Elasticsearch__Enabled: "true"
+      Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
+      Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
+      Projection__Document__Providers__InMemory__Enabled: "false"
+      Projection__Graph__Providers__Neo4j__Enabled: "true"
+      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
+      Projection__Graph__Providers__Neo4j__Username: neo4j
+      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
+      Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19081:8080"
     restart: unless-stopped
@@ -81,17 +93,20 @@ services:
         condition: service_healthy
       garnet:
         condition: service_started
+      elasticsearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
-      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
       AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
-      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
-      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
-      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
-      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_ActorRuntime__KafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__KafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__KafkaConsumerGroup: aevatar-mainnet-host-api
       AEVATAR_Orleans__ClusteringMode: Development
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
@@ -102,6 +117,15 @@ services:
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
       AEVATAR_Orleans__QueueCacheSize: 4096
+      Projection__Document__Providers__Elasticsearch__Enabled: "true"
+      Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
+      Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
+      Projection__Document__Providers__InMemory__Enabled: "false"
+      Projection__Graph__Providers__Neo4j__Enabled: "true"
+      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
+      Projection__Graph__Providers__Neo4j__Username: neo4j
+      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
+      Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19082:8080"
     restart: unless-stopped
@@ -116,17 +140,20 @@ services:
         condition: service_healthy
       garnet:
         condition: service_started
+      elasticsearch:
+        condition: service_started
+      neo4j:
+        condition: service_started
     environment:
       ASPNETCORE_ENVIRONMENT: Distributed
       ASPNETCORE_URLS: http://+:8080
       AEVATAR_ActorRuntime__Provider: Orleans
-      AEVATAR_ActorRuntime__OrleansStreamBackend: MassTransitAdapter
+      AEVATAR_ActorRuntime__OrleansStreamBackend: KafkaProvider
       AEVATAR_ActorRuntime__OrleansPersistenceBackend: Garnet
       AEVATAR_ActorRuntime__OrleansGarnetConnectionString: garnet:6379
-      AEVATAR_ActorRuntime__MassTransitTransportBackend: Kafka
-      AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers: kafka:29092
-      AEVATAR_ActorRuntime__MassTransitKafkaTopicName: aevatar-mainnet-agent-events
-      AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup: aevatar-mainnet-host-api
+      AEVATAR_ActorRuntime__KafkaBootstrapServers: kafka:29092
+      AEVATAR_ActorRuntime__KafkaTopicName: aevatar-mainnet-agent-events
+      AEVATAR_ActorRuntime__KafkaConsumerGroup: aevatar-mainnet-host-api
       AEVATAR_Orleans__ClusteringMode: Development
       AEVATAR_Orleans__ClusterId: aevatar-mainnet-cluster
       AEVATAR_Orleans__ServiceId: aevatar-mainnet-host-api
@@ -137,6 +164,15 @@ services:
       AEVATAR_Orleans__ListenOnAnyHostAddress: "true"
       AEVATAR_Orleans__QueueCount: 8
       AEVATAR_Orleans__QueueCacheSize: 4096
+      Projection__Document__Providers__Elasticsearch__Enabled: "true"
+      Projection__Document__Providers__Elasticsearch__Endpoints__0: http://elasticsearch:9200
+      Projection__Document__Providers__Elasticsearch__IndexPrefix: aevatar-mainnet
+      Projection__Document__Providers__InMemory__Enabled: "false"
+      Projection__Graph__Providers__Neo4j__Enabled: "true"
+      Projection__Graph__Providers__Neo4j__Uri: bolt://neo4j:7687
+      Projection__Graph__Providers__Neo4j__Username: neo4j
+      Projection__Graph__Providers__Neo4j__Password: ${NEO4J_PASSWORD}
+      Projection__Graph__Providers__InMemory__Enabled: "false"
     ports:
       - "19083:8080"
     restart: unless-stopped

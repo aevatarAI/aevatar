@@ -16,21 +16,38 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldCreateThenPrepareRevisionEntry()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
+        var createdAt = DateTimeOffset.Parse("2026-03-14T01:00:00+00:00");
+        var preparedAt = DateTimeOffset.Parse("2026-03-14T02:00:00+00:00");
+        var createdState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+                ServiceRevisionStatus.Created,
+                createdAt: createdAt));
+        var preparedState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+                ServiceRevisionStatus.Prepared,
+                artifactHash: "hash-1",
+                createdAt: createdAt,
+                preparedAt: preparedAt,
+                endpoints: [GAgentServiceTestKit.CreateEndpointDescriptor()]));
 
         await projector.ProjectAsync(
             context,
             BuildEnvelope(new ServiceRevisionCreatedEvent
             {
                 Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
-                CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-1)),
-            }));
+                CreatedAt = Timestamp.FromDateTimeOffset(createdAt),
+            }, createdState));
         await projector.ProjectAsync(
             context,
             BuildEnvelope(new ServiceRevisionPreparedEvent
@@ -39,9 +56,9 @@ public sealed class ServiceRevisionCatalogProjectorTests
                 RevisionId = "r1",
                 ImplementationKind = ServiceImplementationKind.Static,
                 ArtifactHash = "hash-1",
-                PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                PreparedAt = Timestamp.FromDateTimeOffset(preparedAt),
                 Endpoints = { GAgentServiceTestKit.CreateEndpointDescriptor() },
-            }));
+            }, preparedState));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
@@ -55,13 +72,36 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldApplyFailurePublishAndRetireTransitions()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
+        var publishedAt = DateTimeOffset.Parse("2026-03-14T03:00:00+00:00");
+        var retiredAt = DateTimeOffset.Parse("2026-03-14T04:00:00+00:00");
+        var failedState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r2"),
+                ServiceRevisionStatus.PreparationFailed,
+                failureReason: "boom"));
+        var publishedState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r2"),
+                ServiceRevisionStatus.Published,
+                failureReason: "boom",
+                publishedAt: publishedAt));
+        var retiredState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r2"),
+                ServiceRevisionStatus.Retired,
+                failureReason: "boom",
+                publishedAt: publishedAt,
+                retiredAt: retiredAt));
 
         await projector.ProjectAsync(
             context,
@@ -70,23 +110,23 @@ public sealed class ServiceRevisionCatalogProjectorTests
                 Identity = identity.Clone(),
                 RevisionId = "r2",
                 FailureReason = "boom",
-            }));
+            }, failedState));
         await projector.ProjectAsync(
             context,
             BuildEnvelope(new ServiceRevisionPublishedEvent
             {
                 Identity = identity.Clone(),
                 RevisionId = "r2",
-                PublishedAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            }));
+                PublishedAt = Timestamp.FromDateTimeOffset(publishedAt),
+            }, publishedState));
         await projector.ProjectAsync(
             context,
             BuildEnvelope(new ServiceRevisionRetiredEvent
             {
                 Identity = identity.Clone(),
                 RevisionId = "r2",
-                RetiredAt = Timestamp.FromDateTime(DateTime.UtcNow),
-            }));
+                RetiredAt = Timestamp.FromDateTimeOffset(retiredAt),
+            }, retiredState));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
@@ -101,11 +141,11 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreUnrelatedPayload_AndCancellationHooks()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -114,24 +154,17 @@ public sealed class ServiceRevisionCatalogProjectorTests
 
         (await store.ReadItemsAsync()).Should().BeEmpty();
 
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-        var initialize = () => projector.InitializeAsync(context, cts.Token).AsTask();
-        var complete = () => projector.CompleteAsync(context, [], cts.Token).AsTask();
-
-        await initialize.Should().ThrowAsync<OperationCanceledException>();
-        await complete.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]
     public async Task ProjectAsync_ShouldIgnoreEnvelopeWithoutPayload()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -149,21 +182,44 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldAddEntry_WhenCatalogExistsButRevisionIsMissing()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
+        var firstState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+                ServiceRevisionStatus.Created,
+                createdAt: DateTimeOffset.Parse("2026-03-14T01:00:00+00:00")));
+        var secondState = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+                ServiceRevisionStatus.Created,
+                createdAt: DateTimeOffset.Parse("2026-03-14T01:00:00+00:00")),
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r2"),
+                ServiceRevisionStatus.Prepared,
+                artifactHash: "hash-2",
+                preparedAt: DateTimeOffset.Parse("2026-03-14T02:00:00+00:00"),
+                endpoints:
+                [
+                    GAgentServiceTestKit.CreateEndpointDescriptor(
+                        endpointId: "chat",
+                        kind: ServiceEndpointKind.Chat),
+                ]));
 
         await projector.ProjectAsync(
             context,
             BuildEnvelope(new ServiceRevisionCreatedEvent
             {
                 Spec = GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
-                CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow.AddMinutes(-5)),
-            }));
+                CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-14T01:00:00+00:00")),
+            }, firstState));
         await projector.ProjectAsync(
             context,
             BuildEnvelope(new ServiceRevisionPreparedEvent
@@ -172,9 +228,9 @@ public sealed class ServiceRevisionCatalogProjectorTests
                 RevisionId = "r2",
                 ImplementationKind = ServiceImplementationKind.Static,
                 ArtifactHash = "hash-2",
-                PreparedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                PreparedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-14T02:00:00+00:00")),
                 Endpoints = { GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat", kind: ServiceEndpointKind.Chat) },
-            }));
+            }, secondState));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
@@ -187,13 +243,19 @@ public sealed class ServiceRevisionCatalogProjectorTests
     {
         var observedAt = DateTimeOffset.Parse("2026-03-14T12:00:00+00:00");
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.Parse("2026-03-14T00:00:00+00:00")));
         var identity = GAgentServiceTestKit.CreateIdentity();
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
+        var state = CreateRevisionState(
+            identity,
+            CreateRevisionRecord(
+                GAgentServiceTestKit.CreateStaticRevisionSpec(identity, "r1"),
+                ServiceRevisionStatus.Created,
+                createdAt: observedAt.AddMinutes(-5)));
 
         await projector.ProjectAsync(
             context,
@@ -205,7 +267,8 @@ public sealed class ServiceRevisionCatalogProjectorTests
                 },
                 eventId: "evt-revision-created",
                 stateVersion: 13,
-                observedAt: observedAt));
+                observedAt: observedAt,
+                state: state));
 
         var readModel = await store.GetAsync("tenant:app:default:svc");
         readModel.Should().NotBeNull();
@@ -219,11 +282,11 @@ public sealed class ServiceRevisionCatalogProjectorTests
     public async Task ProjectAsync_ShouldIgnoreCommittedEnvelope_WhenEventDataIsMissing()
     {
         var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
-        var projector = new ServiceRevisionCatalogProjector(store, store, new FixedProjectionClock(DateTimeOffset.UtcNow));
+        var projector = new ServiceRevisionCatalogProjector(store, new FixedProjectionClock(DateTimeOffset.UtcNow));
         var context = new ServiceRevisionCatalogProjectionContext
         {
-            ProjectionId = "service-revisions:tenant:app:default:svc",
             RootActorId = "tenant:app:default:svc",
+            ProjectionKind = "service-revisions",
         };
 
         await projector.ProjectAsync(
@@ -245,20 +308,21 @@ public sealed class ServiceRevisionCatalogProjectorTests
         (await store.ReadItemsAsync()).Should().BeEmpty();
     }
 
-    private static EventEnvelope BuildEnvelope<T>(T evt)
+    private static EventEnvelope BuildEnvelope<T>(T evt, ServiceRevisionCatalogState? state = null)
         where T : Google.Protobuf.IMessage =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(evt),
-        };
+        BuildCommittedEnvelope(
+            evt,
+            Guid.NewGuid().ToString("N"),
+            1,
+            DateTimeOffset.UtcNow,
+            state);
 
     private static EventEnvelope BuildCommittedEnvelope<T>(
         T evt,
         string eventId,
         long stateVersion,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        ServiceRevisionCatalogState? state = null)
         where T : Google.Protobuf.IMessage =>
         new()
         {
@@ -273,6 +337,55 @@ public sealed class ServiceRevisionCatalogProjectorTests
                     Timestamp = Timestamp.FromDateTimeOffset(observedAt),
                     EventData = Any.Pack(evt),
                 },
+                StateRoot = state == null ? null : Any.Pack(state),
             }),
         };
+
+    private static ServiceRevisionCatalogState CreateRevisionState(
+        ServiceIdentity identity,
+        params ServiceRevisionRecordState[] revisions)
+    {
+        var state = new ServiceRevisionCatalogState
+        {
+            Identity = identity.Clone(),
+        };
+        foreach (var revision in revisions)
+        {
+            var revisionId = revision.Spec?.RevisionId ?? string.Empty;
+            state.Revisions[revisionId] = revision.Clone();
+        }
+
+        return state;
+    }
+
+    private static ServiceRevisionRecordState CreateRevisionRecord(
+        ServiceRevisionSpec spec,
+        ServiceRevisionStatus status,
+        string artifactHash = "",
+        string failureReason = "",
+        DateTimeOffset? createdAt = null,
+        DateTimeOffset? preparedAt = null,
+        DateTimeOffset? publishedAt = null,
+        DateTimeOffset? retiredAt = null,
+        IReadOnlyList<ServiceEndpointDescriptor>? endpoints = null)
+    {
+        var record = new ServiceRevisionRecordState
+        {
+            Spec = spec.Clone(),
+            Status = status,
+            ArtifactHash = artifactHash,
+            FailureReason = failureReason,
+        };
+        if (createdAt.HasValue)
+            record.CreatedAt = Timestamp.FromDateTimeOffset(createdAt.Value);
+        if (preparedAt.HasValue)
+            record.PreparedAt = Timestamp.FromDateTimeOffset(preparedAt.Value);
+        if (publishedAt.HasValue)
+            record.PublishedAt = Timestamp.FromDateTimeOffset(publishedAt.Value);
+        if (retiredAt.HasValue)
+            record.RetiredAt = Timestamp.FromDateTimeOffset(retiredAt.Value);
+        if (endpoints != null)
+            record.Endpoints.Add(endpoints.Select(x => x.Clone()));
+        return record;
+    }
 }

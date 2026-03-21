@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Primitives;
+using Aevatar.Workflow.Extensions.Maker;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Microsoft.Extensions.Logging;
 
@@ -11,12 +12,11 @@ namespace Aevatar.Workflow.Extensions.Maker.Modules;
 /// <summary>
 /// Recursive MAKER solver module.
 /// Implements atomicity decision + recursive decomposition + per-stage voting.
+/// State is persisted in the workflow execution context via Protobuf.
 /// </summary>
 public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<StepRunKey, NodeState> _nodes = [];
-    private readonly Dictionary<StepRunKey, InternalStageRef> _internalStages = [];
-    private readonly Dictionary<StepRunKey, StepRunKey> _childToParent = [];
+    private const string ModuleStateKey = "maker_recursive";
 
     public string Name => "maker_recursive";
     public int Priority => 3;
@@ -45,8 +45,10 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
     private async Task HandleRecursiveRequestAsync(StepRequestEvent request, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(request.RunId);
-        var nodeKey = new StepRunKey(runId, request.StepId);
-        if (_nodes.ContainsKey(nodeKey))
+        var nodeKey = BuildKey(runId, request.StepId);
+        var state = ctx.LoadState<MakerRecursiveModuleState>(ModuleStateKey);
+
+        if (state.Nodes.ContainsKey(nodeKey))
         {
             ctx.Logger.LogDebug(
                 "maker_recursive: ignore duplicate request run={RunId} step={StepId}",
@@ -55,53 +57,76 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
             return;
         }
 
-        var state = NodeState.Create(request, runId);
-        _nodes[nodeKey] = state;
+        var node = CreateNodeState(request, runId);
+        state.Nodes[nodeKey] = node;
 
         ctx.Logger.LogInformation(
             "maker_recursive: start run={RunId} step={StepId} depth={Depth}/{MaxDepth}",
-            state.RunId,
-            state.StepId,
-            state.Depth,
-            state.MaxDepth);
+            node.RunId,
+            node.StepId,
+            node.Depth,
+            node.MaxDepth);
 
-        await DispatchAtomicVoteAsync(state, ctx, ct);
+        await DispatchAtomicVoteAsync(node, state, ctx, ct);
+        await SaveStateAsync(state, ctx, ct);
     }
 
     private async Task HandleStepCompletedAsync(StepCompletedEvent completed, IWorkflowExecutionContext ctx, CancellationToken ct)
     {
         var runId = WorkflowRunIdNormalizer.Normalize(completed.RunId);
-        var completionKey = new StepRunKey(runId, completed.StepId);
-        if (_internalStages.TryGetValue(completionKey, out var stageRef))
+        var completionKey = BuildKey(runId, completed.StepId);
+        var state = ctx.LoadState<MakerRecursiveModuleState>(ModuleStateKey);
+
+        if (state.InternalStages.TryGetValue(completionKey, out var stageRef))
         {
-            _internalStages.Remove(completionKey);
-            if (!_nodes.TryGetValue(stageRef.NodeKey, out var node))
+            state.InternalStages.Remove(completionKey);
+            var nodeKey = BuildKey(stageRef.NodeRunId, stageRef.NodeStepId);
+            if (!state.Nodes.TryGetValue(nodeKey, out var node))
+            {
+                await SaveStateAsync(state, ctx, ct);
                 return;
+            }
 
             switch (stageRef.Stage)
             {
-                case InternalStage.AtomicVote:
-                    await HandleAtomicVoteCompletedAsync(node, completed, ctx, ct);
-                    return;
-                case InternalStage.DecomposeVote:
-                    await HandleDecomposeVoteCompletedAsync(node, completed, ctx, ct);
-                    return;
-                case InternalStage.LeafSolveVote:
-                    await FinalizeNodeFromInternalStepAsync(node, completed, "leaf", ctx, ct);
-                    return;
-                case InternalStage.ComposeVote:
-                    await FinalizeNodeFromInternalStepAsync(node, completed, "composed", ctx, ct);
-                    return;
+                case MakerInternalStageState.AtomicVote:
+                    await HandleAtomicVoteCompletedAsync(node, completed, state, ctx, ct);
+                    break;
+                case MakerInternalStageState.DecomposeVote:
+                    await HandleDecomposeVoteCompletedAsync(node, completed, state, ctx, ct);
+                    break;
+                case MakerInternalStageState.LeafSolveVote:
+                    await FinalizeNodeFromInternalStepAsync(node, completed, "leaf", state, ctx, ct);
+                    break;
+                case MakerInternalStageState.ComposeVote:
+                    await FinalizeNodeFromInternalStepAsync(node, completed, "composed", state, ctx, ct);
+                    break;
             }
+
+            await SaveStateAsync(state, ctx, ct);
+            return;
         }
 
-        if (_childToParent.TryGetValue(completionKey, out var parentNodeKey))
+        if (state.ChildToParent.TryGetValue(completionKey, out var parentNodeKeyStr))
         {
-            _childToParent.Remove(completionKey);
-            if (!_nodes.TryGetValue(parentNodeKey, out var parent))
+            state.ChildToParent.Remove(completionKey);
+            if (!state.Nodes.TryGetValue(parentNodeKeyStr, out var parent))
+            {
+                await SaveStateAsync(state, ctx, ct);
                 return;
+            }
 
-            parent.ChildResults[completed.StepId] = completed;
+            parent.ChildResults[completed.StepId] = new MakerChildResultState
+            {
+                StepId = completed.StepId,
+                Success = completed.Success,
+                Output = completed.Output,
+                Error = completed.Error,
+                WorkerId = completed.WorkerId,
+            };
+            foreach (var (key, value) in completed.Annotations)
+                parent.ChildResults[completed.StepId].Annotations[key] = value;
+
             ctx.Logger.LogInformation(
                 "maker_recursive: child done parent={Parent} child={Child} ({Done}/{Expected})",
                 parent.StepId,
@@ -109,22 +134,25 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
                 parent.ChildResults.Count,
                 parent.ChildStepIds.Count);
 
-            if (parent.ChildResults.Count < parent.ChildStepIds.Count)
-                return;
+            if (parent.ChildResults.Count >= parent.ChildStepIds.Count)
+            {
+                await HandleAllChildrenDoneAsync(parent, state, ctx, ct);
+            }
 
-            await HandleAllChildrenDoneAsync(parent, ctx, ct);
+            await SaveStateAsync(state, ctx, ct);
         }
     }
 
     private async Task HandleAtomicVoteCompletedAsync(
-        NodeState node,
+        MakerNodeState node,
         StepCompletedEvent atomicVoteResult,
+        MakerRecursiveModuleState state,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!atomicVoteResult.Success)
         {
-            await FailNodeAsync(node, $"atomic vote failed: {atomicVoteResult.Error}", ctx, ct);
+            await FailNodeAsync(node, $"atomic vote failed: {atomicVoteResult.Error}", state, ctx, ct);
             return;
         }
 
@@ -134,22 +162,23 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
 
         if (node.AtomicDecision)
         {
-            await DispatchLeafSolveVoteAsync(node, ctx, ct);
+            await DispatchLeafSolveVoteAsync(node, state, ctx, ct);
             return;
         }
 
-        await DispatchDecomposeVoteAsync(node, ctx, ct);
+        await DispatchDecomposeVoteAsync(node, state, ctx, ct);
     }
 
     private async Task HandleDecomposeVoteCompletedAsync(
-        NodeState node,
+        MakerNodeState node,
         StepCompletedEvent decomposeVoteResult,
+        MakerRecursiveModuleState state,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
         if (!decomposeVoteResult.Success)
         {
-            await FailNodeAsync(node, $"decompose vote failed: {decomposeVoteResult.Error}", ctx, ct);
+            await FailNodeAsync(node, $"decompose vote failed: {decomposeVoteResult.Error}", state, ctx, ct);
             return;
         }
 
@@ -162,18 +191,19 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
                 "maker_recursive: fallback leaf parent={StepId} reason={Reason}",
                 node.StepId,
                 subtasks.Count == 0 ? "no_subtask" : "not_effective_split");
-            await DispatchLeafSolveVoteAsync(node, ctx, ct);
+            await DispatchLeafSolveVoteAsync(node, state, ctx, ct);
             return;
         }
 
         node.ChildStepIds.Clear();
         node.ChildResults.Clear();
 
+        var nodeKey = BuildKey(node.RunId, node.StepId);
         for (var i = 0; i < subtasks.Count; i++)
         {
             var childStepId = $"{node.StepId}_child_{i}";
             node.ChildStepIds.Add(childStepId);
-            _childToParent[new StepRunKey(node.RunId, childStepId)] = node.Key;
+            state.ChildToParent[BuildKey(node.RunId, childStepId)] = nodeKey;
 
             var childRequest = new StepRequestEvent
             {
@@ -195,7 +225,11 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
             node.ChildStepIds.Count);
     }
 
-    private async Task HandleAllChildrenDoneAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
+    private async Task HandleAllChildrenDoneAsync(
+        MakerNodeState node,
+        MakerRecursiveModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
         var orderedChildResults = node.ChildStepIds
             .Where(node.ChildResults.ContainsKey)
@@ -205,7 +239,7 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         var failed = orderedChildResults.FirstOrDefault(x => !x.Success);
         if (failed != null)
         {
-            await FailNodeAsync(node, $"child step failed: {failed.StepId} - {failed.Error}", ctx, ct);
+            await FailNodeAsync(node, $"child step failed: {failed.StepId} - {failed.Error}", state, ctx, ct);
             return;
         }
 
@@ -217,15 +251,17 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
             composeStepId,
             composeInput,
             node.ComposeWorkers,
-            InternalStage.ComposeVote,
+            MakerInternalStageState.ComposeVote,
+            state,
             ctx,
             ct);
     }
 
     private async Task FinalizeNodeFromInternalStepAsync(
-        NodeState node,
+        MakerNodeState node,
         StepCompletedEvent stageResult,
         string stage,
+        MakerRecursiveModuleState state,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -249,10 +285,15 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         completed.Annotations["maker.child_count"] = node.ChildStepIds.Count.ToString();
 
         await ctx.PublishAsync(completed, TopologyAudience.Self, ct);
-        CleanupNode(node.Key);
+        CleanupNode(BuildKey(node.RunId, node.StepId), state);
     }
 
-    private async Task FailNodeAsync(NodeState node, string error, IWorkflowExecutionContext ctx, CancellationToken ct)
+    private async Task FailNodeAsync(
+        MakerNodeState node,
+        string error,
+        MakerRecursiveModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
         await ctx.PublishAsync(new StepCompletedEvent
         {
@@ -262,57 +303,76 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
             Error = error,
         }, TopologyAudience.Self, ct);
 
-        CleanupNode(node.Key);
+        CleanupNode(BuildKey(node.RunId, node.StepId), state);
     }
 
-    private void CleanupNode(StepRunKey nodeKey)
+    private static void CleanupNode(string nodeKey, MakerRecursiveModuleState state)
     {
-        _nodes.Remove(nodeKey);
+        state.Nodes.Remove(nodeKey);
 
-        foreach (var internalKey in _internalStages
-                     .Where(x => x.Value.NodeKey.Equals(nodeKey))
+        foreach (var internalKey in state.InternalStages
+                     .Where(x => BuildKey(x.Value.NodeRunId, x.Value.NodeStepId) == nodeKey)
                      .Select(x => x.Key)
                      .ToList())
         {
-            _internalStages.Remove(internalKey);
+            state.InternalStages.Remove(internalKey);
         }
 
-        foreach (var childKey in _childToParent
-                     .Where(x => x.Value.Equals(nodeKey))
+        foreach (var childKey in state.ChildToParent
+                     .Where(x => x.Value == nodeKey)
                      .Select(x => x.Key)
                      .ToList())
         {
-            _childToParent.Remove(childKey);
+            state.ChildToParent.Remove(childKey);
         }
     }
 
-    private async Task DispatchAtomicVoteAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
+    private async Task DispatchAtomicVoteAsync(
+        MakerNodeState node,
+        MakerRecursiveModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
         var atomicInput = BuildAtomicPrompt(node);
         var stepId = $"{node.StepId}_atomic_vote";
-        await DispatchParallelVoteStepAsync(node, stepId, atomicInput, node.AtomicWorkers, InternalStage.AtomicVote, ctx, ct);
+        await DispatchParallelVoteStepAsync(
+            node, stepId, atomicInput, node.AtomicWorkers,
+            MakerInternalStageState.AtomicVote, state, ctx, ct);
     }
 
-    private async Task DispatchDecomposeVoteAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
+    private async Task DispatchDecomposeVoteAsync(
+        MakerNodeState node,
+        MakerRecursiveModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
         var decomposeInput = BuildDecomposePrompt(node);
         var stepId = $"{node.StepId}_decompose_vote";
-        await DispatchParallelVoteStepAsync(node, stepId, decomposeInput, node.DecomposeWorkers, InternalStage.DecomposeVote, ctx, ct);
+        await DispatchParallelVoteStepAsync(
+            node, stepId, decomposeInput, node.DecomposeWorkers,
+            MakerInternalStageState.DecomposeVote, state, ctx, ct);
     }
 
-    private async Task DispatchLeafSolveVoteAsync(NodeState node, IWorkflowExecutionContext ctx, CancellationToken ct)
+    private async Task DispatchLeafSolveVoteAsync(
+        MakerNodeState node,
+        MakerRecursiveModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
     {
         var solveInput = BuildSolvePrompt(node);
         var stepId = $"{node.StepId}_leaf_vote";
-        await DispatchParallelVoteStepAsync(node, stepId, solveInput, node.SolveWorkers, InternalStage.LeafSolveVote, ctx, ct);
+        await DispatchParallelVoteStepAsync(
+            node, stepId, solveInput, node.SolveWorkers,
+            MakerInternalStageState.LeafSolveVote, state, ctx, ct);
     }
 
     private async Task DispatchParallelVoteStepAsync(
-        NodeState node,
+        MakerNodeState node,
         string internalStepId,
         string input,
         string workers,
-        InternalStage stage,
+        MakerInternalStageState stage,
+        MakerRecursiveModuleState state,
         IWorkflowExecutionContext ctx,
         CancellationToken ct)
     {
@@ -330,8 +390,64 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         req.Parameters["vote_param_k"] = node.K.ToString();
         req.Parameters["vote_param_max_response_length"] = node.MaxResponseLength.ToString();
 
-        _internalStages[new StepRunKey(node.RunId, internalStepId)] = new InternalStageRef(node.Key, stage);
+        state.InternalStages[BuildKey(node.RunId, internalStepId)] = new MakerInternalStageRefState
+        {
+            NodeRunId = node.RunId,
+            NodeStepId = node.StepId,
+            Stage = stage,
+        };
         await ctx.PublishAsync(req, TopologyAudience.Self, ct);
+    }
+
+    private static string BuildKey(string runId, string stepId) => $"{runId}|{stepId}";
+
+    private Task SaveStateAsync(
+        MakerRecursiveModuleState state,
+        IWorkflowExecutionContext ctx,
+        CancellationToken ct)
+    {
+        if (state.Nodes.Count == 0 &&
+            state.InternalStages.Count == 0 &&
+            state.ChildToParent.Count == 0)
+        {
+            return ctx.ClearStateAsync(ModuleStateKey, ct);
+        }
+
+        return ctx.SaveStateAsync(ModuleStateKey, state, ct);
+    }
+
+    private static MakerNodeState CreateNodeState(StepRequestEvent request, string runId)
+    {
+        var parameters = request.Parameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+        var node = new MakerNodeState
+        {
+            RunId = runId,
+            StepId = request.StepId,
+            OriginalTask = request.Input,
+            Depth = ParseInt(parameters, "depth", 0, 0, 32),
+            MaxDepth = ParseInt(parameters, "max_depth", 3, 0, 32),
+            MaxSubtasks = ParseInt(parameters, "max_subtasks", 4, 1, 12),
+            Delimiter = ReadOrDefault(parameters, "delimiter", "\n---\n"),
+            K = ParseInt(parameters, "k", 1, 1, 10),
+            MaxResponseLength = ParseInt(parameters, "max_response_length", 2200, 128, 12000),
+            ParallelStepType = ReadOrDefault(parameters, "parallel_step_type", "parallel"),
+            VoteStepType = ReadOrDefault(parameters, "vote_step_type", "maker_vote"),
+            AtomicWorkers = ReadOrDefault(parameters, "atomic_workers", "coordinator,coordinator,coordinator"),
+            DecomposeWorkers = ReadOrDefault(parameters, "decompose_workers", "coordinator,coordinator,coordinator"),
+            SolveWorkers = ReadOrDefault(parameters, "solve_workers", "worker_a,worker_b,worker_c"),
+            ComposeWorkers = ReadOrDefault(parameters, "compose_workers", "coordinator,coordinator,coordinator"),
+            AtomicPrompt = ReadOrDefault(parameters, "atomic_prompt",
+                "You are a MAKER atomicity judge. Decide whether this task is already atomic (single micro-step) or requires further decomposition. Return exactly one token: ATOMIC or DECOMPOSE."),
+            DecomposePrompt = ReadOrDefault(parameters, "decompose_prompt",
+                "You are a MAKER decomposer. Break the task into 2-5 independent subtasks that are each closer to atomic. Output only subtasks separated by the delimiter."),
+            SolvePrompt = ReadOrDefault(parameters, "solve_prompt",
+                "You are a MAKER worker. Solve this atomic task directly. Return only the answer."),
+            ComposePrompt = ReadOrDefault(parameters, "compose_prompt",
+                "You are a MAKER composer. Merge child solutions into one coherent parent-level answer without losing key details."),
+        };
+        foreach (var (key, value) in parameters)
+            node.OriginalParameters[key] = value;
+        return node;
     }
 
     private static bool IsRecursiveStep(string stepType) =>
@@ -403,90 +519,18 @@ public sealed class MakerRecursiveModule : IEventModule<IWorkflowExecutionContex
         return string.Equals(Normalize(a), Normalize(b), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string BuildAtomicPrompt(NodeState node) =>
+    private static string BuildAtomicPrompt(MakerNodeState node) =>
         $"{node.AtomicPrompt}\n\n{BuildContextBlock(node, "atomic_decision")}\n\nTASK:\n{node.OriginalTask}";
 
-    private static string BuildDecomposePrompt(NodeState node) =>
+    private static string BuildDecomposePrompt(MakerNodeState node) =>
         $"{node.DecomposePrompt}\n\n{BuildContextBlock(node, "decompose")}\n\nDELIMITER:\n{node.Delimiter}\n\nTASK:\n{node.OriginalTask}";
 
-    private static string BuildSolvePrompt(NodeState node) =>
+    private static string BuildSolvePrompt(MakerNodeState node) =>
         $"{node.SolvePrompt}\n\n{BuildContextBlock(node, "solve")}\n\nTASK:\n{node.OriginalTask}";
 
-    private static string BuildComposePrompt(NodeState node, string childOutputs) =>
+    private static string BuildComposePrompt(MakerNodeState node, string childOutputs) =>
         $"{node.ComposePrompt}\n\n{BuildContextBlock(node, "compose")}\n\nPARENT TASK:\n{node.OriginalTask}\n\nCHILD SOLUTIONS (use delimiter {node.Delimiter}):\n{childOutputs}";
 
-    private static string BuildContextBlock(NodeState node, string phase) =>
+    private static string BuildContextBlock(MakerNodeState node, string phase) =>
         $"MAKER_CONTEXT:\nPHASE: {phase}\nDEPTH: {node.Depth}\nMAX_DEPTH: {node.MaxDepth}\nREMAINING_DEPTH: {Math.Max(0, node.MaxDepth - node.Depth)}\nMAX_SUBTASKS: {node.MaxSubtasks}\nVOTE_K: {node.K}\nMAX_RESPONSE_LENGTH: {node.MaxResponseLength}";
-
-    private enum InternalStage
-    {
-        AtomicVote,
-        DecomposeVote,
-        LeafSolveVote,
-        ComposeVote,
-    }
-
-    private readonly record struct StepRunKey(string RunId, string StepId);
-    private sealed record InternalStageRef(StepRunKey NodeKey, InternalStage Stage);
-
-    private sealed class NodeState
-    {
-        public required string RunId { get; init; }
-        public required string StepId { get; init; }
-        public required string OriginalTask { get; init; }
-        public required Dictionary<string, string> OriginalParameters { get; init; }
-        public required int Depth { get; init; }
-        public required int MaxDepth { get; init; }
-        public required int MaxSubtasks { get; init; }
-        public required string Delimiter { get; init; }
-        public required int K { get; init; }
-        public required int MaxResponseLength { get; init; }
-        public required string ParallelStepType { get; init; }
-        public required string VoteStepType { get; init; }
-        public required string AtomicWorkers { get; init; }
-        public required string DecomposeWorkers { get; init; }
-        public required string SolveWorkers { get; init; }
-        public required string ComposeWorkers { get; init; }
-        public required string AtomicPrompt { get; init; }
-        public required string DecomposePrompt { get; init; }
-        public required string SolvePrompt { get; init; }
-        public required string ComposePrompt { get; init; }
-
-        public bool AtomicDecision { get; set; }
-        public List<string> ChildStepIds { get; } = [];
-        public Dictionary<string, StepCompletedEvent> ChildResults { get; } = new(StringComparer.Ordinal);
-        public StepRunKey Key => new(RunId, StepId);
-
-        public static NodeState Create(StepRequestEvent request, string runId)
-        {
-            var parameters = request.Parameters.ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
-            return new NodeState
-            {
-                RunId = runId,
-                StepId = request.StepId,
-                OriginalTask = request.Input,
-                OriginalParameters = parameters,
-                Depth = ParseInt(parameters, "depth", 0, 0, 32),
-                MaxDepth = ParseInt(parameters, "max_depth", 3, 0, 32),
-                MaxSubtasks = ParseInt(parameters, "max_subtasks", 4, 1, 12),
-                Delimiter = ReadOrDefault(parameters, "delimiter", "\n---\n"),
-                K = ParseInt(parameters, "k", 1, 1, 10),
-                MaxResponseLength = ParseInt(parameters, "max_response_length", 2200, 128, 12000),
-                ParallelStepType = ReadOrDefault(parameters, "parallel_step_type", "parallel"),
-                VoteStepType = ReadOrDefault(parameters, "vote_step_type", "maker_vote"),
-                AtomicWorkers = ReadOrDefault(parameters, "atomic_workers", "coordinator,coordinator,coordinator"),
-                DecomposeWorkers = ReadOrDefault(parameters, "decompose_workers", "coordinator,coordinator,coordinator"),
-                SolveWorkers = ReadOrDefault(parameters, "solve_workers", "worker_a,worker_b,worker_c"),
-                ComposeWorkers = ReadOrDefault(parameters, "compose_workers", "coordinator,coordinator,coordinator"),
-                AtomicPrompt = ReadOrDefault(parameters, "atomic_prompt",
-                    "You are a MAKER atomicity judge. Decide whether this task is already atomic (single micro-step) or requires further decomposition. Return exactly one token: ATOMIC or DECOMPOSE."),
-                DecomposePrompt = ReadOrDefault(parameters, "decompose_prompt",
-                    "You are a MAKER decomposer. Break the task into 2-5 independent subtasks that are each closer to atomic. Output only subtasks separated by the delimiter."),
-                SolvePrompt = ReadOrDefault(parameters, "solve_prompt",
-                    "You are a MAKER worker. Solve this atomic task directly. Return only the answer."),
-                ComposePrompt = ReadOrDefault(parameters, "compose_prompt",
-                    "You are a MAKER composer. Merge child solutions into one coherent parent-level answer without losing key details."),
-            };
-        }
-    }
 }

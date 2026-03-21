@@ -1,5 +1,4 @@
 using Aevatar.Scripting.Application.Queries;
-using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -18,11 +17,6 @@ public static class ScriptQueryEndpoints
         group.MapGet("/{actorId}/readmodel", HandleGetSnapshot)
             .Produces<ScriptReadModelSnapshotHttpResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
-
-        group.MapPost("/{actorId}/queries", HandleExecuteDeclaredQuery)
-            .Produces<ScriptDeclaredQueryHttpResponse>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status404NotFound)
-            .Produces(StatusCodes.Status400BadRequest);
 
         return app;
     }
@@ -66,43 +60,7 @@ public static class ScriptQueryEndpoints
             snapshot.UpdatedAt));
     }
 
-    internal static async Task<IResult> HandleExecuteDeclaredQuery(
-        string actorId,
-        ScriptDeclaredQueryHttpRequest request,
-        IScriptReadModelQueryApplicationService service,
-        CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(actorId))
-            return Results.BadRequest(new { code = "ACTOR_ID_REQUIRED", message = "actorId is required." });
-
-        try
-        {
-            var payload = ScriptJsonPayloads.PackStruct(request.JsonPayload);
-            var result = await service.ExecuteDeclaredQueryAsync(actorId, payload, ct);
-            return Results.Ok(new ScriptDeclaredQueryHttpResponse(
-                ActorId: actorId,
-                QueryResultJson: ScriptJsonPayloads.ToJson(result)));
-        }
-        catch (InvalidProtocolBufferException ex)
-        {
-            return Results.BadRequest(new { code = "INVALID_QUERY_PAYLOAD", message = ex.Message });
-        }
-        catch (InvalidJsonException ex)
-        {
-            return Results.BadRequest(new { code = "INVALID_QUERY_PAYLOAD", message = ex.Message });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Results.NotFound(new { code = "READ_MODEL_NOT_FOUND", message = ex.Message });
-        }
-    }
 }
-
-public sealed record ScriptDeclaredQueryHttpRequest(string? JsonPayload);
-
-public sealed record ScriptDeclaredQueryHttpResponse(
-    string ActorId,
-    string QueryResultJson);
 
 public sealed record ScriptReadModelSnapshotHttpResponse(
     string ActorId,

@@ -9,7 +9,7 @@ public interface IProjectionRuntimeOptions
 
     bool EnableRunQueryEndpoints { get; }
 
-    bool EnableRunReportArtifacts { get; }
+    bool EnableRunReportDocuments { get; }
 
     int RunProjectionCompletionWaitTimeoutMs { get; }
 }

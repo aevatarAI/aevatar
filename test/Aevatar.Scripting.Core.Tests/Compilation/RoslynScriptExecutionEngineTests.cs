@@ -34,9 +34,14 @@ public sealed class RoslynScriptExecutionEngineTests
                             builder
                                 .OnCommand<SimpleTextCommand>(HandleCommandAsync)
                                 .OnEvent<SimpleTextEvent>(
-                                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                                    project: static (_, evt, _) => evt.Current)
-                                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>(HandleQueryAsync);
+                                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                                .ProjectState(static (state, _) => state == null
+                                    ? null
+                                    : new SimpleTextReadModel
+                                    {
+                                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                                        Value = state.Value ?? string.Empty,
+                                    });
                         }
 
                         private static Task HandleCommandAsync(

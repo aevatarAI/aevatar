@@ -4,6 +4,7 @@ package aevatar.scripting;
 
 option csharp_namespace = "Aevatar.Scripting.Abstractions";
 import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
 
 message ScriptPackageFile {
   string path = 1;
@@ -71,17 +72,8 @@ message ScriptMessageSemanticsSpec {
   string causation_id_field = 11;
 }
 
-message ScriptQuerySemanticsSpec {
-  string query_type_url = 1;
-  string query_descriptor_full_name = 2;
-  string result_type_url = 3;
-  string result_descriptor_full_name = 4;
-  string read_model_scope = 5;
-}
-
 message ScriptRuntimeSemanticsSpec {
   repeated ScriptMessageSemanticsSpec messages = 1;
-  repeated ScriptQuerySemanticsSpec queries = 2;
 }
 
 message ScriptDefinitionState {
@@ -101,13 +93,13 @@ message ScriptDefinitionState {
   string read_model_type_url = 14;
   repeated string command_type_urls = 15;
   repeated string domain_event_type_urls = 16;
-  repeated string query_type_urls = 17;
-  repeated string internal_signal_type_urls = 18;
-  ScriptPackageSpec script_package = 19;
-  bytes protocol_descriptor_set = 20;
-  string state_descriptor_full_name = 21;
-  string read_model_descriptor_full_name = 22;
-  ScriptRuntimeSemanticsSpec runtime_semantics = 23;
+  repeated string internal_signal_type_urls = 17;
+  ScriptPackageSpec script_package = 18;
+  bytes protocol_descriptor_set = 19;
+  string state_descriptor_full_name = 20;
+  string read_model_descriptor_full_name = 21;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 22;
+  string scope_id = 23;
 }
 
 message ScriptBehaviorState {
@@ -129,6 +121,7 @@ message ScriptBehaviorState {
   string state_descriptor_full_name = 16;
   string read_model_descriptor_full_name = 17;
   ScriptRuntimeSemanticsSpec runtime_semantics = 18;
+  string scope_id = 19;
 }
 
 message ScriptCatalogEntryState {
@@ -139,12 +132,14 @@ message ScriptCatalogEntryState {
   string previous_revision = 5;
   repeated string revision_history = 6;
   string last_proposal_id = 7;
+  string scope_id = 8;
 }
 
 message ScriptCatalogState {
   map<string, ScriptCatalogEntryState> entries = 1;
   int64 last_applied_event_version = 2;
   string last_event_id = 3;
+  string scope_id = 4;
 }
 
 message ScriptEvolutionProposalState {
@@ -189,6 +184,7 @@ message ScriptEvolutionSessionState {
   bool policy_allowed = 16;
   bool validation_succeeded = 17;
   string candidate_source = 18;
+  string scope_id = 19;
 }
 
 message UpsertScriptDefinitionRequestedEvent {
@@ -197,6 +193,7 @@ message UpsertScriptDefinitionRequestedEvent {
   string source_text = 3;
   string source_hash = 4;
   ScriptPackageSpec script_package = 5;
+  string scope_id = 6;
 }
 
 message ScriptDefinitionUpsertedEvent {
@@ -212,13 +209,13 @@ message ScriptDefinitionUpsertedEvent {
   string read_model_type_url = 10;
   repeated string command_type_urls = 11;
   repeated string domain_event_type_urls = 12;
-  repeated string query_type_urls = 13;
-  repeated string internal_signal_type_urls = 14;
-  ScriptPackageSpec script_package = 15;
-  bytes protocol_descriptor_set = 16;
-  string state_descriptor_full_name = 17;
-  string read_model_descriptor_full_name = 18;
-  ScriptRuntimeSemanticsSpec runtime_semantics = 19;
+  repeated string internal_signal_type_urls = 13;
+  ScriptPackageSpec script_package = 14;
+  bytes protocol_descriptor_set = 15;
+  string state_descriptor_full_name = 16;
+  string read_model_descriptor_full_name = 17;
+  ScriptRuntimeSemanticsSpec runtime_semantics = 18;
+  string scope_id = 19;
 }
 
 message ScriptDefinitionBindingSpec {
@@ -268,6 +265,7 @@ message RunScriptRequestedEvent {
   string requested_event_type = 5;
   string command_id = 6;
   string correlation_id = 7;
+  string scope_id = 8;
 }
 
 message BindScriptBehaviorRequestedEvent {
@@ -285,6 +283,7 @@ message BindScriptBehaviorRequestedEvent {
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
+  string scope_id = 15;
 }
 
 message ScriptBehaviorBoundEvent {
@@ -302,6 +301,38 @@ message ScriptBehaviorBoundEvent {
   string state_descriptor_full_name = 12;
   string read_model_descriptor_full_name = 13;
   ScriptRuntimeSemanticsSpec runtime_semantics = 14;
+  string scope_id = 15;
+}
+
+message ScriptNativeDocumentProjection {
+  string schema_id = 1;
+  string schema_version = 2;
+  string schema_hash = 3;
+  string document_index_scope = 4;
+  google.protobuf.Struct fields_value = 5;
+}
+
+message ScriptNativeGraphNodeProjection {
+  string node_id = 1;
+  string node_type = 2;
+  map<string, string> properties = 3;
+}
+
+message ScriptNativeGraphEdgeProjection {
+  string edge_id = 1;
+  string from_node_id = 2;
+  string to_node_id = 3;
+  string edge_type = 4;
+  map<string, string> properties = 5;
+}
+
+message ScriptNativeGraphProjection {
+  string schema_id = 1;
+  string schema_version = 2;
+  string schema_hash = 3;
+  string graph_scope = 4;
+  repeated ScriptNativeGraphNodeProjection node_entries = 5;
+  repeated ScriptNativeGraphEdgeProjection edge_entries = 6;
 }
 
 message ScriptDomainFactCommitted {
@@ -319,6 +350,10 @@ message ScriptDomainFactCommitted {
   string read_model_type_url = 12;
   int64 state_version = 13;
   int64 occurred_at_unix_time_ms = 14;
+  google.protobuf.Any read_model_payload = 15;
+  ScriptNativeDocumentProjection native_document = 16;
+  ScriptNativeGraphProjection native_graph = 17;
+  string scope_id = 18;
 }
 
 message ScriptBehaviorDispatchFailedEvent {
@@ -330,6 +365,7 @@ message ScriptBehaviorDispatchFailedEvent {
   string command_id = 6;
   string correlation_id = 7;
   string failure_reason = 8;
+  string scope_id = 9;
 }
 
 message StartScriptEvolutionSessionRequestedEvent {
@@ -340,6 +376,7 @@ message StartScriptEvolutionSessionRequestedEvent {
   string candidate_source = 5;
   string candidate_source_hash = 6;
   string reason = 7;
+  string scope_id = 8;
 }
 
 message ProposeScriptEvolutionRequestedEvent {
@@ -361,6 +398,7 @@ message PromoteScriptRevisionRequestedEvent {
   string source_hash = 4;
   string proposal_id = 5;
   string expected_base_revision = 6;
+  string scope_id = 7;
 }
 
 message RollbackScriptRevisionRequestedEvent {
@@ -369,6 +407,7 @@ message RollbackScriptRevisionRequestedEvent {
   string reason = 3;
   string proposal_id = 4;
   string expected_current_revision = 5;
+  string scope_id = 6;
 }
 
 message ScriptEvolutionSessionStartedEvent {
@@ -379,6 +418,7 @@ message ScriptEvolutionSessionStartedEvent {
   string candidate_source_hash = 5;
   string reason = 6;
   string candidate_source = 7;
+  string scope_id = 8;
 }
 
 message ScriptEvolutionSessionCompletedEvent {
@@ -390,6 +430,7 @@ message ScriptEvolutionSessionCompletedEvent {
   string catalog_actor_id = 6;
   repeated string diagnostics = 7;
   ScriptDefinitionBindingSpec definition_snapshot = 8;
+  string scope_id = 9;
 }
 
 message ScriptEvolutionProposedEvent {
@@ -457,6 +498,7 @@ message ScriptCatalogRevisionPromotedEvent {
   string definition_actor_id = 3;
   string source_hash = 4;
   string proposal_id = 5;
+  string scope_id = 6;
 }
 
 message ScriptCatalogRollbackRequestedEvent {
@@ -464,6 +506,7 @@ message ScriptCatalogRollbackRequestedEvent {
   string target_revision = 2;
   string reason = 3;
   string proposal_id = 4;
+  string scope_id = 5;
 }
 
 message ScriptCatalogRolledBackEvent {
@@ -471,4 +514,5 @@ message ScriptCatalogRolledBackEvent {
   string target_revision = 2;
   string previous_revision = 3;
   string proposal_id = 4;
+  string scope_id = 5;
 }

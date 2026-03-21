@@ -23,7 +23,7 @@ public sealed class GovernanceApplicationServicesTests
     public async Task ActivationCapabilityViewAssembler_ShouldComposeConfigurationAndArtifactFallback()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var artifactStore = new InMemoryServiceRevisionArtifactStore();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
         await artifactStore.SaveAsync(
             ServiceKeys.Build(identity),
             "r1",
@@ -102,7 +102,7 @@ public sealed class GovernanceApplicationServicesTests
         var assembler = new ActivationCapabilityViewAssembler(
             new RecordingCatalogQueryReader(),
             new RecordingConfigurationQueryReader(),
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var blankRevision = () => assembler.GetAsync(identity, " ");
         var missingDefinition = () => assembler.GetAsync(identity, "r1");
@@ -121,7 +121,7 @@ public sealed class GovernanceApplicationServicesTests
             {
                 GetResult = CreateConfigurationSnapshot(identity),
             },
-            new InMemoryServiceRevisionArtifactStore());
+            new ConfiguredServiceRevisionArtifactStore());
 
         var missingArtifact = () => missingArtifactAssembler.GetAsync(identity, "r1");
 
@@ -293,10 +293,6 @@ public sealed class GovernanceApplicationServicesTests
         var projectionPort = new RecordingGovernanceProjectionPort();
         var service = new ServiceGovernanceCommandApplicationService(
             dispatchPort,
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity),
-            },
             targetProvisioner,
             projectionPort);
 
@@ -323,34 +319,15 @@ public sealed class GovernanceApplicationServicesTests
     }
 
     [Fact]
-    public async Task ServiceGovernanceCommandApplicationService_ShouldRejectMissingDefinitionAndProvisionerFailures()
+    public async Task ServiceGovernanceCommandApplicationService_ShouldSurfaceProvisionerFailures()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();
-        var bindingSpec = CreateServiceBindingSpec(identity, "binding-a", ServiceBindingKind.Service);
-
-        var missingDefinitionService = new ServiceGovernanceCommandApplicationService(
-            new RecordingDispatchPort(),
-            new RecordingCatalogQueryReader(),
-            new RecordingGovernanceCommandTargetProvisioner(),
-            new RecordingGovernanceProjectionPort());
-
-        var missingDefinition = () => missingDefinitionService.CreateBindingAsync(new CreateServiceBindingCommand
-        {
-            Spec = bindingSpec.Clone(),
-        });
-        await missingDefinition.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Service definition*was not found*");
-
         var targetProvisioner = new RecordingGovernanceCommandTargetProvisioner
         {
             ConfigurationException = new InvalidOperationException("configuration target failed"),
         };
         var failingService = new ServiceGovernanceCommandApplicationService(
             new RecordingDispatchPort(),
-            new RecordingCatalogQueryReader
-            {
-                GetResult = CreateCatalogSnapshot(identity),
-            },
             targetProvisioner,
             new RecordingGovernanceProjectionPort());
 

@@ -3,8 +3,8 @@
 ## 1. 文档元信息
 
 - 文档状态：`Active`
-- 文档版本：`v15`
-- 更新时间：`2026-03-14`
+- 文档版本：`v16`
+- 更新时间：`2026-03-16`
 - 适用范围：`src/Aevatar.Scripting.*` 与相关 `test/Aevatar.Scripting.*` / `test/Aevatar.Integration.Tests`
 - 非范围：`Aevatar.Foundation.*` 的内部 runtime 实现细节；本文只说明当前生效的 scripting 主链与文档入口
 
@@ -38,20 +38,27 @@
 
 当前生效主链是：
 
-1. 脚本作者以 `ScriptBehavior<TState,TReadModel>` 编写强类型行为。
-2. 定义侧把脚本编译为 `ScriptBehaviorDescriptor + ScriptGAgentContract`。
-3. runtime provisioning 必须显式携带 `ScriptDefinitionSnapshot`；`RuntimeScriptProvisioningService` 不再中途侧读 definition readmodel，也不再轮询等待投影。
-4. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并在 commit 后发布 `CommittedStateEventPublished(state_event + state_root)` 观察流。
-5. 读侧由 `ScriptReadModelProjector` / `ScriptDefinitionSnapshotProjector` / `ScriptCatalogEntryProjector` 基于 committed observation 构建当前态 readmodel。
-6. 查询通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 对外暴露；projection 内不再保留额外的 `ScriptReadModelQueryService` 转发层。
-7. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
+1. 脚本作者以 `ScriptBehavior<TState,TReadModel>` 编写强类型 `command / signal / domain event` 行为。
+2. 当前态 readmodel 语义必须显式收敛为 `OnEvent(... apply: ...) + ProjectState(...)`：事件只推进 actor state，readmodel 只从当前 state 派生。
+3. 定义侧把脚本编译为 `ScriptBehaviorDescriptor + ScriptGAgentContract`。
+4. runtime provisioning 必须显式携带 `ScriptDefinitionSnapshot`；`RuntimeScriptProvisioningService` 不再中途侧读 definition readmodel，也不再轮询等待投影。
+5. 运行侧由 `ScriptBehaviorGAgent` 宿主脚本行为，并在 commit 后发布 `CommittedStateEventPublished(state_event + state_root)` 观察流。
+6. 写侧 dispatcher 会基于 post-event state 调 `BuildReadModel(...)`，再把 semantic/native committed fact 一并发布出去。
+7. 读侧由 `ScriptReadModelProjector` / `ScriptDefinitionSnapshotProjector` / `ScriptCatalogEntryProjector` / `ScriptNativeDocumentProjector` / `ScriptNativeGraphProjector` 基于 committed observation 构建当前态与 native readmodel。
+8. 查询只通过 `ScriptReadModelQueryReader -> ScriptReadModelQueryApplicationService` 读取 persisted snapshot/document；read-side 不再执行 behavior query，也不再暴露 declared-query authoring/runtime 契约。
+9. 演化链继续由 `ScriptEvolutionSessionGAgent / ScriptEvolutionManagerGAgent / ScriptCatalogGAgent` 承担治理与索引职责。
+
+当前 actor 边界也已经进一步收紧：
+
+1. `IScriptBehaviorRuntimeCapabilities` 不再暴露 `GetReadModelSnapshotAsync(...)` 这类跨 actor readmodel 侧读能力。
+2. scripting behavior 在 actor turn 内只能发布消息、调度 self continuation、调用 AI/definition/provisioning/evolution 等显式应用端口。
+3. 读取其他 actor 的已提交事实必须回到正式 query/readmodel 入口，不能通过 runtime capability 在脚本内部侧读。
 
 当前 runtime semantics 也已经明确收紧：
 
 1. 所有 scripting 行为契约消息都必须显式声明 `(aevatar.scripting.runtime.scripting_runtime)`。
-2. 所有 declared query 都必须显式声明 `(aevatar.scripting.runtime.scripting_query)` 的结果绑定。
-3. 不再接受 `google.protobuf.Empty / StringValue / Struct` 这类 wrapper message 的宿主自动兜底语义。
-4. wrapper 类型仍可作为普通 protobuf 载荷存在于宿主边界，但不能再充当 scripting command / signal / event / query 的隐式协议定义。
+2. 不再接受 `google.protobuf.Empty / StringValue / Struct` 这类 wrapper message 的宿主自动兜底语义。
+3. wrapper 类型仍可作为普通 protobuf 载荷存在于宿主边界，但不能再充当 scripting command / signal / event 的隐式协议定义。
 
 当前 read model schema/materialization 也已经同步收紧：
 
@@ -84,8 +91,7 @@ flowchart LR
     LIVE --> HUB["ProjectionSessionEventHub<EventEnvelope>"]
 
     RM --> QRY["ScriptReadModelQueryReader"]
-    QRY --> APP["ScriptReadModelQueryApplicationService"]
-    APP --> HOSTQ["Host / Query Endpoints"]
+    QRY --> HOSTQ["Host / Snapshot Endpoints"]
 
     EVOAPI["Host / Evolution Commands"] --> SES["ScriptEvolutionSessionGAgent"]
     SES --> CAT["ScriptCatalogGAgent"]
@@ -102,10 +108,13 @@ flowchart LR
 1. `ScriptBehavior<TState,TReadModel>`
 2. `IScriptBehaviorBuilder<TState,TReadModel>`
 3. `ScriptCommandContext<TState>`
-4. `ScriptQueryContext<TReadModel>`
-5. `ScriptFactContext`
+4. `ScriptFactContext`
+5. `ProjectState(Func<TState?, ScriptFactContext, TReadModel?>)`
 
-`Any` 只保留在宿主边界、持久化边界和跨 actor/query 边界。
+当前 authoring surface 已经不再包含 `OnQuery<TQuery, TResult>(...)`。
+`OnEvent<TEvent>(...)` 也不再接受 `project:` 参数。
+
+`Any` 只保留在宿主边界、持久化边界和跨 actor 边界。
 
 ### 5.2 写侧权威事实
 
@@ -114,8 +123,9 @@ flowchart LR
 这意味着：
 
 1. `CommittedStateEventPublished` 现在携带 `state_event + state_root`，作为 scripting current-state readmodel 的统一观察输入。
-2. `ScriptDomainFactCommitted` 继续表达脚本业务事实，但 current-state projection 不再要求读侧用 reducer 从旧文档补算当前态。
+2. `ScriptDomainFactCommitted` 继续表达脚本业务事实，但 current-state projection 不再要求读侧用 reducer 从旧文档补算当前态；每一条 committed fact 自身携带的 `read_model_payload/native_document/native_graph` 都必须对应它自己的 post-event state/version。
 3. runtime provisioning 必须显式使用 write-side 已得出的 `ScriptDefinitionSnapshot`，而不是中间层再去读 definition readmodel。
+4. native document / graph 物化计划已经前移到 write-side；projection 只消费 `ScriptDomainFactCommitted` 内的 durable `native_document/native_graph` 子契约。
 
 ### 5.3 读侧权威模型
 
@@ -143,8 +153,10 @@ flowchart LR
 5. `ScriptRunDomainEventCommitted.state_payloads`
 6. `ScriptRunDomainEventCommitted.read_model_payloads`
 7. `ScriptReadModelQueryService`
-8. `RuntimeScriptProvisioningService` 内部 definition snapshot polling fallback
-7. 直接用 projection store 直读替代正式 query facade 的做法
+8. read-side declared query / behavior query 执行
+9. `RuntimeScriptProvisioningService` 内部 definition snapshot polling fallback
+10. 直接用 projection store 直读替代正式 query facade 的做法
+11. `OnQuery<TQuery, TResult>` / `ExecuteQueryAsync(...)` / `QueryTypeUrls`
 
 ## 7. 模块分层映射
 
@@ -170,7 +182,8 @@ flowchart LR
 3. 运行期 `publish/send/self-signal/durable-timeout` 语义必须保持 runtime-neutral。
 4. 影响业务语义、控制流、稳定读取的数据必须强类型建模，不重新退回 bag。
 5. Scripting 与 Workflow/CQRS Core 继续共享统一 envelope / projection 主链，不引入第二套 read-side pipeline。
-6. runtime semantics 必须 descriptor-first，禁止再依赖 `google.protobuf.*` wrapper fallback 推断 command / signal / event / query 语义。
+6. projection 不得再解析 behavior artifact 或编译 native materialization plan；native materialization 必须来自 actor write-side durable contract。
+7. runtime semantics 必须 descriptor-first，禁止再依赖 `google.protobuf.*` wrapper fallback 推断 command / signal / event 语义。
 
 ## 9. 历史文档整理结论
 

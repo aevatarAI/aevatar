@@ -63,6 +63,40 @@ internal static class Neo4jProjectionGraphStoreCypherSupport
                "ORDER BY updatedAtEpochMs DESC SKIP $skip LIMIT $take";
     }
 
+    internal static string BuildReplaceOwnerGraphCypher(string nodeLabel, string edgeType)
+    {
+        return $"OPTIONAL MATCH ()-[old:{edgeType} {{scope: $scope}}]->() " +
+               "WHERE coalesce(old.projectionManaged, false) = true " +
+               "AND old.projectionOwnerId = $ownerId " +
+               "DELETE old " +
+               "WITH $nodes AS nodes, $edges AS edges, $targetNodeIds AS targetNodeIds, $scope AS scope, $ownerId AS ownerId " +
+               "FOREACH (node IN nodes | " +
+               $"MERGE (n:{nodeLabel} {{scope: scope, nodeId: node.nodeId}}) " +
+               "SET n.nodeType = node.nodeType, " +
+               "n.propertiesJson = node.propertiesJson, " +
+               "n.updatedAtEpochMs = node.updatedAtEpochMs, " +
+               "n.projectionManaged = node.projectionManaged, " +
+               "n.projectionOwnerId = CASE WHEN node.projectionOwnerId = '' THEN null ELSE node.projectionOwnerId END) " +
+               "WITH edges, targetNodeIds, scope, ownerId " +
+               "FOREACH (edge IN edges | " +
+               $"MERGE (from:{nodeLabel} {{scope: scope, nodeId: edge.fromNodeId}}) " +
+               "ON CREATE SET from.nodeType = 'Unknown', from.propertiesJson = '{}', from.updatedAtEpochMs = edge.updatedAtEpochMs " +
+               $"MERGE (to:{nodeLabel} {{scope: scope, nodeId: edge.toNodeId}}) " +
+               "ON CREATE SET to.nodeType = 'Unknown', to.propertiesJson = '{}', to.updatedAtEpochMs = edge.updatedAtEpochMs " +
+               $"MERGE (from)-[r:{edgeType} {{scope: scope, edgeId: edge.edgeId}}]->(to) " +
+               "SET r.relationType = edge.relationType, " +
+               "r.propertiesJson = edge.propertiesJson, " +
+               "r.updatedAtEpochMs = edge.updatedAtEpochMs, " +
+               "r.projectionManaged = edge.projectionManaged, " +
+               "r.projectionOwnerId = CASE WHEN edge.projectionOwnerId = '' THEN null ELSE edge.projectionOwnerId END) " +
+               $"WITH targetNodeIds, scope, ownerId MATCH (n:{nodeLabel} {{scope: scope}}) " +
+               "WHERE coalesce(n.projectionManaged, false) = true " +
+               "AND n.projectionOwnerId = ownerId " +
+               "AND NOT n.nodeId IN targetNodeIds " +
+               $"AND NOT EXISTS {{ MATCH (n)-[managedRel:{edgeType}]-() WHERE managedRel.scope = scope }} " +
+               "DELETE n";
+    }
+
     internal static string BuildNeighborCypher(
         string nodeLabel,
         string edgeType,

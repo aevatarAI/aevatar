@@ -63,8 +63,8 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             "direct",
             createdActorIds: [],
             projectionPort,
-            new NoOpWorkflowRunActorPort(),
-            new NoOpDetachedCleanupScheduler());
+            projectionPort,
+            new NoOpWorkflowRunActorPort());
         var context = new Aevatar.CQRS.Core.Abstractions.Commands.CommandContext(
             "actor-1",
             "cmd-1",
@@ -77,14 +77,21 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
         receipt.Should().Be(new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1"));
     }
 
-    private sealed class NoOpProjectionPort : IWorkflowExecutionProjectionPort
+    private sealed class NoOpProjectionPort
+        : IWorkflowExecutionProjectionPort,
+          IWorkflowExecutionMaterializationActivationPort
     {
         public bool ProjectionEnabled => true;
 
+        public Task<bool> ActivateAsync(string actorId, CancellationToken ct = default)
+        {
+            _ = actorId;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(true);
+        }
+
         public Task<IWorkflowExecutionProjectionLease?> EnsureActorProjectionAsync(
             string rootActorId,
-            string workflowName,
-            string input,
             string commandId,
             CancellationToken ct = default) =>
             Task.FromResult<IWorkflowExecutionProjectionLease?>(null);
@@ -122,37 +129,19 @@ public sealed class WorkflowCommandPolicyAndAdapterTests
             string workflowYaml,
             string workflowName,
             IReadOnlyDictionary<string, string>? inlineWorkflowYamls = null,
+            string? scopeId = null,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
+        public Task MarkStoppedAsync(
+            string actorId,
+            string runId,
+            string reason,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default) =>
             throw new NotSupportedException();
-    }
-
-    private sealed class NoOpDetachedCleanupScheduler : IWorkflowRunDetachedCleanupScheduler
-    {
-        public Task ScheduleAsync(WorkflowRunDetachedCleanupRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task MarkDispatchAcceptedAsync(
-            WorkflowRunDetachedCleanupDispatchAcceptedRequest request,
-            CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public Task DiscardAsync(WorkflowRunDetachedCleanupDiscardRequest request, CancellationToken ct = default)
-        {
-            _ = request;
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class FakeActor : IActor

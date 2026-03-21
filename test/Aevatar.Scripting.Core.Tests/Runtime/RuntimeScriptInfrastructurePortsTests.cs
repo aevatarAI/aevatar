@@ -128,6 +128,7 @@ public class RuntimeScriptInfrastructurePortsTests
     public async Task RunRuntimeAsync_ShouldDispatchRunScriptRequestedEnvelope_WhenRuntimeActorExists()
     {
         RunScriptRequestedEvent? captured = null;
+        var activationPort = new NoOpScriptExecutionProjectionPort();
         var runtime = new TestActorRuntime();
         runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
         {
@@ -135,7 +136,7 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }));
-        var service = CreateRuntimeCommandService(runtime);
+        var service = CreateRuntimeCommandService(runtime, activationPort);
 
         await service.RunRuntimeAsync(
             runtimeActorId: "runtime-1",
@@ -156,6 +157,69 @@ public class RuntimeScriptInfrastructurePortsTests
         captured.ScriptRevision.Should().Be("rev-1");
         captured.RequestedEventType.Should().Be("chat.requested");
         captured.InputPayload.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RunRuntimeAsync_ShouldPropagateScopeId_WhenProvided()
+    {
+        RunScriptRequestedEvent? captured = null;
+        var runtime = new TestActorRuntime();
+        runtime.RegisterActor(new TestActor("runtime-1", (envelope, ct) =>
+        {
+            captured = envelope.Payload.Unpack<RunScriptRequestedEvent>();
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }));
+        var service = CreateRuntimeCommandService(runtime);
+
+        await service.RunRuntimeAsync(
+            runtimeActorId: "runtime-1",
+            runId: "run-1",
+            inputPayload: Any.Pack(new SimpleTextCommand
+            {
+                CommandId = "command-1",
+                Value = "input",
+            }),
+            scriptRevision: "rev-1",
+            definitionActorId: "definition-1",
+            requestedEventType: "chat.requested",
+            scopeId: "scope-7",
+            ct: CancellationToken.None);
+
+        captured.Should().NotBeNull();
+        captured!.ScopeId.Should().Be("scope-7");
+    }
+
+    [Fact]
+    public async Task SpawnRuntimeAsync_ShouldPropagateScopeId_WhenProvided()
+    {
+        BindScriptBehaviorRequestedEvent? captured = null;
+        var runtime = new TestActorRuntime();
+        runtime.CreateActor = actorId => new TestActor(actorId, (envelope, ct) =>
+        {
+            captured = envelope.Payload.Unpack<BindScriptBehaviorRequestedEvent>();
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        });
+        var service = new RuntimeScriptProvisioningService(
+            CreateDispatchService(
+                runtime,
+                new ProvisionScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
+                new ProvisionScriptRuntimeCommandEnvelopeFactory()));
+
+        var actorId = await service.EnsureRuntimeAsync(
+            definitionActorId: "definition-1",
+            scriptRevision: "rev-1",
+            runtimeActorId: "runtime-1",
+            definitionSnapshot: CreateDefinitionSnapshot("rev-1"),
+            scopeId: "scope-9",
+            ct: CancellationToken.None);
+
+        actorId.Should().Be("runtime-1");
+        captured.Should().NotBeNull();
+        captured!.ScopeId.Should().Be("scope-9");
+        captured.DefinitionActorId.Should().Be("definition-1");
+        captured.Revision.Should().Be("rev-1");
     }
 
     [Fact]
@@ -579,6 +643,41 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     [Fact]
+    public async Task EvolutionInteractionService_ShouldPropagateScopeId_IntoStartSessionEvent()
+    {
+        var projectionPort = new TestProjectionPort();
+        var decisionReadPort = new TestDecisionReadPort();
+        StartScriptEvolutionSessionRequestedEvent? capturedStart = null;
+        var runtime = CreateEvolutionRuntime(projectionPort, (_, start) =>
+        {
+            capturedStart = start;
+            projectionPort.Publish("script-evolution-session:" + start.ProposalId, new ScriptEvolutionSessionCompletedEvent
+            {
+                ProposalId = start.ProposalId,
+                Accepted = true,
+                Status = "promoted",
+                ScopeId = start.ScopeId,
+            });
+        });
+        var service = CreateEvolutionInteractionService(runtime, projectionPort, decisionReadPort);
+
+        _ = await service.ProposeAsync(
+            new ScriptEvolutionProposal(
+                ProposalId: "proposal-scope",
+                ScriptId: "script-1",
+                BaseRevision: "rev-1",
+                CandidateRevision: "rev-2",
+                CandidateSource: "source-rev-2",
+                CandidateSourceHash: "hash-rev-2",
+                Reason: "rollout",
+                ScopeId: "scope-42"),
+            CancellationToken.None);
+
+        capturedStart.Should().NotBeNull();
+        capturedStart!.ScopeId.Should().Be("scope-42");
+    }
+
+    [Fact]
     public async Task EvolutionInteractionService_ShouldUseFallbackDecision_WhenSessionTimesOut()
     {
         var projectionPort = new TestProjectionPort();
@@ -734,6 +833,7 @@ public class RuntimeScriptInfrastructurePortsTests
         var targetResolver = new ScriptEvolutionCommandTargetResolver(
             actorAccessor,
             addressResolver,
+            projectionPort,
             projectionPort);
         var dispatchPipeline = new DefaultCommandDispatchPipeline<ScriptEvolutionProposal, ScriptEvolutionCommandTarget, ScriptEvolutionAcceptedReceipt, ScriptEvolutionStartError>(
             targetResolver,
@@ -785,13 +885,16 @@ public class RuntimeScriptInfrastructurePortsTests
             "1",
             "schema-hash");
 
-    private static RuntimeScriptCommandService CreateRuntimeCommandService(TestActorRuntime runtime)
+    private static RuntimeScriptCommandService CreateRuntimeCommandService(
+        TestActorRuntime runtime,
+        IScriptExecutionReadModelActivationPort? readModelActivationPort = null)
     {
         return new RuntimeScriptCommandService(
             CreateDispatchService(
                 runtime,
                 new RunScriptRuntimeCommandTargetResolver(new RuntimeScriptActorAccessor(runtime)),
-                new RunScriptRuntimeCommandEnvelopeFactory()));
+                new RunScriptRuntimeCommandEnvelopeFactory()),
+            readModelActivationPort ?? new NoOpScriptExecutionProjectionPort());
     }
 
     private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(
@@ -1233,7 +1336,9 @@ public class RuntimeScriptInfrastructurePortsTests
         public string ProposalId { get; } = proposalId;
     }
 
-    private sealed class TestProjectionPort : IScriptEvolutionProjectionPort
+    private sealed class TestProjectionPort
+        : IScriptEvolutionProjectionPort,
+          IScriptEvolutionReadModelActivationPort
     {
         private readonly Dictionary<string, IEventSink<ScriptEvolutionSessionCompletedEvent>> _sinks =
             new(StringComparer.Ordinal);
@@ -1257,6 +1362,9 @@ public class RuntimeScriptInfrastructurePortsTests
             return Task.FromResult<IScriptEvolutionProjectionLease?>(
                 new TestProjectionLease(sessionActorId, proposalId));
         }
+
+        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
+            await EnsureActorProjectionAsync(actorId, actorId, ct) != null;
 
         public Task AttachLiveSinkAsync(
             IScriptEvolutionProjectionLease lease,
@@ -1297,7 +1405,9 @@ public class RuntimeScriptInfrastructurePortsTests
         }
     }
 
-    private sealed class NoOpScriptExecutionProjectionPort : IScriptExecutionProjectionPort
+    private sealed class NoOpScriptExecutionProjectionPort
+        : IScriptExecutionProjectionPort,
+          IScriptExecutionReadModelActivationPort
     {
         public bool ProjectionEnabled => true;
 
@@ -1308,6 +1418,9 @@ public class RuntimeScriptInfrastructurePortsTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult<IScriptExecutionProjectionLease?>(new NoOpScriptExecutionProjectionLease(actorId));
         }
+
+        public async Task<bool> ActivateAsync(string actorId, CancellationToken ct = default) =>
+            await EnsureActorProjectionAsync(actorId, ct) != null;
 
         public Task AttachLiveSinkAsync(
             IScriptExecutionProjectionLease lease,

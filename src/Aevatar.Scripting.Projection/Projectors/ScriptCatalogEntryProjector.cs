@@ -8,7 +8,7 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Scripting.Projection.Projectors;
 
 public sealed class ScriptCatalogEntryProjector
-    : IProjectionProjector<ScriptAuthorityProjectionContext, IReadOnlyList<string>>
+    : ICurrentStateProjectionMaterializer<ScriptAuthorityProjectionContext>
 {
     private readonly IProjectionWriteDispatcher<ScriptCatalogEntryDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
@@ -19,13 +19,6 @@ public sealed class ScriptCatalogEntryProjector
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-    }
-
-    public ValueTask InitializeAsync(ScriptAuthorityProjectionContext context, CancellationToken ct = default)
-    {
-        _ = context;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     public async ValueTask ProjectAsync(
@@ -67,6 +60,9 @@ public sealed class ScriptCatalogEntryProjector
                 ActiveSourceHash = entryValue.ActiveSourceHash ?? string.Empty,
                 PreviousRevision = entryValue.PreviousRevision ?? string.Empty,
                 LastProposalId = entryValue.LastProposalId ?? string.Empty,
+                ScopeId = string.IsNullOrWhiteSpace(entryValue.ScopeId)
+                    ? state.ScopeId ?? string.Empty
+                    : entryValue.ScopeId,
                 StateVersion = stateEvent.Version,
                 LastEventId = stateEvent.EventId ?? string.Empty,
                 CreatedAt = updatedAt,
@@ -75,17 +71,6 @@ public sealed class ScriptCatalogEntryProjector
             document.RevisionHistory = entryValue.RevisionHistory.ToArray();
             await _writeDispatcher.UpsertAsync(document, ct);
         }
-    }
-
-    public ValueTask CompleteAsync(
-        ScriptAuthorityProjectionContext context,
-        IReadOnlyList<string> projectionResult,
-        CancellationToken ct = default)
-    {
-        _ = context;
-        _ = projectionResult;
-        _ = ct;
-        return ValueTask.CompletedTask;
     }
 
     public static string BuildDocumentId(string catalogActorId, string scriptId) =>

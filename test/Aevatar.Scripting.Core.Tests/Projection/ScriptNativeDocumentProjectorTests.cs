@@ -2,12 +2,10 @@ using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Scripting.Abstractions;
-using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Materialization;
-using Aevatar.Scripting.Core.Ports;
+using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Tests.Messages;
 using Aevatar.Scripting.Infrastructure.Compilation;
-using Aevatar.Scripting.Infrastructure.Serialization;
 using Aevatar.Scripting.Projection.Materialization;
 using Aevatar.Scripting.Projection.Orchestration;
 using Aevatar.Scripting.Projection.Projectors;
@@ -26,17 +24,14 @@ public sealed class ScriptNativeDocumentProjectorTests
         var dispatcher = new RecordingNativeDocumentDispatcher();
         var projector = new ScriptNativeDocumentProjector(
             dispatcher,
-            new StaticStructuredDefinitionSnapshotPort(),
-            new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy())),
-            new ScriptReadModelMaterializationCompiler(),
-            new ScriptNativeDocumentMaterializer(),
-            new ProtobufMessageCodec());
-        var context = new ScriptExecutionProjectionContext
+            new ScriptNativeDocumentMaterializer());
+        var context = new ScriptExecutionMaterializationContext
         {
-            ProjectionId = "runtime-1:native-document",
             RootActorId = "runtime-1",
+            ProjectionKind = "script-execution-read-model",
         };
         var readModel = BuildProfileReadModel();
+        var nativeDocumentProjection = BuildNativeDocumentProjection(readModel);
 
         await projector.ProjectAsync(
             context,
@@ -50,8 +45,11 @@ public sealed class ScriptNativeDocumentProjectorTests
                     RunId = "run-1",
                     EventType = Any.Pack(new ScriptProfileUpdated()).TypeUrl,
                     DomainEventPayload = Any.Pack(new ScriptProfileUpdated { Current = readModel.Clone() }),
+                    ReadModelTypeUrl = Any.Pack(readModel).TypeUrl,
+                    ReadModelPayload = Any.Pack(readModel),
                     StateVersion = 7,
                     OccurredAtUnixTimeMs = DateTimeOffset.Parse("2026-03-14T00:00:00Z").ToUnixTimeMilliseconds(),
+                    NativeDocument = nativeDocumentProjection.Clone(),
                 },
                 ScriptCommittedEnvelopeFactory.CreateState(
                     "definition-1",
@@ -64,7 +62,12 @@ public sealed class ScriptNativeDocumentProjectorTests
                         NormalizedText = readModel.NormalizedText,
                     },
                     7,
-                    Any.Pack(readModel).TypeUrl)),
+                    Any.Pack(readModel).TypeUrl,
+                    ScriptSources.StructuredProfileBehavior,
+                    ScriptSources.StructuredProfileBehaviorHash,
+                    ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
+                    "3",
+                    "structured-schema")),
             CancellationToken.None);
 
         dispatcher.LastUpsert.Should().NotBeNull();
@@ -107,38 +110,28 @@ public sealed class ScriptNativeDocumentProjectorTests
         return readModel;
     }
 
+    private static ScriptNativeDocumentProjection BuildNativeDocumentProjection(ScriptProfileReadModel readModel)
+    {
+        var artifactResolver = new CachedScriptBehaviorArtifactResolver(new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy()));
+        var artifact = artifactResolver.Resolve(new ScriptBehaviorArtifactRequest(
+            "script-1",
+            "rev-1",
+            ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
+            ScriptSources.StructuredProfileBehaviorHash));
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
+            artifact,
+            "structured-schema",
+            "3");
+        return new ScriptNativeProjectionBuilder()
+            .BuildDocument(readModel, plan)!;
+    }
+
     private static EventEnvelope BuildEnvelope(ScriptDomainFactCommitted fact, ScriptBehaviorState state) =>
         ScriptCommittedEnvelopeFactory.CreateCommittedEnvelope(
             fact,
             state,
             "evt-1",
             DateTimeOffset.Parse("2026-03-14T00:00:00Z"));
-
-    private sealed class StaticStructuredDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
-    {
-        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
-            string definitionActorId,
-            string requestedRevision,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-            definitionActorId.Should().Be("definition-1");
-            requestedRevision.Should().Be("rev-1");
-            return Task.FromResult(new ScriptDefinitionSnapshot(
-                ScriptId: "script-1",
-                Revision: "rev-1",
-                SourceText: ScriptSources.StructuredProfileBehavior,
-                SourceHash: ScriptSources.StructuredProfileBehaviorHash,
-                ScriptPackage: ScriptPackageSpecExtensions.CreateSingleSource(ScriptSources.StructuredProfileBehavior),
-                StateTypeUrl: Any.Pack(new ScriptProfileState()).TypeUrl,
-                ReadModelTypeUrl: Any.Pack(new ScriptProfileReadModel()).TypeUrl,
-                ReadModelSchemaVersion: "3",
-                ReadModelSchemaHash: "structured-schema",
-                ProtocolDescriptorSet: ByteString.Empty,
-                StateDescriptorFullName: ScriptProfileState.Descriptor.FullName,
-                ReadModelDescriptorFullName: ScriptProfileReadModel.Descriptor.FullName));
-        }
-    }
 
     private sealed class RecordingNativeDocumentDispatcher : IProjectionWriteDispatcher<ScriptNativeDocumentReadModel>
     {
@@ -147,7 +140,7 @@ public sealed class ScriptNativeDocumentProjectorTests
         public Task<ProjectionWriteResult> UpsertAsync(ScriptNativeDocumentReadModel readModel, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
-            LastUpsert = readModel.DeepClone();
+            LastUpsert = readModel.Clone();
             return Task.FromResult(ProjectionWriteResult.Applied());
         }
     }

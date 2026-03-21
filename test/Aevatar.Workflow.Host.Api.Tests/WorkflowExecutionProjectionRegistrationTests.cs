@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Projection.Core.Abstractions;
+using Aevatar.CQRS.Projection.Runtime.Abstractions;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration;
 using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
@@ -46,16 +47,27 @@ public class WorkflowExecutionProjectionRegistrationTests
 
         await using var provider = services.BuildServiceProvider();
         var currentStateStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionCurrentStateDocument, string>>();
-        var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowExecutionReport, string>>();
+        var timelineStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunTimelineDocument, string>>();
+        var documentStore = provider.GetRequiredService<IProjectionDocumentReader<WorkflowRunInsightReportDocument, string>>();
         var relationStore = provider.GetRequiredService<IProjectionGraphStore>();
         var currentStateDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionCurrentStateDocument>>();
-        var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowExecutionReport>>();
-
+        var timelineDispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunTimelineDocument>>();
+        var dispatcher = provider.GetRequiredService<IProjectionWriteDispatcher<WorkflowRunInsightReportDocument>>();
+        var graphWriter = provider.GetRequiredService<IProjectionGraphWriter<WorkflowRunInsightReportDocument>>();
+        var currentStateMaterializers = provider.GetServices<ICurrentStateProjectionMaterializer<WorkflowExecutionMaterializationContext>>();
+        var artifactMaterializers = provider.GetServices<IProjectionArtifactMaterializer<WorkflowExecutionMaterializationContext>>();
         currentStateStore.Should().NotBeNull();
+        timelineStore.Should().NotBeNull();
         documentStore.Should().NotBeNull();
         relationStore.Should().NotBeNull();
         currentStateDispatcher.Should().NotBeNull();
+        timelineDispatcher.Should().NotBeNull();
         dispatcher.Should().NotBeNull();
+        graphWriter.Should().NotBeNull();
+        currentStateMaterializers.Should().ContainSingle()
+            .Which.Should().BeOfType<WorkflowExecutionCurrentStateProjector>();
+        artifactMaterializers.Should().ContainSingle()
+            .Which.Should().BeOfType<WorkflowRunInsightReportArtifactProjector>();
 
         Func<Task> act = () => StartHostedServicesAsync(provider);
         await act.Should().NotThrowAsync();
@@ -99,7 +111,18 @@ public class WorkflowExecutionProjectionRegistrationTests
     }
 
     [Fact]
-    public async Task AddWorkflowExecutionProjectionCQRS_ShouldRegisterPassthroughEventDeduplicator()
+    public void WorkflowRunTimelineDocumentMetadataProvider_ShouldExposeExpectedDefaults()
+    {
+        var provider = new WorkflowRunTimelineDocumentMetadataProvider();
+
+        provider.Metadata.IndexName.Should().Be("workflow-run-timelines");
+        provider.Metadata.Mappings.Should().ContainKey("dynamic").WhoseValue.Should().Be(true);
+        provider.Metadata.Settings.Should().BeEmpty();
+        provider.Metadata.Aliases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AddWorkflowExecutionProjectionCQRS_ShouldNotRegisterLegacyEventDeduplicator()
     {
         var services = new ServiceCollection();
         RegisterEventStore(services);
@@ -107,34 +130,7 @@ public class WorkflowExecutionProjectionRegistrationTests
         services.AddWorkflowExecutionProjectionCQRS();
 
         await using var provider = services.BuildServiceProvider();
-        var deduplicator = provider.GetRequiredService<IEventDeduplicator>();
-
-        (await deduplicator.TryRecordAsync("evt-1")).Should().BeTrue();
-    }
-
-    [Fact]
-    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterProjectorAsEnumerableSingleton()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
-        services.AddWorkflowRunInsightBridgeProjector<TestWorkflowProjector>();
-
-        using var provider = services.BuildServiceProvider();
-        var projectors = provider.GetServices<IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>>().ToList();
-
-        projectors.Should().ContainSingle(x => x.GetType() == typeof(TestWorkflowProjector));
-    }
-
-    [Fact]
-    public void AddWorkflowRunInsightBridgeProjector_ShouldRegisterWorkflowBridgeProjectorType()
-    {
-        var services = new ServiceCollection();
-
-        services.AddWorkflowRunInsightBridgeProjector<WorkflowRunInsightBridgeProjector>();
-        services.Should().Contain(x =>
-            x.ServiceType == typeof(IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>) &&
-            x.ImplementationType == typeof(WorkflowRunInsightBridgeProjector));
+        provider.GetService<IEventDeduplicator>().Should().BeNull();
     }
 
     private static void RegisterInMemoryProviders(IServiceCollection services)
@@ -144,7 +140,12 @@ public class WorkflowExecutionProjectionRegistrationTests
             keyFormatter: key => key,
             defaultSortSelector: document => document.UpdatedAt,
             queryTakeMax: 200);
-        services.AddInMemoryDocumentProjectionStore<WorkflowExecutionReport, string>(
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
+            keySelector: document => document.RootActorId,
+            keyFormatter: key => key,
+            defaultSortSelector: document => document.UpdatedAt,
+            queryTakeMax: 200);
+        services.AddInMemoryDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
             keySelector: report => report.RootActorId,
             keyFormatter: key => key,
             defaultSortSelector: report => report.CreatedAt,
@@ -162,12 +163,20 @@ public class WorkflowExecutionProjectionRegistrationTests
             metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionCurrentStateDocument>>().Metadata,
             keySelector: document => document.RootActorId,
             keyFormatter: key => key);
-        services.AddElasticsearchDocumentProjectionStore<WorkflowExecutionReport, string>(
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunTimelineDocument, string>(
             optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
             {
                 Endpoints = ["http://localhost:9200"],
             },
-            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowExecutionReport>>().Metadata,
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunTimelineDocument>>().Metadata,
+            keySelector: document => document.RootActorId,
+            keyFormatter: key => key);
+        services.AddElasticsearchDocumentProjectionStore<WorkflowRunInsightReportDocument, string>(
+            optionsFactory: _ => new ElasticsearchProjectionDocumentStoreOptions
+            {
+                Endpoints = ["http://localhost:9200"],
+            },
+            metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<WorkflowRunInsightReportDocument>>().Metadata,
             keySelector: report => report.RootActorId,
             keyFormatter: key => key);
     }
@@ -222,37 +231,6 @@ public class WorkflowExecutionProjectionRegistrationTests
         public Task<bool> IsExpectedAsync(string actorId, Type expectedType, CancellationToken ct = default) =>
             Task.FromResult(true);
     }
-
-    private sealed class TestWorkflowProjector
-        : IProjectionProjector<WorkflowExecutionProjectionContext, IReadOnlyList<WorkflowExecutionTopologyEdge>>
-    {
-        public ValueTask InitializeAsync(WorkflowExecutionProjectionContext context, CancellationToken ct = default)
-        {
-            _ = context;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask ProjectAsync(WorkflowExecutionProjectionContext context, EventEnvelope envelope, CancellationToken ct = default)
-        {
-            _ = context;
-            _ = envelope;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.CompletedTask;
-        }
-
-        public ValueTask CompleteAsync(
-            WorkflowExecutionProjectionContext context,
-            IReadOnlyList<WorkflowExecutionTopologyEdge> topology,
-            CancellationToken ct = default)
-        {
-            _ = context;
-            _ = topology;
-            ct.ThrowIfCancellationRequested();
-            return ValueTask.CompletedTask;
-        }
-    }
-
     private sealed class EnvironmentVariableScope : IDisposable
     {
         private readonly string _name;

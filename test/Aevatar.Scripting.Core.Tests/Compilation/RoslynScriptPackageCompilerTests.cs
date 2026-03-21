@@ -116,8 +116,6 @@ public class RoslynScriptBehaviorCompilerTests
         artifact.Contract.ReadModelTypeUrl.Should().Be(Any.Pack(new ScriptProfileReadModel()).TypeUrl);
         artifact.Contract.CommandTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdateCommand()).TypeUrl);
         artifact.Contract.DomainEventTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileUpdated()).TypeUrl);
-        artifact.Contract.QueryTypeUrls.Should().ContainSingle(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
-        artifact.Contract.QueryResultTypeUrls.Should().ContainKey(Any.Pack(new ScriptProfileQueryRequested()).TypeUrl);
         artifact.Contract.InternalSignalTypeUrls.Should().ContainSingle(Any.Pack(new SimpleTextSignal()).TypeUrl);
         artifact.Contract.StateDescriptorFullName.Should().Be(ScriptProfileState.Descriptor.FullName);
         artifact.Contract.ReadModelDescriptorFullName.Should().Be(ScriptProfileReadModel.Descriptor.FullName);
@@ -131,11 +129,8 @@ public class RoslynScriptBehaviorCompilerTests
             x.TypeUrl == Any.Pack(new ScriptProfileUpdated()).TypeUrl &&
             x.Kind == ScriptMessageKind.DomainEvent &&
             x.Projectable);
-        artifact.Contract.RuntimeSemantics.Queries.Should().Contain(x =>
-            x.QueryTypeUrl == Any.Pack(new ScriptProfileQueryRequested()).TypeUrl &&
-            x.ResultTypeUrl == Any.Pack(new ScriptProfileQueryResponded()).TypeUrl);
 
-        var plan = new ScriptReadModelMaterializationCompiler().GetOrCompile(
+        var plan = new ScriptReadModelMaterializationCompiler().Compile(
             artifact,
             schemaHash: "contract-hash",
             schemaVersion: "3");
@@ -215,40 +210,6 @@ public class RoslynScriptBehaviorCompilerTests
             x.Contains("only singular scalar fields are supported", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void Compile_ShouldReject_WhenQueryResultDeclaresWrongRuntimeKind()
-    {
-        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
-        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
-            ScriptId: "script-wrong-query-kind",
-            Revision: "rev-wrong-query-kind",
-            Package: CreateInvalidRuntimePackage(
-                resultRuntimeOptions: """
-                                      kind: SCRIPTING_MESSAGE_KIND_DOMAIN_EVENT
-                                      read_model_scope: "dynamic.invalidruntime.InvalidRuntimeReadModel"
-                                      """)));
-
-        result.IsSuccess.Should().BeFalse();
-        result.Diagnostics.Should().Contain(x =>
-            x.Contains("Runtime semantics are missing", StringComparison.Ordinal) ||
-            x.Contains("expected `QueryResult`", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void Compile_ShouldReject_WhenQueryDeclaresWrongResultDescriptor()
-    {
-        var compiler = new RoslynScriptBehaviorCompiler(new ScriptSandboxPolicy());
-        var result = compiler.Compile(new ScriptBehaviorCompilationRequest(
-            ScriptId: "script-wrong-result",
-            Revision: "rev-wrong-result",
-            Package: CreateInvalidRuntimePackage(
-                queryResultFullName: "dynamic.invalidruntime.NotTheResult")));
-
-        result.IsSuccess.Should().BeFalse();
-        result.Diagnostics.Should().Contain(x =>
-            x.Contains("declares result descriptor", StringComparison.Ordinal));
-    }
-
     private const string ContractBehaviorSource =
         """
         using System;
@@ -270,11 +231,35 @@ public class RoslynScriptBehaviorCompilerTests
                         apply: static (state, evt, _) => new ScriptProfileState
                         {
                             CommandCount = (state?.CommandCount ?? 0) + 1,
+                            ActorId = evt.Current?.ActorId ?? string.Empty,
+                            PolicyId = evt.Current?.PolicyId ?? string.Empty,
                             LastCommandId = evt.CommandId ?? string.Empty,
+                            InputText = evt.Current?.InputText ?? string.Empty,
                             NormalizedText = evt.Current?.NormalizedText ?? string.Empty,
-                        },
-                        project: static (_, evt, _) => evt.Current)
-                    .OnQuery<ScriptProfileQueryRequested, ScriptProfileQueryResponded>(HandleQueryAsync);
+                            Tags = { evt.Current == null ? global::System.Array.Empty<string>() : (global::System.Collections.Generic.IEnumerable<string>)evt.Current.Tags },
+                        })
+                    .ProjectState(static (state, _) => state == null
+                        ? new ScriptProfileReadModel()
+                        : new ScriptProfileReadModel
+                        {
+                            HasValue = true,
+                            ActorId = state.ActorId,
+                            PolicyId = state.PolicyId,
+                            LastCommandId = state.LastCommandId,
+                            InputText = state.InputText,
+                            NormalizedText = state.NormalizedText,
+                            Search = new ScriptProfileSearchIndex
+                            {
+                                LookupKey = $"{state.ActorId}:{state.PolicyId}".ToLowerInvariant(),
+                                SortKey = state.NormalizedText ?? string.Empty,
+                            },
+                            Refs = new ScriptProfileDocumentRef
+                            {
+                                ActorId = state.ActorId ?? string.Empty,
+                                PolicyId = state.PolicyId ?? string.Empty,
+                            },
+                            Tags = { state.Tags },
+                        });
             }
 
             private static Task HandleAsync(
@@ -379,9 +364,11 @@ public class RoslynScriptBehaviorCompilerTests
                         .OnEvent<InvalidRuntimeUpdated>(
                             apply: static (_, evt, _) => evt.Current == null
                                 ? new InvalidRuntimeState()
-                                : new InvalidRuntimeState { LastCommandId = evt.CommandId ?? string.Empty },
-                            project: static (_, evt, _) => evt.Current)
-                        .OnQuery<InvalidRuntimeQueryRequested, InvalidRuntimeQueryResponded>(HandleQueryAsync);
+                                : new InvalidRuntimeState { LastCommandId = evt.CommandId ?? string.Empty })
+                        .ProjectState(static (state, _) => new InvalidRuntimeReadModel
+                        {
+                            LastCommandId = state?.LastCommandId ?? string.Empty,
+                        });
                 }
 
                 private static Task HandleAsync(

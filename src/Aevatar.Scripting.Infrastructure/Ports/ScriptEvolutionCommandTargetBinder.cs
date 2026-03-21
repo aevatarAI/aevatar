@@ -32,6 +32,13 @@ public sealed class ScriptEvolutionCommandTargetBinder
 
         try
         {
+            if (!await target.ActivateReadModelAsync(ct))
+            {
+                await sink.DisposeAsync();
+                return CommandTargetBindingResult<ScriptEvolutionStartError>.Failure(
+                    ScriptEvolutionStartError.ProjectionDisabled);
+            }
+
             var projectionLease = await _projectionPort.EnsureAndAttachAsync(
                 token => _projectionPort.EnsureActorProjectionAsync(
                     target.SessionActorId,

@@ -16,7 +16,7 @@ namespace Aevatar.Integration.Tests;
 public sealed class ScriptBehaviorReadModelIntegrationTests
 {
     [Fact]
-    public async Task ProvisionRunAndQuery_ShouldProduceProjectedReadModel()
+    public async Task ProvisionRunAndReadSnapshot_ShouldProduceProjectedReadModel()
     {
         var services = new ServiceCollection();
         services.AddAevatarRuntime();
@@ -79,24 +79,15 @@ public sealed class ScriptBehaviorReadModelIntegrationTests
             committed.DomainEventPayload.Should().NotBeNull();
             committed.DomainEventPayload.Unpack<TextNormalizationCompleted>().Current.NormalizedText.Should().Be("HELLO");
 
-            var snapshot = await queryService.GetSnapshotAsync(runtimeActorId, CancellationToken.None);
-            snapshot.Should().NotBeNull();
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
+                CancellationToken.None);
             snapshot!.ReadModelPayload.Should().NotBeNull();
             snapshot.ReadModelPayload.Unpack<TextNormalizationReadModel>().NormalizedText.Should().Be("HELLO");
 
             var listed = await queryService.ListSnapshotsAsync(10, CancellationToken.None);
             listed.Should().Contain(x => x.ActorId == runtimeActorId);
-
-            var queryResult = await queryService.ExecuteDeclaredQueryAsync(
-                runtimeActorId,
-                Any.Pack(new TextNormalizationQueryRequested
-                {
-                    RequestId = "request-1",
-                    ReplyStreamId = "reply-stream",
-                }),
-                CancellationToken.None);
-            queryResult.Should().NotBeNull();
-            queryResult!.Unpack<TextNormalizationQueryResponded>().Current.NormalizedText.Should().Be("HELLO");
         }
         finally
         {

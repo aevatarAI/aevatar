@@ -129,7 +129,6 @@ public class ScriptCapabilityHostExtensionsTests
         routeEndpoints.Should().Contain("/api/scripts/evolutions/proposals");
         routeEndpoints.Should().Contain("/api/scripts/runtimes");
         routeEndpoints.Should().Contain("/api/scripts/runtimes/{actorId}/readmodel");
-        routeEndpoints.Should().Contain("/api/scripts/runtimes/{actorId}/queries");
     }
 
     private static string NormalizeRoute(string? route)

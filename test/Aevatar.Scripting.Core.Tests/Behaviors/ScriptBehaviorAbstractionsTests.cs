@@ -46,43 +46,16 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void ProjectReadModel_ShouldReturnNull_WhenProjectHandlerIsMissing()
+    public void BuildReadModel_ShouldReturnNull_WhenStateProjectorIsMissing()
     {
         var behavior = new ApplyOnlyBehavior();
         var current = new SimpleTextState { Value = "current" };
 
-        var result = behavior.ProjectReadModel(
+        var result = behavior.BuildReadModel(
             current,
-            new SimpleTextEvent
-            {
-                Current = new SimpleTextReadModel { Value = "next", HasValue = true },
-            },
             CreateFactContext());
 
         result.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ExecuteQueryAsync_ShouldRejectUndeclaredQuery()
-    {
-        var behavior = new CommandBehavior();
-
-        var act = () => behavior.ExecuteQueryAsync(
-            new SimpleTextSignal(),
-            new ScriptTypedReadModelSnapshot(
-                "actor-1",
-                "script-1",
-                "definition-1",
-                "rev-1",
-                ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextReadModel)),
-                new SimpleTextReadModel(),
-                1,
-                "evt-1",
-                DateTimeOffset.UtcNow),
-            CancellationToken.None);
-
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*does not declare query type*");
     }
 
     [Fact]
@@ -95,12 +68,12 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void Descriptor_ShouldRejectEventWithoutApplyOrProject()
+    public void Descriptor_ShouldRejectDuplicateStateProjection()
     {
-        var act = () => _ = new MissingEventHandlerBehavior().Descriptor;
+        var act = () => _ = new DuplicateStateProjectionBehavior().Descriptor;
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*At least one of apply/project must be provided*");
+            .WithMessage("*Read model projector is already registered*");
     }
 
     [Fact]
@@ -110,15 +83,6 @@ public sealed class ScriptBehaviorAbstractionsTests
 
         act.Should().Throw<InvalidOperationException>()
             .WithMessage("*Domain event type*already registered*");
-    }
-
-    [Fact]
-    public void Descriptor_ShouldRejectDuplicateQueryRegistration()
-    {
-        var act = () => _ = new DuplicateQueryBehavior().Descriptor;
-
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Query type*already registered*");
     }
 
     [Fact]
@@ -209,10 +173,9 @@ public sealed class ScriptBehaviorAbstractionsTests
     }
 
     [Fact]
-    public void ScriptRuntimeSemanticsExtensions_ShouldResolveMessagesQueriesAndThrowForMissingEntries()
+    public void ScriptRuntimeSemanticsExtensions_ShouldResolveMessagesAndThrowForMissingEntries()
     {
         var typeUrl = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextCommand));
-        var resultTypeUrl = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextQueryResponded));
         var spec = new ScriptRuntimeSemanticsSpec
         {
             Messages =
@@ -223,19 +186,6 @@ public sealed class ScriptBehaviorAbstractionsTests
                     Kind = ScriptMessageKind.Command,
                     CommandIdField = "command_id",
                 },
-                new ScriptMessageSemanticsSpec
-                {
-                    TypeUrl = resultTypeUrl,
-                    Kind = ScriptMessageKind.QueryResult,
-                },
-            },
-            Queries =
-            {
-                new ScriptQuerySemanticsSpec
-                {
-                    QueryTypeUrl = ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextQueryRequested)),
-                    ResultTypeUrl = resultTypeUrl,
-                },
             },
         };
 
@@ -243,20 +193,13 @@ public sealed class ScriptBehaviorAbstractionsTests
         commandSemantics.CommandIdField.Should().Be("command_id");
         spec.TryGetMessageSemantics(typeUrl, ScriptMessageKind.Unspecified, out var fallbackSemantics).Should().BeTrue();
         fallbackSemantics.Kind.Should().Be(ScriptMessageKind.Command);
-        spec.TryGetQuerySemantics(ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextQueryRequested)), out var querySemantics).Should().BeTrue();
-        querySemantics.ResultTypeUrl.Should().Be(resultTypeUrl);
         ((ScriptRuntimeSemanticsSpec?)null).TryGetMessageSemantics(typeUrl, out _).Should().BeFalse();
-        ((ScriptRuntimeSemanticsSpec?)null).TryGetQuerySemantics(ScriptMessageTypes.GetTypeUrl(typeof(SimpleTextQueryRequested)), out _).Should().BeFalse();
 
         Action missingMessage = () => spec.GetRequiredMessageSemantics("missing-type", ScriptMessageKind.Command);
-        Action missingQuery = () => spec.GetRequiredQuerySemantics("missing-query");
         Action blankTypeUrl = () => ScriptRuntimeSemanticsExtensions.TryGetMessageSemantics(spec, "", out _);
-        Action blankQueryUrl = () => ScriptRuntimeSemanticsExtensions.TryGetQuerySemantics(spec, "", out _);
 
         missingMessage.Should().Throw<InvalidOperationException>().WithMessage("*Runtime semantics are missing for message type*");
-        missingQuery.Should().Throw<InvalidOperationException>().WithMessage("*Runtime semantics are missing for query type*");
         blankTypeUrl.Should().Throw<ArgumentException>();
-        blankQueryUrl.Should().Throw<ArgumentException>();
     }
 
     [Fact]
@@ -278,8 +221,7 @@ public sealed class ScriptBehaviorAbstractionsTests
         contract.StateTypeUrl.Should().Be(descriptor.StateTypeUrl);
         contract.ReadModelTypeUrl.Should().Be(descriptor.ReadModelTypeUrl);
         contract.CommandTypeUrls.Should().ContainSingle(descriptor.Commands.Keys.Single());
-        contract.QueryTypeUrls.Should().ContainSingle(descriptor.Queries.Keys.Single());
-        contract.QueryResultTypeUrls.Should().ContainKey(descriptor.Queries.Keys.Single());
+        contract.DomainEventTypeUrls.Should().ContainSingle(descriptor.DomainEvents.Keys.Single());
     }
 
     [Fact]
@@ -295,7 +237,7 @@ public sealed class ScriptBehaviorAbstractionsTests
             new Dictionary<string, ScriptCommandRegistration>(StringComparer.Ordinal),
             new Dictionary<string, ScriptSignalRegistration>(StringComparer.Ordinal),
             new Dictionary<string, ScriptDomainEventRegistration>(StringComparer.Ordinal),
-            new Dictionary<string, ScriptQueryRegistration>(StringComparer.Ordinal),
+            ReadModelProjector: null,
             ProtocolDescriptorSet: null,
             RuntimeSemantics: null);
 
@@ -435,14 +377,14 @@ public sealed class ScriptBehaviorAbstractionsTests
             builder
                 .OnCommand<SimpleTextCommand>((_, _, _) => Task.CompletedTask)
                 .OnEvent<SimpleTextEvent>(
-                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty },
-                    project: static (_, evt, _) => evt.Current)
-                .OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>((query, snapshot, _) =>
-                    Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded
+                    apply: static (_, evt, _) => new SimpleTextState { Value = evt.Current?.Value ?? string.Empty })
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
                     {
-                        RequestId = query.RequestId ?? string.Empty,
-                        Current = snapshot.CurrentReadModel ?? new SimpleTextReadModel(),
-                    }));
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
     }
 
@@ -450,8 +392,15 @@ public sealed class ScriptBehaviorAbstractionsTests
     {
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
-            builder.OnEvent<SimpleTextEvent>(
-                project: static (_, evt, _) => evt.Current);
+            builder
+                .OnEvent<SimpleTextEvent>()
+                .ProjectState(static (state, _) => state == null
+                    ? null
+                    : new SimpleTextReadModel
+                    {
+                        HasValue = !string.IsNullOrWhiteSpace(state.Value),
+                        Value = state.Value ?? string.Empty,
+                    });
         }
     }
 
@@ -473,11 +422,12 @@ public sealed class ScriptBehaviorAbstractionsTests
         }
     }
 
-    private sealed class MissingEventHandlerBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
+    private sealed class DuplicateStateProjectionBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
     {
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
-            builder.OnEvent<SimpleTextEvent>();
+            builder.ProjectState(static (_, _) => new SimpleTextReadModel());
+            builder.ProjectState(static (_, _) => new SimpleTextReadModel());
         }
     }
 
@@ -486,18 +436,7 @@ public sealed class ScriptBehaviorAbstractionsTests
         protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
         {
             builder.OnEvent<SimpleTextEvent>(apply: static (_, _, _) => new SimpleTextState());
-            builder.OnEvent<SimpleTextEvent>(project: static (_, evt, _) => evt.Current);
-        }
-    }
-
-    private sealed class DuplicateQueryBehavior : ScriptBehavior<SimpleTextState, SimpleTextReadModel>
-    {
-        protected override void Configure(IScriptBehaviorBuilder<SimpleTextState, SimpleTextReadModel> builder)
-        {
-            builder.OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>((_, _, _) =>
-                Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded()));
-            builder.OnQuery<SimpleTextQueryRequested, SimpleTextQueryResponded>((_, _, _) =>
-                Task.FromResult<SimpleTextQueryResponded?>(new SimpleTextQueryResponded()));
+            builder.OnEvent<SimpleTextEvent>(apply: static (_, _, _) => new SimpleTextState());
         }
     }
 

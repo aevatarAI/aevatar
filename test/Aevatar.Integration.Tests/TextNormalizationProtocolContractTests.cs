@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Runtime.Implementations.Local.DependencyInjection;
 using Aevatar.Integration.Tests.Protocols;
 using Aevatar.Integration.Tests.TestDoubles.Protocols;
-using Aevatar.Scripting.Application.Queries;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Hosting.DependencyInjection;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
@@ -25,7 +24,7 @@ public sealed class TextNormalizationProtocolContractTests
         var definitionPort = provider.GetRequiredService<IScriptDefinitionCommandPort>();
         var provisioningPort = provider.GetRequiredService<IScriptRuntimeProvisioningPort>();
         var commandPort = provider.GetRequiredService<IScriptRuntimeCommandPort>();
-        var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
+        var queryService = provider.GetRequiredService<Aevatar.Scripting.Abstractions.Queries.IScriptReadModelQueryPort>();
         var projectionPort = provider.GetRequiredService<Aevatar.Scripting.Abstractions.Queries.IScriptExecutionProjectionPort>();
 
         const string definitionActorId = "text-normalization-definition";
@@ -58,28 +57,24 @@ public sealed class TextNormalizationProtocolContractTests
                 definitionActorId,
                 "protocol.requested",
                 CancellationToken.None);
-            await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(sink, "run-1", CancellationToken.None);
-
-            var result = await queryService.ExecuteDeclaredQueryAsync(
-                runtimeActorId,
-                Any.Pack(new TextNormalizationQueryRequested
-                {
-                    RequestId = "request-1",
-                    ReplyStreamId = "reply-stream",
-                }),
+            var committed = await ScriptRunCommittedObservationTestHelper.WaitForCommittedAsync(
+                sink,
+                "run-1",
                 CancellationToken.None);
 
-            result.Should().NotBeNull();
-            result!.Is(TextNormalizationQueryResponded.Descriptor).Should().BeTrue();
-            var response = result.Unpack<TextNormalizationQueryResponded>();
-            response.RequestId.Should().Be("request-1");
-            response.Current.Should().NotBeNull();
-            response.Current.HasValue.Should().BeTrue();
-            response.Current.InputText.Should().Be("  hello  ");
-            response.Current.NormalizedText.Should().Be("HELLO");
-            response.Current.LastCommandId.Should().Be("command-1");
-            response.Current.Lookup.Normalized.Should().Be("HELLO");
-            response.Current.Refs.ProfileId.Should().Be("command-1");
+            var snapshot = await ScriptReadModelVisibilityTestHelper.WaitForSnapshotAsync(
+                token => queryService.GetSnapshotAsync(runtimeActorId, token),
+                committed.StateVersion,
+                CancellationToken.None);
+
+            snapshot!.ReadModelPayload.Should().NotBeNull();
+            var readModel = snapshot.ReadModelPayload!.Unpack<TextNormalizationReadModel>();
+            readModel.HasValue.Should().BeTrue();
+            readModel.InputText.Should().Be("  hello  ");
+            readModel.NormalizedText.Should().Be("HELLO");
+            readModel.LastCommandId.Should().Be("command-1");
+            readModel.Lookup.Normalized.Should().Be("HELLO");
+            readModel.Refs.ProfileId.Should().Be("command-1");
         }
         finally
         {

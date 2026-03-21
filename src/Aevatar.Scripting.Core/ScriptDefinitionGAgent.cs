@@ -5,7 +5,6 @@ using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Compilation;
-using Aevatar.Scripting.Core.Materialization;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Scripting.Core.Schema;
 using Google.Protobuf;
@@ -21,16 +20,13 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     private const string SchemaStatusValidated = "validated";
     private const string SchemaStatusActivationFailed = "activation_failed";
     private readonly IScriptBehaviorCompiler _compiler;
-    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
     private readonly IScriptReadModelSchemaActivationPolicy _schemaActivationPolicy;
 
     public ScriptDefinitionGAgent(
         IScriptBehaviorCompiler compiler,
-        IScriptReadModelMaterializationCompiler materializationCompiler,
         IScriptReadModelSchemaActivationPolicy schemaActivationPolicy)
     {
         _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler));
-        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
         _schemaActivationPolicy = schemaActivationPolicy ?? throw new ArgumentNullException(nameof(schemaActivationPolicy));
         InitializeId();
     }
@@ -39,6 +35,14 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
     public async Task HandleUpsertScriptDefinitionRequested(UpsertScriptDefinitionRequestedEvent evt)
     {
         ArgumentNullException.ThrowIfNull(evt);
+        if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+            !string.IsNullOrWhiteSpace(evt.ScopeId) &&
+            !string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script definition actor `{Id}` is already bound to scope `{State.ScopeId}` and cannot switch to `{evt.ScopeId}`.");
+        }
+
         var parsedPackage = ScriptSourcePackageSerializer.DeserializeOrWrapCSharp(evt.SourceText ?? string.Empty);
         var scriptPackage = evt.ScriptPackage?.Clone();
         if (scriptPackage == null || scriptPackage.CsharpSources.Count == 0)
@@ -69,10 +73,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                     compilation.Artifact.Descriptor,
                     out extracted))
             {
-                _ = _materializationCompiler.GetOrCompile(
-                    compilation.Artifact,
-                    extracted.SchemaHash,
-                    extracted.SchemaVersion);
                 hasReadModelSchema = true;
                 readModelSchema = extracted.SchemaPayload.Clone();
                 readModelSchemaHash = extracted.SchemaHash;
@@ -94,13 +94,13 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
                 ReadModelTypeUrl = compilation.Artifact.Contract.ReadModelTypeUrl ?? string.Empty,
                 CommandTypeUrls = { compilation.Artifact.Contract.CommandTypeUrls },
                 DomainEventTypeUrls = { compilation.Artifact.Contract.DomainEventTypeUrls },
-                QueryTypeUrls = { compilation.Artifact.Contract.QueryTypeUrls },
                 InternalSignalTypeUrls = { compilation.Artifact.Contract.InternalSignalTypeUrls },
                 ScriptPackage = scriptPackage,
                 ProtocolDescriptorSet = compilation.Artifact.Contract.ProtocolDescriptorSet ?? ByteString.Empty,
                 StateDescriptorFullName = compilation.Artifact.Contract.StateDescriptorFullName ?? string.Empty,
                 ReadModelDescriptorFullName = compilation.Artifact.Contract.ReadModelDescriptorFullName ?? string.Empty,
                 RuntimeSemantics = compilation.Artifact.Contract.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec(),
+                ScopeId = evt.ScopeId ?? string.Empty,
             });
 
             if (!hasReadModelSchema)
@@ -186,8 +186,6 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.CommandTypeUrls.Add(evt.CommandTypeUrls);
         next.DomainEventTypeUrls.Clear();
         next.DomainEventTypeUrls.Add(evt.DomainEventTypeUrls);
-        next.QueryTypeUrls.Clear();
-        next.QueryTypeUrls.Add(evt.QueryTypeUrls);
         next.InternalSignalTypeUrls.Clear();
         next.InternalSignalTypeUrls.Add(evt.InternalSignalTypeUrls);
         next.ScriptPackage = evt.ScriptPackage?.Clone() ?? new ScriptPackageSpec();
@@ -195,6 +193,7 @@ public sealed class ScriptDefinitionGAgent : GAgentBase<ScriptDefinitionState>
         next.StateDescriptorFullName = evt.StateDescriptorFullName ?? string.Empty;
         next.ReadModelDescriptorFullName = evt.ReadModelDescriptorFullName ?? string.Empty;
         next.RuntimeSemantics = evt.RuntimeSemantics?.Clone() ?? new ScriptRuntimeSemanticsSpec();
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         next.ReadModelSchemaStatus = next.ReadModelSchema == null || next.ReadModelSchema.Is(Empty.Descriptor)
             ? string.Empty
             : SchemaStatusPending;

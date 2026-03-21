@@ -1,5 +1,9 @@
 using System.Text.Json;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Workflow.Abstractions;
+using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Core;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -59,6 +63,62 @@ public sealed class AGUISseWriterTests
         await writer.WriteAsync(evt!, CancellationToken.None);
 
         http.Response.Body.Length.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task WriteAsync_WithWorkflowRegistry_ShouldSerializeNestedWorkflowExecutionStatePayload()
+    {
+        var http = new DefaultHttpContext
+        {
+            Response = { Body = new MemoryStream() },
+        };
+
+        await using var writer = new AGUISseWriter(
+            http.Response,
+            WorkflowJsonTypeRegistry.Create(AGUIEvent.Descriptor.File));
+        await writer.WriteAsync(
+            new AGUIEvent
+            {
+                Timestamp = 456,
+                Custom = new CustomEvent
+                {
+                    Name = "aevatar.raw.observed",
+                    Payload = Any.Pack(new WorkflowObservedEnvelopeCustomPayload
+                    {
+                        EventId = "evt-2",
+                        PayloadTypeUrl = "type.googleapis.com/aevatar.workflow.WorkflowExecutionStateUpsertedEvent",
+                        PublisherActorId = "workflow-run-actor-1",
+                        CorrelationId = "corr-1",
+                        StateVersion = 2,
+                        Payload = Any.Pack(new WorkflowExecutionStateUpsertedEvent
+                        {
+                            ScopeKey = "workflow_execution_kernel",
+                            State = Any.Pack(new WorkflowExecutionKernelState
+                            {
+                                Active = true,
+                                RunId = "run-1",
+                                CurrentStepId = "analyze",
+                                Variables =
+                                {
+                                    ["decision"] = "approved",
+                                },
+                            }),
+                        }),
+                    }),
+                },
+            },
+            CancellationToken.None);
+
+        http.Response.Body.Position = 0;
+        var text = await new StreamReader(http.Response.Body).ReadToEndAsync();
+
+        text.Should().StartWith("data: ");
+        text.Should().Contain("WorkflowExecutionStateUpsertedEvent");
+        text.Should().Contain("WorkflowExecutionKernelState");
+        text.Should().Contain("\"scopeKey\": \"workflow_execution_kernel\"");
+        text.Should().Contain("\"runId\": \"run-1\"");
+        text.Should().Contain("\"currentStepId\": \"analyze\"");
+        text.Should().Contain("\"decision\": \"approved\"");
     }
 
     private static long ReadFlexibleInt64(JsonElement value)

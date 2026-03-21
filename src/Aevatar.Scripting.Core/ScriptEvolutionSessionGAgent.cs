@@ -48,6 +48,14 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
     {
         ArgumentNullException.ThrowIfNull(evt);
 
+        if (!string.IsNullOrWhiteSpace(State.ScopeId) &&
+            !string.IsNullOrWhiteSpace(evt.ScopeId) &&
+            !string.Equals(State.ScopeId, evt.ScopeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Script evolution session actor '{Id}' is already bound to scope '{State.ScopeId}' and cannot switch to '{evt.ScopeId}'.");
+        }
+
         var proposal = NormalizeProposal(evt);
         if (!string.IsNullOrWhiteSpace(State.ProposalId))
         {
@@ -69,6 +77,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             CandidateSourceHash = proposal.CandidateSourceHash,
             Reason = proposal.Reason,
             CandidateSource = proposal.CandidateSource,
+            ScopeId = proposal.ScopeId,
         });
 
         await PersistAndMirrorIndexEventAsync(new ScriptEvolutionProposedEvent
@@ -127,7 +136,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             var proposal = BuildBestEffortProposalFromState(evt.ProposalId);
             var definitionActorId = string.IsNullOrWhiteSpace(proposal.ScriptId)
                 ? string.Empty
-                : _addressResolver.GetDefinitionActorId(proposal.ScriptId);
+                : _addressResolver.GetDefinitionActorId(proposal.ScriptId, proposal.ScopeId);
 
             await RejectAndCompleteAsync(
                 proposal,
@@ -136,7 +145,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 "Unexpected script evolution execution failure. reason=" + ex.Message,
                 [ex.GetType().Name],
                 definitionActorId,
-                _addressResolver.GetCatalogActorId(),
+                _addressResolver.GetCatalogActorId(proposal.ScopeId),
                 CancellationToken.None);
         }
     }
@@ -168,7 +177,8 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 TargetRevision: evt.TargetRevision ?? string.Empty,
                 CatalogActorId: evt.CatalogActorId ?? string.Empty,
                 Reason: evt.Reason ?? string.Empty,
-                ExpectedCurrentRevision: string.Empty),
+                ExpectedCurrentRevision: string.Empty,
+                ScopeId: State.ScopeId ?? string.Empty),
             CancellationToken.None);
 
         await PersistAndMirrorIndexEventAsync(new ScriptEvolutionRolledBackEvent
@@ -178,7 +188,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             TargetRevision = evt.TargetRevision ?? string.Empty,
             PreviousRevision = string.Empty,
             CatalogActorId = string.IsNullOrWhiteSpace(evt.CatalogActorId)
-                ? _addressResolver.GetCatalogActorId()
+                ? _addressResolver.GetCatalogActorId(State.ScopeId)
                 : evt.CatalogActorId,
         });
     }
@@ -203,8 +213,8 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         ScriptEvolutionProposal proposal,
         CancellationToken ct)
     {
-        var defaultDefinitionActorId = _addressResolver.GetDefinitionActorId(proposal.ScriptId);
-        var defaultCatalogActorId = _addressResolver.GetCatalogActorId();
+        var defaultDefinitionActorId = _addressResolver.GetDefinitionActorId(proposal.ScriptId, proposal.ScopeId);
+        var defaultCatalogActorId = _addressResolver.GetCatalogActorId(proposal.ScopeId);
 
         var policyFailure = _policyEvaluator.EvaluateFailure(proposal);
         if (!string.IsNullOrWhiteSpace(policyFailure))
@@ -270,6 +280,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 proposal.CandidateSource ?? string.Empty,
                 proposal.CandidateSourceHash ?? string.Empty,
                 null,
+                proposal.ScopeId,
                 ct);
         }
         catch (Exception ex)
@@ -298,6 +309,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 definitionActorId,
                 proposal.CandidateSourceHash ?? string.Empty,
                 proposal.ProposalId ?? string.Empty,
+                proposal.ScopeId,
                 ct);
 
             await PersistAndMirrorIndexEventAsync(new ScriptEvolutionPromotedEvent
@@ -319,6 +331,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
                 CatalogActorId = baselineResolution.CatalogActorId,
                 Diagnostics = { validation.Diagnostics },
                 DefinitionSnapshot = definitionUpsert.Snapshot.ToBindingSpec(),
+                ScopeId = proposal.ScopeId ?? string.Empty,
             });
         }
         catch (Exception ex)
@@ -377,6 +390,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             DefinitionActorId = definitionActorId ?? string.Empty,
             CatalogActorId = catalogActorId ?? string.Empty,
             Diagnostics = { diagnostics },
+            ScopeId = proposal.ScopeId ?? string.Empty,
         });
     }
 
@@ -396,7 +410,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         CancellationToken ct)
         where T : IMessage
     {
-        var managerActorId = _addressResolver.GetEvolutionManagerActorId();
+        var managerActorId = _addressResolver.GetEvolutionManagerActorId(State.ScopeId);
         if (string.IsNullOrWhiteSpace(managerActorId))
             return;
 
@@ -433,7 +447,8 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             CandidateRevision: candidateRevision,
             CandidateSource: candidateSource,
             CandidateSourceHash: evt.CandidateSourceHash ?? string.Empty,
-            Reason: evt.Reason ?? string.Empty);
+            Reason: evt.Reason ?? string.Empty,
+            ScopeId: evt.ScopeId ?? string.Empty);
     }
 
     private ScriptEvolutionProposal BuildProposalFromState()
@@ -454,7 +469,8 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             CandidateRevision: State.CandidateRevision,
             CandidateSource: State.CandidateSource,
             CandidateSourceHash: State.CandidateSourceHash ?? string.Empty,
-            Reason: State.Reason ?? string.Empty);
+            Reason: State.Reason ?? string.Empty,
+            ScopeId: State.ScopeId ?? string.Empty);
     }
 
     private ScriptEvolutionProposal BuildBestEffortProposalFromState(string? fallbackProposalId)
@@ -470,7 +486,8 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
             CandidateRevision: State.CandidateRevision ?? string.Empty,
             CandidateSource: State.CandidateSource ?? string.Empty,
             CandidateSourceHash: State.CandidateSourceHash ?? string.Empty,
-            Reason: State.Reason ?? string.Empty);
+            Reason: State.Reason ?? string.Empty,
+            ScopeId: State.ScopeId ?? string.Empty);
     }
 
     private static ScriptEvolutionSessionState ApplySessionStarted(
@@ -485,6 +502,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         next.CandidateSource = evt.CandidateSource ?? string.Empty;
         next.CandidateSourceHash = evt.CandidateSourceHash ?? string.Empty;
         next.Reason = evt.Reason ?? string.Empty;
+        next.ScopeId = evt.ScopeId ?? string.Empty;
         next.Completed = false;
         next.Accepted = false;
         next.PolicyAllowed = false;
@@ -611,6 +629,7 @@ public sealed class ScriptEvolutionSessionGAgent : GAgentBase<ScriptEvolutionSes
         next.FailureReason = evt.FailureReason ?? string.Empty;
         next.DefinitionActorId = evt.DefinitionActorId ?? string.Empty;
         next.CatalogActorId = evt.CatalogActorId ?? string.Empty;
+        next.ScopeId = string.IsNullOrWhiteSpace(evt.ScopeId) ? state.ScopeId : evt.ScopeId;
         next.Diagnostics.Clear();
         next.Diagnostics.Add(evt.Diagnostics);
         next.LastAppliedEventVersion = state.LastAppliedEventVersion + 1;

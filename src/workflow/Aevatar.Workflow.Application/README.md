@@ -19,7 +19,7 @@
 把所有输入统一折叠成可执行 target：
 
 - `workflowYamls` 优先于 `workflow`
-- `workflow` 走 `IWorkflowDefinitionRegistry`，并解析出规范 definition actor id `workflow-definition:{workflow_name_lower}`
+- `workflow` 走 `IWorkflowDefinitionCatalog`，并解析出规范 definition actor id `workflow-definition:{workflow_name_lower}`
 - `actorId` 作为 definition source lookup
 - source actor 会先经 `IWorkflowActorBindingReader.GetAsync()` 解析成 `WorkflowActorBinding`
 - 若 source actor 是 run actor 且缺失 `DefinitionActorId`，resolver 会回落到 registry 中该 workflow 的规范 definition actor id
@@ -43,7 +43,7 @@
 ### CQRS Interaction / Detached Dispatch
 
 - `ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走完整交互路径：驱动标准 CQRS interaction service、接收 accepted receipt、消费 sink 并持续输出 `WorkflowRunEventEnvelope`
-- `WorkflowRunDetachedDispatchService` 走 accepted-only 路径：先同步 detach live observation，再把后续 cleanup 交给 actor-owned durable outbox；host 只负责 replay trigger，不再用进程内 `Task.Run` 持有 cleanup 事实
+- `DefaultDetachedCommandDispatchService<WorkflowChatRunRequest, WorkflowRunCommandTarget, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus>` 走 accepted-only 路径：复用同一套 CQRS command skeleton，后台 drain session event stream，并在 `WorkflowRunCommandTarget.ReleaseAfterInteractionAsync(...)` 内统一做 release / cleanup
 - `WorkflowDirectFallbackPolicy` 通过 generic fallback decorator 同时包裹 interaction / dispatch 两条命令入口
 - 真正的 envelope 投递由 CQRS Core 的 `ActorCommandTargetDispatcher` 通过 `IActorDispatchPort` 完成，`IActorRuntime` 继续负责目标 actor 的获取/创建与拓扑
 - 状态快照由 `WorkflowRunFinalizeEmitter` 统一在收尾阶段补发
@@ -86,6 +86,6 @@ Aevatar.Workflow.Application/
 ├── Queries/
 │   └── WorkflowExecutionQueryApplicationService.cs
 ├── Workflows/
-│   └── WorkflowDefinitionRegistry.cs
+│   └── WorkflowDefinitionCatalog.cs
 └── Reporting/
 ```

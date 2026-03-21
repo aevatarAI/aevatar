@@ -3,6 +3,7 @@ using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Core.Runtime;
 using Aevatar.Scripting.Core.Serialization;
+using Aevatar.Scripting.Core.Materialization;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 
@@ -11,13 +12,19 @@ namespace Aevatar.Scripting.Application.Runtime;
 public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
 {
     private readonly IScriptBehaviorArtifactResolver _artifactResolver;
+    private readonly IScriptReadModelMaterializationCompiler _materializationCompiler;
+    private readonly IScriptNativeProjectionBuilder _nativeProjectionBuilder;
     private readonly IProtobufMessageCodec _codec;
 
     public ScriptBehaviorDispatcher(
         IScriptBehaviorArtifactResolver artifactResolver,
+        IScriptReadModelMaterializationCompiler materializationCompiler,
+        IScriptNativeProjectionBuilder nativeProjectionBuilder,
         IProtobufMessageCodec codec)
     {
         _artifactResolver = artifactResolver ?? throw new ArgumentNullException(nameof(artifactResolver));
+        _materializationCompiler = materializationCompiler ?? throw new ArgumentNullException(nameof(materializationCompiler));
+        _nativeProjectionBuilder = nativeProjectionBuilder ?? throw new ArgumentNullException(nameof(nativeProjectionBuilder));
         _codec = codec ?? throw new ArgumentNullException(nameof(codec));
     }
 
@@ -73,6 +80,7 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                 CorrelationId: resolvedCorrelationId,
                 CausationId: resolvedCausationId,
                 DefinitionActorId: request.DefinitionActorId,
+                ScopeId: request.ScopeId,
                 CurrentState: currentState,
                 RuntimeCapabilities: request.Capabilities);
             var domainEvents = NormalizeDomainEvents(await behavior.DispatchAsync(typedInbound, context, ct));
@@ -82,7 +90,13 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             ValidateDomainEventContract(request, artifact.Descriptor, domainEvents);
 
             var occurredAtUnixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var materializationPlan = request.CachedMaterializationPlan
+                ?? _materializationCompiler.Compile(
+                    artifact,
+                    request.ReadModelSchemaHash,
+                    request.ReadModelSchemaVersion);
             var committed = new List<ScriptDomainFactCommitted>(domainEvents.Count);
+            var projectedState = currentState;
             for (var i = 0; i < domainEvents.Count; i++)
             {
                 var domainEvent = domainEvents[i];
@@ -91,12 +105,13 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                 var sequence = i + 1L;
                 var domainEventPayload = _codec.Pack(domainEvent)
                     ?? throw new InvalidOperationException("Script domain event cannot be null.");
-                committed.Add(new ScriptDomainFactCommitted
+                var fact = new ScriptDomainFactCommitted
                 {
                     ActorId = request.ActorId,
                     DefinitionActorId = request.DefinitionActorId,
                     ScriptId = request.ScriptId,
                     Revision = request.Revision,
+                    ScopeId = request.ScopeId,
                     RunId = ResolveRunId(request.Envelope),
                     CommandId = ResolveSemanticIdentity(domainEvent, eventSemantics.CommandIdField) ?? context.CommandId,
                     CorrelationId = ResolveSemanticIdentity(domainEvent, eventSemantics.CorrelationIdField) ?? context.CorrelationId,
@@ -107,7 +122,30 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
                     ReadModelTypeUrl = artifact.Contract.ReadModelTypeUrl ?? request.ReadModelTypeUrl ?? string.Empty,
                     StateVersion = request.CurrentStateVersion + sequence,
                     OccurredAtUnixTimeMs = occurredAtUnixTimeMs,
-                });
+                };
+
+                projectedState = behavior.ApplyDomainEvent(
+                    projectedState,
+                    domainEvent,
+                    CreateFactContext(request, fact, eventTypeUrl));
+
+                var factContext = CreateFactContext(request, fact, fact.EventType ?? string.Empty);
+                var semanticReadModel = behavior.BuildReadModel(
+                    projectedState,
+                    factContext);
+                fact.ReadModelPayload = _codec.Pack(semanticReadModel)?.Clone();
+                fact.NativeDocument = _nativeProjectionBuilder.BuildDocument(
+                    semanticReadModel,
+                    materializationPlan);
+                fact.NativeGraph = _nativeProjectionBuilder.BuildGraph(
+                    fact.ActorId ?? request.ActorId,
+                    fact.ScriptId ?? request.ScriptId,
+                    fact.DefinitionActorId ?? request.DefinitionActorId,
+                    fact.Revision ?? request.Revision,
+                    semanticReadModel,
+                    materializationPlan);
+
+                committed.Add(fact);
             }
 
             return committed;
@@ -119,6 +157,28 @@ public sealed class ScriptBehaviorDispatcher : IScriptBehaviorDispatcher
             else if (behavior is IDisposable disposable)
                 disposable.Dispose();
         }
+    }
+
+    private static ScriptFactContext CreateFactContext(
+        ScriptBehaviorDispatchRequest request,
+        ScriptDomainFactCommitted fact,
+        string eventTypeUrl)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(fact);
+
+        return new ScriptFactContext(
+            fact.ActorId ?? request.ActorId,
+            fact.DefinitionActorId ?? request.DefinitionActorId ?? string.Empty,
+            fact.ScriptId ?? request.ScriptId,
+            fact.Revision ?? request.Revision,
+            fact.RunId ?? string.Empty,
+            fact.CommandId ?? string.Empty,
+            fact.CorrelationId ?? string.Empty,
+            fact.EventSequence,
+            fact.StateVersion,
+            fact.EventType ?? eventTypeUrl,
+            fact.OccurredAtUnixTimeMs);
     }
 
     private static ScriptInboundPayload BuildInboundMessage(EventEnvelope envelope)
