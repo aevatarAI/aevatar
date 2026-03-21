@@ -36,6 +36,9 @@ internal static class ChatRunRequestNormalizer
 
         var normalizedAgentId = NormalizeAgentId(input.AgentId);
         var normalizedInputParts = NormalizeInputParts(input.InputParts);
+        if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
+            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
+
         var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, defaultMetadata);
         if (!normalizedContext.Succeeded)
             return ChatRunRequestNormalizationResult.Failed(normalizedContext.Error);
@@ -147,6 +150,13 @@ internal static class ChatRunRequestNormalizer
 
         return normalized.Count == 0 ? null : normalized;
     }
+
+    private static bool HasOnlyUnsupportedInputParts(
+        ChatInput input,
+        IReadOnlyList<WorkflowChatInputPart>? normalizedInputParts) =>
+        string.IsNullOrWhiteSpace(input.Prompt) &&
+        input.InputParts is { Count: > 0 } &&
+        normalizedInputParts == null;
 
     private static NormalizedChatContext NormalizeContext(
         string? explicitScopeId,

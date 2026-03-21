@@ -22,10 +22,10 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         };
         if (command.InputParts is { Count: > 0 })
             chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
-        AppendMetadata(chatRequest.Metadata, context.Headers);
-        AppendMetadata(chatRequest.Metadata, command.Metadata);
-        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
-        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
+        AppendMetadata(chatRequest.Headers, context.Headers);
+        AppendMetadata(chatRequest.Headers, command.Metadata);
+        chatRequest.Headers[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
+        chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
         var envelope = new EventEnvelope
         {

@@ -28,7 +28,6 @@ import type {
   PlaygroundWorkflowParseResult,
   PlaygroundWorkflowSaveResult,
   WorkflowActorGraphEdge,
-  WorkflowActorGraphEnrichedSnapshot,
   WorkflowActorGraphNode,
   WorkflowActorGraphSubgraph,
   WorkflowActorSnapshot,
@@ -1068,20 +1067,6 @@ function decodeWorkflowActorGraphSubgraph(
   };
 }
 
-function decodeWorkflowActorGraphEnrichedSnapshot(
-  value: unknown,
-  label = 'WorkflowActorGraphEnrichedSnapshot',
-): WorkflowActorGraphEnrichedSnapshot {
-  const record = expectRecord(value, label);
-  return {
-    snapshot: decodeWorkflowActorSnapshot(record.snapshot, `${label}.snapshot`),
-    subgraph: decodeWorkflowActorGraphSubgraph(
-      record.subgraph,
-      `${label}.subgraph`,
-    ),
-  };
-}
-
 function decodeWorkflowResumeResponse(
   value: unknown,
   label = 'WorkflowResumeResponse',
@@ -1292,10 +1277,6 @@ export const decodeWorkflowActorSnapshotResponse: Decoder<WorkflowActorSnapshot>
 export const decodeWorkflowActorTimelineResponse: Decoder<WorkflowActorTimelineItem[]> = (
   value,
 ) => expectArray(value, 'WorkflowActorTimelineItem[]', decodeWorkflowActorTimelineItem);
-
-export const decodeWorkflowActorGraphEnrichedResponse: Decoder<WorkflowActorGraphEnrichedSnapshot> = (
-  value,
-) => decodeWorkflowActorGraphEnrichedSnapshot(value);
 
 export const decodeWorkflowActorGraphEdgesResponse: Decoder<WorkflowActorGraphEdge[]> = (
   value,

@@ -13,7 +13,6 @@ import {
   ProList,
 } from '@ant-design/pro-components';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { history } from '@umijs/max';
 import {
   Alert,
   Avatar,
@@ -33,6 +32,7 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { configurationApi } from '@/shared/api/configurationApi';
 import { consoleApi } from '@/shared/api/consoleApi';
+import { history } from '@/shared/navigation/history';
 import type {
   ConfigurationEmbeddingsStatus,
   ConfigurationLlmApiKeyStatus,

@@ -3,16 +3,23 @@ import { persistAuthSession } from './session';
 
 describe('authFetch', () => {
   const originalFetch = global.fetch;
+  const originalEnv = process.env;
 
   beforeEach(() => {
     window.localStorage.clear();
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    process.env = {
+      ...originalEnv,
+      NYXID_BASE_URL: 'http://127.0.0.1:3001',
+      NYXID_CLIENT_ID: 'console-web',
+    };
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
     jest.restoreAllMocks();
     window.localStorage.clear();
+    process.env = originalEnv;
   });
 
   it('injects a bearer token from the current NyxID session', async () => {
@@ -118,7 +125,10 @@ describe('authFetch', () => {
 
     await authFetch('/api/agents');
 
-    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit | undefined];
+    const [, init] = fetchMock.mock.calls.at(-1) as [
+      string,
+      RequestInit | undefined,
+    ];
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer new-access-token',
     );

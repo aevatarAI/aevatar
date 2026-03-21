@@ -335,9 +335,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
-    private static void CopyParametersToChatMetadata(
+    private static void CopyParametersToChatHeaders(
         MapField<string, string> parameters,
-        MapField<string, string> metadata)
+        MapField<string, string> headers)
     {
         foreach (var (key, value) in parameters)
         {
@@ -349,7 +349,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 continue;
             }
 
-            metadata[key.Trim()] = value.Trim();
+            headers[key.Trim()] = value.Trim();
         }
     }
 
@@ -435,7 +435,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             SessionId = sessionId,
             TimeoutMs = timeoutMs,
         };
-        CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+        CopyParametersToChatHeaders(request.Parameters, chatRequest.Headers);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)

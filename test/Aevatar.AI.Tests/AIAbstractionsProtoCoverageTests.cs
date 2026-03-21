@@ -13,7 +13,7 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Prompt = "hello",
             SessionId = "session-1",
-            Metadata = { ["correlation_id"] = "c-1" },
+            Headers = { ["correlation_id"] = "c-1" },
             TimeoutMs = 2500,
             ScopeId = "scope-1",
             InputParts =
@@ -27,7 +27,7 @@ public sealed class AIAbstractionsProtoCoverageTests
                 },
             },
         }, ChatRequestEvent.Parser);
-        request.Metadata["correlation_id"].Should().Be("c-1");
+        request.Headers["correlation_id"].Should().Be("c-1");
         request.TimeoutMs.Should().Be(2500);
         request.ScopeId.Should().Be("scope-1");
         request.InputParts.Should().ContainSingle();
@@ -228,12 +228,12 @@ public sealed class AIAbstractionsProtoCoverageTests
         {
             Prompt = "p1",
             SessionId = "s1",
-            Metadata = { ["k1"] = "v1" },
+            Headers = { ["k1"] = "v1" },
         });
 
         target.Prompt.Should().Be("p1");
         target.SessionId.Should().Be("s1");
-        target.Metadata["k1"].Should().Be("v1");
+        target.Headers["k1"].Should().Be("v1");
 
         target.Clone().Should().BeEquivalentTo(target);
         target.ToString().Should().Contain("prompt");

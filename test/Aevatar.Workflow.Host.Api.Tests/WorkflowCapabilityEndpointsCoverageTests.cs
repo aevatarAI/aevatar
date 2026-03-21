@@ -197,6 +197,26 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectUnsupportedOnlyInputParts_WhenPromptMissing()
+    {
+        var input = new ChatInput
+        {
+            InputParts =
+            [
+                new ChatInputContentPart
+                {
+                    Type = "foo",
+                },
+            ],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.PromptRequired);
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldExtractLegacyScopeIdIntoTypedField()
     {
         var input = new ChatInput

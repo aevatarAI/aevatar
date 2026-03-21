@@ -255,13 +255,20 @@ public sealed class ToolCallLoop
             var root = doc.RootElement;
             var imageBase64 =
                 TryGetStringByKeys(root, "image_base64", "imageBase64") ??
-                TryGetNestedMediaBase64(root, "image");
+                TryGetNestedMediaBase64(root, "image", "image_base64", "imageBase64");
             var audioBase64 =
                 TryGetStringByKeys(root, "audio_base64", "audioBase64") ??
-                TryGetNestedMediaBase64(root, "audio");
+                TryGetNestedMediaBase64(root, "audio", "audio_base64", "audioBase64");
             var videoBase64 =
                 TryGetStringByKeys(root, "video_base64", "videoBase64") ??
-                TryGetNestedMediaBase64(root, "video");
+                TryGetNestedMediaBase64(root, "video", "video_base64", "videoBase64");
+
+            if (string.IsNullOrWhiteSpace(imageBase64) &&
+                string.IsNullOrWhiteSpace(audioBase64) &&
+                string.IsNullOrWhiteSpace(videoBase64))
+            {
+                imageBase64 = TryGetStringByKeys(root, "base64", "data");
+            }
 
             var kind = ResolveMediaKind(imageBase64, audioBase64, videoBase64);
             var dataBase64 = kind switch
@@ -330,11 +337,16 @@ public sealed class ToolCallLoop
         }
     }
 
-    private static string? TryGetNestedMediaBase64(JsonElement root, string propertyName)
+    private static string? TryGetNestedMediaBase64(JsonElement root, string propertyName, params string[] legacyAliasKeys)
     {
         if (!root.TryGetProperty(propertyName, out var media) || media.ValueKind != JsonValueKind.Object)
             return null;
-        return TryGetStringByKeys(media, "base64", "data");
+
+        var keys = new List<string>(legacyAliasKeys.Length + 2);
+        keys.AddRange(legacyAliasKeys);
+        keys.Add("base64");
+        keys.Add("data");
+        return TryGetStringByKeys(media, [.. keys]);
     }
 
     private static string? TryGetNestedMediaType(JsonElement root, ContentPartKind kind)

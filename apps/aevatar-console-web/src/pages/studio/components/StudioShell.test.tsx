@@ -34,8 +34,8 @@ describe('StudioShell', () => {
           navItems,
           onSelectPage: handleSelectPage,
           pageTitle: 'Studio page',
+          children: React.createElement('div', null, 'Studio content'),
         },
-        React.createElement('div', null, 'Studio content'),
       ),
     );
 

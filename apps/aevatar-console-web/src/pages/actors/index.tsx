@@ -127,7 +127,7 @@ const timelineStatusValueEnum = {
 } as const;
 
 const graphViewLabels: Record<ActorGraphViewMode, string> = {
-  enriched: 'Enriched snapshot',
+  enriched: 'Snapshot + subgraph',
   subgraph: 'Subgraph',
   edges: 'Edges only',
 };
@@ -521,25 +521,6 @@ const ActorsPage: React.FC = () => {
       }),
   });
 
-  const graphEnrichedQuery = useQuery({
-    queryKey: [
-      'actor-graph-enriched',
-      filters.actorId,
-      filters.graphDepth,
-      filters.graphTake,
-      filters.graphDirection,
-      [...filters.edgeTypes].sort().join(','),
-    ],
-    enabled: Boolean(filters.actorId),
-    queryFn: () =>
-      consoleApi.getActorGraphEnriched(filters.actorId, {
-        depth: filters.graphDepth,
-        take: filters.graphTake,
-        direction: filters.graphDirection,
-        edgeTypes: filters.edgeTypes,
-      }),
-  });
-
   const graphSubgraphQuery = useQuery({
     queryKey: [
       'actor-graph-subgraph',
@@ -549,7 +530,7 @@ const ActorsPage: React.FC = () => {
       filters.graphDirection,
       [...filters.edgeTypes].sort().join(','),
     ],
-    enabled: Boolean(filters.actorId) && graphViewMode === 'subgraph',
+    enabled: Boolean(filters.actorId) && graphViewMode !== 'edges',
     queryFn: () =>
       consoleApi.getActorGraphSubgraph(filters.actorId, {
         depth: filters.graphDepth,
@@ -654,28 +635,23 @@ const ActorsPage: React.FC = () => {
         : undefined;
     }
 
-    return graphEnrichedQuery.data?.subgraph;
+    return graphSubgraphQuery.data;
   }, [
     filters.actorId,
     graphEdgesQuery.data,
-    graphEnrichedQuery.data?.subgraph,
     graphSubgraphQuery.data,
     graphViewMode,
   ]);
 
   const currentGraphLoading =
-    graphViewMode === 'subgraph'
-      ? graphSubgraphQuery.isLoading
-      : graphViewMode === 'edges'
-        ? graphEdgesQuery.isLoading
-        : graphEnrichedQuery.isLoading;
+    graphViewMode === 'edges'
+      ? graphEdgesQuery.isLoading
+      : graphSubgraphQuery.isLoading;
 
   const currentGraphError =
-    graphViewMode === 'subgraph'
-      ? graphSubgraphQuery.error
-      : graphViewMode === 'edges'
-        ? graphEdgesQuery.error
-        : graphEnrichedQuery.error;
+    graphViewMode === 'edges'
+      ? graphEdgesQuery.error
+      : graphSubgraphQuery.error;
 
   const graphElements = useMemo(() => {
     if (!currentGraph) {
@@ -695,9 +671,6 @@ const ActorsPage: React.FC = () => {
         new Set(
           [
             ...filters.edgeTypes,
-            ...(graphEnrichedQuery.data?.subgraph.edges ?? []).map(
-              (edge) => edge.edgeType,
-            ),
             ...(graphSubgraphQuery.data?.edges ?? []).map(
               (edge) => edge.edgeType,
             ),
@@ -710,7 +683,6 @@ const ActorsPage: React.FC = () => {
     [
       filters.edgeTypes,
       graphEdgesQuery.data,
-      graphEnrichedQuery.data?.subgraph.edges,
       graphSubgraphQuery.data?.edges,
     ],
   );

@@ -150,6 +150,34 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_ShouldRejectUnsupportedOnlyInputParts()
+    {
+        var service = new FakeCommandDispatchService();
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput
+            {
+                InputParts =
+                [
+                    new ChatInputContentPart
+                    {
+                        Type = "foo",
+                    },
+                ],
+            },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("PROMPT_REQUIRED");
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldReturn499_WhenDispatchCanceled()
     {
         var service = new FakeCommandDispatchService
@@ -211,6 +239,43 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
         body.Should().Contain("PROMPT_REQUIRED");
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldRejectUnsupportedOnlyInputParts()
+    {
+        var http = CreateHttpContext();
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.AgentNotFound));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                InputParts =
+                [
+                    new ChatInputContentPart
+                    {
+                        Type = "foo",
+                    },
+                ],
+            },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("PROMPT_REQUIRED");
+        called.Should().BeFalse();
     }
 
     [Fact]
