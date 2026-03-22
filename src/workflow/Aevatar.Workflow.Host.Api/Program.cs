@@ -20,6 +20,7 @@ builder.AddAevatarDefaultHost(
     {
         options.ServiceName = "Aevatar.Workflow.Host.Api";
         options.EnableWebSockets = true;
+        options.DefaultListenUrls = "http://localhost:5100";
     });
 builder.AddAevatarPlatform();
 builder.AddAevatarWorkflowObservability();

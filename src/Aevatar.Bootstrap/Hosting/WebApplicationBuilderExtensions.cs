@@ -1,6 +1,7 @@
 using Aevatar.Configuration;
 using Aevatar.Hosting;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,6 +24,8 @@ public sealed class AevatarDefaultHostOptions
     public bool AutoMapCapabilities { get; set; } = true;
 
     public bool MapRootHealthEndpoint { get; set; } = true;
+
+    public string DefaultListenUrls { get; set; } = string.Empty;
 }
 
 public static class WebApplicationBuilderExtensions
@@ -38,6 +41,7 @@ public static class WebApplicationBuilderExtensions
 
         AddApplicationBaseConfiguration(builder);
         builder.Configuration.AddAevatarConfig();
+        ApplyDefaultListenUrls(builder, hostOptions);
         builder.Services.AddAevatarBootstrap(builder.Configuration);
         builder.Services.AddSingleton(hostOptions);
 
@@ -48,6 +52,19 @@ public static class WebApplicationBuilderExtensions
             AddDefaultCorsPolicy(builder, hostOptions.CorsPolicyName);
 
         return builder;
+    }
+
+    private static void ApplyDefaultListenUrls(
+        WebApplicationBuilder builder,
+        AevatarDefaultHostOptions hostOptions)
+    {
+        if (string.IsNullOrWhiteSpace(hostOptions.DefaultListenUrls))
+            return;
+
+        if (HasExplicitListenConfiguration(builder.Configuration))
+            return;
+
+        builder.WebHost.UseUrls(hostOptions.DefaultListenUrls);
     }
 
     private static void AddApplicationBaseConfiguration(WebApplicationBuilder builder)
@@ -69,6 +86,18 @@ public static class WebApplicationBuilderExtensions
             Path.Combine(applicationBasePath, $"appsettings.{environmentName}.json"),
             optional: true,
             reloadOnChange: false);
+    }
+
+    private static bool HasExplicitListenConfiguration(IConfiguration configuration)
+    {
+        if (!string.IsNullOrWhiteSpace(configuration[WebHostDefaults.ServerUrlsKey]))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(configuration["http_ports"]) ||
+            !string.IsNullOrWhiteSpace(configuration["https_ports"]))
+            return true;
+
+        return configuration.GetSection("Kestrel:Endpoints").GetChildren().Any();
     }
 
     public static WebApplication UseAevatarDefaultHost(this WebApplication app)

@@ -75,7 +75,9 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
         if (Interlocked.Increment(ref _inflightCount) == 1)
             _drainComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var task = DrainAsync(target, receipt, _shutdownToken);
+        // Detached dispatch must hand off drain work asynchronously even when the sink
+        // is already fully buffered, otherwise DispatchAsync can block on inline cleanup.
+        var task = Task.Run(() => DrainAsync(target, receipt, _shutdownToken));
 
         task.ContinueWith(
             _ =>

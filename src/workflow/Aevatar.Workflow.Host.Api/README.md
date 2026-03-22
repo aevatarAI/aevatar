@@ -2,6 +2,8 @@
 
 `Aevatar.Workflow.Host.Api` 是协议层宿主，只做 HTTP/SSE/WebSocket 适配与依赖组合。
 
+零配置本地启动默认监听：`http://localhost:5100`
+
 能力文档入口：
 
 - Host 快速入口：`CHAT_API_CAPABILITIES.md`

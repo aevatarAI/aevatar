@@ -123,6 +123,44 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldReturnBeforeBufferedCleanup_Completes()
+    {
+        var sink = new EventChannel<string>();
+        sink.Push("done:completed");
+        sink.Complete();
+
+        var allowCleanup = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var target = new BlockingDetachedTestTarget("target-5", sink, allowCleanup.Task);
+        var receipt = new DetachedReceipt("target-5", "receipt-5");
+        var service = new DefaultDetachedCommandDispatchService<string, BlockingDetachedTestTarget, DetachedReceipt, string, string, string, string>(
+            new BlockingDetachedPipeline(CommandTargetResolution<CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt>, string>.Success(
+                new CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-5", "cmd-5", "corr-5", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-5" },
+                    Receipt = receipt,
+                })),
+            new DetachedOutputStream(),
+            new DetachedCompletionPolicy(),
+            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+
+        var dispatchTask = service.DispatchAsync("command-5", CancellationToken.None);
+
+        var dispatchResult = await dispatchTask.WaitAsync(TimeSpan.FromSeconds(1));
+        dispatchResult.Succeeded.Should().BeTrue();
+        dispatchResult.Receipt.Should().Be(receipt);
+
+        await target.ReleaseStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.ReleaseObserved.Task.IsCompleted.Should().BeFalse();
+
+        allowCleanup.TrySetResult(true);
+
+        await target.ReleaseObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.ReleaseCalls.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task DisposeAsync_ShouldDrainInflightTasks()
     {
         var sink = new EventChannel<string>();
@@ -209,6 +247,72 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
             DispatchAsyncCore(command, ct);
 
         private async Task<CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>> DispatchAsyncCore(
+            string command,
+            CancellationToken ct)
+        {
+            var prepared = await PrepareAsync(command, ct);
+            if (!prepared.Succeeded || prepared.Target == null)
+                return prepared;
+            await DispatchPreparedAsync(prepared.Target, ct);
+            return prepared;
+        }
+    }
+
+    private sealed class BlockingDetachedTestTarget(
+        string targetId,
+        IEventSink<string> sink,
+        Task cleanupGate)
+        : ICommandEventTarget<string>,
+          ICommandInteractionCleanupTarget<DetachedReceipt, string>
+    {
+        public string TargetId { get; } = targetId;
+
+        public List<(DetachedReceipt Receipt, CommandInteractionCleanupContext<string> Cleanup)> ReleaseCalls { get; } = [];
+        public TaskCompletionSource<bool> ReleaseStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> ReleaseObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IEventSink<string> RequireLiveSink() => sink;
+
+        public async Task ReleaseAfterInteractionAsync(
+            DetachedReceipt receipt,
+            CommandInteractionCleanupContext<string> cleanup,
+            CancellationToken ct = default)
+        {
+            ReleaseStarted.TrySetResult(true);
+            await cleanupGate.WaitAsync(ct);
+            ReleaseCalls.Add((receipt, cleanup));
+            ReleaseObserved.TrySetResult(true);
+        }
+    }
+
+    private sealed class BlockingDetachedPipeline(
+        CommandTargetResolution<CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt>, string> result)
+        : ICommandDispatchPipeline<string, BlockingDetachedTestTarget, DetachedReceipt, string>
+    {
+        public Task<CommandTargetResolution<CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt>, string>> PrepareAsync(
+            string command,
+            CancellationToken ct = default)
+        {
+            _ = command;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(result);
+        }
+
+        public Task DispatchPreparedAsync(
+            CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt> execution,
+            CancellationToken ct = default)
+        {
+            _ = execution;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<CommandTargetResolution<CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt>, string>> DispatchAsync(
+            string command,
+            CancellationToken ct = default) =>
+            DispatchAsyncCore(command, ct);
+
+        private async Task<CommandTargetResolution<CommandDispatchExecution<BlockingDetachedTestTarget, DetachedReceipt>, string>> DispatchAsyncCore(
             string command,
             CancellationToken ct)
         {

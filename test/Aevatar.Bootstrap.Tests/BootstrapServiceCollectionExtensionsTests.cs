@@ -113,6 +113,46 @@ public class BootstrapServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void AddAevatarDefaultHost_ShouldApplyDefaultListenUrls_WhenNoExplicitAddressConfigured()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+            options.DefaultListenUrls = "http://localhost:5100";
+        });
+
+        builder.WebHost
+            .GetSetting(WebHostDefaults.ServerUrlsKey)
+            .Should()
+            .Be("http://localhost:5100");
+    }
+
+    [Fact]
+    public void AddAevatarDefaultHost_ShouldNotOverrideExplicitUrlsConfiguration()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [WebHostDefaults.ServerUrlsKey] = "http://localhost:6200",
+        });
+
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+            options.DefaultListenUrls = "http://localhost:5100";
+        });
+
+        builder.Configuration[WebHostDefaults.ServerUrlsKey].Should().Be("http://localhost:6200");
+        builder.WebHost.GetSetting(WebHostDefaults.ServerUrlsKey).Should().Be("http://localhost:6200");
+    }
+
+    [Fact]
     public void UseAevatarDefaultHost_WhenAutoMapCapabilitiesDisabled_ShouldOnlyMapRootHealthRoute()
     {
         using var home = new TemporaryAevatarHomeScope();
