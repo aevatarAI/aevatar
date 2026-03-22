@@ -93,13 +93,13 @@ public class WorkflowRunReportExportWriterTests
         }
     }
 
-    private static WorkflowRunReport BuildReport(
+    private static WorkflowRunExportDocument BuildReport(
         string finalError,
         bool withTopology,
         bool withRoleReplies)
     {
         var started = DateTimeOffset.UtcNow;
-        return new WorkflowRunReport
+        return new WorkflowRunExportDocument
         {
             WorkflowName = "wf<main>",
             RootActorId = "root&1",

@@ -93,6 +93,36 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
     }
 
     [Fact]
+    public async Task DispatchAsync_ShouldPassShutdownToken_ToCleanup()
+    {
+        using var cts = new CancellationTokenSource();
+        var sink = new EventChannel<string>();
+        sink.Push("done:completed");
+        sink.Complete();
+
+        var target = new DetachedTestTarget("target-4", sink);
+        var receipt = new DetachedReceipt("target-4", "receipt-4");
+        var service = new DefaultDetachedCommandDispatchService<string, DetachedTestTarget, DetachedReceipt, string, string, string, string>(
+            new DetachedPipeline(CommandTargetResolution<CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>, string>.Success(
+                new CommandDispatchExecution<DetachedTestTarget, DetachedReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-4", "cmd-4", "corr-4", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-4" },
+                    Receipt = receipt,
+                })),
+            new DetachedOutputStream(),
+            new DetachedCompletionPolicy(),
+            new DetachedDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
+            shutdownSignal: new TestShutdownSignal(cts.Token));
+
+        await service.DispatchAsync("command-4", CancellationToken.None);
+
+        await target.ReleaseObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        target.ReleaseTokens.Should().ContainSingle().Which.Should().Be(cts.Token);
+    }
+
+    [Fact]
     public async Task DisposeAsync_ShouldDrainInflightTasks()
     {
         var sink = new EventChannel<string>();
@@ -134,6 +164,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
         public string TargetId { get; } = targetId;
 
         public List<(DetachedReceipt Receipt, CommandInteractionCleanupContext<string> Cleanup)> ReleaseCalls { get; } = [];
+        public List<CancellationToken> ReleaseTokens { get; } = [];
         public TaskCompletionSource<bool> ReleaseObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IEventSink<string> RequireLiveSink() => sink;
@@ -144,6 +175,7 @@ public sealed class DefaultDetachedCommandDispatchServiceTests
             CancellationToken ct = default)
         {
             ReleaseCalls.Add((receipt, cleanup));
+            ReleaseTokens.Add(ct);
             ReleaseObserved.TrySetResult(true);
             return Task.CompletedTask;
         }

@@ -185,7 +185,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        var act = async () => await exporter.ExportAsync(new WorkflowRunReport(), cts.Token);
+        var act = async () => await exporter.ExportAsync(new WorkflowRunExportDocument(), cts.Token);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
@@ -195,7 +195,7 @@ public sealed class WorkflowRunCommandTargetAndPolicyTests
     {
         IWorkflowRunReportExportPort exporter = new NoopWorkflowRunReportExporter();
 
-        await exporter.ExportAsync(new WorkflowRunReport(), CancellationToken.None);
+        await exporter.ExportAsync(new WorkflowRunExportDocument(), CancellationToken.None);
     }
 
     private static WorkflowRunCommandTarget CreateTarget(

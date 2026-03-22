@@ -55,7 +55,7 @@ Aevatar.Workflow.Application.Abstractions/
 |------|------|
 | `IWorkflowExecutionQueryApplicationService` | 查询门面 |
 | `WorkflowRunSummary` | run 摘要（列表用） |
-| `WorkflowRunReport` | run 完整报告 |
+| `WorkflowRunExportDocument` | run 导出文档 |
 | `WorkflowRunStepTrace` | 步骤执行轨迹 |
 | `WorkflowRunRoleReply` | 角色回复记录 |
 | `WorkflowRunTimelineEvent` | 时间线事件 |

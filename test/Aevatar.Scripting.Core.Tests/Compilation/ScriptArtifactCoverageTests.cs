@@ -52,43 +52,35 @@ public class ScriptArtifactCoverageTests
     }
 
     [Fact]
-    public async Task CachedResolver_ShouldDisposeDuplicateArtifact_WhenConcurrentCompilationLosesCacheRace()
+    public async Task CachedResolver_ShouldShareSingleInflightCompile_WhenConcurrentCallersResolveSameArtifact()
     {
-        var firstCompileEntered = new ManualResetEventSlim(false);
+        var firstCompileEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowFirstCompileToReturn = new ManualResetEventSlim(false);
-        var secondCompileReturned = new ManualResetEventSlim(false);
-        var firstArtifactDisposed = 0;
-        var secondArtifactDisposed = 0;
 
-        var compiler = new ConcurrentRaceCompiler(
-            onFirstCompile: () =>
+        var compiler = new BlockingCompiler(
+            onCompile: () =>
             {
-                firstCompileEntered.Set();
-                allowFirstCompileToReturn.Wait();
-                return CreateArtifact("script-1", "rev-1", () => firstArtifactDisposed += 1);
-            },
-            onSecondCompile: () =>
-            {
-                var artifact = CreateArtifact("script-1", "rev-1", () => secondArtifactDisposed += 1);
-                secondCompileReturned.Set();
-                return artifact;
+                firstCompileEntered.TrySetResult(true);
+                if (!allowFirstCompileToReturn.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Timed out waiting to release the first compilation.");
+                }
+
+                return CreateArtifact("script-1", "rev-1");
             });
         var resolver = new CachedScriptBehaviorArtifactResolver(compiler);
         var request = CreateRequest();
 
         var firstTask = Task.Run(() => resolver.Resolve(request));
-        firstCompileEntered.Wait();
+        await firstCompileEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var secondTask = Task.Run(() => resolver.Resolve(request));
-        secondCompileReturned.Wait();
         allowFirstCompileToReturn.Set();
 
-        var resolved = await Task.WhenAll(firstTask, secondTask);
+        var resolved = await Task.WhenAll(firstTask, secondTask).WaitAsync(TimeSpan.FromSeconds(5));
 
         resolved[0].Should().BeSameAs(resolved[1]);
-        compiler.CallCount.Should().Be(2);
-        firstArtifactDisposed.Should().Be(1);
-        secondArtifactDisposed.Should().Be(0);
+        compiler.CallCount.Should().Be(1);
     }
 
     [Fact]
@@ -152,9 +144,7 @@ public class ScriptArtifactCoverageTests
         }
     }
 
-    private sealed class ConcurrentRaceCompiler(
-        Func<ScriptBehaviorArtifact> onFirstCompile,
-        Func<ScriptBehaviorArtifact> onSecondCompile) : IScriptBehaviorCompiler
+    private sealed class BlockingCompiler(Func<ScriptBehaviorArtifact> onCompile) : IScriptBehaviorCompiler
     {
         private int _callCount;
 
@@ -163,14 +153,8 @@ public class ScriptArtifactCoverageTests
         public ScriptBehaviorCompilationResult Compile(ScriptBehaviorCompilationRequest request)
         {
             _ = request;
-            var call = Interlocked.Increment(ref _callCount);
-            var artifact = call switch
-            {
-                1 => onFirstCompile(),
-                2 => onSecondCompile(),
-                _ => throw new InvalidOperationException("Unexpected compile call."),
-            };
-
+            Interlocked.Increment(ref _callCount);
+            var artifact = onCompile();
             return new ScriptBehaviorCompilationResult(true, artifact, Array.Empty<string>());
         }
     }

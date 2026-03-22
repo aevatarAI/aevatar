@@ -11,7 +11,7 @@
 通过 `/api/chat` 一次请求提交所有 YAML 定义，无需预注册。
 
 ```bash
-curl -N -X POST http://localhost:5000/api/chat \
+curl -N -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "hello from parent",
@@ -109,7 +109,7 @@ steps:
 
 ```bash
 # 启动 workflow
-curl -N -X POST http://localhost:5000/api/chat \
+curl -N -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Analyze this: hello world",
@@ -126,7 +126,7 @@ curl -N -X POST http://localhost:5000/api/chat \
 ### WebSocket
 
 ```javascript
-const ws = new WebSocket("ws://localhost:5000/api/ws/chat");
+const ws = new WebSocket("ws://localhost:5100/api/ws/chat");
 
 ws.onopen = () => {
   ws.send(JSON.stringify({
@@ -161,7 +161,7 @@ demos/Aevatar.Demos.Workflow/workflows/
 可以直接用于验证多级 workflow_call 链路：
 
 ```bash
-curl -N -X POST http://localhost:5000/api/chat \
+curl -N -X POST http://localhost:5100/api/chat \
   -H "Content-Type: application/json" \
   -d '{"prompt": "test multilevel call", "workflow": "workflow_call_multilevel"}'
 ```

@@ -301,18 +301,18 @@ public sealed class WorkflowInfrastructureCoverageTests
 
     private sealed class FakeReportExporter : IWorkflowRunReportExportPort
     {
-        public Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
+        public Task ExportAsync(WorkflowRunExportDocument exportDocument, CancellationToken ct = default)
         {
-            _ = report;
+            _ = exportDocument;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
     }
 
-    private static WorkflowRunReport BuildReport()
+    private static WorkflowRunExportDocument BuildReport()
     {
         var started = DateTimeOffset.UtcNow;
-        return new WorkflowRunReport
+        return new WorkflowRunExportDocument
         {
             WorkflowName = "workflow-report",
             RootActorId = "root-1",

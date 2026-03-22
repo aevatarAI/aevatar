@@ -69,7 +69,7 @@ internal static class ChatCommand
     private static Command CreateSetUrlCommand()
     {
         var command = new Command("set-url", "Persist chat API base URL.");
-        var urlArgument = new Argument<string>("url", "Absolute API base URL, e.g. http://localhost:5000");
+        var urlArgument = new Argument<string>("url", "Absolute API base URL, e.g. http://localhost:5100");
         command.AddArgument(urlArgument);
         command.SetHandler((string url) => ChatCommandHandler.SetApiBaseUrl(url), urlArgument);
         return command;

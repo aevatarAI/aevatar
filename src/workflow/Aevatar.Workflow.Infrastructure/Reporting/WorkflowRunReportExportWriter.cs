@@ -5,7 +5,7 @@ using Aevatar.Workflow.Application.Abstractions.Queries;
 
 namespace Aevatar.Workflow.Infrastructure.Reporting;
 
-/// <summary>Writes WorkflowRunReport export files to JSON and HTML.</summary>
+/// <summary>Writes workflow run export documents to JSON and HTML.</summary>
 public static class WorkflowRunReportExportWriter
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -24,19 +24,19 @@ public static class WorkflowRunReportExportWriter
             Path.Combine(outputDirectory, $"workflow-execution-{stamp}.html"));
     }
 
-    public static async Task WriteAsync(WorkflowRunReport report, string jsonPath, string htmlPath)
+    public static async Task WriteAsync(WorkflowRunExportDocument exportDocument, string jsonPath, string htmlPath)
     {
         var dir = Path.GetDirectoryName(jsonPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         dir = Path.GetDirectoryName(htmlPath);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-        var json = JsonSerializer.Serialize(report, JsonOptions);
+        var json = JsonSerializer.Serialize(exportDocument, JsonOptions);
         await File.WriteAllTextAsync(jsonPath, json);
-        await File.WriteAllTextAsync(htmlPath, BuildHtml(report));
+        await File.WriteAllTextAsync(htmlPath, BuildHtml(exportDocument));
     }
 
-    private static string BuildHtml(WorkflowRunReport report)
+    private static string BuildHtml(WorkflowRunExportDocument exportDocument)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<!doctype html>");
@@ -59,54 +59,54 @@ public static class WorkflowRunReportExportWriter
         sb.AppendLine("<div class='card'>");
         sb.AppendLine("<h2>Overview</h2>");
         sb.AppendLine("<table><tbody>");
-        AppendRow(sb, "Workflow", report.WorkflowName);
-        AppendRow(sb, "RootActor", report.RootActorId);
-        AppendRow(sb, "CommandId", report.CommandId);
-        AppendRow(sb, "ProjectionScope", report.ProjectionScope.ToString());
-        AppendRow(sb, "CompletionStatus", report.CompletionStatus.ToString());
-        AppendRow(sb, "TopologySource", report.TopologySource.ToString());
-        AppendRow(sb, "Success", report.Success?.ToString() ?? "(unknown)");
-        AppendRow(sb, "DurationMs", report.DurationMs.ToString("F2"));
-        AppendRow(sb, "CreatedAt", report.CreatedAt.ToString("O"));
-        AppendRow(sb, "UpdatedAt", report.UpdatedAt.ToString("O"));
-        AppendRow(sb, "StartedAt", report.StartedAt.ToString("O"));
-        AppendRow(sb, "EndedAt", report.EndedAt.ToString("O"));
+        AppendRow(sb, "Workflow", exportDocument.WorkflowName);
+        AppendRow(sb, "RootActor", exportDocument.RootActorId);
+        AppendRow(sb, "CommandId", exportDocument.CommandId);
+        AppendRow(sb, "ProjectionScope", exportDocument.ProjectionScope.ToString());
+        AppendRow(sb, "CompletionStatus", exportDocument.CompletionStatus.ToString());
+        AppendRow(sb, "TopologySource", exportDocument.TopologySource.ToString());
+        AppendRow(sb, "Success", exportDocument.Success?.ToString() ?? "(unknown)");
+        AppendRow(sb, "DurationMs", exportDocument.DurationMs.ToString("F2"));
+        AppendRow(sb, "CreatedAt", exportDocument.CreatedAt.ToString("O"));
+        AppendRow(sb, "UpdatedAt", exportDocument.UpdatedAt.ToString("O"));
+        AppendRow(sb, "StartedAt", exportDocument.StartedAt.ToString("O"));
+        AppendRow(sb, "EndedAt", exportDocument.EndedAt.ToString("O"));
         sb.AppendLine("</tbody></table>");
         sb.AppendLine("</div>");
 
         sb.AppendLine("<div class='card'><h2>Summary</h2><table><tbody>");
-        AppendRow(sb, "TotalSteps", report.Summary.TotalSteps.ToString());
-        AppendRow(sb, "RequestedSteps", report.Summary.RequestedSteps.ToString());
-        AppendRow(sb, "CompletedSteps", report.Summary.CompletedSteps.ToString());
-        AppendRow(sb, "RoleReplyCount", report.Summary.RoleReplyCount.ToString());
-        foreach (var (stepType, count) in report.Summary.StepTypeCounts.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
+        AppendRow(sb, "TotalSteps", exportDocument.Summary.TotalSteps.ToString());
+        AppendRow(sb, "RequestedSteps", exportDocument.Summary.RequestedSteps.ToString());
+        AppendRow(sb, "CompletedSteps", exportDocument.Summary.CompletedSteps.ToString());
+        AppendRow(sb, "RoleReplyCount", exportDocument.Summary.RoleReplyCount.ToString());
+        foreach (var (stepType, count) in exportDocument.Summary.StepTypeCounts.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
             AppendRow(sb, $"StepType.{stepType}", count.ToString());
         sb.AppendLine("</tbody></table></div>");
 
         sb.AppendLine("<div class='card'><h2>Input</h2>");
-        sb.AppendLine($"<pre>{E(report.Input)}</pre>");
+        sb.AppendLine($"<pre>{E(exportDocument.Input)}</pre>");
         sb.AppendLine("</div>");
 
         sb.AppendLine("<div class='card'><h2>Final Output</h2>");
-        if (!string.IsNullOrWhiteSpace(report.FinalError))
-            sb.AppendLine($"<div class='muted'>Error: {E(report.FinalError)}</div>");
-        sb.AppendLine($"<pre>{E(report.FinalOutput)}</pre>");
+        if (!string.IsNullOrWhiteSpace(exportDocument.FinalError))
+            sb.AppendLine($"<div class='muted'>Error: {E(exportDocument.FinalError)}</div>");
+        sb.AppendLine($"<pre>{E(exportDocument.FinalOutput)}</pre>");
         sb.AppendLine("</div>");
 
         sb.AppendLine("<div class='card'><h2>Topology</h2>");
         sb.AppendLine("<table><thead><tr><th>Parent</th><th>Child</th></tr></thead><tbody>");
-        if (report.Topology.Count == 0)
+        if (exportDocument.Topology.Count == 0)
             sb.AppendLine("<tr><td colspan='2' class='muted'>(no links)</td></tr>");
         else
         {
-            foreach (var edge in report.Topology)
+            foreach (var edge in exportDocument.Topology)
                 sb.AppendLine($"<tr><td>{E(edge.Parent)}</td><td>{E(edge.Child)}</td></tr>");
         }
         sb.AppendLine("</tbody></table></div>");
 
         sb.AppendLine("<div class='card'><h2>Steps</h2>");
         sb.AppendLine("<table><thead><tr><th>StepId</th><th>Type</th><th>TargetRole</th><th>Success</th><th>Worker</th><th>DurationMs</th><th>OutputPreview</th><th>Error</th></tr></thead><tbody>");
-        foreach (var step in report.Steps)
+        foreach (var step in exportDocument.Steps)
         {
             sb.AppendLine("<tr>");
             sb.AppendLine($"<td><code>{E(step.StepId)}</code></td>");
@@ -122,11 +122,11 @@ public static class WorkflowRunReportExportWriter
         sb.AppendLine("</tbody></table></div>");
 
         sb.AppendLine("<div class='card'><h2>Role Replies</h2>");
-        if (report.RoleReplies.Count == 0)
+        if (exportDocument.RoleReplies.Count == 0)
             sb.AppendLine("<div class='muted'>(no role replies captured)</div>");
         else
         {
-            foreach (var reply in report.RoleReplies)
+            foreach (var reply in exportDocument.RoleReplies)
             {
                 sb.AppendLine("<details>");
                 sb.AppendLine($"<summary><code>{E(reply.RoleId)}</code> session={E(reply.SessionId)} chars={reply.ContentLength} time={E(reply.Timestamp.ToString("HH:mm:ss.fff"))}</summary>");
@@ -138,7 +138,7 @@ public static class WorkflowRunReportExportWriter
 
         sb.AppendLine("<div class='card'><h2>Timeline</h2>");
         sb.AppendLine("<table><thead><tr><th>Time</th><th>Stage</th><th>Agent</th><th>StepId</th><th>StepType</th><th>Message</th></tr></thead><tbody>");
-        foreach (var evt in report.Timeline)
+        foreach (var evt in exportDocument.Timeline)
         {
             sb.AppendLine("<tr>");
             sb.AppendLine($"<td>{E(evt.Timestamp.ToString("HH:mm:ss.fff"))}</td>");

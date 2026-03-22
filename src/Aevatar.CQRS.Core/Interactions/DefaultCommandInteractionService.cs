@@ -16,6 +16,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
     private readonly ICommandFinalizeEmitter<TReceipt, TCompletion, TFrame> _finalizeEmitter;
     private readonly ICommandDurableCompletionResolver<TReceipt, TCompletion> _durableCompletionResolver;
     private readonly ILogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>> _logger;
+    private readonly CancellationToken _cleanupToken;
 
     public DefaultCommandInteractionService(
         ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> dispatchPipeline,
@@ -23,13 +24,15 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
         ICommandCompletionPolicy<TEvent, TCompletion> completionPolicy,
         ICommandFinalizeEmitter<TReceipt, TCompletion, TFrame> finalizeEmitter,
         ICommandDurableCompletionResolver<TReceipt, TCompletion> durableCompletionResolver,
-        ILogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>? logger = null)
+        ILogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>? logger = null,
+        ICommandDispatchShutdownSignal? shutdownSignal = null)
     {
         _dispatchPipeline = dispatchPipeline ?? throw new ArgumentNullException(nameof(dispatchPipeline));
         _outputStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
         _completionPolicy = completionPolicy ?? throw new ArgumentNullException(nameof(completionPolicy));
         _finalizeEmitter = finalizeEmitter ?? throw new ArgumentNullException(nameof(finalizeEmitter));
         _durableCompletionResolver = durableCompletionResolver ?? throw new ArgumentNullException(nameof(durableCompletionResolver));
+        _cleanupToken = shutdownSignal?.ShutdownToken ?? CancellationToken.None;
         _logger = logger ?? NullLogger<DefaultCommandInteractionService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>>.Instance;
     }
 
@@ -111,7 +114,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                 {
                     durableCompletion = await _durableCompletionResolver.ResolveAsync(
                         receipt,
-                        CancellationToken.None);
+                        _cleanupToken);
                 }
 
                 await target.ReleaseAfterInteractionAsync(
@@ -120,7 +123,7 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                         observedCompleted,
                         observedCompletion,
                         durableCompletion),
-                    CancellationToken.None);
+                    _cleanupToken);
             }
             catch (Exception cleanupException)
             {

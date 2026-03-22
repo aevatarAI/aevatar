@@ -75,9 +75,7 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
         if (Interlocked.Increment(ref _inflightCount) == 1)
             _drainComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var task = Task.Run(
-            () => DrainAsync(target, receipt, _shutdownToken),
-            CancellationToken.None);
+        var task = DrainAsync(target, receipt, _shutdownToken);
 
         task.ContinueWith(
             _ =>
@@ -168,7 +166,7 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
                         observedCompleted,
                         observedCompletion,
                         durableCompletion),
-                    CancellationToken.None);
+                    ct);
             }
             catch (Exception ex)
             {

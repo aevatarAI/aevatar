@@ -509,16 +509,7 @@ public sealed class WorkflowRunGAgent
 
         foreach (var role in _compiledWorkflow.Roles)
         {
-            var roleId = role.Id;
-            if (string.IsNullOrWhiteSpace(roleId))
-            {
-                Logger.LogWarning(
-                    "Skip workflow role without id while building agent tree. workflow={WorkflowName} actor={ActorId}",
-                    _compiledWorkflow.Name,
-                    Id);
-                continue;
-            }
-
+            var roleId = RequireRoleId(role);
             var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
@@ -545,6 +536,16 @@ public sealed class WorkflowRunGAgent
             throw new InvalidOperationException("Role id is required to create child actor.");
 
         return $"{Id}:{roleId.Trim()}";
+    }
+
+    private static string RequireRoleId(RoleDefinition role)
+    {
+        ArgumentNullException.ThrowIfNull(role);
+
+        if (string.IsNullOrWhiteSpace(role.Id))
+            throw new InvalidOperationException("Role id is required to create child actor.");
+
+        return role.Id.Trim();
     }
 
     private void InstallCognitiveModules()

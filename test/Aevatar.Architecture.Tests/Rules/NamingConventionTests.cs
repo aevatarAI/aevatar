@@ -61,7 +61,7 @@ public class NamingConventionTests
         rule.Check(Arch);
     }
 
-    [Fact(Skip = "Known violation - WorkflowRunReport exists in Aevatar.Workflow.Application.Abstractions.Queries")]
+    [Fact]
     public void LegacyWorkflowReportArtifact_ShouldNot_Exist()
     {
         IArchRule rule = Types().That()

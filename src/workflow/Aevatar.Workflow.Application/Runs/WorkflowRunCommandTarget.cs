@@ -168,7 +168,7 @@ internal sealed class WorkflowRunCommandTarget
         {
             try
             {
-                await DestroyCreatedActorsAsync(CancellationToken.None);
+                await DestroyCreatedActorsAsync(ct);
             }
             catch (Exception ex)
             {

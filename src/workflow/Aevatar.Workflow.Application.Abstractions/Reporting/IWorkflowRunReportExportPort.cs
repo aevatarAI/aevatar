@@ -4,5 +4,5 @@ namespace Aevatar.Workflow.Application.Abstractions.Reporting;
 
 public interface IWorkflowRunReportExportPort
 {
-    Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default);
+    Task ExportAsync(WorkflowRunExportDocument exportDocument, CancellationToken ct = default);
 }

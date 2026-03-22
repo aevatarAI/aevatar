@@ -182,19 +182,52 @@ public sealed class DefaultCommandInteractionServiceTests
         target.ReleaseCalls[0].Cleanup.ObservedCompleted.Should().BeFalse();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ShouldPassShutdownToken_ToCleanup()
+    {
+        using var cts = new CancellationTokenSource();
+        var sink = new EventChannel<string>();
+        sink.Push("done:completed");
+        sink.Complete();
+
+        var target = new TestTarget("target-1", sink);
+        var receipt = new TestReceipt("target-1", "receipt-5");
+        var service = CreateService(
+            new TestDispatchPipeline(CommandTargetResolution<CommandDispatchExecution<TestTarget, TestReceipt>, string>.Success(
+                new CommandDispatchExecution<TestTarget, TestReceipt>
+                {
+                    Target = target,
+                    Context = new CommandContext("target-1", "cmd-5", "corr-5", new Dictionary<string, string>()),
+                    Envelope = new Aevatar.Foundation.Abstractions.EventEnvelope { Id = "env-5" },
+                    Receipt = receipt,
+                })),
+            shutdownSignal: new TestShutdownSignal(cts.Token));
+
+        var result = await service.ExecuteAsync(
+            "command-5",
+            static (_, _) => ValueTask.CompletedTask,
+            ct: CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        target.ReleaseTokens.Should().ContainSingle().Which.Should().Be(cts.Token);
+    }
+
     private static DefaultCommandInteractionService<string, TestTarget, TestReceipt, string, string, string, string> CreateService(
         ICommandDispatchPipeline<string, TestTarget, TestReceipt, string> dispatchPipeline,
         ICommandCompletionPolicy<string, string>? completionPolicy = null,
         ICommandFinalizeEmitter<TestReceipt, string, string>? finalizeEmitter = null,
-        ICommandDurableCompletionResolver<TestReceipt, string>? durableResolver = null) =>
+        ICommandDurableCompletionResolver<TestReceipt, string>? durableResolver = null,
+        ICommandDispatchShutdownSignal? shutdownSignal = null) =>
         new(
             dispatchPipeline,
             new DefaultEventOutputStream<string, string>(new PassThroughFrameMapper()),
             completionPolicy ?? new TestCompletionPolicy(),
             finalizeEmitter ?? new RecordingFinalizeEmitter(),
-            durableResolver ?? new RecordingDurableResolver(CommandDurableCompletionObservation<string>.Incomplete));
+            durableResolver ?? new RecordingDurableResolver(CommandDurableCompletionObservation<string>.Incomplete),
+            shutdownSignal: shutdownSignal);
 
     private sealed record TestReceipt(string TargetId, string ReceiptId);
+    private sealed record TestShutdownSignal(CancellationToken ShutdownToken) : ICommandDispatchShutdownSignal;
 
     private sealed class TestTarget(string targetId, IEventSink<string> sink)
         : ICommandEventTarget<string>,
@@ -202,6 +235,7 @@ public sealed class DefaultCommandInteractionServiceTests
     {
         public string TargetId { get; } = targetId;
         public List<(TestReceipt Receipt, CommandInteractionCleanupContext<string> Cleanup)> ReleaseCalls { get; } = [];
+        public List<CancellationToken> ReleaseTokens { get; } = [];
         public Exception? ReleaseException { get; set; }
 
         public IEventSink<string> RequireLiveSink() => sink;
@@ -213,6 +247,7 @@ public sealed class DefaultCommandInteractionServiceTests
         {
             ct.ThrowIfCancellationRequested();
             ReleaseCalls.Add((receipt, cleanup));
+            ReleaseTokens.Add(ct);
             if (ReleaseException != null)
                 throw ReleaseException;
 

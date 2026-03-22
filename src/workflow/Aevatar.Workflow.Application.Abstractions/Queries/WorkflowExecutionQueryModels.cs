@@ -120,7 +120,7 @@ public enum WorkflowRunCompletionStatus
     Unknown = 99,
 }
 
-public sealed class WorkflowRunReport
+public sealed class WorkflowRunExportDocument
 {
     public string ReportVersion { get; set; } = "1.0";
     public WorkflowRunProjectionScope ProjectionScope { get; set; } = WorkflowRunProjectionScope.Unknown;

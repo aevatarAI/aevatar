@@ -19,9 +19,9 @@ internal sealed class FileSystemWorkflowRunReportExporter : IWorkflowRunReportEx
         _logger = logger;
     }
 
-    public async Task ExportAsync(WorkflowRunReport report, CancellationToken ct = default)
+    public async Task ExportAsync(WorkflowRunExportDocument exportDocument, CancellationToken ct = default)
     {
-        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(exportDocument);
 
         if (!_options.Value.Enabled)
             return;
@@ -30,7 +30,7 @@ internal sealed class FileSystemWorkflowRunReportExporter : IWorkflowRunReportEx
 
         var outputDir = ResolveOutputDirectory();
         var (jsonPath, htmlPath) = WorkflowRunReportExportWriter.BuildDefaultPaths(outputDir);
-        await WorkflowRunReportExportWriter.WriteAsync(report, jsonPath, htmlPath);
+        await WorkflowRunReportExportWriter.WriteAsync(exportDocument, jsonPath, htmlPath);
 
         _logger.LogInformation("Chat run report saved: json={JsonPath}, html={HtmlPath}", jsonPath, htmlPath);
     }

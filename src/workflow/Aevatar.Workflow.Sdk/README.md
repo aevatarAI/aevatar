@@ -8,7 +8,7 @@
 - Bridge 回调 token 签发与回调上报
 - Workflow/Actor 查询接口
 
-> 默认对接地址：`http://localhost:5000`
+> 默认对接地址：`http://localhost:5100`
 
 ---
 
@@ -29,7 +29,7 @@ var services = new ServiceCollection();
 
 services.AddAevatarWorkflowSdk(options =>
 {
-    options.BaseUrl = "http://localhost:5000";
+    options.BaseUrl = "http://localhost:5100";
     options.DefaultHeaders["x-tenant-id"] = "demo";
 });
 ```
@@ -176,12 +176,12 @@ using Microsoft.Extensions.Options;
 
 var httpClient = new HttpClient
 {
-    BaseAddress = new Uri("http://localhost:5000"),
+    BaseAddress = new Uri("http://localhost:5100"),
 };
 
 var options = Options.Create(new AevatarWorkflowClientOptions
 {
-    BaseUrl = "http://localhost:5000",
+    BaseUrl = "http://localhost:5100",
 });
 
 IAevatarWorkflowClient client = new AevatarWorkflowClient(
