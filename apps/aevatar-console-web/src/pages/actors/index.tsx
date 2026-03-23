@@ -2,7 +2,7 @@ import type {
   ProColumns,
   ProDescriptionsItemProps,
   ProFormInstance,
-} from '@ant-design/pro-components';
+} from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
@@ -13,8 +13,9 @@ import {
   ProFormSelect,
   ProFormText,
   ProTable,
-} from '@ant-design/pro-components';
-import { useQuery } from '@tanstack/react-query';
+} from "@ant-design/pro-components";
+import { useQuery } from "@tanstack/react-query";
+import { history } from "@/shared/navigation/history";
 import {
   Alert,
   Button,
@@ -26,22 +27,22 @@ import {
   Statistic,
   Tag,
   Typography,
-} from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { consoleApi } from '@/shared/api/consoleApi';
+} from "antd";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import type {
   WorkflowActorGraphEdge,
   WorkflowActorGraphNode,
   WorkflowActorGraphSubgraph,
   WorkflowActorSnapshot,
-} from '@/shared/api/models';
-import { formatDateTime } from '@/shared/datetime/dateTime';
-import { buildActorGraphElements } from '@/shared/graphs/buildGraphElements';
-import GraphCanvas from '@/shared/graphs/GraphCanvas';
+} from "@/shared/models/runtime/actors";
+import { formatDateTime } from "@/shared/datetime/dateTime";
+import { buildActorGraphElements } from "@/shared/graphs/buildGraphElements";
+import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import {
   type ActorGraphDirection,
   loadConsolePreferences,
-} from '@/shared/preferences/consolePreferences';
+} from "@/shared/preferences/consolePreferences";
 import {
   cardStackStyle,
   compactTableCardProps,
@@ -49,16 +50,16 @@ import {
   fillCardStyle,
   moduleCardProps,
   stretchColumnStyle,
-} from '@/shared/ui/proComponents';
+} from "@/shared/ui/proComponents";
 import {
   type ActorTimelineFilters,
   type ActorTimelineRow,
   buildTimelineRows,
   deriveSubgraphFromEdges,
   filterTimelineRows,
-} from './actorPresentation';
+} from "./actorPresentation";
 
-type ActorGraphViewMode = 'enriched' | 'subgraph' | 'edges';
+type ActorGraphViewMode = "enriched" | "subgraph" | "edges";
 
 type ActorPageState = {
   actorId: string;
@@ -70,7 +71,7 @@ type ActorPageState = {
 };
 
 type ActorSnapshotRecord = WorkflowActorSnapshot & {
-  executionStatus: 'success' | 'error' | 'default';
+  executionStatus: "success" | "error" | "default";
   completionRate: number;
 };
 
@@ -103,47 +104,47 @@ const defaultTimelineFilters: ActorTimelineFilters = {
   stages: [],
   eventTypes: [],
   stepTypes: [],
-  query: '',
+  query: "",
   errorsOnly: false,
 };
 
 const graphViewOptions: Array<{ label: string; value: ActorGraphViewMode }> = [
-  { label: 'Enriched', value: 'enriched' },
-  { label: 'Subgraph', value: 'subgraph' },
-  { label: 'Edges only', value: 'edges' },
+  { label: "Enriched", value: "enriched" },
+  { label: "Subgraph", value: "subgraph" },
+  { label: "Edges only", value: "edges" },
 ];
 
 const executionValueEnum = {
-  success: { text: 'Healthy', status: 'Success' },
-  error: { text: 'Error', status: 'Error' },
-  default: { text: 'Unknown', status: 'Default' },
+  success: { text: "Healthy", status: "Success" },
+  error: { text: "Error", status: "Error" },
+  default: { text: "Unknown", status: "Default" },
 } as const;
 
 const timelineStatusValueEnum = {
-  processing: { text: 'Processing', status: 'Processing' },
-  success: { text: 'Completed', status: 'Success' },
-  error: { text: 'Error', status: 'Error' },
-  default: { text: 'Observed', status: 'Default' },
+  processing: { text: "Processing", status: "Processing" },
+  success: { text: "Completed", status: "Success" },
+  error: { text: "Error", status: "Error" },
+  default: { text: "Observed", status: "Default" },
 } as const;
 
 const graphViewLabels: Record<ActorGraphViewMode, string> = {
-  enriched: 'Snapshot + subgraph',
-  subgraph: 'Subgraph',
-  edges: 'Edges only',
+  enriched: "Backend enriched snapshot",
+  subgraph: "Subgraph",
+  edges: "Edges only",
 };
 
 function renderPropertyList(properties: Record<string, string>) {
   const entries = Object.entries(properties);
   if (entries.length === 0) {
-    return 'n/a';
+    return "n/a";
   }
 
   return (
-    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+    <Space direction="vertical" size={4} style={{ width: "100%" }}>
       {entries.map(([key, value]) => (
         <Typography.Text key={key}>
-          <Typography.Text type="secondary">{key}</Typography.Text>:{' '}
-          {value || 'n/a'}
+          <Typography.Text type="secondary">{key}</Typography.Text>:{" "}
+          {value || "n/a"}
         </Typography.Text>
       ))}
     </Space>
@@ -152,208 +153,210 @@ function renderPropertyList(properties: Record<string, string>) {
 
 const snapshotColumns: ProDescriptionsItemProps<ActorSnapshotRecord>[] = [
   {
-    title: 'ActorId',
-    dataIndex: 'actorId',
+    title: "ActorId",
+    dataIndex: "actorId",
     render: (_, record) => (
       <Typography.Text copyable>{record.actorId}</Typography.Text>
     ),
   },
   {
-    title: 'Workflow',
-    dataIndex: 'workflowName',
+    title: "Workflow",
+    dataIndex: "workflowName",
   },
   {
-    title: 'Execution',
-    dataIndex: 'executionStatus',
-    valueType: 'status' as any,
+    title: "Execution",
+    dataIndex: "executionStatus",
+    valueType: "status" as any,
     valueEnum: executionValueEnum,
   },
   {
-    title: 'Completion',
-    dataIndex: 'completionRate',
-    valueType: 'percent',
+    title: "Completion",
+    dataIndex: "completionRate",
+    valueType: "percent",
   },
   {
-    title: 'State version',
-    dataIndex: 'stateVersion',
-    valueType: 'digit',
+    title: "State version",
+    dataIndex: "stateVersion",
+    valueType: "digit",
   },
   {
-    title: 'Role replies',
-    dataIndex: 'roleReplyCount',
-    valueType: 'digit',
+    title: "Role replies",
+    dataIndex: "roleReplyCount",
+    valueType: "digit",
   },
   {
-    title: 'Last command',
-    dataIndex: 'lastCommandId',
+    title: "Last command",
+    dataIndex: "lastCommandId",
     render: (_, record) =>
       record.lastCommandId ? (
         <Typography.Text copyable>{record.lastCommandId}</Typography.Text>
       ) : (
-        'n/a'
+        "n/a"
       ),
   },
   {
-    title: 'Last updated',
-    dataIndex: 'lastUpdatedAt',
-    valueType: 'dateTime',
+    title: "Last updated",
+    dataIndex: "lastUpdatedAt",
+    valueType: "dateTime",
     render: (_, record) => formatDateTime(record.lastUpdatedAt),
   },
   {
-    title: 'Last output',
-    dataIndex: 'lastOutput',
-    render: (_, record) => record.lastOutput || 'n/a',
+    title: "Last output",
+    dataIndex: "lastOutput",
+    render: (_, record) => record.lastOutput || "n/a",
   },
   {
-    title: 'Last error',
-    dataIndex: 'lastError',
-    render: (_, record) => record.lastError || 'n/a',
+    title: "Last error",
+    dataIndex: "lastError",
+    render: (_, record) => record.lastError || "n/a",
   },
 ];
 
 const timelineColumns: ProColumns<ActorTimelineRow>[] = [
   {
-    title: 'Timestamp',
-    dataIndex: 'timestamp',
-    valueType: 'dateTime',
+    title: "Timestamp",
+    dataIndex: "timestamp",
+    valueType: "dateTime",
     width: 220,
     render: (_, record) => formatDateTime(record.timestamp),
   },
   {
-    title: 'Status',
-    dataIndex: 'timelineStatus',
-    valueType: 'status' as any,
+    title: "Status",
+    dataIndex: "timelineStatus",
+    valueType: "status" as any,
     valueEnum: timelineStatusValueEnum,
     width: 120,
   },
   {
-    title: 'Stage',
-    dataIndex: 'stage',
+    title: "Stage",
+    dataIndex: "stage",
     width: 180,
   },
   {
-    title: 'Event type',
-    dataIndex: 'eventType',
+    title: "Event type",
+    dataIndex: "eventType",
     width: 220,
-    render: (_, record) => record.eventType || 'n/a',
+    render: (_, record) => record.eventType || "n/a",
   },
   {
-    title: 'Message',
-    dataIndex: 'message',
+    title: "Message",
+    dataIndex: "message",
     ellipsis: true,
   },
   {
-    title: 'Step',
-    dataIndex: 'stepId',
+    title: "Step",
+    dataIndex: "stepId",
     width: 180,
-    render: (_, record) => record.stepId || 'n/a',
+    render: (_, record) => record.stepId || "n/a",
   },
   {
-    title: 'Step type',
-    dataIndex: 'stepType',
+    title: "Step type",
+    dataIndex: "stepType",
     width: 160,
-    render: (_, record) => record.stepType || 'n/a',
+    render: (_, record) => record.stepType || "n/a",
   },
   {
-    title: 'Actor',
-    dataIndex: 'agentId',
+    title: "Actor",
+    dataIndex: "agentId",
     width: 200,
-    render: (_, record) => record.agentId || 'n/a',
+    render: (_, record) => record.agentId || "n/a",
   },
   {
-    title: 'Data',
-    dataIndex: 'dataSummary',
+    title: "Data",
+    dataIndex: "dataSummary",
     ellipsis: true,
     render: (_, record) =>
       record.dataCount > 0
-        ? `${record.dataCount} field${record.dataCount === 1 ? '' : 's'} · ${record.dataSummary}`
-        : 'n/a',
+        ? `${record.dataCount} field${record.dataCount === 1 ? "" : "s"} · ${
+            record.dataSummary
+          }`
+        : "n/a",
   },
 ];
 
 const graphSummaryColumns: ProDescriptionsItemProps<ActorGraphSummaryRecord>[] =
   [
     {
-      title: 'View',
-      dataIndex: 'mode',
+      title: "View",
+      dataIndex: "mode",
       render: (_, record) => graphViewLabels[record.mode],
     },
     {
-      title: 'Direction',
-      dataIndex: 'direction',
+      title: "Direction",
+      dataIndex: "direction",
     },
     {
-      title: 'Depth',
-      dataIndex: 'depth',
-      valueType: 'digit',
+      title: "Depth",
+      dataIndex: "depth",
+      valueType: "digit",
     },
     {
-      title: 'Take',
-      dataIndex: 'take',
-      valueType: 'digit',
+      title: "Take",
+      dataIndex: "take",
+      valueType: "digit",
     },
     {
-      title: 'Edge types',
-      dataIndex: 'edgeTypes',
+      title: "Edge types",
+      dataIndex: "edgeTypes",
     },
     {
-      title: 'Root node',
-      dataIndex: 'rootNodeId',
+      title: "Root node",
+      dataIndex: "rootNodeId",
       render: (_, record) => (
         <Typography.Text copyable>{record.rootNodeId}</Typography.Text>
       ),
     },
     {
-      title: 'Nodes',
-      dataIndex: 'nodeCount',
-      valueType: 'digit',
+      title: "Nodes",
+      dataIndex: "nodeCount",
+      valueType: "digit",
     },
     {
-      title: 'Edges',
-      dataIndex: 'edgeCount',
-      valueType: 'digit',
+      title: "Edges",
+      dataIndex: "edgeCount",
+      valueType: "digit",
     },
   ];
 
 const nodeDetailColumns: ProDescriptionsItemProps<ActorNodeDetailRecord>[] = [
   {
-    title: 'NodeId',
-    dataIndex: 'nodeId',
+    title: "NodeId",
+    dataIndex: "nodeId",
     render: (_, record) => (
       <Typography.Text copyable>{record.nodeId}</Typography.Text>
     ),
   },
   {
-    title: 'Primary label',
-    dataIndex: 'primaryLabel',
+    title: "Primary label",
+    dataIndex: "primaryLabel",
   },
   {
-    title: 'Node type',
-    dataIndex: 'nodeType',
+    title: "Node type",
+    dataIndex: "nodeType",
   },
   {
-    title: 'Role',
-    dataIndex: ['properties', 'role'],
-    render: (_, record) => record.properties.role || 'n/a',
+    title: "Role",
+    dataIndex: ["properties", "role"],
+    render: (_, record) => record.properties.role || "n/a",
   },
   {
-    title: 'Updated at',
-    dataIndex: 'updatedAt',
+    title: "Updated at",
+    dataIndex: "updatedAt",
     render: (_, record) => formatDateTime(record.updatedAt),
   },
   {
-    title: 'Root node',
-    dataIndex: 'isRoot',
-    render: (_, record) => (record.isRoot ? 'Yes' : 'No'),
+    title: "Root node",
+    dataIndex: "isRoot",
+    render: (_, record) => (record.isRoot ? "Yes" : "No"),
   },
   {
-    title: 'Property count',
-    dataIndex: 'propertyCount',
-    valueType: 'digit',
+    title: "Property count",
+    dataIndex: "propertyCount",
+    valueType: "digit",
   },
   {
-    title: 'Properties',
-    dataIndex: 'properties',
+    title: "Properties",
+    dataIndex: "properties",
     span: 2,
     render: (_, record) => renderPropertyList(record.properties),
   },
@@ -361,43 +364,43 @@ const nodeDetailColumns: ProDescriptionsItemProps<ActorNodeDetailRecord>[] = [
 
 const edgeDetailColumns: ProDescriptionsItemProps<ActorEdgeDetailRecord>[] = [
   {
-    title: 'EdgeId',
-    dataIndex: 'edgeId',
+    title: "EdgeId",
+    dataIndex: "edgeId",
     render: (_, record) => (
       <Typography.Text copyable>{record.edgeId}</Typography.Text>
     ),
   },
   {
-    title: 'Type',
-    dataIndex: 'edgeType',
+    title: "Type",
+    dataIndex: "edgeType",
   },
   {
-    title: 'From',
-    dataIndex: 'fromNodeId',
+    title: "From",
+    dataIndex: "fromNodeId",
     render: (_, record) => (
       <Typography.Text copyable>{record.fromNodeId}</Typography.Text>
     ),
   },
   {
-    title: 'To',
-    dataIndex: 'toNodeId',
+    title: "To",
+    dataIndex: "toNodeId",
     render: (_, record) => (
       <Typography.Text copyable>{record.toNodeId}</Typography.Text>
     ),
   },
   {
-    title: 'Updated at',
-    dataIndex: 'updatedAt',
+    title: "Updated at",
+    dataIndex: "updatedAt",
     render: (_, record) => formatDateTime(record.updatedAt),
   },
   {
-    title: 'Property count',
-    dataIndex: 'propertyCount',
-    valueType: 'digit',
+    title: "Property count",
+    dataIndex: "propertyCount",
+    valueType: "digit",
   },
   {
-    title: 'Properties',
-    dataIndex: 'properties',
+    title: "Properties",
+    dataIndex: "properties",
     span: 2,
     render: (_, record) => renderPropertyList(record.properties),
   },
@@ -418,9 +421,9 @@ function parsePositiveInt(value: string | null, fallback: number): number {
 
 function parseDirection(
   value: string | null,
-  fallback: ActorGraphDirection,
+  fallback: ActorGraphDirection
 ): ActorGraphDirection {
-  if (value === 'Both' || value === 'Outbound' || value === 'Inbound') {
+  if (value === "Both" || value === "Outbound" || value === "Inbound") {
     return value;
   }
 
@@ -428,18 +431,18 @@ function parseDirection(
 }
 
 function parseGraphViewMode(value: string | null): ActorGraphViewMode {
-  if (value === 'subgraph' || value === 'edges' || value === 'enriched') {
+  if (value === "subgraph" || value === "edges" || value === "enriched") {
     return value;
   }
 
-  return 'enriched';
+  return "enriched";
 }
 
 function readStateFromUrl(): ActorPageState {
   const preferences = loadConsolePreferences();
-  if (typeof window === 'undefined') {
+  if (typeof window === "undefined") {
     return {
-      actorId: '',
+      actorId: "",
       timelineTake: preferences.actorTimelineTake,
       graphDepth: preferences.actorGraphDepth,
       graphTake: preferences.actorGraphTake,
@@ -450,37 +453,37 @@ function readStateFromUrl(): ActorPageState {
 
   const params = new URLSearchParams(window.location.search);
   return {
-    actorId: params.get('actorId') ?? '',
+    actorId: params.get("actorId") ?? "",
     timelineTake: parsePositiveInt(
-      params.get('timelineTake'),
-      preferences.actorTimelineTake,
+      params.get("timelineTake"),
+      preferences.actorTimelineTake
     ),
     graphDepth: parsePositiveInt(
-      params.get('graphDepth'),
-      preferences.actorGraphDepth,
+      params.get("graphDepth"),
+      preferences.actorGraphDepth
     ),
     graphTake: parsePositiveInt(
-      params.get('graphTake'),
-      preferences.actorGraphTake,
+      params.get("graphTake"),
+      preferences.actorGraphTake
     ),
     graphDirection: parseDirection(
-      params.get('graphDirection'),
-      preferences.actorGraphDirection,
+      params.get("graphDirection"),
+      preferences.actorGraphDirection
     ),
     edgeTypes: params
-      .getAll('edgeTypes')
+      .getAll("edgeTypes")
       .map((value) => value.trim())
       .filter(Boolean),
   };
 }
 
 function readGraphViewModeFromUrl(): ActorGraphViewMode {
-  if (typeof window === 'undefined') {
-    return 'enriched';
+  if (typeof window === "undefined") {
+    return "enriched";
   }
 
   return parseGraphViewMode(
-    new URLSearchParams(window.location.search).get('graphView'),
+    new URLSearchParams(window.location.search).get("graphView")
   );
 }
 
@@ -488,7 +491,7 @@ const ActorsPage: React.FC = () => {
   const initialState = useMemo(() => readStateFromUrl(), []);
   const initialGraphViewMode = useMemo(() => readGraphViewModeFromUrl(), []);
   const formRef = useRef<ProFormInstance<ActorPageState> | undefined>(
-    undefined,
+    undefined
   );
   const timelineFormRef = useRef<
     ProFormInstance<ActorTimelineFilters> | undefined
@@ -500,39 +503,58 @@ const ActorsPage: React.FC = () => {
   const [graphViewMode, setGraphViewMode] =
     useState<ActorGraphViewMode>(initialGraphViewMode);
   const [timelineFilters, setTimelineFilters] = useState<ActorTimelineFilters>(
-    defaultTimelineFilters,
+    defaultTimelineFilters
   );
-  const [selectedNodeId, setSelectedNodeId] = useState<string>('');
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string>('');
-  const [selectedTimelineKey, setSelectedTimelineKey] = useState<string>('');
+  const [selectedNodeId, setSelectedNodeId] = useState<string>("");
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
+  const [selectedTimelineKey, setSelectedTimelineKey] = useState<string>("");
 
   const snapshotQuery = useQuery({
-    queryKey: ['actor-snapshot', filters.actorId],
+    queryKey: ["actor-snapshot", filters.actorId],
     enabled: Boolean(filters.actorId),
-    queryFn: () => consoleApi.getActorSnapshot(filters.actorId),
+    queryFn: () => runtimeActorsApi.getActorSnapshot(filters.actorId),
   });
 
   const timelineQuery = useQuery({
-    queryKey: ['actor-timeline', filters.actorId, filters.timelineTake],
+    queryKey: ["actor-timeline", filters.actorId, filters.timelineTake],
     enabled: Boolean(filters.actorId),
     queryFn: () =>
-      consoleApi.getActorTimeline(filters.actorId, {
+      runtimeActorsApi.getActorTimeline(filters.actorId, {
         take: filters.timelineTake,
+      }),
+  });
+
+  const graphEnrichedQuery = useQuery({
+    queryKey: [
+      "actor-graph-enriched",
+      filters.actorId,
+      filters.graphDepth,
+      filters.graphTake,
+      filters.graphDirection,
+      [...filters.edgeTypes].sort().join(","),
+    ],
+    enabled: Boolean(filters.actorId),
+    queryFn: () =>
+      runtimeActorsApi.getActorGraphEnriched(filters.actorId, {
+        depth: filters.graphDepth,
+        take: filters.graphTake,
+        direction: filters.graphDirection,
+        edgeTypes: filters.edgeTypes,
       }),
   });
 
   const graphSubgraphQuery = useQuery({
     queryKey: [
-      'actor-graph-subgraph',
+      "actor-graph-subgraph",
       filters.actorId,
       filters.graphDepth,
       filters.graphTake,
       filters.graphDirection,
-      [...filters.edgeTypes].sort().join(','),
+      [...filters.edgeTypes].sort().join(","),
     ],
-    enabled: Boolean(filters.actorId) && graphViewMode !== 'edges',
+    enabled: Boolean(filters.actorId) && graphViewMode === "subgraph",
     queryFn: () =>
-      consoleApi.getActorGraphSubgraph(filters.actorId, {
+      runtimeActorsApi.getActorGraphSubgraph(filters.actorId, {
         depth: filters.graphDepth,
         take: filters.graphTake,
         direction: filters.graphDirection,
@@ -542,15 +564,15 @@ const ActorsPage: React.FC = () => {
 
   const graphEdgesQuery = useQuery({
     queryKey: [
-      'actor-graph-edges',
+      "actor-graph-edges",
       filters.actorId,
       filters.graphTake,
       filters.graphDirection,
-      [...filters.edgeTypes].sort().join(','),
+      [...filters.edgeTypes].sort().join(","),
     ],
-    enabled: Boolean(filters.actorId) && graphViewMode === 'edges',
+    enabled: Boolean(filters.actorId) && graphViewMode === "edges",
     queryFn: () =>
-      consoleApi.getActorGraphEdges(filters.actorId, {
+      runtimeActorsApi.getActorGraphEdges(filters.actorId, {
         take: filters.graphTake,
         direction: filters.graphDirection,
         edgeTypes: filters.edgeTypes,
@@ -566,10 +588,10 @@ const ActorsPage: React.FC = () => {
       ...snapshotQuery.data,
       executionStatus:
         snapshotQuery.data.lastSuccess === null
-          ? 'default'
+          ? "default"
           : snapshotQuery.data.lastSuccess
-            ? 'success'
-            : 'error',
+          ? "success"
+          : "error",
       completionRate:
         snapshotQuery.data.totalSteps > 0
           ? snapshotQuery.data.completedSteps / snapshotQuery.data.totalSteps
@@ -579,17 +601,17 @@ const ActorsPage: React.FC = () => {
 
   const timelineRows = useMemo<ActorTimelineRow[]>(
     () => buildTimelineRows(timelineQuery.data ?? []),
-    [timelineQuery.data],
+    [timelineQuery.data]
   );
 
   const filteredTimelineRows = useMemo(
     () => filterTimelineRows(timelineRows, timelineFilters),
-    [timelineRows, timelineFilters],
+    [timelineRows, timelineFilters]
   );
 
   const selectedTimelineRecord = useMemo<ActorTimelineRow | undefined>(
     () => timelineRows.find((row) => row.key === selectedTimelineKey),
-    [selectedTimelineKey, timelineRows],
+    [selectedTimelineKey, timelineRows]
   );
 
   const timelineStageOptions = useMemo(
@@ -597,27 +619,27 @@ const ActorsPage: React.FC = () => {
       Array.from(new Set(timelineRows.map((row) => row.stage).filter(Boolean)))
         .sort((left, right) => left.localeCompare(right))
         .map((value) => ({ label: value, value })),
-    [timelineRows],
+    [timelineRows]
   );
 
   const timelineEventTypeOptions = useMemo(
     () =>
       Array.from(
-        new Set(timelineRows.map((row) => row.eventType).filter(Boolean)),
+        new Set(timelineRows.map((row) => row.eventType).filter(Boolean))
       )
         .sort((left, right) => left.localeCompare(right))
         .map((value) => ({ label: value, value })),
-    [timelineRows],
+    [timelineRows]
   );
 
   const timelineStepTypeOptions = useMemo(
     () =>
       Array.from(
-        new Set(timelineRows.map((row) => row.stepType).filter(Boolean)),
+        new Set(timelineRows.map((row) => row.stepType).filter(Boolean))
       )
         .sort((left, right) => left.localeCompare(right))
         .map((value) => ({ label: value, value })),
-    [timelineRows],
+    [timelineRows]
   );
 
   const currentGraph = useMemo<WorkflowActorGraphSubgraph | undefined>(() => {
@@ -625,33 +647,38 @@ const ActorsPage: React.FC = () => {
       return undefined;
     }
 
-    if (graphViewMode === 'subgraph') {
+    if (graphViewMode === "subgraph") {
       return graphSubgraphQuery.data;
     }
 
-    if (graphViewMode === 'edges') {
+    if (graphViewMode === "edges") {
       return graphEdgesQuery.data
         ? deriveSubgraphFromEdges(graphEdgesQuery.data, filters.actorId)
         : undefined;
     }
 
-    return graphSubgraphQuery.data;
+    return graphEnrichedQuery.data?.subgraph;
   }, [
     filters.actorId,
     graphEdgesQuery.data,
+    graphEnrichedQuery.data?.subgraph,
     graphSubgraphQuery.data,
     graphViewMode,
   ]);
 
   const currentGraphLoading =
-    graphViewMode === 'edges'
+    graphViewMode === "subgraph"
+      ? graphSubgraphQuery.isLoading
+      : graphViewMode === "edges"
       ? graphEdgesQuery.isLoading
-      : graphSubgraphQuery.isLoading;
+      : graphEnrichedQuery.isLoading;
 
   const currentGraphError =
-    graphViewMode === 'edges'
+    graphViewMode === "subgraph"
+      ? graphSubgraphQuery.error
+      : graphViewMode === "edges"
       ? graphEdgesQuery.error
-      : graphSubgraphQuery.error;
+      : graphEnrichedQuery.error;
 
   const graphElements = useMemo(() => {
     if (!currentGraph) {
@@ -661,7 +688,7 @@ const ActorsPage: React.FC = () => {
     return buildActorGraphElements(
       currentGraph.nodes,
       currentGraph.edges,
-      currentGraph.rootNodeId || filters.actorId,
+      currentGraph.rootNodeId || filters.actorId
     );
   }, [currentGraph, filters.actorId]);
 
@@ -671,20 +698,24 @@ const ActorsPage: React.FC = () => {
         new Set(
           [
             ...filters.edgeTypes,
+            ...(graphEnrichedQuery.data?.subgraph.edges ?? []).map(
+              (edge) => edge.edgeType
+            ),
             ...(graphSubgraphQuery.data?.edges ?? []).map(
-              (edge) => edge.edgeType,
+              (edge) => edge.edgeType
             ),
             ...(graphEdgesQuery.data ?? []).map((edge) => edge.edgeType),
           ]
             .map((value) => value.trim())
-            .filter(Boolean),
-        ),
+            .filter(Boolean)
+        )
       ).sort((left, right) => left.localeCompare(right)),
     [
       filters.edgeTypes,
       graphEdgesQuery.data,
+      graphEnrichedQuery.data?.subgraph.edges,
       graphSubgraphQuery.data?.edges,
-    ],
+    ]
   );
 
   const graphSummary = useMemo<ActorGraphSummaryRecord | undefined>(() => {
@@ -698,7 +729,7 @@ const ActorsPage: React.FC = () => {
       depth: filters.graphDepth,
       take: filters.graphTake,
       edgeTypes:
-        filters.edgeTypes.length > 0 ? filters.edgeTypes.join(', ') : 'All',
+        filters.edgeTypes.length > 0 ? filters.edgeTypes.join(", ") : "All",
       rootNodeId: currentGraph.rootNodeId || filters.actorId,
       nodeCount: currentGraph.nodes.length,
       edgeCount: currentGraph.edges.length,
@@ -715,7 +746,7 @@ const ActorsPage: React.FC = () => {
 
   const selectedNodeRecord = useMemo<ActorNodeDetailRecord | undefined>(() => {
     const node = currentGraph?.nodes.find(
-      (item) => item.nodeId === selectedNodeId,
+      (item) => item.nodeId === selectedNodeId
     );
     if (!node) {
       return undefined;
@@ -732,7 +763,7 @@ const ActorsPage: React.FC = () => {
 
   const selectedEdgeRecord = useMemo<ActorEdgeDetailRecord | undefined>(() => {
     const edge = currentGraph?.edges.find(
-      (item) => item.edgeId === selectedEdgeId,
+      (item) => item.edgeId === selectedEdgeId
     );
     if (!edge) {
       return undefined;
@@ -745,32 +776,32 @@ const ActorsPage: React.FC = () => {
   }, [currentGraph, selectedEdgeId]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === "undefined") {
       return;
     }
 
     const url = new URL(window.location.href);
     if (filters.actorId) {
-      url.searchParams.set('actorId', filters.actorId);
+      url.searchParams.set("actorId", filters.actorId);
     } else {
-      url.searchParams.delete('actorId');
+      url.searchParams.delete("actorId");
     }
-    url.searchParams.set('timelineTake', String(filters.timelineTake));
-    url.searchParams.set('graphDepth', String(filters.graphDepth));
-    url.searchParams.set('graphTake', String(filters.graphTake));
-    url.searchParams.set('graphDirection', filters.graphDirection);
-    url.searchParams.set('graphView', graphViewMode);
-    url.searchParams.delete('edgeTypes');
+    url.searchParams.set("timelineTake", String(filters.timelineTake));
+    url.searchParams.set("graphDepth", String(filters.graphDepth));
+    url.searchParams.set("graphTake", String(filters.graphTake));
+    url.searchParams.set("graphDirection", filters.graphDirection);
+    url.searchParams.set("graphView", graphViewMode);
+    url.searchParams.delete("edgeTypes");
     for (const edgeType of filters.edgeTypes) {
-      url.searchParams.append('edgeTypes', edgeType);
+      url.searchParams.append("edgeTypes", edgeType);
     }
-    window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   }, [filters, graphViewMode]);
 
   useEffect(() => {
     timelineFormRef.current?.setFieldsValue(defaultTimelineFilters);
     setTimelineFilters(defaultTimelineFilters);
-    setSelectedTimelineKey('');
+    setSelectedTimelineKey("");
   }, [filters.actorId]);
 
   useEffect(() => {
@@ -779,41 +810,63 @@ const ActorsPage: React.FC = () => {
     }
 
     if (!timelineRows.some((row) => row.key === selectedTimelineKey)) {
-      setSelectedTimelineKey('');
+      setSelectedTimelineKey("");
     }
   }, [selectedTimelineKey, timelineRows]);
 
   useEffect(() => {
     if (!currentGraph) {
-      setSelectedNodeId('');
-      setSelectedEdgeId('');
+      setSelectedNodeId("");
+      setSelectedEdgeId("");
       return;
     }
 
     if (!currentGraph.nodes.some((node) => node.nodeId === selectedNodeId)) {
       setSelectedNodeId(
-        currentGraph.rootNodeId || currentGraph.nodes[0]?.nodeId || '',
+        currentGraph.rootNodeId || currentGraph.nodes[0]?.nodeId || ""
       );
     }
 
     if (!currentGraph.edges.some((edge) => edge.edgeId === selectedEdgeId)) {
-      setSelectedEdgeId('');
+      setSelectedEdgeId("");
     }
   }, [currentGraph, selectedEdgeId, selectedNodeId]);
 
   return (
     <PageContainer
-      title="Actors"
-      content="Inspect actor snapshots, filter execution history, and switch across enriched, subgraph, and edges-only topology views."
+      title="Runtime Explorer"
+      content="Inspect runtime actor snapshots, filter execution history, and switch across enriched, subgraph, and edges-only topology views."
     >
-      <ProCard title="Actor query" {...moduleCardProps}>
+      <ProCard
+        title="Runtime actor query"
+        {...moduleCardProps}
+        extra={
+          <Space wrap>
+            <Button onClick={() => history.push("/runs")}>Open runs</Button>
+            <Button onClick={() => history.push("/workflows")}>
+              Open workflows
+            </Button>
+            <Button
+              onClick={() =>
+                history.push(
+                  `/observability?actorId=${encodeURIComponent(
+                    filters.actorId
+                  )}`
+                )
+              }
+            >
+              Open observability
+            </Button>
+          </Space>
+        }
+      >
         <ProForm<ActorPageState>
           formRef={formRef}
           layout="vertical"
           initialValues={initialState}
           onFinish={async (values) => {
             setFilters({
-              actorId: (values.actorId ?? '').trim(),
+              actorId: (values.actorId ?? "").trim(),
               timelineTake: values.timelineTake,
               graphDepth: values.graphDepth,
               graphTake: values.graphTake,
@@ -832,7 +885,7 @@ const ActorsPage: React.FC = () => {
                   onClick={() => {
                     formRef.current?.setFieldsValue(initialState);
                     timelineFormRef.current?.setFieldsValue(
-                      defaultTimelineFilters,
+                      defaultTimelineFilters
                     );
                     graphControlFormRef.current?.setFieldsValue({
                       graphViewMode: initialGraphViewMode,
@@ -891,9 +944,9 @@ const ActorsPage: React.FC = () => {
                 name="graphDirection"
                 label="Graph direction"
                 options={[
-                  { label: 'Both', value: 'Both' },
-                  { label: 'Outbound', value: 'Outbound' },
-                  { label: 'Inbound', value: 'Inbound' },
+                  { label: "Both", value: "Both" },
+                  { label: "Outbound", value: "Outbound" },
+                  { label: "Inbound", value: "Inbound" },
                 ]}
               />
             </Col>
@@ -906,9 +959,9 @@ const ActorsPage: React.FC = () => {
                   value: edgeType,
                 }))}
                 fieldProps={{
-                  mode: 'multiple',
+                  mode: "multiple",
                   allowClear: true,
-                  placeholder: 'Filter graph edge types',
+                  placeholder: "Filter graph edge types",
                 }}
               />
             </Col>
@@ -920,7 +973,7 @@ const ActorsPage: React.FC = () => {
         <ProCard style={{ marginTop: 16 }} {...moduleCardProps}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Provide an actorId to load actor data."
+            description="Provide a runtime actorId to load actor data."
           />
         </ProCard>
       ) : null}
@@ -968,7 +1021,7 @@ const ActorsPage: React.FC = () => {
                   <Alert
                     showIcon
                     type="error"
-                    message="Failed to load actor"
+                    title="Failed to load actor"
                     description={String(snapshotQuery.error)}
                   />
                 ) : (
@@ -1004,7 +1057,7 @@ const ActorsPage: React.FC = () => {
                         stages: values.stages ?? [],
                         eventTypes: values.eventTypes ?? [],
                         stepTypes: values.stepTypes ?? [],
-                        query: values.query ?? '',
+                        query: values.query ?? "",
                         errorsOnly: Boolean(values.errorsOnly),
                       });
                     }}
@@ -1023,9 +1076,9 @@ const ActorsPage: React.FC = () => {
                           label="Stages"
                           options={timelineStageOptions}
                           fieldProps={{
-                            mode: 'multiple',
+                            mode: "multiple",
                             allowClear: true,
-                            placeholder: 'All stages',
+                            placeholder: "All stages",
                           }}
                         />
                       </Col>
@@ -1035,9 +1088,9 @@ const ActorsPage: React.FC = () => {
                           label="Event types"
                           options={timelineEventTypeOptions}
                           fieldProps={{
-                            mode: 'multiple',
+                            mode: "multiple",
                             allowClear: true,
-                            placeholder: 'All event types',
+                            placeholder: "All event types",
                           }}
                         />
                       </Col>
@@ -1047,9 +1100,9 @@ const ActorsPage: React.FC = () => {
                           label="Step types"
                           options={timelineStepTypeOptions}
                           fieldProps={{
-                            mode: 'multiple',
+                            mode: "multiple",
                             allowClear: true,
-                            placeholder: 'All step types',
+                            placeholder: "All step types",
                           }}
                         />
                       </Col>
@@ -1069,7 +1122,7 @@ const ActorsPage: React.FC = () => {
                     <Alert
                       showIcon
                       type="error"
-                      message="Failed to load timeline"
+                      title="Failed to load timeline"
                       description={String(timelineQuery.error)}
                     />
                   ) : null}
@@ -1088,7 +1141,9 @@ const ActorsPage: React.FC = () => {
                       onClick: () => setSelectedTimelineKey(record.key),
                     })}
                     rowClassName={(record) =>
-                      record.key === selectedTimelineKey ? 'ant-table-row-selected' : ''
+                      record.key === selectedTimelineKey
+                        ? "ant-table-row-selected"
+                        : ""
                     }
                     locale={{
                       emptyText: (
@@ -1101,78 +1156,86 @@ const ActorsPage: React.FC = () => {
                   />
                   <Drawer
                     title="Timeline detail"
-                    width={560}
+                    size={560}
                     open={Boolean(selectedTimelineRecord)}
-                    onClose={() => setSelectedTimelineKey('')}
-                    destroyOnClose
+                    onClose={() => setSelectedTimelineKey("")}
+                    destroyOnHidden
                   >
                     {selectedTimelineRecord ? (
-                      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                      <Space
+                        direction="vertical"
+                        size={16}
+                        style={{ width: "100%" }}
+                      >
                         <ProDescriptions<ActorTimelineRow>
                           column={1}
                           dataSource={selectedTimelineRecord}
                           columns={[
                             {
-                              title: 'Timestamp',
-                              dataIndex: 'timestamp',
-                              render: (_, record) => formatDateTime(record.timestamp),
+                              title: "Timestamp",
+                              dataIndex: "timestamp",
+                              render: (_, record) =>
+                                formatDateTime(record.timestamp),
                             },
                             {
-                              title: 'Stage',
-                              dataIndex: 'stage',
-                              render: (_, record) => record.stage || 'n/a',
+                              title: "Stage",
+                              dataIndex: "stage",
+                              render: (_, record) => record.stage || "n/a",
                             },
                             {
-                              title: 'Event type',
-                              dataIndex: 'eventType',
-                              render: (_, record) => record.eventType || 'n/a',
+                              title: "Event type",
+                              dataIndex: "eventType",
+                              render: (_, record) => record.eventType || "n/a",
                             },
                             {
-                              title: 'Message',
-                              dataIndex: 'message',
-                              render: (_, record) => record.message || 'n/a',
+                              title: "Message",
+                              dataIndex: "message",
+                              render: (_, record) => record.message || "n/a",
                             },
                             {
-                              title: 'Step',
-                              dataIndex: 'stepId',
-                              render: (_, record) => record.stepId || 'n/a',
+                              title: "Step",
+                              dataIndex: "stepId",
+                              render: (_, record) => record.stepId || "n/a",
                             },
                             {
-                              title: 'Step type',
-                              dataIndex: 'stepType',
-                              render: (_, record) => record.stepType || 'n/a',
+                              title: "Step type",
+                              dataIndex: "stepType",
+                              render: (_, record) => record.stepType || "n/a",
                             },
                             {
-                              title: 'Actor',
-                              dataIndex: 'agentId',
-                              render: (_, record) => record.agentId || 'n/a',
+                              title: "Actor",
+                              dataIndex: "agentId",
+                              render: (_, record) => record.agentId || "n/a",
                             },
                           ]}
                         />
 
                         <div>
-                          <Typography.Text strong>Structured data</Typography.Text>
+                          <Typography.Text strong>
+                            Structured data
+                          </Typography.Text>
                           <div style={{ marginTop: 12 }}>
                             {selectedTimelineRecord.dataCount > 0 ? (
                               <Space
                                 direction="vertical"
                                 size={8}
-                                style={{ width: '100%' }}
+                                style={{ width: "100%" }}
                               >
-                                {Object.entries(selectedTimelineRecord.data).map(
-                                  ([key, value]) => (
-                                    <Typography.Text key={key}>
-                                      <Typography.Text type="secondary">
-                                        {key}
-                                      </Typography.Text>
-                                      : {value || 'n/a'}
+                                {Object.entries(
+                                  selectedTimelineRecord.data
+                                ).map(([key, value]) => (
+                                  <Typography.Text key={key}>
+                                    <Typography.Text type="secondary">
+                                      {key}
                                     </Typography.Text>
-                                  ),
-                                )}
+                                    : {value || "n/a"}
+                                  </Typography.Text>
+                                ))}
                               </Space>
                             ) : (
                               <Typography.Text type="secondary">
-                                No structured data was attached to this timeline entry.
+                                No structured data was attached to this timeline
+                                entry.
                               </Typography.Text>
                             )}
                           </div>
@@ -1184,11 +1247,15 @@ const ActorsPage: React.FC = () => {
                             <pre
                               style={{
                                 marginTop: 12,
-                                whiteSpace: 'pre-wrap',
-                                wordBreak: 'break-word',
+                                whiteSpace: "pre-wrap",
+                                wordBreak: "break-word",
                               }}
                             >
-                              {JSON.stringify(selectedTimelineRecord.data, null, 2)}
+                              {JSON.stringify(
+                                selectedTimelineRecord.data,
+                                null,
+                                2
+                              )}
                             </pre>
                           </div>
                         ) : null}
@@ -1253,7 +1320,7 @@ const ActorsPage: React.FC = () => {
                   <Alert
                     showIcon
                     type="error"
-                    message="Failed to load graph view"
+                    title="Failed to load graph view"
                     description={String(currentGraphError)}
                   />
                 ) : selectedNodeRecord || selectedEdgeRecord ? (
@@ -1301,7 +1368,7 @@ const ActorsPage: React.FC = () => {
           </Row>
 
           <ProCard
-            title="Graph explorer"
+            title="Runtime graph explorer"
             style={{ marginTop: 16 }}
             {...moduleCardProps}
             loading={currentGraphLoading}
@@ -1310,7 +1377,7 @@ const ActorsPage: React.FC = () => {
               <Alert
                 showIcon
                 type="error"
-                message="Failed to load graph topology"
+                title="Failed to load graph topology"
                 description={String(currentGraphError)}
               />
             ) : currentGraph && currentGraph.nodes.length > 0 ? (

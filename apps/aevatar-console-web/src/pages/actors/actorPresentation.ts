@@ -3,9 +3,9 @@ import type {
   WorkflowActorGraphNode,
   WorkflowActorGraphSubgraph,
   WorkflowActorTimelineItem,
-} from '@/shared/api/models';
+} from "@/shared/models/runtime/actors";
 
-export type TimelineStatus = 'processing' | 'success' | 'error' | 'default';
+export type TimelineStatus = "processing" | "success" | "error" | "default";
 
 export type ActorTimelineRow = WorkflowActorTimelineItem & {
   key: string;
@@ -24,24 +24,24 @@ export type ActorTimelineFilters = {
 
 export function deriveTimelineStatus(stage: string): TimelineStatus {
   const normalized = stage.toLowerCase();
-  if (normalized.includes('error') || normalized.includes('failed')) {
-    return 'error';
+  if (normalized.includes("error") || normalized.includes("failed")) {
+    return "error";
   }
   if (
-    normalized.includes('completed') ||
-    normalized.includes('finish') ||
-    normalized.includes('end')
+    normalized.includes("completed") ||
+    normalized.includes("finish") ||
+    normalized.includes("end")
   ) {
-    return 'success';
+    return "success";
   }
   if (
-    normalized.includes('start') ||
-    normalized.includes('running') ||
-    normalized.includes('wait')
+    normalized.includes("start") ||
+    normalized.includes("running") ||
+    normalized.includes("wait")
   ) {
-    return 'processing';
+    return "processing";
   }
-  return 'default';
+  return "default";
 }
 
 function summarizeTimelineData(data: Record<string, string>): {
@@ -51,7 +51,7 @@ function summarizeTimelineData(data: Record<string, string>): {
   const entries = Object.entries(data);
   if (entries.length === 0) {
     return {
-      dataSummary: '',
+      dataSummary: "",
       dataCount: 0,
     };
   }
@@ -59,7 +59,7 @@ function summarizeTimelineData(data: Record<string, string>): {
   const preview = entries
     .slice(0, 2)
     .map(([key, value]) => `${key}=${value}`)
-    .join(' · ');
+    .join(" · ");
 
   return {
     dataSummary:
@@ -69,7 +69,7 @@ function summarizeTimelineData(data: Record<string, string>): {
 }
 
 export function buildTimelineRows(
-  items: WorkflowActorTimelineItem[],
+  items: WorkflowActorTimelineItem[]
 ): ActorTimelineRow[] {
   return items.map((item, index) => ({
     ...item,
@@ -81,12 +81,12 @@ export function buildTimelineRows(
 
 export function filterTimelineRows(
   rows: ActorTimelineRow[],
-  filters: ActorTimelineFilters,
+  filters: ActorTimelineFilters
 ): ActorTimelineRow[] {
   const query = filters.query.trim().toLowerCase();
 
   return rows.filter((row) => {
-    if (filters.errorsOnly && row.timelineStatus !== 'error') {
+    if (filters.errorsOnly && row.timelineStatus !== "error") {
       return false;
     }
 
@@ -101,7 +101,10 @@ export function filterTimelineRows(
       return false;
     }
 
-    if (filters.stepTypes.length > 0 && !filters.stepTypes.includes(row.stepType)) {
+    if (
+      filters.stepTypes.length > 0 &&
+      !filters.stepTypes.includes(row.stepType)
+    ) {
       return false;
     }
 
@@ -118,7 +121,7 @@ export function filterTimelineRows(
       row.eventType,
       row.dataSummary,
     ]
-      .join(' ')
+      .join(" ")
       .toLowerCase()
       .includes(query);
   });
@@ -126,7 +129,7 @@ export function filterTimelineRows(
 
 export function deriveSubgraphFromEdges(
   edges: WorkflowActorGraphEdge[],
-  rootNodeId: string,
+  rootNodeId: string
 ): WorkflowActorGraphSubgraph {
   const nodesById = new Map<string, WorkflowActorGraphNode>();
 
@@ -137,11 +140,11 @@ export function deriveSubgraphFromEdges(
 
     nodesById.set(nodeId, {
       nodeId,
-      nodeType: nodeId === rootNodeId ? 'RootActor' : 'DerivedActor',
-      updatedAt: '',
+      nodeType: nodeId === rootNodeId ? "RootActor" : "DerivedActor",
+      updatedAt: "",
       properties: {
         nodeId,
-        source: 'graph-edges',
+        source: "graph-edges",
       },
     });
   }

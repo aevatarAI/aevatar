@@ -2,38 +2,38 @@ import {
   enUSIntl,
   PageLoading,
   ProConfigProvider,
-} from '@ant-design/pro-components';
+} from "@ant-design/pro-components";
 import {
   DownOutlined,
   LogoutOutlined,
   SettingOutlined,
   UserOutlined,
-} from '@ant-design/icons';
-import { QueryClientProvider } from '@tanstack/react-query';
-import { Avatar, ConfigProvider, Dropdown, Space, Typography } from 'antd';
-import enUS from 'antd/locale/en_US';
-import React from 'react';
-import BrandLogo from '@/components/BrandLogo';
-import defaultSettings from '../config/defaultSettings';
-import { errorConfig } from './requestErrorConfig';
+} from "@ant-design/icons";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { Avatar, ConfigProvider, Dropdown, Space, Typography } from "antd";
+import enUS from "antd/locale/en_US";
+import React from "react";
+import { history } from "@/shared/navigation/history";
+import BrandLogo from "@/components/BrandLogo";
+import defaultSettings from "../config/defaultSettings";
+import { errorConfig } from "./requestErrorConfig";
 import {
   ensureActiveAuthSession,
   hasRestorableAuthSession,
-} from './shared/auth/client';
-import { getNyxIDRuntimeConfig } from './shared/auth/config';
+} from "./shared/auth/client";
+import { getNyxIDRuntimeConfig } from "./shared/auth/config";
 import {
   buildAuthInitialState,
   clearStoredAuthSession,
   loadRestorableAuthSession,
   loadStoredAuthSession,
   sanitizeReturnTo,
-} from './shared/auth/session';
-import { history } from './shared/navigation/history';
-import { queryClient } from './shared/query/queryClient';
+} from "./shared/auth/session";
+import { queryClient } from "./shared/query/queryClient";
 
-const PUBLIC_ROUTES = new Set(['/login', '/auth/callback']);
-const DEFAULT_PROTECTED_ROUTE = '/overview';
-const STUDIO_HOST_ROUTES = new Set(['/studio', '/playground', '/yaml']);
+const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
+const DEFAULT_PROTECTED_ROUTE = "/overview";
+const STUDIO_HOST_ROUTES = new Set(["/studio"]);
 
 function isStudioHostRoute(pathname: string): boolean {
   return STUDIO_HOST_ROUTES.has(pathname);
@@ -47,7 +47,7 @@ function buildLoginRoute(returnTo: string): string {
 }
 
 function getCurrentReturnTo(pathname: string): string {
-  return pathname === '/'
+  return pathname === "/"
     ? DEFAULT_PROTECTED_ROUTE
     : `${pathname}${window.location.search}${window.location.hash}`;
 }
@@ -81,7 +81,9 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
   pathname,
   children,
 }) => {
-  const [ready, setReady] = React.useState(() => Boolean(loadStoredAuthSession()));
+  const [ready, setReady] = React.useState(() =>
+    Boolean(loadStoredAuthSession())
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -137,7 +139,7 @@ export const layout = ({
         return;
       }
 
-      if (pathname === '/') {
+      if (pathname === "/") {
         history.replace(DEFAULT_PROTECTED_ROUTE);
       }
     },
@@ -156,43 +158,43 @@ export const layout = ({
           menu={{
             items: [
               {
-                key: 'settings',
+                key: "settings",
                 icon: <SettingOutlined />,
-                label: 'Settings',
+                label: "Settings",
               },
               {
-                key: 'logout',
+                key: "logout",
                 icon: <LogoutOutlined />,
-                label: 'Logout',
+                label: "Logout",
               },
             ],
             onClick: ({ key }) => {
-              if (key === 'settings') {
-                history.push('/settings');
+              if (key === "settings") {
+                history.push("/settings");
                 return;
               }
 
-              if (key === 'logout') {
+              if (key === "logout") {
                 clearStoredAuthSession();
-                window.location.replace('/login');
+                window.location.replace("/login");
               }
             },
           }}
           placement="bottomRight"
-          trigger={['click']}
+          trigger={["click"]}
         >
           <span
             style={{
-              alignItems: 'center',
-              background: 'rgba(0, 0, 0, 0.03)',
-              border: '1px solid rgba(5, 5, 5, 0.06)',
+              alignItems: "center",
+              background: "rgba(0, 0, 0, 0.03)",
+              border: "1px solid rgba(5, 5, 5, 0.06)",
               borderRadius: 999,
-              cursor: 'pointer',
-              display: 'inline-flex',
+              cursor: "pointer",
+              display: "inline-flex",
               gap: 8,
               height: 36,
               maxWidth: 220,
-              padding: '0 10px 0 6px',
+              padding: "0 10px 0 6px",
             }}
             title={displayName}
           >
@@ -204,11 +206,11 @@ export const layout = ({
             <Typography.Text
               style={{
                 flex: 1,
-                lineHeight: '20px',
+                lineHeight: "20px",
                 marginBottom: 0,
                 maxWidth: 160,
                 minWidth: 0,
-                whiteSpace: 'nowrap',
+                whiteSpace: "nowrap",
               }}
               ellipsis={{ tooltip: displayName }}
               type="secondary"
@@ -217,7 +219,7 @@ export const layout = ({
             </Typography.Text>
             <DownOutlined
               style={{
-                color: 'rgba(0, 0, 0, 0.45)',
+                color: "rgba(0, 0, 0, 0.45)",
                 fontSize: 11,
               }}
             />

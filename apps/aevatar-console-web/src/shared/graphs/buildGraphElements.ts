@@ -1,13 +1,17 @@
-import type { Edge, Node } from '@xyflow/react';
+import type { Edge, Node } from "@xyflow/react";
 import type {
   WorkflowActorGraphEdge,
   WorkflowActorGraphNode,
+} from "@/shared/models/runtime/actors";
+import type {
   WorkflowAuthoringDefinition,
   WorkflowAuthoringEdge,
-  WorkflowCatalogEdge,
+} from "@/shared/models/runtime/authoring";
+import type {
   WorkflowCatalogDefinition,
+  WorkflowCatalogEdge,
   WorkflowCatalogItemDetail,
-} from '../api/models';
+} from "@/shared/models/runtime/catalog";
 
 type WorkflowGraphDetail = {
   definition: WorkflowCatalogDefinition | WorkflowAuthoringDefinition;
@@ -28,7 +32,7 @@ type LayoutNode = {
 
 function buildLevels(
   rootId: string,
-  edges: Array<{ from: string; to: string }>,
+  edges: Array<{ from: string; to: string }>
 ): Map<string, number> {
   const outgoing = new Map<string, string[]>();
   for (const edge of edges) {
@@ -59,7 +63,7 @@ function buildLevels(
 function layoutNodes(
   nodes: LayoutNode[],
   edges: Array<{ from: string; to: string }>,
-  rootId: string,
+  rootId: string
 ): Node[] {
   const levels = buildLevels(rootId, edges);
   const groups = new Map<number, LayoutNode[]>();
@@ -86,7 +90,7 @@ function layoutNodes(
         label: node.label,
         subtitle: node.subtitle,
       },
-      type: 'default',
+      type: "default",
     };
   });
 }
@@ -94,11 +98,12 @@ function layoutNodes(
 export function buildActorGraphElements(
   nodes: WorkflowActorGraphNode[],
   edges: WorkflowActorGraphEdge[],
-  rootId: string,
+  rootId: string
 ): { nodes: Node[]; edges: Edge[] } {
   const mappedNodes = nodes.map((node) => ({
     id: node.nodeId,
-    label: node.properties.stepId || node.properties.workflowName || node.nodeId,
+    label:
+      node.properties.stepId || node.properties.workflowName || node.nodeId,
     subtitle: node.nodeType,
   }));
 
@@ -109,14 +114,14 @@ export function buildActorGraphElements(
         from: edge.fromNodeId,
         to: edge.toNodeId,
       })),
-      rootId,
+      rootId
     ),
     edges: edges.map((edge) => ({
       id: edge.edgeId,
       source: edge.fromNodeId,
       target: edge.toNodeId,
       label: edge.edgeType,
-      animated: edge.edgeType === 'OWNS',
+      animated: edge.edgeType === "OWNS",
     })),
   };
 }
@@ -131,7 +136,7 @@ function buildWorkflowEdges(detail: WorkflowGraphDetail) {
   return detail.definition.steps.flatMap((step) => {
     const derived: WorkflowGraphEdgeLike[] = [];
     if (step.next) {
-      derived.push({ from: step.id, to: step.next, label: 'next' });
+      derived.push({ from: step.id, to: step.next, label: "next" });
     }
 
     for (const [branch, target] of Object.entries(step.branches ?? {})) {
@@ -141,7 +146,11 @@ function buildWorkflowEdges(detail: WorkflowGraphDetail) {
     }
 
     for (const child of step.children ?? []) {
-      derived.push({ from: step.id, to: child.id, label: child.type || 'child' });
+      derived.push({
+        from: step.id,
+        to: child.id,
+        label: child.type || "child",
+      });
     }
 
     return derived;
@@ -149,12 +158,12 @@ function buildWorkflowEdges(detail: WorkflowGraphDetail) {
 }
 
 export function buildWorkflowGraphElements(
-  detail: WorkflowCatalogItemDetail | WorkflowGraphDetail,
+  detail: WorkflowCatalogItemDetail | WorkflowGraphDetail
 ): { nodes: Node[]; edges: Edge[] } {
   const roleNodes: LayoutNode[] = detail.definition.roles.map((role) => ({
     id: `role:${role.id}`,
     label: role.name || role.id,
-    subtitle: 'Role',
+    subtitle: "Role",
   }));
 
   const stepNodes: LayoutNode[] = detail.definition.steps.map((step) => ({
@@ -169,19 +178,23 @@ export function buildWorkflowGraphElements(
     .map((step) => ({
       from: `role:${step.targetRole}`,
       to: step.id,
-      label: 'targets',
+      label: "targets",
     }));
 
   const allEdges = [...roleEdges, ...workflowEdges];
 
   return {
-    nodes: layoutNodes([...roleNodes, ...stepNodes], allEdges, roleNodes[0]?.id ?? stepNodes[0]?.id ?? 'root'),
+    nodes: layoutNodes(
+      [...roleNodes, ...stepNodes],
+      allEdges,
+      roleNodes[0]?.id ?? stepNodes[0]?.id ?? "root"
+    ),
     edges: allEdges.map((edge, index) => ({
       id: `${edge.from}-${edge.to}-${index}`,
       source: edge.from,
       target: edge.to,
       label: edge.label,
-      animated: edge.label === 'targets',
+      animated: edge.label === "targets",
     })),
   };
 }

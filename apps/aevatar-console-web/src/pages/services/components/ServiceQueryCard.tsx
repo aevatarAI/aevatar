@@ -1,0 +1,78 @@
+import { ProCard } from '@ant-design/pro-components';
+import { Button, Input, InputNumber, Space } from 'antd';
+import React from 'react';
+import { moduleCardProps } from '@/shared/ui/proComponents';
+import type { ServiceQueryDraft } from './serviceQuery';
+
+type ServiceQueryCardProps = {
+  draft: ServiceQueryDraft;
+  onChange: (draft: ServiceQueryDraft) => void;
+  onLoad: () => void;
+  onReset?: () => void;
+  loadLabel?: string;
+};
+
+const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
+  draft,
+  onChange,
+  onLoad,
+  onReset,
+  loadLabel = 'Load services',
+}) => {
+  return (
+    <ProCard {...moduleCardProps}>
+      <Space wrap>
+        <Input
+          placeholder="tenantId"
+          style={{ width: 180 }}
+          value={draft.tenantId}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              tenantId: event.target.value,
+            })
+          }
+        />
+        <Input
+          placeholder="appId"
+          style={{ width: 180 }}
+          value={draft.appId}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              appId: event.target.value,
+            })
+          }
+        />
+        <Input
+          placeholder="namespace"
+          style={{ width: 180 }}
+          value={draft.namespace}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              namespace: event.target.value,
+            })
+          }
+        />
+        <InputNumber
+          min={1}
+          max={500}
+          value={draft.take}
+          onChange={(value) =>
+            onChange({
+              ...draft,
+              take: Number(value) || 200,
+            })
+          }
+        />
+        <Button type="primary" onClick={onLoad}>
+          {loadLabel}
+        </Button>
+        {onReset ? <Button onClick={onReset}>Reset</Button> : null}
+      </Space>
+    </ProCard>
+  );
+};
+
+export default ServiceQueryCard;

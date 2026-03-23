@@ -2,23 +2,23 @@ import type {
   ConfigurationCollectionRawDocument,
   ConfigurationEmbeddingsStatus,
   ConfigurationLlmApiKeyStatus,
+  ConfigurationLlmProbeResult,
+  ConfigurationLlmInstance,
+  ConfigurationLlmProviderType,
+  ConfigurationMcpServer,
+  ConfigurationRawDocument,
   ConfigurationSecretValueStatus,
   ConfigurationSecp256k1GenerateResult,
   ConfigurationSecp256k1Status,
   ConfigurationSkillsMpStatus,
-  ConfigurationMcpServer,
-  ConfigurationLlmProbeResult,
-  ConfigurationLlmInstance,
-  ConfigurationLlmProviderType,
-  ConfigurationRawDocument,
   ConfigurationSourceStatus,
   ConfigurationValidationResult,
   ConfigurationWebSearchStatus,
   ConfigurationWorkflowFile,
   ConfigurationWorkflowFileDetail,
-} from './models';
+} from "@/shared/models/platform/configuration";
+import type { Decoder } from "./decodeUtils";
 import {
-  type Decoder,
   decodeConfigurationEmbeddingsStatusResponse,
   decodeConfigurationCollectionRawDocumentResponse,
   decodeConfigurationLlmApiKeyStatusResponse,
@@ -39,21 +39,21 @@ import {
   decodeConfigurationWorkflowFileDetailResponse,
   decodeConfigurationWorkflowFileMutationResponse,
   decodeConfigurationWorkflowFilesResponse,
-} from './decoders';
-import { authFetch } from '@/shared/auth/fetch';
+} from "./configurationDecoders";
+import { authFetch } from "@/shared/auth/fetch";
 
 const JSON_HEADERS = {
-  'Content-Type': 'application/json',
-  Accept: 'application/json',
+  "Content-Type": "application/json",
+  Accept: "application/json",
 };
 
-const CONFIGURATION_API_PREFIX = '/api/configuration';
+const CONFIGURATION_API_PREFIX = "/api/configuration";
 
-type WorkflowSource = 'home' | 'repo' | 'all';
+type WorkflowSource = "home" | "repo" | "all";
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
 }
 
@@ -83,7 +83,7 @@ async function readError(response: Response): Promise<string> {
 async function requestJson<T>(
   input: string,
   decoder: Decoder<T>,
-  init?: RequestInit,
+  init?: RequestInit
 ): Promise<T> {
   const response = await authFetch(input, init);
   if (!response.ok) {
@@ -112,76 +112,84 @@ function withSource(path: string, source?: WorkflowSource): string {
 }
 
 export const configurationApi = {
-  async getHealth(): Promise<'ok'> {
+  async getHealth(): Promise<"ok"> {
     const payload = await requestText(`${CONFIGURATION_API_PREFIX}/health`);
-    if (payload.trim() !== 'ok') {
-      throw new Error(`Unexpected configuration health payload: ${payload || '<empty>'}`);
+    if (payload.trim() !== "ok") {
+      throw new Error(
+        `Unexpected configuration health payload: ${payload || "<empty>"}`
+      );
     }
 
-    return 'ok';
+    return "ok";
   },
 
   getSourceStatus(): Promise<ConfigurationSourceStatus> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/source`,
-      decodeConfigurationSourceStatusResponse,
+      decodeConfigurationSourceStatusResponse
     );
   },
 
-  listWorkflows(source: WorkflowSource = 'all'): Promise<ConfigurationWorkflowFile[]> {
+  listWorkflows(
+    source: WorkflowSource = "all"
+  ): Promise<ConfigurationWorkflowFile[]> {
     return requestJson(
       withSource(`${CONFIGURATION_API_PREFIX}/workflows`, source),
-      decodeConfigurationWorkflowFilesResponse,
+      decodeConfigurationWorkflowFilesResponse
     );
   },
 
   getWorkflow(
     filename: string,
-    source: WorkflowSource = 'all',
+    source: WorkflowSource = "all"
   ): Promise<ConfigurationWorkflowFileDetail> {
     return requestJson(
       withSource(
         `${CONFIGURATION_API_PREFIX}/workflows/${encodeURIComponent(filename)}`,
-        source,
+        source
       ),
-      decodeConfigurationWorkflowFileDetailResponse,
+      decodeConfigurationWorkflowFileDetailResponse
     );
   },
 
   saveWorkflow(input: {
     filename: string;
     content: string;
-    source: Exclude<WorkflowSource, 'all'>;
+    source: Exclude<WorkflowSource, "all">;
   }): Promise<ConfigurationWorkflowFile> {
     return requestJson(
       withSource(
-        `${CONFIGURATION_API_PREFIX}/workflows/${encodeURIComponent(input.filename)}`,
-        input.source,
+        `${CONFIGURATION_API_PREFIX}/workflows/${encodeURIComponent(
+          input.filename
+        )}`,
+        input.source
       ),
       decodeConfigurationWorkflowFileMutationResponse,
       {
-        method: 'PUT',
+        method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify({
           content: input.content,
         }),
-      },
+      }
     );
   },
 
   async deleteWorkflow(input: {
     filename: string;
-    source: Exclude<WorkflowSource, 'all'>;
+    source: Exclude<WorkflowSource, "all">;
   }): Promise<void> {
     const response = await authFetch(
       withSource(
-        `${CONFIGURATION_API_PREFIX}/workflows/${encodeURIComponent(input.filename)}`,
-        input.source,
+        `${CONFIGURATION_API_PREFIX}/workflows/${encodeURIComponent(
+          input.filename
+        )}`,
+        input.source
       ),
       {
-        method: 'DELETE',
+        method: "DELETE",
         headers: JSON_HEADERS,
-      },
+      }
     );
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -191,13 +199,13 @@ export const configurationApi = {
   getConfigRaw(): Promise<ConfigurationRawDocument> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/config/raw`,
-      decodeConfigurationRawDocumentResponse,
+      decodeConfigurationRawDocumentResponse
     );
   },
 
   async saveConfigRaw(json: string): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/config/raw`, {
-      method: 'PUT',
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         json,
@@ -211,18 +219,21 @@ export const configurationApi = {
   getConnectorsRaw(): Promise<ConfigurationCollectionRawDocument> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/connectors/raw`,
-      decodeConfigurationCollectionRawDocumentResponse,
+      decodeConfigurationCollectionRawDocumentResponse
     );
   },
 
   async saveConnectorsRaw(json: string): Promise<void> {
-    const response = await authFetch(`${CONFIGURATION_API_PREFIX}/connectors/raw`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        json,
-      }),
-    });
+    const response = await authFetch(
+      `${CONFIGURATION_API_PREFIX}/connectors/raw`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          json,
+        }),
+      }
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -233,19 +244,19 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/connectors/validate`,
       decodeConfigurationValidationResultResponse,
       {
-        method: 'POST',
+        method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({
           json,
         }),
-      },
+      }
     );
   },
 
   listMcpServers(): Promise<ConfigurationMcpServer[]> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/mcp`,
-      decodeConfigurationMcpServersResponse,
+      decodeConfigurationMcpServersResponse
     );
   },
 
@@ -260,7 +271,7 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/mcp/${encodeURIComponent(input.name)}`,
       decodeConfigurationMcpServerMutationResponse,
       {
-        method: 'PUT',
+        method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify({
           command: input.command,
@@ -268,7 +279,7 @@ export const configurationApi = {
           env: input.env,
           timeoutMs: input.timeoutMs,
         }),
-      },
+      }
     );
   },
 
@@ -276,9 +287,9 @@ export const configurationApi = {
     const response = await authFetch(
       `${CONFIGURATION_API_PREFIX}/mcp/${encodeURIComponent(name)}`,
       {
-        method: 'DELETE',
+        method: "DELETE",
         headers: JSON_HEADERS,
-      },
+      }
     );
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -288,13 +299,13 @@ export const configurationApi = {
   getMcpRaw(): Promise<ConfigurationCollectionRawDocument> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/mcp/raw`,
-      decodeConfigurationCollectionRawDocumentResponse,
+      decodeConfigurationCollectionRawDocumentResponse
     );
   },
 
   async saveMcpRaw(json: string): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/mcp/raw`, {
-      method: 'PUT',
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         json,
@@ -310,34 +321,34 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/mcp/validate`,
       decodeConfigurationValidationResultResponse,
       {
-        method: 'POST',
+        method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({
           json,
         }),
-      },
+      }
     );
   },
 
   getEmbeddingsStatus(): Promise<ConfigurationEmbeddingsStatus> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/embeddings`,
-      decodeConfigurationEmbeddingsStatusResponse,
+      decodeConfigurationEmbeddingsStatusResponse
     );
   },
 
   getEmbeddingsApiKey(
-    input: { reveal?: boolean } = {},
+    input: { reveal?: boolean } = {}
   ): Promise<ConfigurationSecretValueStatus> {
     const params = new URLSearchParams();
     if (input.reveal === true) {
-      params.set('reveal', 'true');
+      params.set("reveal", "true");
     }
 
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/embeddings/api-key${suffix}`,
-      decodeConfigurationSecretValueStatusResponse,
+      decodeConfigurationSecretValueStatusResponse
     );
   },
 
@@ -349,7 +360,7 @@ export const configurationApi = {
     apiKey?: string;
   }): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/embeddings`, {
-      method: 'POST',
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(compactObject(input)),
     });
@@ -360,7 +371,7 @@ export const configurationApi = {
 
   async deleteEmbeddings(): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/embeddings`, {
-      method: 'DELETE',
+      method: "DELETE",
       headers: JSON_HEADERS,
     });
     if (!response.ok) {
@@ -371,22 +382,22 @@ export const configurationApi = {
   getWebSearchStatus(): Promise<ConfigurationWebSearchStatus> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/websearch`,
-      decodeConfigurationWebSearchStatusResponse,
+      decodeConfigurationWebSearchStatusResponse
     );
   },
 
   getWebSearchApiKey(
-    input: { reveal?: boolean } = {},
+    input: { reveal?: boolean } = {}
   ): Promise<ConfigurationSecretValueStatus> {
     const params = new URLSearchParams();
     if (input.reveal === true) {
-      params.set('reveal', 'true');
+      params.set("reveal", "true");
     }
 
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/websearch/api-key${suffix}`,
-      decodeConfigurationSecretValueStatusResponse,
+      decodeConfigurationSecretValueStatusResponse
     );
   },
 
@@ -399,7 +410,7 @@ export const configurationApi = {
     apiKey?: string;
   }): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/websearch`, {
-      method: 'POST',
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(compactObject(input)),
     });
@@ -410,7 +421,7 @@ export const configurationApi = {
 
   async deleteWebSearch(): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/websearch`, {
-      method: 'DELETE',
+      method: "DELETE",
       headers: JSON_HEADERS,
     });
     if (!response.ok) {
@@ -421,22 +432,22 @@ export const configurationApi = {
   getSkillsMpStatus(): Promise<ConfigurationSkillsMpStatus> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/skillsmp/status`,
-      decodeConfigurationSkillsMpStatusResponse,
+      decodeConfigurationSkillsMpStatusResponse
     );
   },
 
   getSkillsMpApiKey(
-    input: { reveal?: boolean } = {},
+    input: { reveal?: boolean } = {}
   ): Promise<ConfigurationSecretValueStatus> {
     const params = new URLSearchParams();
     if (input.reveal === true) {
-      params.set('reveal', 'true');
+      params.set("reveal", "true");
     }
 
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/skillsmp/api-key${suffix}`,
-      decodeConfigurationSecretValueStatusResponse,
+      decodeConfigurationSecretValueStatusResponse
     );
   },
 
@@ -445,7 +456,7 @@ export const configurationApi = {
     baseUrl?: string;
   }): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/skillsmp`, {
-      method: 'POST',
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(compactObject(input)),
     });
@@ -456,7 +467,7 @@ export const configurationApi = {
 
   async deleteSkillsMp(): Promise<void> {
     const response = await authFetch(`${CONFIGURATION_API_PREFIX}/skillsmp`, {
-      method: 'DELETE',
+      method: "DELETE",
       headers: JSON_HEADERS,
     });
     if (!response.ok) {
@@ -467,7 +478,7 @@ export const configurationApi = {
   getSecp256k1Status(): Promise<ConfigurationSecp256k1Status> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/crypto/secp256k1/status`,
-      decodeConfigurationSecp256k1StatusResponse,
+      decodeConfigurationSecp256k1StatusResponse
     );
   },
 
@@ -476,27 +487,30 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/crypto/secp256k1/generate`,
       decodeConfigurationSecp256k1GenerateResponse,
       {
-        method: 'POST',
+        method: "POST",
         headers: JSON_HEADERS,
-      },
+      }
     );
   },
 
   getSecretsRaw(): Promise<ConfigurationRawDocument> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/secrets/raw`,
-      decodeConfigurationRawDocumentResponse,
+      decodeConfigurationRawDocumentResponse
     );
   },
 
   async saveSecretsRaw(json: string): Promise<void> {
-    const response = await authFetch(`${CONFIGURATION_API_PREFIX}/secrets/raw`, {
-      method: 'PUT',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        json,
-      }),
-    });
+    const response = await authFetch(
+      `${CONFIGURATION_API_PREFIX}/secrets/raw`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          json,
+        }),
+      }
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -505,21 +519,21 @@ export const configurationApi = {
   listLlmProviders(): Promise<ConfigurationLlmProviderType[]> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/llm/providers`,
-      decodeConfigurationLlmProviderTypesResponse,
+      decodeConfigurationLlmProviderTypesResponse
     );
   },
 
   listLlmInstances(): Promise<ConfigurationLlmInstance[]> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/llm/instances`,
-      decodeConfigurationLlmInstancesResponse,
+      decodeConfigurationLlmInstancesResponse
     );
   },
 
   getLlmDefault(): Promise<string> {
     return requestJson(
       `${CONFIGURATION_API_PREFIX}/llm/default`,
-      decodeConfigurationLlmDefaultResponse,
+      decodeConfigurationLlmDefaultResponse
     );
   },
 
@@ -528,30 +542,32 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/llm/default`,
       decodeConfigurationLlmDefaultResponse,
       {
-        method: 'POST',
+        method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify(
           compactObject({
             providerName: trimOptional(providerName),
-          }),
+          })
         ),
-      },
+      }
     );
   },
 
   getLlmApiKey(
     providerName: string,
-    input: { reveal?: boolean } = {},
+    input: { reveal?: boolean } = {}
   ): Promise<ConfigurationLlmApiKeyStatus> {
     const params = new URLSearchParams();
     if (input.reveal === true) {
-      params.set('reveal', 'true');
+      params.set("reveal", "true");
     }
 
-    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
     return requestJson(
-      `${CONFIGURATION_API_PREFIX}/llm/api-key/${encodeURIComponent(providerName)}${suffix}`,
-      decodeConfigurationLlmApiKeyStatusResponse,
+      `${CONFIGURATION_API_PREFIX}/llm/api-key/${encodeURIComponent(
+        providerName
+      )}${suffix}`,
+      decodeConfigurationLlmApiKeyStatusResponse
     );
   },
 
@@ -559,14 +575,17 @@ export const configurationApi = {
     providerName: string;
     apiKey: string;
   }): Promise<void> {
-    const response = await authFetch(`${CONFIGURATION_API_PREFIX}/llm/api-key`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        providerName: input.providerName,
-        apiKey: input.apiKey,
-      }),
-    });
+    const response = await authFetch(
+      `${CONFIGURATION_API_PREFIX}/llm/api-key`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          providerName: input.providerName,
+          apiKey: input.apiKey,
+        }),
+      }
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -574,11 +593,13 @@ export const configurationApi = {
 
   async deleteLlmApiKey(providerName: string): Promise<void> {
     const response = await authFetch(
-      `${CONFIGURATION_API_PREFIX}/llm/api-key/${encodeURIComponent(providerName)}`,
+      `${CONFIGURATION_API_PREFIX}/llm/api-key/${encodeURIComponent(
+        providerName
+      )}`,
       {
-        method: 'DELETE',
+        method: "DELETE",
         headers: JSON_HEADERS,
-      },
+      }
     );
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -594,11 +615,14 @@ export const configurationApi = {
     copyApiKeyFrom?: string;
     forceCopyApiKeyFrom?: boolean;
   }): Promise<void> {
-    const response = await authFetch(`${CONFIGURATION_API_PREFIX}/llm/instance`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(compactObject(input)),
-    });
+    const response = await authFetch(
+      `${CONFIGURATION_API_PREFIX}/llm/instance`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(compactObject(input)),
+      }
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -606,11 +630,13 @@ export const configurationApi = {
 
   async deleteLlmInstance(providerName: string): Promise<void> {
     const response = await authFetch(
-      `${CONFIGURATION_API_PREFIX}/llm/instance/${encodeURIComponent(providerName)}`,
+      `${CONFIGURATION_API_PREFIX}/llm/instance/${encodeURIComponent(
+        providerName
+      )}`,
       {
-        method: 'DELETE',
+        method: "DELETE",
         headers: JSON_HEADERS,
-      },
+      }
     );
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -626,10 +652,10 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/llm/probe/test`,
       decodeConfigurationLlmProbeResultResponse,
       {
-        method: 'POST',
+        method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify(compactObject(input)),
-      },
+      }
     );
   },
 
@@ -642,30 +668,36 @@ export const configurationApi = {
       `${CONFIGURATION_API_PREFIX}/llm/probe/models`,
       decodeConfigurationLlmProbeResultResponse,
       {
-        method: 'POST',
+        method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify(compactObject(input)),
-      },
+      }
     );
   },
 
   async setSecret(input: { key: string; value: string }): Promise<void> {
-    const response = await authFetch(`${CONFIGURATION_API_PREFIX}/secrets/set`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(input),
-    });
+    const response = await authFetch(
+      `${CONFIGURATION_API_PREFIX}/secrets/set`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(input),
+      }
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }
   },
 
   async removeSecret(key: string): Promise<void> {
-    const response = await authFetch(`${CONFIGURATION_API_PREFIX}/secrets/remove`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ key }),
-    });
+    const response = await authFetch(
+      `${CONFIGURATION_API_PREFIX}/secrets/remove`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ key }),
+      }
+    );
     if (!response.ok) {
       throw new Error(await readError(response));
     }

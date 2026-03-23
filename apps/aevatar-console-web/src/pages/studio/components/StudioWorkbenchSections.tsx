@@ -124,6 +124,10 @@ type StudioSettingsDraftLike = {
   readonly providers: StudioProviderSettings[];
 };
 
+function isScopeDirectoryPath(path: string): boolean {
+  return path.trim().startsWith('scope://');
+}
+
 export type StudioWorkflowLayout = 'grid' | 'list';
 
 const workflowSectionShellStyle: React.CSSProperties = {
@@ -179,6 +183,9 @@ const workflowBrowserStyle: React.CSSProperties = {
   boxShadow: '0 26px 64px rgba(17, 24, 39, 0.08)',
   overflow: 'hidden',
   minHeight: 640,
+  width: '100%',
+  flex: 1,
+  minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
 };
@@ -211,19 +218,35 @@ const workflowDirectorySelectButtonStyle: React.CSSProperties = {
   minWidth: 0,
   padding: 0,
   textAlign: 'left',
+  whiteSpace: 'normal',
+};
+
+const workflowDirectoryTextStackStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  minWidth: 0,
 };
 
 const workflowDirectoryLabelStyle: React.CSSProperties = {
+  display: 'block',
   fontSize: 13,
   fontWeight: 600,
   color: '#1F2937',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
 
 const workflowDirectoryPathStyle: React.CSSProperties = {
+  display: 'block',
   fontSize: 11,
   lineHeight: 1.6,
   color: '#9CA3AF',
   marginTop: 4,
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
 
 const workflowToolbarLayoutStyle: React.CSSProperties = {
@@ -969,6 +992,9 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                   <div style={cardStackStyle}>
                     {directories.map((directory) => {
                       const active = selectedDirectoryId === directory.directoryId;
+                      const showDirectoryPath =
+                        workflowStorageMode !== 'scope' &&
+                        !isScopeDirectoryPath(directory.path);
 
                       return (
                         <div
@@ -991,13 +1017,21 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                               style={workflowDirectorySelectButtonStyle}
                               onClick={() => onSelectDirectoryId(directory.directoryId)}
                             >
-                              <div style={cardStackStyle}>
-                                <Typography.Text style={workflowDirectoryLabelStyle}>
+                              <div style={workflowDirectoryTextStackStyle}>
+                                <Typography.Text
+                                  style={workflowDirectoryLabelStyle}
+                                  ellipsis={{ tooltip: directory.label }}
+                                >
                                   {directory.label}
                                 </Typography.Text>
-                                <Typography.Text style={workflowDirectoryPathStyle}>
-                                  {directory.path}
-                                </Typography.Text>
+                                {showDirectoryPath ? (
+                                  <Typography.Text
+                                    style={workflowDirectoryPathStyle}
+                                    ellipsis={{ tooltip: directory.path }}
+                                  >
+                                    {directory.path}
+                                  </Typography.Text>
+                                ) : null}
                               </div>
                             </Button>
                             {!directory.isBuiltIn && workflowStorageMode !== 'scope' ? (
@@ -5426,29 +5460,37 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
                 ) : null}
                 {workspaceSettings.data.directories.length > 0 ? (
                   <div style={cardStackStyle}>
-                    {workspaceSettings.data.directories.map((directory) => (
-                      <div key={directory.directoryId} style={embeddedPanelStyle}>
-                        <div style={cardStackStyle}>
-                          <Space wrap size={[8, 8]}>
-                            <Typography.Text strong>{directory.label}</Typography.Text>
-                            {directory.isBuiltIn ? <Tag>built-in</Tag> : null}
-                          </Space>
-                          <Typography.Text type="secondary" copyable>
-                            {directory.path}
-                          </Typography.Text>
-                          {canManageDirectories && !directory.isBuiltIn ? (
-                            <Button
-                              danger
-                              size="small"
-                              loading={settingsPending}
-                              onClick={() => onRemoveDirectory(directory.directoryId)}
-                            >
-                              Remove
-                            </Button>
-                          ) : null}
+                    {workspaceSettings.data.directories.map((directory) => {
+                      const showDirectoryPath =
+                        workflowStorageMode !== 'scope' &&
+                        !isScopeDirectoryPath(directory.path);
+
+                      return (
+                        <div key={directory.directoryId} style={embeddedPanelStyle}>
+                          <div style={cardStackStyle}>
+                            <Space wrap size={[8, 8]}>
+                              <Typography.Text strong>{directory.label}</Typography.Text>
+                              {directory.isBuiltIn ? <Tag>built-in</Tag> : null}
+                            </Space>
+                            {showDirectoryPath ? (
+                              <Typography.Text type="secondary" copyable>
+                                {directory.path}
+                              </Typography.Text>
+                            ) : null}
+                            {canManageDirectories && !directory.isBuiltIn ? (
+                              <Button
+                                danger
+                                size="small"
+                                loading={settingsPending}
+                                onClick={() => onRemoveDirectory(directory.directoryId)}
+                              >
+                                Remove
+                              </Button>
+                            ) : null}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <Empty

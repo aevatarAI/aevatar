@@ -1,33 +1,29 @@
 import {
   ApartmentOutlined,
-  CodeOutlined,
-  EditOutlined,
   FilterOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  MoreOutlined,
-  PlayCircleOutlined,
   SearchOutlined,
-} from '@ant-design/icons';
+} from "@ant-design/icons";
 import type {
   ProColumns,
   ProDescriptionsItemProps,
-} from '@ant-design/pro-components';
+} from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
   ProDescriptions,
   ProTable,
-} from '@ant-design/pro-components';
-import { useQuery } from '@tanstack/react-query';
-import type { MenuProps } from 'antd';
+} from "@ant-design/pro-components";
+import { useQuery } from "@tanstack/react-query";
+import { history } from "@/shared/navigation/history";
+import type { MenuProps } from "antd";
 import {
   Alert,
   Button,
   Col,
-  Dropdown,
   Empty,
   Input,
   Modal,
@@ -37,9 +33,8 @@ import {
   Statistic,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
-} from 'antd';
+} from "antd";
 import React, {
   useCallback,
   useContext,
@@ -48,25 +43,15 @@ import React, {
   useMemo,
   useRef,
   useState,
-} from 'react';
-import { consoleApi } from '@/shared/api/consoleApi';
-import { history } from '@/shared/navigation/history';
-import type { WorkflowCatalogRole } from '@/shared/api/models';
-import { buildWorkflowGraphElements } from '@/shared/graphs/buildGraphElements';
-import GraphCanvas from '@/shared/graphs/GraphCanvas';
-import { getPlaygroundDraftStatus } from '@/shared/playground/draftStatus';
-import {
-  buildPlaygroundRoute,
-  buildYamlBrowserRoute,
-} from '@/shared/playground/navigation';
-import {
-  loadPlaygroundDraft,
-  PLAYGROUND_DRAFT_UPDATED_EVENT,
-} from '@/shared/playground/playgroundDraft';
+} from "react";
+import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
+import type { WorkflowCatalogRole } from "@/shared/models/runtime/catalog";
+import { buildWorkflowGraphElements } from "@/shared/graphs/buildGraphElements";
+import GraphCanvas from "@/shared/graphs/GraphCanvas";
 import {
   listVisibleWorkflowCatalogItems,
   resolveWorkflowCatalogSelection,
-} from '@/shared/workflows/catalogVisibility';
+} from "@/shared/workflows/catalogVisibility";
 import {
   cardStackStyle,
   compactTableCardProps,
@@ -75,8 +60,8 @@ import {
   moduleCardProps,
   scrollPanelStyle,
   stretchColumnStyle,
-} from '@/shared/ui/proComponents';
-import WorkflowYamlViewer from './WorkflowYamlViewer';
+} from "@/shared/ui/proComponents";
+import WorkflowYamlViewer from "./WorkflowYamlViewer";
 import {
   buildStepRows,
   buildStringOptions,
@@ -87,12 +72,12 @@ import {
   type WorkflowLibraryFilter,
   type WorkflowLibraryRow,
   type WorkflowStepRow,
-} from './workflowPresentation';
+} from "./workflowPresentation";
 
-type WorkflowDetailTab = 'yaml' | 'roles' | 'steps' | 'graph';
+type WorkflowDetailTab = "yaml" | "roles" | "steps" | "graph";
 
 type WorkflowSummaryRecord = {
-  closedWorldStatus: 'success' | 'default';
+  closedWorldStatus: "success" | "default";
   roleCount: number;
   stepCount: number;
   edgeCount: number;
@@ -101,7 +86,7 @@ type WorkflowSummaryRecord = {
 };
 
 type WorkflowFocusRecord = {
-  focusType: 'role' | 'step';
+  focusType: "role" | "step";
   focusId: string;
   relatedRole: string;
   relatedStepCount: number;
@@ -141,28 +126,28 @@ type DictionarySectionProps = {
 };
 
 type ChildStepSectionProps = {
-  childrenSteps: WorkflowStepRow['children'];
+  childrenSteps: WorkflowStepRow["children"];
 };
 
 const llmValueEnum = {
-  processing: { text: 'Required', status: 'Processing' },
-  success: { text: 'Optional', status: 'Success' },
+  processing: { text: "Required", status: "Processing" },
+  success: { text: "Optional", status: "Success" },
 } as const;
 
 const llmFilterOptions = [
-  { label: 'All', value: 'all' },
-  { label: 'Requires LLM', value: 'required' },
-  { label: 'Optional', value: 'optional' },
+  { label: "All", value: "all" },
+  { label: "Requires LLM", value: "required" },
+  { label: "Optional", value: "optional" },
 ] as const;
 
-const focusTypeLabels: Record<WorkflowFocusRecord['focusType'], string> = {
-  role: 'Role',
-  step: 'Step',
+const focusTypeLabels: Record<WorkflowFocusRecord["focusType"], string> = {
+  role: "Role",
+  step: "Step",
 };
 
 const workflowNameCellStyle = {
-  display: 'flex',
-  flexDirection: 'column',
+  display: "flex",
+  flexDirection: "column",
   gap: 4,
 } as const;
 
@@ -172,62 +157,62 @@ const compactFilterPanelStyle = {
 } as const;
 
 const workflowDetailHeaderStyle = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
   gap: 16,
-  flexWrap: 'wrap',
+  flexWrap: "wrap",
 } as const;
 
 const workflowDetailHeaderMainStyle = {
-  flex: '1 1 420px',
+  flex: "1 1 420px",
   minWidth: 0,
-  display: 'flex',
-  flexDirection: 'column',
+  display: "flex",
+  flexDirection: "column",
   gap: 12,
 } as const;
 
 const workflowDetailActionGroupStyle = {
-  flex: '0 0 auto',
-  display: 'flex',
-  justifyContent: 'flex-end',
-  flexWrap: 'wrap',
+  flex: "0 0 auto",
+  display: "flex",
+  justifyContent: "flex-end",
+  flexWrap: "wrap",
   gap: 8,
 } as const;
 
 const workflowDetailDescriptionStyle = {
   marginBottom: 0,
-  maxWidth: '100%',
+  maxWidth: "100%",
 } as const;
 
 const workflowSummaryCardStyle = {
-  height: '100%',
-  border: '1px solid var(--ant-color-border-secondary)',
+  height: "100%",
+  border: "1px solid var(--ant-color-border-secondary)",
   borderRadius: 12,
   padding: 12,
-  background: 'var(--ant-color-fill-quaternary)',
+  background: "var(--ant-color-fill-quaternary)",
 } as const;
 
 const collapsedLibraryBodyStyle = {
   ...embeddedPanelStyle,
-  alignItems: 'flex-start',
-  display: 'flex',
-  flexDirection: 'column',
+  alignItems: "flex-start",
+  display: "flex",
+  flexDirection: "column",
   gap: 12,
   minHeight: 220,
-  justifyContent: 'space-between',
+  justifyContent: "space-between",
 } as const;
 
 const splitPaneListShellStyle = {
   ...embeddedPanelStyle,
-  height: '100%',
+  height: "100%",
   padding: 8,
 } as const;
 
 const splitPaneDetailShellStyle = {
   ...embeddedPanelStyle,
   minHeight: 540,
-  background: 'var(--ant-color-fill-quaternary)',
+  background: "var(--ant-color-fill-quaternary)",
 } as const;
 
 const splitPaneScrollableListStyle = {
@@ -237,50 +222,50 @@ const splitPaneScrollableListStyle = {
 } as const;
 
 const splitPaneItemButtonStyle = {
-  alignItems: 'flex-start',
+  alignItems: "flex-start",
   borderRadius: 12,
-  display: 'flex',
-  flexDirection: 'column',
+  display: "flex",
+  flexDirection: "column",
   gap: 6,
-  height: 'auto',
-  justifyContent: 'flex-start',
-  padding: '12px 14px',
-  textAlign: 'left',
-  whiteSpace: 'normal',
-  width: '100%',
+  height: "auto",
+  justifyContent: "flex-start",
+  padding: "12px 14px",
+  textAlign: "left",
+  whiteSpace: "normal",
+  width: "100%",
 } as const;
 
 const splitPaneItemMetaStyle = {
-  display: 'flex',
-  flexDirection: 'column',
+  display: "flex",
+  flexDirection: "column",
   gap: 4,
-  width: '100%',
+  width: "100%",
 } as const;
 
 const definitionSectionTitleStyle = {
-  alignItems: 'center',
-  display: 'flex',
+  alignItems: "center",
+  display: "flex",
   gap: 8,
-  justifyContent: 'space-between',
+  justifyContent: "space-between",
   marginBottom: 12,
 } as const;
 
 const detailMetaGridStyle = {
-  display: 'grid',
+  display: "grid",
   gap: 12,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
 } as const;
 
 const detailActionRowStyle = {
-  display: 'flex',
-  flexWrap: 'wrap',
+  display: "flex",
+  flexWrap: "wrap",
   gap: 8,
 } as const;
 
 const detailTextBlockStyle = {
   marginBottom: 0,
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 } as const;
 
 const graphPanelShellStyle = {
@@ -289,28 +274,28 @@ const graphPanelShellStyle = {
 } as const;
 
 const graphPanelHeaderStyle = {
-  alignItems: 'flex-start',
-  display: 'flex',
+  alignItems: "flex-start",
+  display: "flex",
   gap: 12,
-  justifyContent: 'space-between',
+  justifyContent: "space-between",
   marginBottom: 12,
-  flexWrap: 'wrap',
+  flexWrap: "wrap",
 } as const;
 
 const graphModalBodyStyle = {
-  display: 'flex',
-  flexDirection: 'column',
+  display: "flex",
+  flexDirection: "column",
   gap: 16,
-  height: '100%',
+  height: "100%",
 } as const;
 
 const highlightedTabLabelStyle = {
-  alignItems: 'center',
+  alignItems: "center",
   borderRadius: 999,
-  display: 'inline-flex',
+  display: "inline-flex",
   gap: 8,
-  padding: '4px 10px',
-  transition: 'all 0.2s ease',
+  padding: "4px 10px",
+  transition: "all 0.2s ease",
 } as const;
 
 const WorkflowGraphInteractionContext =
@@ -321,7 +306,7 @@ function useWorkflowGraphInteraction(): WorkflowGraphInteractionContextValue {
 
   if (!value) {
     throw new Error(
-      'Workflow graph interaction context is unavailable in this tree.',
+      "Workflow graph interaction context is unavailable in this tree."
     );
   }
 
@@ -329,10 +314,10 @@ function useWorkflowGraphInteraction(): WorkflowGraphInteractionContextValue {
 }
 
 function renderMetricValue(
-  value: number | string | null | undefined,
+  value: number | string | null | undefined
 ): number | string {
-  if (value === null || value === undefined || value === '') {
-    return 'n/a';
+  if (value === null || value === undefined || value === "") {
+    return "n/a";
   }
 
   return value;
@@ -359,17 +344,17 @@ const DictionarySection: React.FC<DictionarySectionProps> = ({
             <div
               key={`${title}-${key}`}
               style={{
-                alignItems: 'start',
-                borderBottom: '1px solid var(--ant-color-border-secondary)',
-                display: 'flex',
+                alignItems: "start",
+                borderBottom: "1px solid var(--ant-color-border-secondary)",
+                display: "flex",
                 gap: 8,
-                justifyContent: 'space-between',
+                justifyContent: "space-between",
                 paddingBottom: 12,
               }}
             >
               <Typography.Text code>{key}</Typography.Text>
               <Typography.Text style={detailTextBlockStyle}>
-                {value || 'n/a'}
+                {value || "n/a"}
               </Typography.Text>
             </div>
           ))}
@@ -399,7 +384,7 @@ const ChildStepSection: React.FC<ChildStepSectionProps> = ({
             <div
               key={childStep.id}
               style={{
-                borderBottom: '1px solid var(--ant-color-border-secondary)',
+                borderBottom: "1px solid var(--ant-color-border-secondary)",
                 paddingBottom: 12,
               }}
             >
@@ -442,7 +427,7 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
       <Col xs={24} lg={9}>
         <div style={splitPaneListShellStyle}>
           <div style={splitPaneScrollableListStyle}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {roles.map((role) => {
                 const isActive = role.id === activeRole.id;
 
@@ -453,12 +438,12 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
                       style={{
                         ...splitPaneItemButtonStyle,
                         background: isActive
-                          ? 'var(--ant-color-primary-bg)'
-                          : 'transparent',
+                          ? "var(--ant-color-primary-bg)"
+                          : "transparent",
                         border: `1px solid ${
                           isActive
-                            ? 'var(--ant-color-primary-border)'
-                            : 'transparent'
+                            ? "var(--ant-color-primary-border)"
+                            : "transparent"
                         }`,
                       }}
                       type="text"
@@ -467,7 +452,7 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
                       <div style={splitPaneItemMetaStyle}>
                         <Typography.Text strong>{role.id}</Typography.Text>
                         <Typography.Text type="secondary">
-                          {role.name || 'Unnamed role'}
+                          {role.name || "Unnamed role"}
                         </Typography.Text>
                       </div>
                       <Space wrap size={[6, 6]}>
@@ -496,16 +481,16 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
                 </Typography.Title>
                 <Typography.Paragraph
                   type="secondary"
-                  style={{ margin: '4px 0 0' }}
+                  style={{ margin: "4px 0 0" }}
                 >
                   Role ID · {activeRole.id}
                 </Typography.Paragraph>
               </div>
               <Space wrap size={[8, 8]}>
                 <Tag color="processing">
-                  {activeRole.provider || 'No provider'}
+                  {activeRole.provider || "No provider"}
                 </Tag>
-                <Tag>{activeRole.model || 'No model'}</Tag>
+                <Tag>{activeRole.model || "No model"}</Tag>
               </Space>
             </div>
 
@@ -565,7 +550,7 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
                 <Typography.Text strong>System prompt</Typography.Text>
               </div>
               <Typography.Paragraph style={detailTextBlockStyle}>
-                {activeRole.systemPrompt || 'No system prompt provided.'}
+                {activeRole.systemPrompt || "No system prompt provided."}
               </Typography.Paragraph>
             </div>
 
@@ -614,7 +599,7 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
                 <Typography.Text strong>Event routes</Typography.Text>
               </div>
               <Typography.Paragraph style={detailTextBlockStyle}>
-                {activeRole.eventRoutes || 'No explicit event routes provided.'}
+                {activeRole.eventRoutes || "No explicit event routes provided."}
               </Typography.Paragraph>
             </div>
           </div>
@@ -649,7 +634,7 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
       <Col xs={24} lg={9}>
         <div style={splitPaneListShellStyle}>
           <div style={splitPaneScrollableListStyle}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               {steps.map((step) => {
                 const isActive = step.id === activeStep.id;
 
@@ -660,12 +645,12 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
                       style={{
                         ...splitPaneItemButtonStyle,
                         background: isActive
-                          ? 'var(--ant-color-primary-bg)'
-                          : 'transparent',
+                          ? "var(--ant-color-primary-bg)"
+                          : "transparent",
                         border: `1px solid ${
                           isActive
-                            ? 'var(--ant-color-primary-border)'
-                            : 'transparent'
+                            ? "var(--ant-color-primary-border)"
+                            : "transparent"
                         }`,
                       }}
                       type="text"
@@ -699,7 +684,7 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
                 </Typography.Title>
                 <Typography.Paragraph
                   type="secondary"
-                  style={{ margin: '4px 0 0' }}
+                  style={{ margin: "4px 0 0" }}
                 >
                   {activeStep.type} step
                 </Typography.Paragraph>
@@ -738,11 +723,11 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
               <div style={workflowSummaryCardStyle}>
                 <Statistic
                   title="Target role"
-                  value={activeStep.targetRole || 'n/a'}
+                  value={activeStep.targetRole || "n/a"}
                 />
               </div>
               <div style={workflowSummaryCardStyle}>
-                <Statistic title="Next" value={activeStep.next || 'n/a'} />
+                <Statistic title="Next" value={activeStep.next || "n/a"} />
               </div>
               <div style={workflowSummaryCardStyle}>
                 <Statistic
@@ -778,30 +763,30 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
 
 const focusColumns: ProDescriptionsItemProps<WorkflowFocusRecord>[] = [
   {
-    title: 'Focus type',
-    dataIndex: 'focusType',
+    title: "Focus type",
+    dataIndex: "focusType",
     render: (_, record) => focusTypeLabels[record.focusType],
   },
   {
-    title: 'Identifier',
-    dataIndex: 'focusId',
+    title: "Identifier",
+    dataIndex: "focusId",
     render: (_, record) => (
       <Typography.Text copyable>{record.focusId}</Typography.Text>
     ),
   },
   {
-    title: 'Related role',
-    dataIndex: 'relatedRole',
-    render: (_, record) => record.relatedRole || 'n/a',
+    title: "Related role",
+    dataIndex: "relatedRole",
+    render: (_, record) => record.relatedRole || "n/a",
   },
   {
-    title: 'Related steps',
-    dataIndex: 'relatedStepCount',
-    valueType: 'digit',
+    title: "Related steps",
+    dataIndex: "relatedStepCount",
+    valueType: "digit",
   },
   {
-    title: 'Graph node',
-    dataIndex: 'graphNodeId',
+    title: "Graph node",
+    dataIndex: "graphNodeId",
     render: (_, record) => (
       <Typography.Text copyable>{record.graphNodeId}</Typography.Text>
     ),
@@ -810,26 +795,26 @@ const focusColumns: ProDescriptionsItemProps<WorkflowFocusRecord>[] = [
 
 function parseDetailTab(value: string | null): WorkflowDetailTab {
   if (
-    value === 'yaml' ||
-    value === 'roles' ||
-    value === 'steps' ||
-    value === 'graph'
+    value === "yaml" ||
+    value === "roles" ||
+    value === "steps" ||
+    value === "graph"
   ) {
     return value;
   }
 
-  return 'yaml';
+  return "yaml";
 }
 
 function readInitialSelection(): { workflow: string; tab: WorkflowDetailTab } {
-  if (typeof window === 'undefined') {
-    return { workflow: '', tab: 'yaml' };
+  if (typeof window === "undefined") {
+    return { workflow: "", tab: "yaml" };
   }
 
   const params = new URLSearchParams(window.location.search);
   return {
-    workflow: params.get('workflow') ?? '',
-    tab: parseDetailTab(params.get('tab')),
+    workflow: params.get("workflow") ?? "",
+    tab: parseDetailTab(params.get("tab")),
   };
 }
 
@@ -839,7 +824,7 @@ function sortFilterValues(values: string[]): string[] {
 
 function areWorkflowFiltersEqual(
   left: WorkflowLibraryFilter,
-  right: WorkflowLibraryFilter,
+  right: WorkflowLibraryFilter
 ): boolean {
   return (
     left.keyword.trim() === right.keyword.trim() &&
@@ -857,7 +842,7 @@ function countAdvancedFilters(filters: WorkflowLibraryFilter): number {
   return [
     filters.groups.length > 0,
     filters.sources.length > 0,
-    filters.llmRequirement !== 'all',
+    filters.llmRequirement !== "all",
     filters.primitives.length > 0,
   ].filter(Boolean).length;
 }
@@ -874,30 +859,28 @@ function summarizeAppliedFilters(filters: WorkflowLibraryFilter): string {
   if (filters.sources.length > 0) {
     parts.push(`${filters.sources.length} source filter(s)`);
   }
-  if (filters.llmRequirement !== 'all') {
+  if (filters.llmRequirement !== "all") {
     parts.push(
-      filters.llmRequirement === 'required'
-        ? 'Requires LLM only'
-        : 'Optional LLM only',
+      filters.llmRequirement === "required"
+        ? "Requires LLM only"
+        : "Optional LLM only"
     );
   }
   if (filters.primitives.length > 0) {
     parts.push(`${filters.primitives.length} primitive filter(s)`);
   }
 
-  return parts.length > 0 ? parts.join(' · ') : 'All workflows';
+  return parts.length > 0 ? parts.join(" · ") : "All workflows";
 }
 
 function createWorkflowColumns(
   onInspect: (workflowName: string) => void,
-  onRun: (workflowName: string) => void,
-  onOpenYaml: (workflowName: string) => void,
-  onOpenDraft: (workflowName: string) => void,
+  onRun: (workflowName: string) => void
 ): ProColumns<WorkflowLibraryRow>[] {
   return [
     {
-      title: 'Workflow',
-      dataIndex: 'name',
+      title: "Workflow",
+      dataIndex: "name",
       width: 260,
       render: (_, record) => (
         <div style={workflowNameCellStyle}>
@@ -905,26 +888,26 @@ function createWorkflowColumns(
           <Typography.Text
             type="secondary"
             ellipsis={{ tooltip: record.description }}
-            style={{ display: 'block', fontSize: 12, maxWidth: '100%' }}
+            style={{ display: "block", fontSize: 12, maxWidth: "100%" }}
           >
-            {record.description || 'No description provided.'}
+            {record.description || "No description provided."}
           </Typography.Text>
         </div>
       ),
     },
     {
-      title: 'Group',
-      dataIndex: 'groupLabel',
+      title: "Group",
+      dataIndex: "groupLabel",
       width: 140,
     },
     {
-      title: 'Source',
-      dataIndex: 'sourceLabel',
+      title: "Source",
+      dataIndex: "sourceLabel",
       width: 120,
     },
     {
-      title: 'Primitives',
-      dataIndex: 'primitives',
+      title: "Primitives",
+      dataIndex: "primitives",
       width: 220,
       render: (_, record) => {
         const visiblePrimitives = record.primitives.slice(0, 2);
@@ -948,81 +931,39 @@ function createWorkflowColumns(
       },
     },
     {
-      title: 'LLM',
-      dataIndex: 'llmStatus',
+      title: "LLM",
+      dataIndex: "llmStatus",
       width: 100,
-      valueType: 'status' as any,
+      valueType: "status" as any,
       valueEnum: llmValueEnum,
     },
     {
-      title: 'Actions',
-      valueType: 'option',
-      width: 104,
-      align: 'right',
-      render: (_, record) => {
-        const items: MenuProps['items'] = [
-          {
-            key: 'inspect',
-            label: 'Inspect',
-            icon: <SearchOutlined />,
-          },
-          {
-            key: 'yaml',
-            label: 'Open YAML',
-            icon: <CodeOutlined />,
-          },
-          {
-            key: 'draft',
-            label: 'Open draft',
-            icon: <EditOutlined />,
-          },
-        ];
-
-        return (
-          <Space key={`${record.name}-actions`} size={4}>
-            <Tooltip title="Run workflow">
-              <Button
-                type="text"
-                icon={<PlayCircleOutlined />}
-                aria-label={`Run ${record.name}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onRun(record.name);
-                }}
-              />
-            </Tooltip>
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items,
-                onClick: ({ key, domEvent }) => {
-                  domEvent.stopPropagation();
-                  if (key === 'inspect') {
-                    onInspect(record.name);
-                    return;
-                  }
-                  if (key === 'yaml') {
-                    onOpenYaml(record.name);
-                    return;
-                  }
-                  if (key === 'draft') {
-                    onOpenDraft(record.name);
-                  }
-                },
-              }}
-            >
-              <Tooltip title="More actions">
-                <Button
-                  type="text"
-                  icon={<MoreOutlined />}
-                  aria-label={`More actions for ${record.name}`}
-                  onClick={(event) => event.stopPropagation()}
-                />
-              </Tooltip>
-            </Dropdown>
-          </Space>
-        );
-      },
+      title: "Actions",
+      valueType: "option",
+      width: 180,
+      align: "right",
+      render: (_, record) => (
+        <Space key={`${record.name}-actions`} size={4}>
+          <Button
+            type="link"
+            onClick={(event) => {
+              event.stopPropagation();
+              onInspect(record.name);
+            }}
+          >
+            Inspect
+          </Button>
+          <Button
+            type="link"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRun(record.name);
+            }}
+          >
+            Run
+          </Button>
+        </Space>
+      ),
     },
   ];
 }
@@ -1030,89 +971,91 @@ function createWorkflowColumns(
 const WorkflowsPage: React.FC = () => {
   const initialSelection = useMemo(() => readInitialSelection(), []);
   const [filters, setFilters] = useState<WorkflowLibraryFilter>(
-    defaultWorkflowLibraryFilter,
+    defaultWorkflowLibraryFilter
   );
   const [filterDraft, setFilterDraft] = useState<WorkflowLibraryFilter>(
-    defaultWorkflowLibraryFilter,
+    defaultWorkflowLibraryFilter
   );
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [isLibraryCollapsed, setIsLibraryCollapsed] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<string>(
-    initialSelection.workflow,
+    initialSelection.workflow
   );
   const [activeDetailTab, setActiveDetailTab] = useState<WorkflowDetailTab>(
-    initialSelection.tab,
+    initialSelection.tab
   );
-  const [selectedRoleId, setSelectedRoleId] = useState<string>('');
-  const [selectedStepId, setSelectedStepId] = useState<string>('');
-  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string>('');
+  const [selectedRoleId, setSelectedRoleId] = useState<string>("");
+  const [selectedStepId, setSelectedStepId] = useState<string>("");
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string>("");
   const [graphFocusSequence, setGraphFocusSequence] = useState(0);
   const [isGraphFullscreenOpen, setIsGraphFullscreenOpen] = useState(false);
   const [viewportHeight, setViewportHeight] = useState(() =>
-    typeof window === 'undefined' ? 960 : window.innerHeight,
-  );
-  const [playgroundDraft, setPlaygroundDraft] = useState(() =>
-    loadPlaygroundDraft(),
+    typeof window === "undefined" ? 960 : window.innerHeight
   );
   const graphPanelRef = useRef<HTMLDivElement | null>(null);
   const pendingGraphScrollRef = useRef(false);
 
   const catalogQuery = useQuery({
-    queryKey: ['workflow-catalog'],
-    queryFn: () => consoleApi.listWorkflowCatalog(),
+    queryKey: ["workflow-catalog"],
+    queryFn: () => runtimeCatalogApi.listWorkflowCatalog(),
   });
 
   const detailQuery = useQuery({
-    queryKey: ['workflow-detail', selectedWorkflow],
+    queryKey: ["workflow-detail", selectedWorkflow],
     enabled: Boolean(selectedWorkflow),
-    queryFn: () => consoleApi.getWorkflowDetail(selectedWorkflow),
+    queryFn: () => runtimeCatalogApi.getWorkflowDetail(selectedWorkflow),
   });
 
   const workflowRows = useMemo(
-    () => buildWorkflowRows(listVisibleWorkflowCatalogItems(catalogQuery.data ?? [])),
-    [catalogQuery.data],
+    () =>
+      buildWorkflowRows(
+        listVisibleWorkflowCatalogItems(catalogQuery.data ?? [])
+      ),
+    [catalogQuery.data]
   );
 
   const filteredCatalog = useMemo(
     () => filterWorkflowRows(workflowRows, filters),
-    [filters, workflowRows],
+    [filters, workflowRows]
   );
 
   const groupOptions = useMemo(
     () => buildStringOptions(workflowRows.map((item) => item.groupLabel)),
-    [workflowRows],
+    [workflowRows]
   );
 
   const sourceOptions = useMemo(
     () => buildStringOptions(workflowRows.map((item) => item.sourceLabel)),
-    [workflowRows],
+    [workflowRows]
   );
 
   const primitiveOptions = useMemo(
     () => buildStringOptions(workflowRows.flatMap((item) => item.primitives)),
-    [workflowRows],
+    [workflowRows]
   );
   const advancedFilterCount = useMemo(
     () => countAdvancedFilters(filterDraft),
-    [filterDraft],
+    [filterDraft]
   );
   const appliedFilterSummary = useMemo(
     () => summarizeAppliedFilters(filters),
-    [filters],
+    [filters]
   );
   const hasPendingFilterChanges = useMemo(
     () => !areWorkflowFiltersEqual(filters, filterDraft),
-    [filterDraft, filters],
+    [filterDraft, filters]
   );
 
   useEffect(() => {
-    if ((catalogQuery.data ?? []).some((item) => item.name === selectedWorkflow)) {
+    if (
+      (catalogQuery.data ?? []).some((item) => item.name === selectedWorkflow)
+    ) {
       return;
     }
 
     const nextSelection = resolveWorkflowCatalogSelection(
       catalogQuery.data ?? [],
-      selectedWorkflow,
+      selectedWorkflow
     );
     if (nextSelection !== selectedWorkflow) {
       setSelectedWorkflow(nextSelection);
@@ -1120,70 +1063,51 @@ const WorkflowsPage: React.FC = () => {
   }, [catalogQuery.data, selectedWorkflow]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === "undefined") {
       return;
     }
 
     const handleResize = () => setViewportHeight(window.innerHeight);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   useEffect(() => {
-    setSelectedRoleId('');
-    setSelectedStepId('');
-    setSelectedGraphNodeId('');
+    setSelectedRoleId("");
+    setSelectedStepId("");
+    setSelectedGraphNodeId("");
     setIsGraphFullscreenOpen(false);
-    setActiveDetailTab((current) => (current === 'graph' ? current : 'yaml'));
+    setActiveDetailTab((current) => (current === "graph" ? current : "yaml"));
   }, [selectedWorkflow]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === "undefined") {
       return;
     }
 
     const url = new URL(window.location.href);
     if (selectedWorkflow) {
-      url.searchParams.set('workflow', selectedWorkflow);
+      url.searchParams.set("workflow", selectedWorkflow);
     } else {
-      url.searchParams.delete('workflow');
+      url.searchParams.delete("workflow");
     }
-    url.searchParams.set('tab', activeDetailTab);
-    window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+    url.searchParams.set("tab", activeDetailTab);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   }, [activeDetailTab, selectedWorkflow]);
-
-  useEffect(() => {
-    const handleDraftUpdate = () => setPlaygroundDraft(loadPlaygroundDraft());
-    window.addEventListener(PLAYGROUND_DRAFT_UPDATED_EVENT, handleDraftUpdate);
-    return () =>
-      window.removeEventListener(
-        PLAYGROUND_DRAFT_UPDATED_EVENT,
-        handleDraftUpdate,
-      );
-  }, []);
 
   const workflowColumns = useMemo(
     () =>
       createWorkflowColumns(
         (workflowName) => setSelectedWorkflow(workflowName),
         (workflowName) =>
-          history.push(`/runs?workflow=${encodeURIComponent(workflowName)}`),
-        (workflowName) =>
-          history.push(buildYamlBrowserRoute({ workflow: workflowName })),
-        (workflowName) =>
-          history.push(
-            buildPlaygroundRoute({
-              template: workflowName,
-              importTemplate: true,
-            }),
-          ),
+          history.push(`/runs?workflow=${encodeURIComponent(workflowName)}`)
       ),
-    [],
+    []
   );
 
   const stepRows = useMemo<WorkflowStepRow[]>(
     () => buildStepRows(detailQuery.data?.definition.steps ?? []),
-    [detailQuery.data?.definition.steps],
+    [detailQuery.data?.definition.steps]
   );
 
   const openRunsPage = useCallback(() => {
@@ -1201,8 +1125,8 @@ const WorkflowsPage: React.FC = () => {
 
     return {
       closedWorldStatus: detailQuery.data.definition.closedWorldMode
-        ? 'success'
-        : 'default',
+        ? "success"
+        : "default",
       roleCount: detailQuery.data.definition.roles.length,
       stepCount: detailQuery.data.definition.steps.length,
       edgeCount: detailQuery.data.edges.length,
@@ -1215,50 +1139,41 @@ const WorkflowsPage: React.FC = () => {
       workflowSummary
         ? [
             {
-              id: 'mode',
-              title: 'Mode',
+              id: "mode",
+              title: "Mode",
               value:
-                workflowSummary.closedWorldStatus === 'success'
-                  ? 'Closed world'
-                  : 'Open world',
+                workflowSummary.closedWorldStatus === "success"
+                  ? "Closed world"
+                  : "Open world",
             },
             {
-              id: 'source',
-              title: 'Source',
+              id: "source",
+              title: "Source",
               value: workflowSummary.sourceLabel,
             },
             {
-              id: 'roles',
-              title: 'Roles',
+              id: "roles",
+              title: "Roles",
               value: workflowSummary.roleCount,
             },
             {
-              id: 'steps',
-              title: 'Steps',
+              id: "steps",
+              title: "Steps",
               value: workflowSummary.stepCount,
             },
             {
-              id: 'edges',
-              title: 'Edges',
+              id: "edges",
+              title: "Edges",
               value: workflowSummary.edgeCount,
             },
             {
-              id: 'primitives',
-              title: 'Primitives',
+              id: "primitives",
+              title: "Primitives",
               value: workflowSummary.primitiveCount,
             },
           ]
         : [],
-    [workflowSummary],
-  );
-
-  const playgroundDraftStatus = useMemo(
-    () =>
-      getPlaygroundDraftStatus(playgroundDraft, {
-        referenceWorkflow: detailQuery.data?.catalog.name,
-        referenceYaml: detailQuery.data?.yaml,
-      }),
-    [detailQuery.data?.catalog.name, detailQuery.data?.yaml, playgroundDraft],
+    [workflowSummary]
   );
 
   const graphElements = useMemo(() => {
@@ -1269,51 +1184,51 @@ const WorkflowsPage: React.FC = () => {
     return buildWorkflowGraphElements(detailQuery.data);
   }, [detailQuery.data]);
   const graphTabLabel = useMemo(() => {
-    const isActive = activeDetailTab === 'graph';
+    const isActive = activeDetailTab === "graph";
     const hasFocus = Boolean(selectedGraphNodeId);
     const isHighlighted = isActive || hasFocus;
 
     return (
       <span
-        data-active={isActive ? 'true' : 'false'}
-        data-highlighted={isHighlighted ? 'true' : 'false'}
+        data-active={isActive ? "true" : "false"}
+        data-highlighted={isHighlighted ? "true" : "false"}
         data-testid="workflow-graph-tab-label"
         style={{
           ...highlightedTabLabelStyle,
           background: isActive
-            ? 'linear-gradient(135deg, rgba(22, 119, 255, 0.2), rgba(22, 119, 255, 0.08))'
+            ? "linear-gradient(135deg, rgba(22, 119, 255, 0.2), rgba(22, 119, 255, 0.08))"
             : hasFocus
-              ? 'rgba(22, 119, 255, 0.08)'
-              : 'transparent',
+            ? "rgba(22, 119, 255, 0.08)"
+            : "transparent",
           border: `1px solid ${
             isActive
-              ? 'rgba(22, 119, 255, 0.36)'
+              ? "rgba(22, 119, 255, 0.36)"
               : hasFocus
-                ? 'rgba(22, 119, 255, 0.24)'
-                : 'transparent'
+              ? "rgba(22, 119, 255, 0.24)"
+              : "transparent"
           }`,
-          boxShadow: isActive ? '0 6px 16px rgba(22, 119, 255, 0.14)' : 'none',
-          color: isActive ? 'var(--ant-color-primary)' : 'inherit',
+          boxShadow: isActive ? "0 6px 16px rgba(22, 119, 255, 0.14)" : "none",
+          color: isActive ? "var(--ant-color-primary)" : "inherit",
         }}
       >
         <ApartmentOutlined
           aria-hidden
           style={{
             color: isHighlighted
-              ? 'var(--ant-color-primary)'
-              : 'var(--ant-color-text-secondary)',
+              ? "var(--ant-color-primary)"
+              : "var(--ant-color-text-secondary)",
           }}
         />
         <span>Graph</span>
         <span
           aria-hidden
           style={{
-            background: isActive ? '#1677ff' : hasFocus ? '#52c41a' : '#d9d9d9',
-            borderRadius: '50%',
+            background: isActive ? "#1677ff" : hasFocus ? "#52c41a" : "#d9d9d9",
+            borderRadius: "50%",
             boxShadow: isHighlighted
-              ? '0 0 0 4px rgba(22, 119, 255, 0.12)'
-              : 'none',
-            display: 'inline-block',
+              ? "0 0 0 4px rgba(22, 119, 255, 0.12)"
+              : "none",
+            display: "inline-block",
             height: 8,
             width: 8,
           }}
@@ -1323,28 +1238,28 @@ const WorkflowsPage: React.FC = () => {
   }, [activeDetailTab, selectedGraphNodeId]);
   const fullscreenGraphHeight = useMemo(
     () => Math.max(viewportHeight - 220, 560),
-    [viewportHeight],
+    [viewportHeight]
   );
 
   const focusedRole = useMemo(
     () =>
       detailQuery.data?.definition.roles.find(
-        (role) => role.id === selectedRoleId,
+        (role) => role.id === selectedRoleId
       ),
-    [detailQuery.data?.definition.roles, selectedRoleId],
+    [detailQuery.data?.definition.roles, selectedRoleId]
   );
 
   const focusedStep = useMemo(
     () => stepRows.find((step) => step.id === selectedStepId),
-    [selectedStepId, stepRows],
+    [selectedStepId, stepRows]
   );
 
   const focusRecord = useMemo<WorkflowFocusRecord | undefined>(() => {
     if (focusedStep) {
       return {
-        focusType: 'step',
+        focusType: "step",
         focusId: focusedStep.id,
-        relatedRole: focusedStep.targetRole || '',
+        relatedRole: focusedStep.targetRole || "",
         relatedStepCount: 1,
         graphNodeId: focusedStep.id,
       };
@@ -1352,10 +1267,10 @@ const WorkflowsPage: React.FC = () => {
 
     if (focusedRole) {
       const relatedSteps = stepRows.filter(
-        (step) => step.targetRole === focusedRole.id,
+        (step) => step.targetRole === focusedRole.id
       );
       return {
-        focusType: 'role',
+        focusType: "role",
         focusId: focusedRole.id,
         relatedRole: focusedRole.name || focusedRole.id,
         relatedStepCount: relatedSteps.length,
@@ -1368,7 +1283,7 @@ const WorkflowsPage: React.FC = () => {
 
   const handleSelectRole = useCallback((roleId: string) => {
     setSelectedRoleId(roleId);
-    setSelectedStepId('');
+    setSelectedStepId("");
   }, []);
 
   const handleSelectStep = useCallback(
@@ -1376,19 +1291,19 @@ const WorkflowsPage: React.FC = () => {
       setSelectedStepId(stepId);
       setSelectedRoleId(findWorkflowStepTargetRole(stepRows, stepId));
     },
-    [stepRows],
+    [stepRows]
   );
 
   const handleRoleStepsFocus = useCallback((role: WorkflowCatalogRole) => {
     setSelectedRoleId(role.id);
-    setSelectedStepId('');
-    setActiveDetailTab('steps');
+    setSelectedStepId("");
+    setActiveDetailTab("steps");
   }, []);
 
   const handleInspectRoleFromStep = useCallback((roleId: string) => {
     setSelectedRoleId(roleId);
-    setSelectedStepId('');
-    setActiveDetailTab('roles');
+    setSelectedStepId("");
+    setActiveDetailTab("roles");
   }, []);
 
   const scrollGraphPanelIntoView = useCallback(() => {
@@ -1398,8 +1313,8 @@ const WorkflowsPage: React.FC = () => {
     }
 
     scrollTarget.scrollIntoView?.({
-      behavior: 'smooth',
-      block: 'nearest',
+      behavior: "smooth",
+      block: "nearest",
     });
     pendingGraphScrollRef.current = false;
     return true;
@@ -1413,15 +1328,15 @@ const WorkflowsPage: React.FC = () => {
         scrollGraphPanelIntoView();
       }
     },
-    [scrollGraphPanelIntoView],
+    [scrollGraphPanelIntoView]
   );
 
   const focusRoleGraph = useCallback((roleId: string) => {
     setSelectedRoleId(roleId);
-    setSelectedStepId('');
+    setSelectedStepId("");
     setSelectedGraphNodeId(`role:${roleId}`);
     pendingGraphScrollRef.current = true;
-    setActiveDetailTab('graph');
+    setActiveDetailTab("graph");
     setGraphFocusSequence((current) => current + 1);
   }, []);
 
@@ -1429,14 +1344,14 @@ const WorkflowsPage: React.FC = () => {
     (stepId: string, targetRole?: string) => {
       setSelectedStepId(stepId);
       setSelectedRoleId(
-        targetRole || findWorkflowStepTargetRole(stepRows, stepId),
+        targetRole || findWorkflowStepTargetRole(stepRows, stepId)
       );
       setSelectedGraphNodeId(stepId);
       pendingGraphScrollRef.current = true;
-      setActiveDetailTab('graph');
+      setActiveDetailTab("graph");
       setGraphFocusSequence((current) => current + 1);
     },
-    [stepRows],
+    [stepRows]
   );
 
   const graphInteractionValue = useMemo<WorkflowGraphInteractionContextValue>(
@@ -1444,28 +1359,28 @@ const WorkflowsPage: React.FC = () => {
       focusRoleGraph,
       focusStepGraph,
     }),
-    [focusRoleGraph, focusStepGraph],
+    [focusRoleGraph, focusStepGraph]
   );
 
   const handleGraphNodeSelect = useCallback(
     (nodeId: string) => {
       setSelectedGraphNodeId(nodeId);
-      if (nodeId.startsWith('role:')) {
-        const roleId = nodeId.slice('role:'.length);
+      if (nodeId.startsWith("role:")) {
+        const roleId = nodeId.slice("role:".length);
         setSelectedRoleId(roleId);
-        setSelectedStepId('');
+        setSelectedStepId("");
         return;
       }
 
       setSelectedStepId(nodeId);
       setSelectedRoleId(findWorkflowStepTargetRole(stepRows, nodeId));
     },
-    [stepRows],
+    [stepRows]
   );
 
   useLayoutEffect(() => {
     if (
-      activeDetailTab !== 'graph' ||
+      activeDetailTab !== "graph" ||
       graphFocusSequence === 0 ||
       !pendingGraphScrollRef.current
     ) {
@@ -1497,25 +1412,21 @@ const WorkflowsPage: React.FC = () => {
 
   return (
     <PageContainer
-      title="Workflows"
-      content="Browse the workflow catalog, focus roles and steps, and jump directly into a run with the selected workflow."
+      title="Runtime Workflows"
+      content="Browse the runtime workflow catalog, inspect roles and steps, and move directly into the run console for the selected workflow."
     >
       <Row gutter={[16, 16]} align="stretch">
-        <Col
-          xs={24}
-          xl={isLibraryCollapsed ? 5 : 9}
-          style={stretchColumnStyle}
-        >
+        <Col xs={24} xl={isLibraryCollapsed ? 5 : 9} style={stretchColumnStyle}>
           <ProCard
-            title="Workflow library"
+            title="Runtime workflow catalog"
             {...moduleCardProps}
             style={fillCardStyle}
             extra={
               <Button
                 aria-label={
                   isLibraryCollapsed
-                    ? 'Expand workflow library'
-                    : 'Collapse workflow library'
+                    ? "Expand workflow library"
+                    : "Collapse workflow library"
                 }
                 icon={
                   isLibraryCollapsed ? (
@@ -1526,16 +1437,19 @@ const WorkflowsPage: React.FC = () => {
                 }
                 onClick={toggleLibraryCollapsed}
               >
-                {isLibraryCollapsed ? 'Expand' : 'Collapse'}
+                {isLibraryCollapsed ? "Expand" : "Collapse"}
               </Button>
             }
           >
             {isLibraryCollapsed ? (
               <div style={collapsedLibraryBodyStyle}>
                 <div style={cardStackStyle}>
-                  <Typography.Text strong>Library panel is collapsed.</Typography.Text>
+                  <Typography.Text strong>
+                    Library panel is collapsed.
+                  </Typography.Text>
                   <Typography.Text type="secondary">
-                    Reopen the panel to browse filters, catalog rows, and workflow actions.
+                    Reopen the panel to browse filters, catalog rows, and
+                    workflow actions.
                   </Typography.Text>
                 </div>
                 <div style={cardStackStyle}>
@@ -1550,10 +1464,13 @@ const WorkflowsPage: React.FC = () => {
                       Current selection
                     </Typography.Text>
                     <Typography.Paragraph
-                      ellipsis={{ rows: 2, tooltip: selectedWorkflow || 'No workflow selected' }}
-                      style={{ margin: '8px 0 0' }}
+                      ellipsis={{
+                        rows: 2,
+                        tooltip: selectedWorkflow || "No workflow selected",
+                      }}
+                      style={{ margin: "8px 0 0" }}
                     >
-                      {selectedWorkflow || 'No workflow selected'}
+                      {selectedWorkflow || "No workflow selected"}
                     </Typography.Paragraph>
                   </div>
                 </div>
@@ -1587,11 +1504,11 @@ const WorkflowsPage: React.FC = () => {
                           }
                         >
                           {showAdvancedFilters
-                            ? 'Hide advanced filters'
+                            ? "Hide advanced filters"
                             : `Advanced filters${
                                 advancedFilterCount > 0
                                   ? ` (${advancedFilterCount})`
-                                  : ''
+                                  : ""
                               }`}
                         </Button>
                         <Button
@@ -1615,7 +1532,7 @@ const WorkflowsPage: React.FC = () => {
                             value={filterDraft.groups}
                             options={groupOptions}
                             placeholder="Groups"
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             onChange={(value) =>
                               setFilterDraft((current) => ({
                                 ...current,
@@ -1632,7 +1549,7 @@ const WorkflowsPage: React.FC = () => {
                             value={filterDraft.sources}
                             options={sourceOptions}
                             placeholder="Sources"
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             onChange={(value) =>
                               setFilterDraft((current) => ({
                                 ...current,
@@ -1643,16 +1560,16 @@ const WorkflowsPage: React.FC = () => {
                           />
                         </Col>
                         <Col xs={24} md={12}>
-                          <Select<WorkflowLibraryFilter['llmRequirement']>
+                          <Select<WorkflowLibraryFilter["llmRequirement"]>
                             value={filterDraft.llmRequirement}
                             options={
                               llmFilterOptions as unknown as Array<{
                                 label: string;
-                                value: WorkflowLibraryFilter['llmRequirement'];
+                                value: WorkflowLibraryFilter["llmRequirement"];
                               }>
                             }
                             placeholder="LLM requirement"
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             onChange={(value) =>
                               setFilterDraft((current) => ({
                                 ...current,
@@ -1669,7 +1586,7 @@ const WorkflowsPage: React.FC = () => {
                             value={filterDraft.primitives}
                             options={primitiveOptions}
                             placeholder="Primitives"
-                            style={{ width: '100%' }}
+                            style={{ width: "100%" }}
                             onChange={(value) =>
                               setFilterDraft((current) => ({
                                 ...current,
@@ -1683,7 +1600,7 @@ const WorkflowsPage: React.FC = () => {
                     </div>
                   ) : null}
                   <Typography.Text type="secondary">
-                    {filteredCatalog.length} workflow(s) shown ·{' '}
+                    {filteredCatalog.length} workflow(s) shown ·{" "}
                     {appliedFilterSummary}
                   </Typography.Text>
                 </div>
@@ -1692,7 +1609,7 @@ const WorkflowsPage: React.FC = () => {
                   <Alert
                     showIcon
                     type="error"
-                    message="Failed to load workflow catalog"
+                    title="Failed to load workflow catalog"
                     description={String(catalogQuery.error)}
                   />
                 ) : null}
@@ -1716,8 +1633,8 @@ const WorkflowsPage: React.FC = () => {
                   })}
                   rowClassName={(record) =>
                     record.name === selectedWorkflow
-                      ? 'ant-table-row-selected'
-                      : ''
+                      ? "ant-table-row-selected"
+                      : ""
                   }
                   locale={{
                     emptyText: (
@@ -1739,7 +1656,7 @@ const WorkflowsPage: React.FC = () => {
           style={stretchColumnStyle}
         >
           <ProCard
-            title="Workflow detail"
+            title="Runtime definition"
             {...moduleCardProps}
             style={fillCardStyle}
             loading={detailQuery.isLoading && Boolean(selectedWorkflow)}
@@ -1748,7 +1665,7 @@ const WorkflowsPage: React.FC = () => {
               <Alert
                 showIcon
                 type="error"
-                message="Failed to load workflow detail"
+                title="Failed to load workflow detail"
                 description={String(detailQuery.error)}
               />
             ) : detailQuery.data ? (
@@ -1762,7 +1679,7 @@ const WorkflowsPage: React.FC = () => {
                         </Typography.Text>
                         <Typography.Title
                           level={4}
-                          style={{ margin: '4px 0 0' }}
+                          style={{ margin: "4px 0 0" }}
                         >
                           {detailQuery.data.catalog.name}
                         </Typography.Title>
@@ -1784,7 +1701,7 @@ const WorkflowsPage: React.FC = () => {
                           ))}
                         {detailQuery.data.catalog.primitives.length > 3 ? (
                           <Tag>
-                            +{detailQuery.data.catalog.primitives.length - 3}{' '}
+                            +{detailQuery.data.catalog.primitives.length - 3}{" "}
                             more
                           </Tag>
                         ) : null}
@@ -1799,7 +1716,7 @@ const WorkflowsPage: React.FC = () => {
                       }}
                     >
                       {detailQuery.data.catalog.description ||
-                        'No description provided.'}
+                        "No description provided."}
                     </Typography.Paragraph>
                   </div>
                   <div style={workflowDetailActionGroupStyle}>
@@ -1807,37 +1724,16 @@ const WorkflowsPage: React.FC = () => {
                       type="primary"
                       onClick={() =>
                         history.push(
-                          `/runs?workflow=${encodeURIComponent(detailQuery.data.catalog.name)}`,
+                          `/runs?workflow=${encodeURIComponent(
+                            detailQuery.data.catalog.name
+                          )}`
                         )
                       }
                     >
                       Run workflow
                     </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildYamlBrowserRoute({
-                            workflow: detailQuery.data.catalog.name,
-                          }),
-                        )
-                      }
-                    >
-                      Open YAML browser
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildPlaygroundRoute({
-                            template: detailQuery.data.catalog.name,
-                            importTemplate: true,
-                          }),
-                        )
-                      }
-                    >
-                      {playgroundDraftStatus.matchesReferenceWorkflow &&
-                      playgroundDraftStatus.hasDraft
-                        ? 'Resume draft in playground'
-                        : 'Open in playground'}
+                    <Button onClick={() => history.push("/scopes/workflows")}>
+                      Open scope workflows
                     </Button>
                   </div>
                 </div>
@@ -1871,13 +1767,6 @@ const WorkflowsPage: React.FC = () => {
                   </div>
                 ) : null}
 
-                <Alert
-                  showIcon
-                  type={playgroundDraftStatus.alertType}
-                  title={`Playground draft · ${playgroundDraftStatus.label}`}
-                  description={playgroundDraftStatus.detail}
-                />
-
                 <WorkflowGraphInteractionContext.Provider
                   value={graphInteractionValue}
                 >
@@ -1888,14 +1777,14 @@ const WorkflowsPage: React.FC = () => {
                     }
                     items={[
                       {
-                        key: 'yaml',
-                        label: 'YAML',
+                        key: "yaml",
+                        label: "YAML",
                         children: (
                           <WorkflowYamlViewer yaml={detailQuery.data.yaml} />
                         ),
                       },
                       {
-                        key: 'roles',
+                        key: "roles",
                         label: `Roles (${detailQuery.data.definition.roles.length})`,
                         children: (
                           <WorkflowRoleSplitPanel
@@ -1907,7 +1796,7 @@ const WorkflowsPage: React.FC = () => {
                         ),
                       },
                       {
-                        key: 'steps',
+                        key: "steps",
                         label: `Steps (${detailQuery.data.definition.steps.length})`,
                         children: (
                           <WorkflowStepSplitPanel
@@ -1920,7 +1809,7 @@ const WorkflowsPage: React.FC = () => {
                         ),
                       },
                       {
-                        key: 'graph',
+                        key: "graph",
                         label: graphTabLabel,
                         children: (
                           <div
@@ -1934,7 +1823,7 @@ const WorkflowsPage: React.FC = () => {
                                 </Typography.Text>
                                 <Typography.Paragraph
                                   type="secondary"
-                                  style={{ margin: '4px 0 0' }}
+                                  style={{ margin: "4px 0 0" }}
                                 >
                                   Node highlights follow the latest focus action
                                   from Roles or Steps.
@@ -1975,7 +1864,7 @@ const WorkflowsPage: React.FC = () => {
                     footer={null}
                     onCancel={() => setIsGraphFullscreenOpen(false)}
                     open={isGraphFullscreenOpen}
-                    style={{ maxWidth: '100vw', paddingBottom: 0, top: 0 }}
+                    style={{ maxWidth: "100vw", paddingBottom: 0, top: 0 }}
                     styles={{
                       body: {
                         flex: 1,
@@ -1984,9 +1873,9 @@ const WorkflowsPage: React.FC = () => {
                       },
                       container: {
                         borderRadius: 0,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        height: '100vh',
+                        display: "flex",
+                        flexDirection: "column",
+                        height: "100vh",
                         padding: 24,
                       },
                       header: {
@@ -2004,7 +1893,7 @@ const WorkflowsPage: React.FC = () => {
                           </Typography.Text>
                           <Typography.Paragraph
                             type="secondary"
-                            style={{ margin: '4px 0 0' }}
+                            style={{ margin: "4px 0 0" }}
                           >
                             Explore the workflow topology with more canvas space
                             while keeping node focus in sync with the detail
@@ -2042,7 +1931,7 @@ const WorkflowsPage: React.FC = () => {
             ) : (
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="Select a workflow to inspect the definition."
+                description="Select a runtime workflow to inspect the definition."
               />
             )}
           </ProCard>
