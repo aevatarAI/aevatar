@@ -30,7 +30,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var yaml = registry.GetYaml("direct");
         yaml.Should().NotBeNullOrWhiteSpace();
         registry.GetDefinition("direct")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("direct"));
@@ -44,7 +44,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication(options => options.RegisterBuiltInDirectWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         registry.GetYaml("direct").Should().BeNull();
     }
 
@@ -56,7 +56,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var yaml = registry.GetYaml("auto");
         yaml.Should().NotBeNullOrWhiteSpace();
         registry.GetDefinition("auto")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto"));
@@ -74,7 +74,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication(options => options.RegisterBuiltInAutoWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         registry.GetYaml("auto").Should().BeNull();
     }
 
@@ -86,7 +86,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication();
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         var yaml = registry.GetYaml("auto_review");
         yaml.Should().NotBeNullOrWhiteSpace();
         registry.GetDefinition("auto_review")!.DefinitionActorId.Should().Be(WorkflowDefinitionActorId.Format("auto_review"));
@@ -105,7 +105,7 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         services.AddWorkflowApplication(options => options.RegisterBuiltInAutoReviewWorkflow = false);
 
         using var provider = services.BuildServiceProvider();
-        var registry = provider.GetRequiredService<IWorkflowDefinitionRegistry>();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
         registry.GetYaml("auto_review").Should().BeNull();
     }
 

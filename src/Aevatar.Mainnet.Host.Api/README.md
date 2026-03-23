@@ -9,7 +9,7 @@
 - `builder.AddAevatarPlatform(options => { options.EnableMakerExtensions = true; })`
 - `app.UseAevatarDefaultHost()`（自动挂载能力端点）
 
-## 分布式模式（Orleans + TM + Kafka）
+## 分布式模式（Orleans + KafkaProvider）
 
 1. 启动 Kafka 与 Garnet（仓库根目录）：
 
@@ -28,9 +28,8 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 3. `src/Aevatar.Mainnet.Host.Api/appsettings.Distributed.json` 默认启用：
 
 - `ActorRuntime:Provider=Orleans`
-- `ActorRuntime:OrleansStreamBackend=MassTransitAdapter`
+- `ActorRuntime:OrleansStreamBackend=KafkaProvider`
 - `ActorRuntime:OrleansPersistenceBackend=Garnet`
-- `ActorRuntime:MassTransitTransportBackend=Kafka`
 - `Orleans:ClusteringMode=Localhost`
 
 在上述配置下，Event Sourcing 的 `IEventStore` 会自动使用 `GarnetEventStore`（连接串复用 `ActorRuntime:OrleansGarnetConnectionString`）。
@@ -44,7 +43,7 @@ ASPNETCORE_ENVIRONMENT=Distributed dotnet run --project src/Aevatar.Mainnet.Host
 可通过 `AEVATAR_` 前缀环境变量覆盖，例如：
 
 ```bash
-export AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers=localhost:9092
+export AEVATAR_ActorRuntime__KafkaBootstrapServers=localhost:9092
 export AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet
 export AEVATAR_ActorRuntime__OrleansGarnetConnectionString=localhost:6379
 export AEVATAR_Orleans__SiloPort=11111

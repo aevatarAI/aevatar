@@ -26,10 +26,9 @@ public static class EventSinkProjectionRuntimeRegistration
 
         services.TryAddSingleton<IProjectionFailureReplayService, ProjectionFailureReplayService>();
         services.TryAddSingleton<IProjectionFailureAlertSink, LoggingProjectionFailureAlertSink>();
-        services.TryAddSingleton<IProjectionScopeContextFactory<TContext>>(
-            _ => new ProjectionScopeContextFactory<TContext>(contextFactory));
-        services.TryAddSingleton<IProjectionSessionActivationService<TRuntimeLease>>(sp =>
-            new ProjectionSessionScopeActivationService<
+        services.TryAddSingleton<Func<ProjectionRuntimeScopeKey, TContext>>(_ => contextFactory);
+        services.TryAddSingleton<IProjectionScopeActivationService<TRuntimeLease>>(sp =>
+            new ProjectionScopeActivationService<
                 TRuntimeLease,
                 TContext,
                 TScopeAgent>(
@@ -42,8 +41,8 @@ public static class EventSinkProjectionRuntimeRegistration
                     request.SessionId)),
                 (_, context) => leaseFactory(context),
                 sp.GetService<Aevatar.Foundation.Abstractions.TypeSystem.IAgentTypeVerifier>()));
-        services.TryAddSingleton<IProjectionSessionReleaseService<TRuntimeLease>>(sp =>
-            new ProjectionSessionScopeReleaseService<
+        services.TryAddSingleton<IProjectionScopeReleaseService<TRuntimeLease>>(sp =>
+            new ProjectionScopeReleaseService<
                 TRuntimeLease,
                 TScopeAgent>(
                 sp.GetRequiredService<IActorRuntime>(),

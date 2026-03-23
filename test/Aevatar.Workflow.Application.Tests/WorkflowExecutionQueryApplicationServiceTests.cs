@@ -15,7 +15,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var currentStatePort = new FakeCurrentStateQueryPort(calls) { EnableActorQueryEndpoints = false };
         var artifactPort = new FakeArtifactQueryPort(calls) { EnableActorQueryEndpoints = false };
         var service = new WorkflowExecutionQueryApplicationService(
-            new StaticWorkflowDefinitionRegistry(["direct", "auto"]),
+            new StaticWorkflowDefinitionCatalog(["direct", "auto"]),
             currentStatePort,
             artifactPort,
             new StaticWorkflowCatalogPort(),
@@ -39,7 +39,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         var currentStatePort = new FakeCurrentStateQueryPort(calls) { EnableActorQueryEndpoints = true };
         var artifactPort = new FakeArtifactQueryPort(calls) { EnableActorQueryEndpoints = true };
         var service = new WorkflowExecutionQueryApplicationService(
-            new StaticWorkflowDefinitionRegistry([]),
+            new StaticWorkflowDefinitionCatalog([]),
             currentStatePort,
             artifactPort,
             new StaticWorkflowCatalogPort(),
@@ -101,7 +101,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
             EdgeTypes = ["child"],
         };
         var service = new WorkflowExecutionQueryApplicationService(
-            new StaticWorkflowDefinitionRegistry(["direct"]),
+            new StaticWorkflowDefinitionCatalog(["direct"]),
             currentStatePort,
             artifactPort,
             new StaticWorkflowCatalogPort(),
@@ -130,7 +130,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     public async Task ListAgentsAsync_ShouldHonorCancellation()
     {
         var service = new WorkflowExecutionQueryApplicationService(
-            new StaticWorkflowDefinitionRegistry([]),
+            new StaticWorkflowDefinitionCatalog([]),
             new FakeCurrentStateQueryPort([]) { EnableActorQueryEndpoints = false },
             new FakeArtifactQueryPort([]) { EnableActorQueryEndpoints = false },
             new StaticWorkflowCatalogPort(),
@@ -143,7 +143,7 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
         await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    private sealed class StaticWorkflowDefinitionRegistry(IReadOnlyList<string> names) : IWorkflowDefinitionRegistry
+    private sealed class StaticWorkflowDefinitionCatalog(IReadOnlyList<string> names) : IWorkflowDefinitionCatalog
     {
         public void Register(string name, string yaml) => throw new NotSupportedException();
 

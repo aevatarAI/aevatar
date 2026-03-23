@@ -257,9 +257,9 @@ if (Directory.Exists(workflowRoot))
         }
     }
 }
-var workflowRegistry = new WorkflowDefinitionRegistry();
+var workflowCatalog = new WorkflowDefinitionCatalog();
 foreach (var (workflowName, workflowYaml) in workflowDefinitions)
-    workflowRegistry.Register(workflowName, workflowYaml);
+    workflowCatalog.Register(workflowName, workflowYaml);
 
 // ─── Build services ───
 
@@ -275,7 +275,7 @@ services.AddAevatarAIFeatures(config, options =>
 });
 services.AddAevatarWorkflow();
 services.AddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
-services.AddSingleton<IWorkflowDefinitionRegistry>(workflowRegistry);
+services.AddSingleton<IWorkflowDefinitionCatalog>(workflowCatalog);
 services.AddSingleton<IWorkflowDefinitionResolver, RegistryWorkflowDefinitionResolver>();
 
 if (needsLlm && !string.IsNullOrEmpty(apiKey))

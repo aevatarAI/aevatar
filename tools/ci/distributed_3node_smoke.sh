@@ -8,17 +8,23 @@ cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/distributed_smoke_common.sh"
 
 COMPOSE_ARGS=(-f docker-compose.yml -f docker-compose.projection-providers.yml)
-KAFKA_CONTAINER="aevatar-kafka"
-GARNET_HOST="127.0.0.1"
-GARNET_PORT=6379
-ELASTICSEARCH_ENDPOINT="http://127.0.0.1:9200"
-ELASTICSEARCH_PORT=9200
-ELASTICSEARCH_TRANSPORT_PORT=9300
-NEO4J_URI="bolt://127.0.0.1:7687"
-NEO4J_USERNAME="neo4j"
-NEO4J_PASSWORD="password"
-NEO4J_HTTP_PORT=7474
-NEO4J_BOLT_PORT=7687
+KAFKA_CONTAINER="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_CONTAINER:-aevatar-kafka}"
+KAFKA_BOOTSTRAP_SERVERS="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
+KAFKA_HOST="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_HOST:-127.0.0.1}"
+KAFKA_PORT="${AEVATAR_DISTRIBUTED_SMOKE_KAFKA_PORT:-9092}"
+GARNET_HOST="${AEVATAR_DISTRIBUTED_SMOKE_GARNET_HOST:-127.0.0.1}"
+GARNET_PORT="${AEVATAR_DISTRIBUTED_SMOKE_GARNET_PORT:-6379}"
+ELASTICSEARCH_ENDPOINT="${AEVATAR_DISTRIBUTED_SMOKE_ELASTICSEARCH_ENDPOINT:-http://127.0.0.1:9200}"
+ELASTICSEARCH_PORT="${AEVATAR_DISTRIBUTED_SMOKE_ELASTICSEARCH_PORT:-9200}"
+ELASTICSEARCH_TRANSPORT_PORT="${AEVATAR_DISTRIBUTED_SMOKE_ELASTICSEARCH_TRANSPORT_PORT:-9300}"
+NEO4J_URI="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_URI:-bolt://127.0.0.1:7687}"
+NEO4J_USERNAME="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_USERNAME:-neo4j}"
+NEO4J_PASSWORD="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_PASSWORD:-password}"
+NEO4J_HTTP_PORT="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_HTTP_PORT:-7474}"
+NEO4J_BOLT_HOST="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_BOLT_HOST:-127.0.0.1}"
+NEO4J_BOLT_PORT="${AEVATAR_DISTRIBUTED_SMOKE_NEO4J_BOLT_PORT:-7687}"
+STREAM_BACKEND="${AEVATAR_DISTRIBUTED_SMOKE_STREAM_BACKEND:-KafkaProvider}"
+BOOTSTRAP_DOCKER_INFRA="${AEVATAR_DISTRIBUTED_SMOKE_BOOTSTRAP_DOCKER_INFRA:-true}"
 PUBLISH_DIR="/tmp/aevatar-mainnet-publish"
 APP_DLL="${PUBLISH_DIR}/Aevatar.Mainnet.Host.Api.dll"
 WAIT_SECONDS=120
@@ -31,10 +37,12 @@ LOCK_OWNER="distributed_3node_smoke"
 timestamp="$(date +%Y%m%d-%H%M%S)"
 cluster_id="aevatar-mainnet-ci-cluster-${timestamp}"
 service_id="aevatar-mainnet-host-api"
+kafka_consumer_group="aevatar-mainnet-ci-group-${timestamp}"
 log_dir="/tmp/aevatar-distributed-smoke-${timestamp}"
 mkdir -p "${log_dir}"
 
 declare -a pids=()
+STARTED_DOCKER_INFRA=0
 
 cleanup() {
   for pid in "${pids[@]-}"; do
@@ -50,7 +58,9 @@ cleanup() {
     fi
   done
 
-  docker compose "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  if [[ "${STARTED_DOCKER_INFRA}" == "1" ]]; then
+    docker compose "${COMPOSE_ARGS[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
   release_distributed_smoke_lock
 }
 trap cleanup EXIT INT TERM
@@ -67,13 +77,12 @@ start_node() {
     ASPNETCORE_ENVIRONMENT=Distributed \
     ASPNETCORE_URLS="http://127.0.0.1:${http_port}" \
     AEVATAR_ActorRuntime__Provider=Orleans \
-    AEVATAR_ActorRuntime__OrleansStreamBackend=MassTransitAdapter \
+    AEVATAR_ActorRuntime__OrleansStreamBackend="${STREAM_BACKEND}" \
     AEVATAR_ActorRuntime__OrleansPersistenceBackend=Garnet \
     AEVATAR_ActorRuntime__OrleansGarnetConnectionString="${GARNET_HOST}:${GARNET_PORT}" \
-    AEVATAR_ActorRuntime__MassTransitTransportBackend=Kafka \
-    AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers=localhost:9092 \
-    AEVATAR_ActorRuntime__MassTransitKafkaTopicName=aevatar-mainnet-agent-events \
-    AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup="aevatar-mainnet-ci-node${node}-${timestamp}" \
+    AEVATAR_ActorRuntime__KafkaBootstrapServers="${KAFKA_BOOTSTRAP_SERVERS}" \
+    AEVATAR_ActorRuntime__KafkaTopicName=aevatar-mainnet-agent-events \
+    AEVATAR_ActorRuntime__KafkaConsumerGroup="${kafka_consumer_group}" \
     AEVATAR_Orleans__ClusteringMode=Development \
     AEVATAR_Orleans__ClusterId="${cluster_id}" \
     AEVATAR_Orleans__ServiceId="${service_id}" \
@@ -99,22 +108,49 @@ start_node() {
 
 echo "Starting Kafka, Garnet, Elasticsearch and Neo4j..."
 acquire_distributed_smoke_lock "${LOCK_OWNER}"
-ensure_local_tcp_ports_free \
-  "${LOCK_OWNER}" \
-  9092 \
-  "${GARNET_PORT}" \
-  "${ELASTICSEARCH_PORT}" \
-  "${ELASTICSEARCH_TRANSPORT_PORT}" \
-  "${NEO4J_HTTP_PORT}" \
-  "${NEO4J_BOLT_PORT}" \
-  "${HTTP_PORTS[@]}" \
-  "${SILO_PORTS[@]}" \
-  "${GATEWAY_PORTS[@]}"
-docker compose "${COMPOSE_ARGS[@]}" up -d kafka garnet elasticsearch neo4j
-wait_kafka_health "${KAFKA_CONTAINER}"
-wait_garnet_health "${GARNET_HOST}" "${GARNET_PORT}"
-wait_elasticsearch_health "${ELASTICSEARCH_ENDPOINT}"
-wait_neo4j_bolt "127.0.0.1" "${NEO4J_BOLT_PORT}"
+if [[ "${BOOTSTRAP_DOCKER_INFRA}" == "true" ]]; then
+  require_bootstrapped_docker_infra_defaults \
+    "${LOCK_OWNER}" \
+    "KAFKA_CONTAINER=${KAFKA_CONTAINER}|aevatar-kafka" \
+    "KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}|localhost:9092" \
+    "KAFKA_HOST=${KAFKA_HOST}|127.0.0.1" \
+    "KAFKA_PORT=${KAFKA_PORT}|9092" \
+    "GARNET_HOST=${GARNET_HOST}|127.0.0.1" \
+    "GARNET_PORT=${GARNET_PORT}|6379" \
+    "ELASTICSEARCH_ENDPOINT=${ELASTICSEARCH_ENDPOINT}|http://127.0.0.1:9200" \
+    "ELASTICSEARCH_PORT=${ELASTICSEARCH_PORT}|9200" \
+    "ELASTICSEARCH_TRANSPORT_PORT=${ELASTICSEARCH_TRANSPORT_PORT}|9300" \
+    "NEO4J_HTTP_PORT=${NEO4J_HTTP_PORT}|7474" \
+    "NEO4J_BOLT_HOST=${NEO4J_BOLT_HOST}|127.0.0.1" \
+    "NEO4J_BOLT_PORT=${NEO4J_BOLT_PORT}|7687"
+  ensure_local_tcp_ports_free \
+    "${LOCK_OWNER}" \
+    "${KAFKA_PORT}" \
+    "${GARNET_PORT}" \
+    "${ELASTICSEARCH_PORT}" \
+    "${ELASTICSEARCH_TRANSPORT_PORT}" \
+    "${NEO4J_HTTP_PORT}" \
+    "${NEO4J_BOLT_PORT}" \
+    "${HTTP_PORTS[@]}" \
+    "${SILO_PORTS[@]}" \
+    "${GATEWAY_PORTS[@]}"
+  docker compose "${COMPOSE_ARGS[@]}" up -d kafka garnet elasticsearch neo4j
+  STARTED_DOCKER_INFRA=1
+  wait_kafka_health "${KAFKA_CONTAINER}"
+  wait_garnet_health "${GARNET_HOST}" "${GARNET_PORT}"
+  wait_elasticsearch_health "${ELASTICSEARCH_ENDPOINT}"
+  wait_neo4j_bolt "${NEO4J_BOLT_HOST}" "${NEO4J_BOLT_PORT}"
+else
+  ensure_local_tcp_ports_free \
+    "${LOCK_OWNER}" \
+    "${HTTP_PORTS[@]}" \
+    "${SILO_PORTS[@]}" \
+    "${GATEWAY_PORTS[@]}"
+  wait_tcp_endpoint "${KAFKA_HOST}" "${KAFKA_PORT}" "Kafka"
+  wait_tcp_endpoint "${GARNET_HOST}" "${GARNET_PORT}" "Garnet"
+  wait_elasticsearch_health "${ELASTICSEARCH_ENDPOINT}"
+  wait_neo4j_bolt "${NEO4J_BOLT_HOST}" "${NEO4J_BOLT_PORT}"
+fi
 
 echo "Publishing host app..."
 dotnet publish src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj \

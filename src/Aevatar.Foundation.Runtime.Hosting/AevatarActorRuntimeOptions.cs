@@ -4,11 +4,9 @@ public sealed class AevatarActorRuntimeOptions
 {
     public const string SectionName = "ActorRuntime";
     public const string ProviderInMemory = "InMemory";
-    public const string ProviderMassTransit = "MassTransit";
     public const string ProviderOrleans = "Orleans";
-    public const string MassTransitTransportBackendKafka = "Kafka";
     public const string OrleansStreamBackendInMemory = "InMemory";
-    public const string OrleansStreamBackendMassTransitAdapter = "MassTransitAdapter";
+    public const string OrleansStreamBackendKafkaProvider = "KafkaProvider";
     public const string OrleansPersistenceBackendInMemory = "InMemory";
     public const string OrleansPersistenceBackendGarnet = "Garnet";
     public const string DefaultOrleansStreamProviderName = "AevatarOrleansStreamProvider";
@@ -27,13 +25,15 @@ public sealed class AevatarActorRuntimeOptions
 
     public string OrleansGarnetConnectionString { get; set; } = DefaultOrleansGarnetConnectionString;
 
-    public string MassTransitTransportBackend { get; set; } = MassTransitTransportBackendKafka;
+    public int OrleansQueueCount { get; set; } = 8;
 
-    public string MassTransitKafkaBootstrapServers { get; set; } = "localhost:9092";
+    public int OrleansQueueCacheSize { get; set; } = 4096;
 
-    public string MassTransitKafkaTopicName { get; set; } = "aevatar-foundation-agent-events";
+    public string KafkaBootstrapServers { get; set; } = "localhost:9092";
 
-    public string MassTransitKafkaConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
+    public string KafkaTopicName { get; set; } = "aevatar-foundation-agent-events";
+
+    public string KafkaConsumerGroup { get; set; } = "aevatar-foundation-kafka-streaming";
 
     public bool EventSourcingEnableSnapshots { get; set; } = true;
 

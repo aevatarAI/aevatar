@@ -7,7 +7,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.EventModules;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Workflow.Core.Modules;
@@ -15,9 +14,17 @@ namespace Aevatar.Workflow.Core.Modules;
 /// <summary>工具调用模块。处理 type=tool_call 的步骤。</summary>
 public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly Dictionary<string, IAgentTool> _toolIndex = new(StringComparer.OrdinalIgnoreCase);
-    private readonly SemaphoreSlim _toolIndexLock = new(1, 1);
-    private bool _toolIndexInitialized;
+    private readonly IEnumerable<IAgentToolSource> _toolSources;
+    private readonly ILogger<ToolCallModule> _logger;
+    private volatile Task<IReadOnlyDictionary<string, IAgentTool>>? _toolIndex;
+
+    public ToolCallModule(
+        IEnumerable<IAgentToolSource> toolSources,
+        ILogger<ToolCallModule> logger)
+    {
+        _toolSources = toolSources ?? throw new ArgumentNullException(nameof(toolSources));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
 
     public string Name => "tool_call";
     public int Priority => 10;
@@ -58,8 +65,8 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
             CallId = request.StepId,
         }, TopologyAudience.Self, ct);
 
-        var tool = await ResolveToolAsync(toolName, ctx, ct);
-        if (tool == null)
+        var toolIndex = await GetOrDiscoverAsync(ct);
+        if (!toolIndex.TryGetValue(toolName, out var tool))
         {
             const string notFound = "tool not found or no tool sources configured";
             await PublishToolFailureAsync(ctx, request, toolName, notFound, ct);
@@ -92,46 +99,48 @@ public sealed class ToolCallModule : IEventModule<IWorkflowExecutionContext>
         }
     }
 
-    private async Task<IAgentTool?> ResolveToolAsync(string toolName, IWorkflowExecutionContext ctx, CancellationToken ct)
+    private Task<IReadOnlyDictionary<string, IAgentTool>> GetOrDiscoverAsync(CancellationToken ct)
     {
-        if (_toolIndex.TryGetValue(toolName, out var cached))
-            return cached;
-
-        await _toolIndexLock.WaitAsync(ct);
-        try
+        while (true)
         {
-            if (_toolIndex.TryGetValue(toolName, out cached))
-                return cached;
+            var current = _toolIndex;
+            if (current != null && !current.IsFaulted && !current.IsCanceled)
+                return current;
 
-            if (!_toolIndexInitialized)
+            var discoveryTask = DiscoverAllToolsAsync(_toolSources, _logger, ct);
+            var winner = Interlocked.CompareExchange(ref _toolIndex, discoveryTask, current);
+            if (winner == current)
+                return discoveryTask;
+        }
+    }
+    private static async Task<IReadOnlyDictionary<string, IAgentTool>> DiscoverAllToolsAsync(
+        IEnumerable<IAgentToolSource> toolSources,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        var index = new Dictionary<string, IAgentTool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in toolSources)
+        {
+            IReadOnlyList<IAgentTool> tools;
+            try
             {
-                var sources = ctx.Services.GetServices<IAgentToolSource>().ToList();
-                foreach (var source in sources)
-                {
-                    IReadOnlyList<IAgentTool> tools;
-                    try
-                    {
-                        tools = await source.DiscoverToolsAsync(ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        ctx.Logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
-                        continue;
-                    }
-
-                    foreach (var tool in tools)
-                        _toolIndex[tool.Name] = tool;
-                }
-
-                _toolIndexInitialized = true;
+                tools = await source.DiscoverToolsAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Tool source discovery failed: {Source}", source.GetType().Name);
+                continue;
             }
 
-            return _toolIndex.GetValueOrDefault(toolName);
+            foreach (var tool in tools)
+                index[tool.Name] = tool;
         }
-        finally
-        {
-            _toolIndexLock.Release();
-        }
+
+        return index;
     }
 
     private static async Task PublishToolFailureAsync(

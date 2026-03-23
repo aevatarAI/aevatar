@@ -204,7 +204,7 @@ block-beta
 | `Aevatar.Foundation.Runtime` | 本地单进程运行时（InMemory Actor / Stream / Store） |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans` | Orleans 分布式 Actor 运行时 |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming` | Orleans 流适配 + Stream Forward 拓扑 |
-| `Aevatar.Foundation.Runtime.Transport.Implementations.MassTransitKafka` | Kafka 传输层（via MassTransit） |
+| `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider` | Orleans Kafka strict provider backend |
 
 ---
 
@@ -627,8 +627,8 @@ flowchart LR
 | 模式 | Actor Runtime | Stream 实现 | 状态持久化 | Forward 拓扑存储 | 适用场景 |
 |---|---|---|---|---|---|
 | InMemory | `LocalActorRuntime` | `InMemoryStream` | `InMemoryStateStore` | 进程内字典 | 开发 / 单元测试 |
-| MassTransit | `LocalActorRuntime` | `MassTransitStream` | InMemory | 进程内字典 | 单节点 + 消息总线 |
-| Orleans | Orleans Silo | Orleans + MassTransit + Kafka | Garnet (Redis) | `IStreamTopologyGrain` | 生产分布式部署 |
+| MassTransit（历史路径） | `LocalActorRuntime` | `MassTransitStream` | InMemory | 进程内字典 | 旧版单节点消息总线 |
+| Orleans | Orleans Silo | `KafkaProvider`（Orleans Persistent Streams QueueAdapter/Receiver） | Garnet (Redis) | `IStreamTopologyGrain` | 生产分布式部署 |
 
 ### 8.2 Orleans 分布式拓扑
 
@@ -676,13 +676,12 @@ Orleans 模式的核心配置项（通过环境变量或 `appsettings.Distribute
 | 配置项 | 说明 | Distributed 模板值 |
 |---|---|---|
 | `ActorRuntime:Provider` | 运行时提供者 | `Orleans` |
-| `ActorRuntime:OrleansStreamBackend` | 流后端 | `MassTransitAdapter` |
+| `ActorRuntime:OrleansStreamBackend` | 流后端 | `KafkaProvider` |
 | `ActorRuntime:OrleansPersistenceBackend` | 持久化后端 | `InMemory` / `Garnet` |
 | `ActorRuntime:OrleansGarnetConnectionString` | Garnet 连接串 | `localhost:6379` |
-| `ActorRuntime:MassTransitTransportBackend` | MassTransit 传输后端 | `Kafka` |
-| `ActorRuntime:MassTransitKafkaBootstrapServers` | Kafka 地址 | `localhost:9092` |
-| `ActorRuntime:MassTransitKafkaTopicName` | Kafka 主题 | `aevatar-mainnet-agent-events` |
-| `ActorRuntime:MassTransitKafkaConsumerGroup` | Kafka 消费组（建议按环境隔离） | `aevatar-mainnet-cg` |
+| `ActorRuntime:KafkaBootstrapServers` | Kafka 地址 | `localhost:9092` |
+| `ActorRuntime:KafkaTopicName` | Kafka 主题 | `aevatar-mainnet-agent-events` |
+| `ActorRuntime:KafkaConsumerGroup` | Kafka 消费组（建议按环境隔离） | `aevatar-mainnet-cg` |
 | `Orleans:ClusteringMode` | 集群模式 | `Localhost` / `Development` |
 | `Orleans:ClusterId` | 集群 ID | `aevatar-mainnet-cluster` |
 | `Orleans:ServiceId` | 服务 ID（与 ClusterId 组合隔离） | `aevatar-mainnet-service` |
@@ -896,8 +895,7 @@ var mainnet = builder.AddProject<Projects.Aevatar_Mainnet_Host_Api>("mainnet")
     .WithReference(kafka)
     .WithReference(garnet)
     .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Distributed")
-    .WithEnvironment("AEVATAR_ActorRuntime__Provider", "Orleans")
-    .WithEnvironment("AEVATAR_ActorRuntime__MassTransitTransportBackend", "Kafka");
+    .WithEnvironment("AEVATAR_ActorRuntime__Provider", "Orleans");
 
 builder.Build().Run();
 ```
@@ -1138,7 +1136,7 @@ flowchart LR
 
 **3) Kafka 与流并行度（P0）**
 
-- 保证同一 `runId` 有序：消息键固定 `runId`，跨 `runId` 并行。需验证当前 `MassTransitKafka` 传输实现是否已将 `RunId` 用作 Kafka 分区键；若使用默认随机分区，同一 Run 的事件可能乱序到达投影端。
+- 保证同一 `runId` 有序：消息键固定 `runId`，跨 `runId` 并行。当前主链已收敛到 `KafkaProvider`；同一 `runId` 的 Kafka 路由键必须保持稳定，并通过统一的 `StreamId -> PartitionId` 映射进入同一分区，避免同一 Run 的事件乱序到达投影端。
 - 分区数至少满足 `num_partitions >= max(silo_replicas, target_parallelism)`。
 - 消费组按环境/业务域隔离，避免不同流量池互相争抢。
 - 对于多租户隔离要求极高的场景，考虑为高流量租户/App 部署独立 Mainnet 实例并配置独立 Kafka Topic/ConsumerGroup（实例级环境变量），从传输层实现硬隔离。
@@ -1605,13 +1603,12 @@ flowchart LR
 |---|---|
 | `ASPNETCORE_ENVIRONMENT` | 运行环境（`Distributed` 启用分布式模式） |
 | `AEVATAR_ActorRuntime__Provider` | `Orleans` / `InMemory` |
-| `AEVATAR_ActorRuntime__OrleansStreamBackend` | `MassTransitAdapter` / `InMemory` |
+| `AEVATAR_ActorRuntime__OrleansStreamBackend` | `KafkaProvider` / `InMemory` |
 | `AEVATAR_ActorRuntime__OrleansPersistenceBackend` | `Garnet` / `InMemory` |
 | `AEVATAR_ActorRuntime__OrleansGarnetConnectionString` | Garnet 连接串 |
-| `AEVATAR_ActorRuntime__MassTransitTransportBackend` | MassTransit 传输后端（Kafka） |
-| `AEVATAR_ActorRuntime__MassTransitKafkaBootstrapServers` | Kafka 地址 |
-| `AEVATAR_ActorRuntime__MassTransitKafkaTopicName` | Kafka Topic 名称 |
-| `AEVATAR_ActorRuntime__MassTransitKafkaConsumerGroup` | Kafka 消费组 |
+| `AEVATAR_ActorRuntime__KafkaBootstrapServers` | Kafka 地址 |
+| `AEVATAR_ActorRuntime__KafkaTopicName` | Kafka Topic 名称 |
+| `AEVATAR_ActorRuntime__KafkaConsumerGroup` | Kafka 消费组 |
 | `AEVATAR_Projection__Graph__Providers__Neo4j__Password` | Mainnet Host 连接 Neo4j 的密码 |
 | `AEVATAR_Orleans__ClusteringMode` | `Localhost` / `Development` |
 | `AEVATAR_Orleans__ClusterId` | Orleans 集群 ID |

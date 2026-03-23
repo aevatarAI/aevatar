@@ -122,14 +122,20 @@ public sealed class DefaultCommandInteractionService<TCommand, TTarget, TReceipt
                         durableCompletion),
                     CancellationToken.None);
             }
-            catch (Exception ex) when (executionException != null)
+            catch (Exception cleanupException)
             {
-                _logger.LogWarning(
-                    ex,
-                    "Command interaction cleanup failed after execution. command={CommandType}, target={TargetType}, succeeded={Succeeded}",
-                    typeof(TCommand).FullName,
-                    typeof(TTarget).FullName,
-                    interactionResult != null);
+                if (executionException != null)
+                {
+                    _logger.LogWarning(
+                        cleanupException,
+                        "Command interaction cleanup failed after execution failure. command={CommandType}, target={TargetType}",
+                        typeof(TCommand).FullName,
+                        typeof(TTarget).FullName);
+                }
+                else
+                {
+                    throw;
+                }
             }
         }
     }

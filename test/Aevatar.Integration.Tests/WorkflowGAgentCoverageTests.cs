@@ -242,43 +242,21 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_WhenRoleIdMissing_ShouldSkipBlankRoleAndContinueExecution()
+    public async Task WorkflowRunGAgent_WhenRoleIdMissing_ShouldThrow()
     {
-        var publisher = new RecordingEventPublisher();
-        var eventStore = new InMemoryEventStore();
-        var runtime = new RecordingActorRuntime();
         var agent = CreateRunAgent(
-            runtime: runtime,
-            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)),
-            eventStore: eventStore);
-        agent.EventPublisher = publisher;
+            runtime: new RecordingActorRuntime(),
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
             BuildValidWorkflowYaml("", "RoleNoId"),
             "wf_missing_role",
             runId: "run-missing-role");
 
-        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "x", SessionId = "s" });
+        var act = () => agent.HandleChatRequest(new ChatRequestEvent { Prompt = "x", SessionId = "s" });
 
-        runtime.CreateCalls.Should().Be(0);
-        runtime.Linked.Should().BeEmpty();
-        runtime.CreatedActors.Should().BeEmpty();
-        agent.State.Status.Should().Be("running");
-
-        var starts = publisher.Published
-            .Where(x => x.direction == TopologyAudience.Self)
-            .Select(x => x.evt)
-            .OfType<StartWorkflowEvent>()
-            .ToList();
-        starts.Should().ContainSingle();
-        starts[0].WorkflowName.Should().Be("wf_valid");
-        starts[0].RunId.Should().Be("run-missing-role");
-
-        var persisted = await eventStore.GetEventsAsync(agent.Id);
-        persisted.Should().ContainSingle(x =>
-            x.EventType.Contains(nameof(WorkflowRunExecutionStartedEvent), StringComparison.Ordinal));
-        persisted.Should().NotContain(x =>
-            x.EventType.Contains(nameof(WorkflowRoleActorLinkedEvent), StringComparison.Ordinal));
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Role id is required*");
     }
 
     [Fact]
@@ -460,7 +438,7 @@ public class WorkflowGAgentCoverageTests
             definitionPublisher,
             "workflow-definition:sub_flow",
             "sub_flow",
-            BuildValidWorkflowYaml("sub_role", "SubRole"));
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
         var agent = CreateRunAgent(runtime: runtime);
         SetAgentId(agent, "workflow-run-parent-singleton");
         agent.EventPublisher = runPublisher;
@@ -530,7 +508,7 @@ public class WorkflowGAgentCoverageTests
             definitionPublisher,
             "workflow-definition:sub_flow",
             "sub_flow",
-            BuildValidWorkflowYaml("sub_role", "SubRole"));
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
         var agent = CreateRunAgent(runtime: runtime);
         SetAgentId(agent, "workflow-run-parent-completion");
         agent.EventPublisher = runPublisher;
@@ -582,7 +560,7 @@ public class WorkflowGAgentCoverageTests
             definitionPublisher,
             "workflow-definition:sub_flow",
             "sub_flow",
-            BuildValidWorkflowYaml("sub_role", "SubRole"));
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
         var agent = CreateRunAgent(runtime: runtime);
         SetAgentId(agent, "workflow-run-parent-cleanup");
         agent.EventPublisher = runPublisher;
@@ -1266,12 +1244,14 @@ public class WorkflowGAgentCoverageTests
         string roleId,
         string roleName,
         string? provider = null,
-        string? model = null)
+        string? model = null,
+        string? workflowName = null)
     {
+        var name = workflowName ?? "wf_valid";
         var providerLine = string.IsNullOrWhiteSpace(provider) ? string.Empty : $"\n    provider: \"{provider}\"";
         var modelLine = string.IsNullOrWhiteSpace(model) ? string.Empty : $"\n    model: \"{model}\"";
         return $$"""
-                 name: wf_valid
+                 name: {{name}}
                  roles:
                    - id: "{{roleId}}"
                      name: "{{roleName}}"

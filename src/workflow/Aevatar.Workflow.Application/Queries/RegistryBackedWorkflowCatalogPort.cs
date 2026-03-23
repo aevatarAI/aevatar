@@ -5,9 +5,9 @@ namespace Aevatar.Workflow.Application.Queries;
 
 internal sealed class RegistryBackedWorkflowCatalogPort : IWorkflowCatalogPort, IWorkflowCapabilitiesPort
 {
-    private readonly IWorkflowDefinitionRegistry _workflowRegistry;
+    private readonly IWorkflowDefinitionCatalog _workflowRegistry;
 
-    public RegistryBackedWorkflowCatalogPort(IWorkflowDefinitionRegistry workflowRegistry)
+    public RegistryBackedWorkflowCatalogPort(IWorkflowDefinitionCatalog workflowRegistry)
     {
         _workflowRegistry = workflowRegistry;
     }

@@ -3,7 +3,7 @@ namespace Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming;
 public sealed class AevatarOrleansRuntimeOptions
 {
     public const string StreamBackendInMemory = "InMemory";
-    public const string StreamBackendMassTransitAdapter = "MassTransitAdapter";
+    public const string StreamBackendKafkaProvider = "KafkaProvider";
     public const string PersistenceBackendInMemory = "InMemory";
     public const string PersistenceBackendGarnet = "Garnet";
     public const string DefaultGarnetConnectionString = "localhost:6379";
