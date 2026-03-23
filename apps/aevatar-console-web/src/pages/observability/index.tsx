@@ -22,6 +22,7 @@ import { loadConsolePreferences } from "@/shared/preferences/consolePreferences"
 import {
   fillCardStyle,
   moduleCardProps,
+  scrollPanelStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
 
@@ -46,6 +47,44 @@ type InternalJumpItem = {
 const targetStatusValueEnum = {
   configured: { text: "Configured", status: "Success" },
   missing: { text: "Missing", status: "Default" },
+} as const;
+
+const consoleSurfacesCardStyle = {
+  ...fillCardStyle,
+  height: 520,
+} as const;
+
+const configuredTargetsCardStyle = {
+  ...fillCardStyle,
+  height: 520,
+} as const;
+
+const consoleSurfacesBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const configuredTargetsBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const consoleSurfacesViewportStyle = {
+  ...scrollPanelStyle,
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
+} as const;
+
+const configuredTargetsViewportStyle = {
+  ...scrollPanelStyle,
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
 } as const;
 
 const summaryColumns: ProDescriptionsItemProps<ObservabilitySummaryRecord>[] = [
@@ -322,77 +361,82 @@ const ObservabilityPage: React.FC = () => {
           <ProCard
             title="Configured targets"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={configuredTargetsCardStyle}
+            bodyStyle={configuredTargetsBodyStyle}
           >
-            <ProList<ObservabilityTarget>
-              rowKey="id"
-              search={false}
-              split
-              dataSource={targets}
-              locale={{
-                emptyText: (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="No observability targets are available."
-                  />
-                ),
-              }}
-              metas={{
-                title: {
-                  dataIndex: "label",
-                  render: (_, record) => (
-                    <Space wrap size={[8, 8]}>
-                      <Typography.Text strong>{record.label}</Typography.Text>
-                      <Tag
-                        color={
-                          record.status === "configured" ? "success" : "default"
-                        }
-                      >
-                        {record.status}
-                      </Tag>
-                    </Space>
+            <div style={configuredTargetsViewportStyle}>
+              <ProList<ObservabilityTarget>
+                rowKey="id"
+                search={false}
+                split
+                dataSource={targets}
+                locale={{
+                  emptyText: (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="No observability targets are available."
+                    />
                   ),
-                },
-                description: {
-                  dataIndex: "description",
-                },
-                subTitle: {
-                  render: (_, record) => (
-                    <Space wrap size={[8, 8]}>
-                      <Tag>{record.contextSummary}</Tag>
-                      {record.status === "configured" ? (
-                        <Tag color="processing">{record.homeUrl}</Tag>
-                      ) : (
-                        <Tag>No URL configured</Tag>
-                      )}
-                    </Space>
-                  ),
-                },
-                content: {
-                  render: (_, record) => (
-                    <Space wrap>
-                      <Button
-                        type="primary"
-                        disabled={record.status !== "configured"}
-                        href={record.homeUrl || undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open {record.label}
-                      </Button>
-                      <Button
-                        disabled={record.status !== "configured"}
-                        href={record.exploreUrl || undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open explore
-                      </Button>
-                    </Space>
-                  ),
-                },
-              }}
-            />
+                }}
+                metas={{
+                  title: {
+                    dataIndex: "label",
+                    render: (_, record) => (
+                      <Space wrap size={[8, 8]}>
+                        <Typography.Text strong>{record.label}</Typography.Text>
+                        <Tag
+                          color={
+                            record.status === "configured"
+                              ? "success"
+                              : "default"
+                          }
+                        >
+                          {record.status}
+                        </Tag>
+                      </Space>
+                    ),
+                  },
+                  description: {
+                    dataIndex: "description",
+                  },
+                  subTitle: {
+                    render: (_, record) => (
+                      <Space wrap size={[8, 8]}>
+                        <Tag>{record.contextSummary}</Tag>
+                        {record.status === "configured" ? (
+                          <Tag color="processing">{record.homeUrl}</Tag>
+                        ) : (
+                          <Tag>No URL configured</Tag>
+                        )}
+                      </Space>
+                    ),
+                  },
+                  content: {
+                    render: (_, record) => (
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          disabled={record.status !== "configured"}
+                          href={record.homeUrl || undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open {record.label}
+                        </Button>
+                        <Button
+                          disabled={record.status !== "configured"}
+                          href={record.exploreUrl || undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open explore
+                        </Button>
+                      </Space>
+                    ),
+                  },
+                }}
+              />
+            </div>
           </ProCard>
         </Col>
 
@@ -400,34 +444,37 @@ const ObservabilityPage: React.FC = () => {
           <ProCard
             title="Console surfaces"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={consoleSurfacesCardStyle}
+            bodyStyle={consoleSurfacesBodyStyle}
           >
-            <ProList<InternalJumpItem>
-              rowKey="id"
-              search={false}
-              split
-              dataSource={internalJumps}
-              metas={{
-                title: {
-                  dataIndex: "title",
-                },
-                description: {
-                  dataIndex: "description",
-                },
-                actions: {
-                  render: (_, record) => [
-                    <Button
-                      key={`${record.id}-open`}
-                      type="link"
-                      disabled={!record.enabled}
-                      onClick={() => history.push(record.href)}
-                    >
-                      Open
-                    </Button>,
-                  ],
-                },
-              }}
-            />
+            <div style={consoleSurfacesViewportStyle}>
+              <ProList<InternalJumpItem>
+                rowKey="id"
+                search={false}
+                split
+                dataSource={internalJumps}
+                metas={{
+                  title: {
+                    dataIndex: "title",
+                  },
+                  description: {
+                    dataIndex: "description",
+                  },
+                  actions: {
+                    render: (_, record) => [
+                      <Button
+                        key={`${record.id}-open`}
+                        type="link"
+                        disabled={!record.enabled}
+                        onClick={() => history.push(record.href)}
+                      >
+                        Open
+                      </Button>,
+                    ],
+                  },
+                }}
+              />
+            </div>
           </ProCard>
         </Col>
       </Row>

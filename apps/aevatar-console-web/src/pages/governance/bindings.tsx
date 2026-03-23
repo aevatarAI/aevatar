@@ -53,9 +53,6 @@ const GovernanceBindingsPage: React.FC = () => {
     <PageContainer
       title="Governance Bindings"
       content="Inspect bound services, connectors, and secrets for a single service."
-      onBack={() =>
-        history.push(buildGovernanceHref("/governance", activeDraft))
-      }
     >
       <Row gutter={[16, 16]}>
         <Col xs={24}>

@@ -60,6 +60,25 @@ const capabilitySurfacesScrollStyle = {
   maxHeight: 552,
 };
 
+const boundedOverviewCardStyle = {
+  ...fillCardStyle,
+  height: 520,
+} as const;
+
+const boundedOverviewCardBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const boundedOverviewCardViewportStyle = {
+  ...scrollPanelStyle,
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
+} as const;
+
 const profileColumns: ProDescriptionsItemProps<ConsoleProfileItem>[] = [
   {
     title: "Preferred workflow",
@@ -331,89 +350,92 @@ const OverviewPage: React.FC = () => {
           <ProCard
             title="Quick actions"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={boundedOverviewCardStyle}
+            bodyStyle={boundedOverviewCardBodyStyle}
           >
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <div>
-                <Typography.Text strong>Platform entry points</Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  style={{ display: "block", marginTop: 4 }}
-                >
-                  Open runtime, scope, service, governance, and capability
-                  surfaces.
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {platformQuickActions.map((item) => (
-                      <Button
-                        key={item.id}
-                        type={item.primary ? "primary" : "default"}
-                        onClick={item.onOpen}
-                      >
-                        {item.label}
-                      </Button>
-                    ))}
-                  </Space>
-                </div>
-              </div>
-
-              <div>
-                <Typography.Text strong>Local console tools</Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  style={{ display: "block", marginTop: 4 }}
-                >
-                  Jump into browser-level preferences, local runtime
-                  configuration, and external observability tools.
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {localQuickActions.map((item) => (
-                      <Button
-                        key={item.id}
-                        href={item.href}
-                        onClick={item.onOpen}
-                        target={item.target}
-                        rel={item.rel}
-                      >
-                        {item.label}
-                      </Button>
-                    ))}
-                  </Space>
-                </div>
-              </div>
-
-              <div>
-                <Typography.Text strong>
-                  Human-in-the-loop workflows
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {humanFocusedWorkflows.length > 0 ? (
-                      humanFocusedWorkflows.map((item) => (
+            <div style={boundedOverviewCardViewportStyle}>
+              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+                <div>
+                  <Typography.Text strong>Platform entry points</Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", marginTop: 4 }}
+                  >
+                    Open runtime, scope, service, governance, and capability
+                    surfaces.
+                  </Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {platformQuickActions.map((item) => (
                         <Button
-                          key={item.name}
-                          type="dashed"
-                          onClick={() =>
-                            history.push(
-                              `/runs?workflow=${encodeURIComponent(item.name)}`
-                            )
-                          }
+                          key={item.id}
+                          type={item.primary ? "primary" : "default"}
+                          onClick={item.onOpen}
                         >
-                          {item.name}
+                          {item.label}
                         </Button>
-                      ))
-                    ) : (
-                      <Typography.Text type="secondary">
-                        No human-interaction workflows were discovered in the
-                        catalog.
-                      </Typography.Text>
-                    )}
-                  </Space>
+                      ))}
+                    </Space>
+                  </div>
                 </div>
-              </div>
-            </Space>
+
+                <div>
+                  <Typography.Text strong>Local console tools</Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", marginTop: 4 }}
+                  >
+                    Jump into browser-level preferences, local runtime
+                    configuration, and external observability tools.
+                  </Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {localQuickActions.map((item) => (
+                        <Button
+                          key={item.id}
+                          href={item.href}
+                          onClick={item.onOpen}
+                          target={item.target}
+                          rel={item.rel}
+                        >
+                          {item.label}
+                        </Button>
+                      ))}
+                    </Space>
+                  </div>
+                </div>
+
+                <div>
+                  <Typography.Text strong>
+                    Human-in-the-loop workflows
+                  </Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {humanFocusedWorkflows.length > 0 ? (
+                        humanFocusedWorkflows.map((item) => (
+                          <Button
+                            key={item.name}
+                            type="dashed"
+                            onClick={() =>
+                              history.push(
+                                `/runs?workflow=${encodeURIComponent(item.name)}`
+                              )
+                            }
+                          >
+                            {item.name}
+                          </Button>
+                        ))
+                      ) : (
+                        <Typography.Text type="secondary">
+                          No human-interaction workflows were discovered in the
+                          catalog.
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  </div>
+                </div>
+              </Space>
+            </div>
           </ProCard>
         </Col>
 
@@ -421,41 +443,44 @@ const OverviewPage: React.FC = () => {
           <ProCard
             title="Console profile"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={boundedOverviewCardStyle}
+            bodyStyle={boundedOverviewCardBodyStyle}
           >
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <ProDescriptions<ConsoleProfileItem>
-                column={1}
-                dataSource={profileData}
-                columns={profileColumns}
-              />
+            <div style={boundedOverviewCardViewportStyle}>
+              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+                <ProDescriptions<ConsoleProfileItem>
+                  column={1}
+                  dataSource={profileData}
+                  columns={profileColumns}
+                />
 
-              <div>
-                <Typography.Text strong>Live actor shortcuts</Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {liveActors.length > 0 ? (
-                      liveActors.map((agent) => (
-                        <Button
-                          key={agent.id}
-                          onClick={() =>
-                            history.push(
-                              `/actors?actorId=${encodeURIComponent(agent.id)}`
-                            )
-                          }
-                        >
-                          {agent.id}
-                        </Button>
-                      ))
-                    ) : (
-                      <Typography.Text type="secondary">
-                        No live actors were returned by the backend.
-                      </Typography.Text>
-                    )}
-                  </Space>
+                <div>
+                  <Typography.Text strong>Live actor shortcuts</Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {liveActors.length > 0 ? (
+                        liveActors.map((agent) => (
+                          <Button
+                            key={agent.id}
+                            onClick={() =>
+                              history.push(
+                                `/actors?actorId=${encodeURIComponent(agent.id)}`
+                              )
+                            }
+                          >
+                            {agent.id}
+                          </Button>
+                        ))
+                      ) : (
+                        <Typography.Text type="secondary">
+                          No live actors were returned by the backend.
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  </div>
                 </div>
-              </div>
-            </Space>
+              </Space>
+            </div>
           </ProCard>
         </Col>
       </Row>

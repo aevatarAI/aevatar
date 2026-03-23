@@ -38,6 +38,26 @@ type ReloadHandler = () => void;
 type ActionHandler = () => void;
 type ChangeHandler<T> = (value: T) => void;
 
+const fixedListCardStyle = {
+  height: 520,
+} as const;
+
+const fixedListCardBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const fixedListViewportStyle = {
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
+  overflowX: "hidden",
+  overflowY: "auto",
+  paddingRight: 4,
+} as const;
+
 export type SystemStatusSectionProps = {
   configurationSourceError?: unknown;
   configurationSourceStatus?: ConfigurationSourceStatus;
@@ -192,52 +212,56 @@ export const WorkflowFilesSection: React.FC<WorkflowFilesSectionProps> = ({
         title="Available files"
         ghost
         extra={<Button onClick={onRefresh}>Refresh</Button>}
+        style={fixedListCardStyle}
+        bodyStyle={fixedListCardBodyStyle}
       >
-        <ProList<ConfigurationWorkflowFile>
-          rowKey={(record) => workflowKey(record)}
-          search={false}
-          split
-          dataSource={workflows}
-          locale={{
-            emptyText: (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="No workflow files discovered."
-              />
-            ),
-          }}
-          metas={{
-            title: {
-              dataIndex: "filename",
-              render: (_, record) => (
-                <Space wrap>
-                  <Button
-                    type={
-                      selectedWorkflowId &&
-                      workflowKey(record) === selectedWorkflowId
-                        ? "primary"
-                        : "link"
-                    }
-                    onClick={() => onSelectWorkflow(workflowKey(record))}
-                  >
-                    {record.filename}
-                  </Button>
-                  <Tag>{record.source}</Tag>
-                </Space>
+        <div style={fixedListViewportStyle}>
+          <ProList<ConfigurationWorkflowFile>
+            rowKey={(record) => workflowKey(record)}
+            search={false}
+            split
+            dataSource={workflows}
+            locale={{
+              emptyText: (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="No workflow files discovered."
+                />
               ),
-            },
-            description: {
-              render: (_, record) => (
-                <Space direction="vertical" size={4} style={{ width: "100%" }}>
-                  <Typography.Text type="secondary">
-                    {formatDateTime(record.lastModified)}
-                  </Typography.Text>
-                  <Typography.Text code>{record.path}</Typography.Text>
-                </Space>
-              ),
-            },
-          }}
-        />
+            }}
+            metas={{
+              title: {
+                dataIndex: "filename",
+                render: (_, record) => (
+                  <Space wrap>
+                    <Button
+                      type={
+                        selectedWorkflowId &&
+                        workflowKey(record) === selectedWorkflowId
+                          ? "primary"
+                          : "link"
+                      }
+                      onClick={() => onSelectWorkflow(workflowKey(record))}
+                    >
+                      {record.filename}
+                    </Button>
+                    <Tag>{record.source}</Tag>
+                  </Space>
+                ),
+              },
+              description: {
+                render: (_, record) => (
+                  <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                    <Typography.Text type="secondary">
+                      {formatDateTime(record.lastModified)}
+                    </Typography.Text>
+                    <Typography.Text code>{record.path}</Typography.Text>
+                  </Space>
+                ),
+              },
+            }}
+          />
+        </div>
       </ProCard>
     </Col>
     <Col xs={24} lg={14}>
@@ -1210,56 +1234,60 @@ export const McpSection: React.FC<McpSectionProps> = ({
           title="Registered servers"
           ghost
           extra={<Button onClick={onReloadServers}>Refresh</Button>}
+          style={fixedListCardStyle}
+          bodyStyle={fixedListCardBodyStyle}
         >
-          <ProList<ConfigurationMcpServer>
-            rowKey="name"
-            search={false}
-            split
-            dataSource={servers}
-            locale={{
-              emptyText: (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="No MCP servers configured."
-                />
-              ),
-            }}
-            metas={{
-              title: {
-                dataIndex: "name",
-                render: (_, record) => (
-                  <Space wrap>
-                    <Button
-                      type={
-                        !isNewMcpDraft && selectedMcpServerName === record.name
-                          ? "primary"
-                          : "link"
-                      }
-                      onClick={() => onSelectServer(record.name)}
+          <div style={fixedListViewportStyle}>
+            <ProList<ConfigurationMcpServer>
+              rowKey="name"
+              search={false}
+              split
+              dataSource={servers}
+              locale={{
+                emptyText: (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="No MCP servers configured."
+                  />
+                ),
+              }}
+              metas={{
+                title: {
+                  dataIndex: "name",
+                  render: (_, record) => (
+                    <Space wrap>
+                      <Button
+                        type={
+                          !isNewMcpDraft && selectedMcpServerName === record.name
+                            ? "primary"
+                            : "link"
+                        }
+                        onClick={() => onSelectServer(record.name)}
+                      >
+                        {record.name}
+                      </Button>
+                      <Tag>{record.timeoutMs} ms</Tag>
+                    </Space>
+                  ),
+                },
+                description: {
+                  render: (_, record) => (
+                    <Space
+                      direction="vertical"
+                      size={4}
+                      style={{ width: "100%" }}
                     >
-                      {record.name}
-                    </Button>
-                    <Tag>{record.timeoutMs} ms</Tag>
-                  </Space>
-                ),
-              },
-              description: {
-                render: (_, record) => (
-                  <Space
-                    direction="vertical"
-                    size={4}
-                    style={{ width: "100%" }}
-                  >
-                    <Typography.Text code>{record.command}</Typography.Text>
-                    <Typography.Text type="secondary">
-                      args: {record.args.length} · env:{" "}
-                      {Object.keys(record.env).length}
-                    </Typography.Text>
-                  </Space>
-                ),
-              },
-            }}
-          />
+                      <Typography.Text code>{record.command}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        args: {record.args.length} · env:{" "}
+                        {Object.keys(record.env).length}
+                      </Typography.Text>
+                    </Space>
+                  ),
+                },
+              }}
+            />
+          </div>
         </ProCard>
       </Col>
       <Col xs={24} lg={14}>
