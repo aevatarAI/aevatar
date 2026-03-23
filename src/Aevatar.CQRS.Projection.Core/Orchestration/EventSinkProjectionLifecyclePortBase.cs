@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using Aevatar.CQRS.Core.Abstractions.Streaming;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 
@@ -7,6 +6,7 @@ namespace Aevatar.CQRS.Projection.Core.Orchestration;
 
 /// <summary>
 /// Event-sink specialized lifecycle port base with runtime lease resolution hook.
+/// Sink subscriptions are process-local transient I/O handles (not business fact state).
 /// </summary>
 public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRuntimeLease, TEvent>
     : IEventSinkProjectionLifecyclePort<TLeaseContract, TEvent>
@@ -18,7 +18,10 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
     private readonly IProjectionScopeActivationService<TRuntimeLease> _activationService;
     private readonly IProjectionScopeReleaseService<TRuntimeLease> _releaseService;
     private readonly IProjectionSessionEventHub<TEvent> _sessionEventHub;
-    private readonly ConcurrentDictionary<int, IAsyncDisposable> _sinkSubscriptions = new();
+
+    // Keyed by object identity (ReferenceEqualityComparer) to avoid RuntimeHelpers.GetHashCode collisions.
+    private readonly ConcurrentDictionary<object, IAsyncDisposable> _sinkSubscriptions =
+        new(ReferenceEqualityComparer.Instance);
 
     protected EventSinkProjectionLifecyclePortBase(
         Func<bool> projectionEnabledAccessor,
@@ -69,9 +72,8 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
             evt => sink.PushAsync(evt, CancellationToken.None),
             ct).ConfigureAwait(false);
 
-        var sinkKey = RuntimeHelpers.GetHashCode(sink);
-        var previous = _sinkSubscriptions.TryGetValue(sinkKey, out var existing) ? existing : null;
-        _sinkSubscriptions[sinkKey] = subscription;
+        var previous = _sinkSubscriptions.TryGetValue(sink, out var existing) ? existing : null;
+        _sinkSubscriptions[sink] = subscription;
         if (previous != null)
             await previous.DisposeAsync().ConfigureAwait(false);
     }
@@ -88,8 +90,7 @@ public abstract class EventSinkProjectionLifecyclePortBase<TLeaseContract, TRunt
         if (!ProjectionEnabled)
             return;
 
-        var sinkKey = RuntimeHelpers.GetHashCode(sink);
-        if (_sinkSubscriptions.TryRemove(sinkKey, out var subscription))
+        if (_sinkSubscriptions.TryRemove(sink, out var subscription))
             await subscription.DisposeAsync().ConfigureAwait(false);
     }
 
