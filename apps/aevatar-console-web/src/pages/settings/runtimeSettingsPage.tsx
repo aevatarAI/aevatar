@@ -4,7 +4,7 @@ import {
   ProDescriptions,
 } from "@ant-design/pro-components";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Grid, message, Space, Tabs } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { configurationApi } from "@/shared/api/configurationApi";

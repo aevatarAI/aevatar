@@ -40,6 +40,63 @@ public sealed class ChatQueryEndpointsTests
     }
 
     [Fact]
+    public async Task ListPrimitives_ShouldComposePrimitiveDescriptorsFromCapabilitiesAndCatalog()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            Capabilities = new WorkflowCapabilitiesDocument
+            {
+                Primitives =
+                [
+                    new WorkflowPrimitiveCapability
+                    {
+                        Name = "workflow_call",
+                        Aliases = ["workflow_call", "sub_workflow"],
+                        Category = "control-flow",
+                        Description = "Invoke a sub workflow.",
+                        Parameters =
+                        [
+                            new WorkflowPrimitiveParameterCapability
+                            {
+                                Name = "workflow",
+                                Type = "string",
+                                Required = true,
+                                Description = "Workflow name.",
+                                Default = string.Empty,
+                                Enum = ["child", "parent", "child"],
+                            },
+                        ],
+                    },
+                ],
+            },
+            WorkflowCatalog =
+            [
+                new WorkflowCatalogItem
+                {
+                    Name = "child_example",
+                    IsPrimitiveExample = true,
+                    Primitives = ["workflow_call"],
+                },
+                new WorkflowCatalogItem
+                {
+                    Name = "ignored_non_example",
+                    IsPrimitiveExample = false,
+                    Primitives = ["workflow_call"],
+                },
+            ],
+        };
+
+        var result = ChatQueryEndpoints.ListPrimitives(service);
+
+        var body = await ExecuteAsync(result);
+        body.Should().Contain("workflow_call");
+        body.Should().Contain("sub_workflow");
+        body.Should().Contain("child_example");
+        body.Should().NotContain("ignored_non_example");
+        service.Calls.Should().ContainInOrder("GetCapabilities", "ListWorkflowCatalog");
+    }
+
+    [Fact]
     public async Task GetActorSnapshot_ShouldReturnNotFound_WhenSnapshotMissing()
     {
         var service = new FakeWorkflowExecutionQueryApplicationService();
@@ -92,6 +149,40 @@ public sealed class ChatQueryEndpointsTests
         service.Calls.Should().ContainInOrder(
             "ListActorGraphEdges:actor-1:12:Outbound:child,sibling",
             "GetActorGraphSubgraph:actor-1:3:8:Both:child");
+    }
+
+    [Fact]
+    public async Task GetActorGraphEnriched_ShouldCombineSnapshotAndSubgraph()
+    {
+        var service = new FakeWorkflowExecutionQueryApplicationService
+        {
+            Snapshot = new WorkflowActorSnapshot
+            {
+                ActorId = "actor-1",
+                WorkflowName = "direct",
+            },
+            GraphSubgraph = new WorkflowActorGraphSubgraph
+            {
+                RootNodeId = "actor-1",
+            },
+        };
+
+        var result = await ChatQueryEndpoints.GetActorGraphEnriched(
+            "actor-1",
+            service,
+            depth: 4,
+            take: 9,
+            direction: " inbound ",
+            edgeTypes: ["child", "child", ""],
+            ct: CancellationToken.None);
+
+        var body = await ExecuteAsync(result);
+        body.Should().Contain("snapshot");
+        body.Should().Contain("subgraph");
+        body.Should().Contain("actor-1");
+        service.Calls.Should().ContainInOrder(
+            "GetActorSnapshot:actor-1",
+            "GetActorGraphSubgraph:actor-1:4:9:Inbound:child");
     }
 
     [Fact]
