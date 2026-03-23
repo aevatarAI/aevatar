@@ -54,7 +54,6 @@ public sealed class AppHostFixture : IAsyncLifetime
             {
                 Port = port,
                 NoBrowser = true,
-                ApiBaseUrl = BaseUrl,
                 StartedSignal = startedSignal,
             },
             _shutdownCts.Token));
