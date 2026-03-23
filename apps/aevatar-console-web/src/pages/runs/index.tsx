@@ -1,10 +1,9 @@
 import {
   connectChatWebSocket,
   parseSSEStream,
-  type RunStatus,
   useHumanInteraction,
   useRunSession,
-} from '@aevatar-react-sdk/agui';
+} from "@aevatar-react-sdk/agui";
 import {
   AGUIEventType,
   type ChatRunRequest,
@@ -12,12 +11,8 @@ import {
   CustomEventName,
   type WorkflowResumeRequest,
   type WorkflowSignalRequest,
-} from '@aevatar-react-sdk/types';
-import type {
-  ProColumns,
-  ProDescriptionsItemProps,
-  ProFormInstance,
-} from '@ant-design/pro-components';
+} from "@aevatar-react-sdk/types";
+import type { ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
@@ -29,9 +24,9 @@ import {
   ProFormTextArea,
   ProList,
   ProTable,
-} from '@ant-design/pro-components';
-import { useQuery } from '@tanstack/react-query';
-import { history } from '@umijs/max';
+} from "@ant-design/pro-components";
+import { useQuery } from "@tanstack/react-query";
+import { history } from "@umijs/max";
 import {
   Alert,
   Badge,
@@ -47,33 +42,35 @@ import {
   Tabs,
   Tag,
   Typography,
-} from 'antd';
+} from "antd";
 import React, {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-} from 'react';
+} from "react";
 import {
   getLatestCustomEventData,
   parseStepRequestData,
   parseWaitingSignalData,
-} from '@/shared/agui/customEventData';
-import { consoleApi } from '@/shared/api/consoleApi';
-import { formatDateTime } from '@/shared/datetime/dateTime';
-import { loadConsolePreferences } from '@/shared/preferences/consolePreferences';
+} from "@/shared/agui/customEventData";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
+import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { formatDateTime } from "@/shared/datetime/dateTime";
+import { loadConsolePreferences } from "@/shared/preferences/consolePreferences";
 import {
   clearRecentRuns,
   loadRecentRuns,
   type RecentRunEntry,
   saveRecentRun,
-} from '@/shared/runs/recentRuns';
+} from "@/shared/runs/recentRuns";
 import {
   buildWorkflowCatalogOptions,
   findWorkflowCatalogItem,
   listVisibleWorkflowCatalogItems,
-} from '@/shared/workflows/catalogVisibility';
+} from "@/shared/workflows/catalogVisibility";
 import {
   cardStackStyle,
   compactTableCardProps,
@@ -81,650 +78,102 @@ import {
   moduleCardProps,
   scrollPanelStyle,
   stretchColumnStyle,
-} from '@/shared/ui/proComponents';
+} from "@/shared/ui/proComponents";
 import {
   buildEventRows,
   isHumanApprovalSuspension,
   type RunEventRow,
   type RunTransport,
-} from './runEventPresentation';
-
-type RunFormValues = {
-  prompt: string;
-  workflow?: string;
-  actorId?: string;
-  transport: RunTransport;
-};
-
-type ResumeFormValues = {
-  approved: boolean;
-  userInput?: string;
-};
-
-type SignalFormValues = {
-  payload?: string;
-};
-
-type RunPreset = {
-  key: string;
-  title: string;
-  workflow: string;
-  prompt: string;
-  description: string;
-  tags: string[];
-};
-
-type RunStatusValue = RunStatus | 'unknown';
-type RunFocusStatus =
-  | 'idle'
-  | 'running'
-  | 'human_input'
-  | 'human_approval'
-  | 'wait_signal'
-  | 'finished'
-  | 'error';
-
-type RecentRunRow = RecentRunEntry & {
-  key: string;
-  statusValue: RunStatusValue;
-};
-
-type RecentRunTableRow = RecentRunRow & {
-  onRestore?: () => void;
-  onOpenActor?: () => void;
-};
-
-type RunSummaryRecord = {
-  status: RunStatus;
-  transport: RunTransport;
-  workflowName: string;
-  actorId: string;
-  commandId: string;
-  runId: string;
-  focusStatus: RunFocusStatus;
-  focusLabel: string;
-  lastEventAt: string;
-  messageCount: number;
-  eventCount: number;
-  activeSteps: string[];
-};
-
-type SelectedWorkflowRecord = {
-  workflowName: string;
-  groupLabel: string;
-  sourceLabel: string;
-  llmStatus: 'processing' | 'success';
-  description: string;
-};
-
-type WaitingSignalRecord = {
-  signalName: string;
-  stepId: string;
-  runId: string;
-  prompt: string;
-};
-
-type HumanInputRecord = {
-  stepId: string;
-  runId: string;
-  suspensionType: string;
-  prompt: string;
-  timeoutSeconds: number;
-};
-
-type ConsoleViewKey = 'dual' | 'messages' | 'events';
-
-const composerRailMinWidth = 320;
-const composerRailDefaultWidth = 360;
-const composerRailMaxWidth = 560;
-const composerRailKeyboardStep = 24;
-const monitorWorkbenchMinWidth = 520;
-
-const builtInPresets: RunPreset[] = [
-  {
-    key: 'direct',
-    title: 'Direct chat',
-    workflow: 'direct',
-    prompt:
-      'Summarize what this workflow can do and produce a concise execution result.',
-    description:
-      'Baseline direct workflow for quick validation of the chat stream.',
-    tags: ['baseline', 'llm'],
-  },
-  {
-    key: 'human-input',
-    title: 'Human input triage',
-    workflow: 'human_input_manual_triage',
-    prompt:
-      'A production incident needs manual classification before the workflow can continue.',
-    description: 'Use this to verify human input prompts and resume flow.',
-    tags: ['human_input', 'resume'],
-  },
-  {
-    key: 'human-approval',
-    title: 'Human approval gate',
-    workflow: 'human_approval_release_gate',
-    prompt:
-      'Prepare a release summary that requires explicit human approval before rollout.',
-    description: 'Use this to verify approval flow and moderation checkpoints.',
-    tags: ['human_approval', 'approval'],
-  },
-  {
-    key: 'wait-signal',
-    title: 'Wait signal',
-    workflow: 'wait_signal_manual_success',
-    prompt: 'Wait for an external readiness signal before completing the run.',
-    description:
-      'Use this to verify waiting_signal and manual signal delivery.',
-    tags: ['wait_signal', 'signal'],
-  },
-];
-
-const runStatusValueEnum = {
-  idle: { text: 'Idle', status: 'Default' },
-  running: { text: 'Running', status: 'Processing' },
-  finished: { text: 'Finished', status: 'Success' },
-  error: { text: 'Error', status: 'Error' },
-  unknown: { text: 'Unknown', status: 'Default' },
-} as const;
-
-const transportValueEnum = {
-  sse: { text: 'SSE', status: 'Processing' },
-  ws: { text: 'WebSocket', status: 'Success' },
-} as const;
-
-const runFocusValueEnum = {
-  idle: { text: 'Idle', status: 'Default' },
-  running: { text: 'Running', status: 'Processing' },
-  human_input: { text: 'Human input', status: 'Warning' },
-  human_approval: { text: 'Approval', status: 'Warning' },
-  wait_signal: { text: 'Wait signal', status: 'Warning' },
-  finished: { text: 'Finished', status: 'Success' },
-  error: { text: 'Error', status: 'Error' },
-} as const;
-
-const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
-  {
-    title: 'Transport',
-    dataIndex: 'transport',
-    valueType: 'status' as any,
-    valueEnum: transportValueEnum,
-  },
-  {
-    title: 'Workflow',
-    dataIndex: 'workflowName',
-    render: (_, record) => record.workflowName || 'n/a',
-  },
-  {
-    title: 'Actor',
-    dataIndex: 'actorId',
-    render: (_, record) =>
-      record.actorId ? (
-        <Typography.Text copyable>{record.actorId}</Typography.Text>
-      ) : (
-        'n/a'
-      ),
-  },
-  {
-    title: 'Command',
-    dataIndex: 'commandId',
-    render: (_, record) =>
-      record.commandId ? (
-        <Typography.Text copyable>{record.commandId}</Typography.Text>
-      ) : (
-        'n/a'
-      ),
-  },
-  {
-    title: 'RunId',
-    dataIndex: 'runId',
-    render: (_, record) =>
-      record.runId ? (
-        <Typography.Text copyable>{record.runId}</Typography.Text>
-      ) : (
-        'n/a'
-      ),
-  },
-  {
-    title: 'Current focus',
-    dataIndex: 'focusStatus',
-    valueType: 'status' as any,
-    valueEnum: runFocusValueEnum,
-    render: (_, record) => <Tag color="processing">{record.focusLabel}</Tag>,
-  },
-  {
-    title: 'Last event',
-    dataIndex: 'lastEventAt',
-    valueType: 'dateTime',
-    render: (_, record) => record.lastEventAt || 'n/a',
-  },
-  {
-    title: 'Active steps',
-    dataIndex: 'activeSteps',
-    render: (_, record) =>
-      record.activeSteps.length > 0 ? (
-        <Space wrap size={[4, 4]}>
-          {record.activeSteps.map((step) => (
-            <Tag key={step} color="processing">
-              {step}
-            </Tag>
-          ))}
-        </Space>
-      ) : (
-        <Tag>None</Tag>
-      ),
-  },
-];
-
-const humanInputColumns: ProDescriptionsItemProps<HumanInputRecord>[] = [
-  {
-    title: 'Step',
-    dataIndex: 'stepId',
-    render: (_, record) => record.stepId || 'n/a',
-  },
-  {
-    title: 'Run',
-    dataIndex: 'runId',
-    render: (_, record) => record.runId || 'n/a',
-  },
-  {
-    title: 'Suspension',
-    dataIndex: 'suspensionType',
-    render: (_, record) => record.suspensionType || 'n/a',
-  },
-  {
-    title: 'Timeout',
-    dataIndex: 'timeoutSeconds',
-    valueType: 'digit',
-  },
-  {
-    title: 'Prompt',
-    dataIndex: 'prompt',
-    render: (_, record) => record.prompt || 'n/a',
-  },
-];
-
-const workflowDescriptionColumns: ProDescriptionsItemProps<SelectedWorkflowRecord>[] =
-  [
-    {
-      title: 'Workflow',
-      dataIndex: 'workflowName',
-      render: (_, record) => (
-        <Tag color="processing">{record.workflowName}</Tag>
-      ),
-    },
-    {
-      title: 'Group',
-      dataIndex: 'groupLabel',
-    },
-    {
-      title: 'Source',
-      dataIndex: 'sourceLabel',
-    },
-    {
-      title: 'LLM',
-      dataIndex: 'llmStatus',
-      valueType: 'status' as any,
-      valueEnum: {
-        processing: { text: 'Required', status: 'Processing' },
-        success: { text: 'Optional', status: 'Success' },
-      },
-    },
-    {
-      title: 'Description',
-      dataIndex: 'description',
-    },
-  ];
-
-const waitingSignalColumns: ProDescriptionsItemProps<WaitingSignalRecord>[] = [
-  {
-    title: 'Signal name',
-    dataIndex: 'signalName',
-  },
-  {
-    title: 'Step',
-    dataIndex: 'stepId',
-    render: (_, record) => record.stepId || 'n/a',
-  },
-  {
-    title: 'Run',
-    dataIndex: 'runId',
-    render: (_, record) => record.runId || 'n/a',
-  },
-  {
-    title: 'Prompt',
-    dataIndex: 'prompt',
-    render: (_, record) => record.prompt || 'n/a',
-  },
-];
-
-const runsWorkbenchShellStyle = {
-  background:
-    'linear-gradient(180deg, rgba(15, 23, 42, 0.03) 0%, rgba(15, 23, 42, 0.01) 100%)',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  height: 'calc(100vh - 64px)',
-  overflow: 'hidden',
-  padding: 12,
-  position: 'relative',
-} as const;
-
-const runsWorkbenchHeaderStyle = {
-  alignItems: 'center',
-  backdropFilter: 'blur(8px)',
-  background: 'var(--ant-color-bg-container)',
-  border: '1px solid var(--ant-color-border-secondary)',
-  borderRadius: 14,
-  display: 'flex',
-  flex: '0 0 auto',
-  justifyContent: 'space-between',
-  minHeight: 52,
-  padding: '0 16px',
-  position: 'sticky',
-  top: 0,
-  zIndex: 6,
-} as const;
-
-const runsWorkbenchMainStyle = {
-  display: 'flex',
-  flex: 1,
-  minHeight: 0,
-  overflow: 'hidden',
-} as const;
-
-const runsWorkbenchComposerRailStyle = {
-  display: 'flex',
-  minWidth: 0,
-  overflow: 'hidden',
-} as const;
-
-const runsWorkbenchResizeRailStyle = {
-  alignItems: 'stretch',
-  background: 'transparent',
-  border: 'none',
-  cursor: 'col-resize',
-  display: 'flex',
-  flex: '0 0 20px',
-  justifyContent: 'center',
-  outline: 'none',
-  padding: '0 6px',
-  userSelect: 'none',
-} as const;
-
-const runsWorkbenchResizeHandleStyle = {
-  background: 'var(--ant-color-border-secondary)',
-  borderRadius: 999,
-  transition: 'background-color 0.2s ease, transform 0.2s ease',
-  width: 4,
-} as const;
-
-const runsWorkbenchMonitorStyle = {
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column',
-  gap: 12,
-  minWidth: 0,
-  overflow: 'hidden',
-} as const;
-
-const workbenchCardStyle = {
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column',
-  minHeight: 0,
-} as const;
-
-const workbenchCardBodyStyle = {
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column',
-  minHeight: 0,
-  overflow: 'hidden',
-  padding: 12,
-} as const;
-
-const workbenchScrollableBodyStyle = {
-  flex: 1,
-  minHeight: 0,
-  overflowX: 'hidden',
-  overflowY: 'auto',
-  paddingRight: 4,
-} as const;
-
-const workbenchHudCardStyle = {
-  ...workbenchCardStyle,
-  flex: '0 0 auto',
-} as const;
-
-const workbenchHudBodyStyle = {
-  ...workbenchCardBodyStyle,
-  overflow: 'visible',
-} as const;
-
-const workbenchOverviewGridStyle = {
-  flex: 1,
-  minHeight: 0,
-} as const;
-
-const workbenchOverviewCardStyle = {
-  ...workbenchCardStyle,
-  minHeight: 0,
-} as const;
-
-const workbenchConsoleCardStyle = {
-  ...workbenchCardStyle,
-  flex: '0 0 calc((100vh - 64px) * 0.3)',
-  minHeight: 260,
-} as const;
-
-const workbenchConsoleBodyStyle = {
-  ...workbenchCardBodyStyle,
-  overflow: 'hidden',
-} as const;
-
-const workbenchConsoleViewportStyle = {
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column',
-  minHeight: 0,
-} as const;
-
-const workbenchConsoleTabPanelStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  height: 'calc((100vh - 64px) * 0.3 - 120px)',
-  minHeight: 180,
-} as const;
-
-const workbenchConsoleSurfaceStyle = {
-  background:
-    'linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%)',
-  border: '1px solid var(--ant-color-border-secondary)',
-  borderRadius: 12,
-  color: 'var(--ant-color-text)',
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column',
-  fontFamily:
-    "'Monaco', 'Consolas', 'SFMono-Regular', 'Liberation Mono', monospace",
-  minHeight: 0,
-  overflow: 'hidden',
-} as const;
-
-const workbenchConsoleScrollStyle = {
-  flex: 1,
-  minHeight: 0,
-  overflowX: 'hidden',
-  overflowY: 'auto',
-  padding: 12,
-} as const;
-
-const workbenchMessageListStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 10,
-} as const;
-
-const workbenchEventHeaderStyle = {
-  borderBottom: '1px solid var(--ant-color-border-secondary)',
-  color: 'var(--ant-color-text-secondary)',
-  display: 'grid',
-  fontSize: 12,
-  gap: 12,
-  gridTemplateColumns: '220px 120px minmax(0, 1fr)',
-  padding: '12px 12px 8px',
-} as const;
-
-const workbenchEventRowStyle = {
-  borderBottom: '1px solid rgba(5, 5, 5, 0.06)',
-  display: 'grid',
-  gap: 12,
-  gridTemplateColumns: '220px 120px minmax(0, 1fr)',
-  padding: '10px 12px',
-} as const;
-
-const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
-  {
-    title: 'Workflow',
-    dataIndex: 'workflowName',
-    ellipsis: true,
-  },
-  {
-    title: 'Status',
-    dataIndex: 'statusValue',
-    width: 120,
-    valueType: 'status' as any,
-    valueEnum: runStatusValueEnum,
-  },
-  {
-    title: 'Recorded',
-    dataIndex: 'recordedAt',
-    width: 220,
-    valueType: 'dateTime',
-    render: (_, record) => formatDateTime(record.recordedAt),
-  },
-  {
-    title: 'RunId',
-    dataIndex: 'runId',
-    width: 180,
-    render: (_, record) => record.runId || 'n/a',
-  },
-  {
-    title: 'Preview',
-    dataIndex: 'lastMessagePreview',
-    ellipsis: true,
-    render: (_, record) =>
-      record.lastMessagePreview || record.prompt || 'No preview recorded.',
-  },
-  {
-    title: 'Actions',
-    valueType: 'option',
-    width: 160,
-    render: (_, record) => [
-      <Space key={`${record.id}-actions`}>
-        <Button type="link" onClick={() => record.onRestore?.()}>
-          Restore
-        </Button>
-        {record.actorId ? (
-          <Button type="link" onClick={() => record.onOpenActor?.()}>
-            Actor
-          </Button>
-        ) : null}
-      </Space>,
-    ],
-  },
-];
-
-function trimOptional(value?: string | null): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
-}
-
-function formatElapsedDuration(totalMilliseconds: number): string {
-  const totalSeconds = Math.max(0, Math.floor(totalMilliseconds / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return [hours, minutes, seconds]
-      .map((value) => value.toString().padStart(2, '0'))
-      .join(':');
-  }
-
-  return [minutes, seconds]
-    .map((value) => value.toString().padStart(2, '0'))
-    .join(':');
-}
-
-function clampComposerWidth(
-  requestedWidth: number,
-  containerWidth: number,
-): number {
-  const maxWidth = Math.max(
-    composerRailMinWidth,
-    Math.min(composerRailMaxWidth, containerWidth - monitorWorkbenchMinWidth),
-  );
-
-  return Math.min(Math.max(requestedWidth, composerRailMinWidth), maxWidth);
-}
-
-function readInitialRunFormValues(preferredWorkflow: string): RunFormValues {
-  if (typeof window === 'undefined') {
-    return {
-      prompt: '',
-      workflow: preferredWorkflow,
-      actorId: undefined,
-      transport: 'sse',
-    };
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  return {
-    prompt: params.get('prompt') ?? '',
-    workflow: trimOptional(params.get('workflow')) ?? preferredWorkflow,
-    actorId: trimOptional(params.get('actorId')),
-    transport: trimOptional(params.get('transport')) === 'ws' ? 'ws' : 'sse',
-  };
-}
+} from "./runEventPresentation";
+import {
+  builtInPresets,
+  clampComposerWidth,
+  composerRailDefaultWidth,
+  composerRailKeyboardStep,
+  composerRailMinWidth,
+  type ConsoleViewKey,
+  formatElapsedDuration,
+  humanInputColumns,
+  type HumanInputRecord,
+  monitorWorkbenchMinWidth,
+  readInitialRunFormValues,
+  recentRunColumns,
+  type RecentRunRow,
+  type RecentRunTableRow,
+  type ResumeFormValues,
+  type RunFocusStatus,
+  type RunFormValues,
+  type RunPreset,
+  type RunStatusValue,
+  runSummaryColumns,
+  runStatusValueEnum,
+  runsWorkbenchComposerRailStyle,
+  runsWorkbenchHeaderStyle,
+  runsWorkbenchMainStyle,
+  runsWorkbenchMonitorStyle,
+  runsWorkbenchResizeHandleStyle,
+  runsWorkbenchResizeRailStyle,
+  runsWorkbenchShellStyle,
+  type RunSummaryRecord,
+  type SelectedWorkflowRecord,
+  type SignalFormValues,
+  waitingSignalColumns,
+  type WaitingSignalRecord,
+  workbenchCardStyle,
+  workbenchCardBodyStyle,
+  workbenchConsoleBodyStyle,
+  workbenchConsoleCardStyle,
+  workbenchConsoleScrollStyle,
+  workbenchConsoleSurfaceStyle,
+  workbenchConsoleTabPanelStyle,
+  workbenchConsoleViewportStyle,
+  workbenchEventHeaderStyle,
+  workbenchEventRowStyle,
+  workbenchHudBodyStyle,
+  workbenchHudCardStyle,
+  workbenchMessageListStyle,
+  workbenchOverviewCardStyle,
+  workbenchOverviewGridStyle,
+  workbenchScrollableBodyStyle,
+  workflowDescriptionColumns,
+} from "./runWorkbenchConfig";
 
 const RunsPage: React.FC = () => {
   const preferences = useMemo(() => loadConsolePreferences(), []);
   const [messageApi, messageContextHolder] = message.useMessage();
   const initialFormValues = useMemo(
     () => readInitialRunFormValues(preferences.preferredWorkflow),
-    [preferences.preferredWorkflow],
+    [preferences.preferredWorkflow]
   );
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
-    undefined,
+    undefined
   );
   const runsWorkbenchMainRef = useRef<HTMLDivElement | null>(null);
   const resumeFormRef = useRef<ProFormInstance<ResumeFormValues> | undefined>(
-    undefined,
+    undefined
   );
   const signalFormRef = useRef<ProFormInstance<SignalFormValues> | undefined>(
-    undefined,
+    undefined
   );
-  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogSearch, setCatalogSearch] = useState("");
   const [selectedWorkflowName, setSelectedWorkflowName] = useState(
-    initialFormValues.workflow ?? preferences.preferredWorkflow,
+    initialFormValues.workflow ?? preferences.preferredWorkflow
   );
   const [recentRuns, setRecentRuns] = useState<RecentRunEntry[]>(() =>
-    loadRecentRuns(),
+    loadRecentRuns()
   );
   const [selectedTransport, setSelectedTransport] = useState<RunTransport>(
-    initialFormValues.transport,
+    initialFormValues.transport
   );
   const [composerWidth, setComposerWidth] = useState(composerRailDefaultWidth);
   const [activeTransport, setActiveTransport] = useState<RunTransport>(
-    initialFormValues.transport,
+    initialFormValues.transport
   );
-  const [consoleView, setConsoleView] = useState<ConsoleViewKey>('dual');
+  const [consoleView, setConsoleView] = useState<ConsoleViewKey>("dual");
   const [isInteractionDrawerOpen, setIsInteractionDrawerOpen] = useState(false);
   const [isComposerResizing, setIsComposerResizing] = useState(false);
   const [runStartedAtMs, setRunStartedAtMs] = useState<number | undefined>(
-    undefined,
+    undefined
   );
   const [elapsedNow, setElapsedNow] = useState(() => Date.now());
   const [transportIssue, setTransportIssue] = useState<
@@ -734,8 +183,8 @@ const RunsPage: React.FC = () => {
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
 
   const workflowCatalogQuery = useQuery({
-    queryKey: ['workflow-catalog'],
-    queryFn: () => consoleApi.listWorkflowCatalog(),
+    queryKey: ["workflow-catalog"],
+    queryFn: () => runtimeCatalogApi.listWorkflowCatalog(),
   });
 
   const { session, dispatch, reset } = useRunSession();
@@ -758,7 +207,7 @@ const RunsPage: React.FC = () => {
       });
       messageApi.error(code ? `${code}: ${messageText}` : messageText);
     },
-    [dispatch, messageApi],
+    [dispatch, messageApi]
   );
 
   const sendRun = useCallback(
@@ -772,7 +221,7 @@ const RunsPage: React.FC = () => {
       setStreaming(true);
 
       try {
-        if (transport === 'ws') {
+        if (transport === "ws") {
           const { events, close } = connectChatWebSocket(request, {
             onAck: (payload) => {
               setWsAck(payload);
@@ -791,9 +240,9 @@ const RunsPage: React.FC = () => {
           const controller = new AbortController();
           stopActiveRunRef.current = () => controller.abort();
 
-          const response = await consoleApi.streamChat(
+          const response = await runtimeRunsApi.streamChat(
             request,
-            controller.signal,
+            controller.signal
           );
           for await (const event of parseSSEStream(response, {
             signal: controller.signal,
@@ -806,7 +255,7 @@ const RunsPage: React.FC = () => {
           }
         }
       } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') {
+        if (error instanceof Error && error.name === "AbortError") {
           return;
         }
 
@@ -817,7 +266,7 @@ const RunsPage: React.FC = () => {
         setStreaming(false);
       }
     },
-    [abortRun, dispatch, reportTransportError, reset],
+    [abortRun, dispatch, reportTransportError, reset]
   );
 
   const resizeComposerRail = useCallback((clientX: number) => {
@@ -827,7 +276,7 @@ const RunsPage: React.FC = () => {
     }
 
     setComposerWidth(
-      clampComposerWidth(clientX - containerRect.left, containerRect.width),
+      clampComposerWidth(clientX - containerRect.left, containerRect.width)
     );
   }, []);
 
@@ -842,8 +291,8 @@ const RunsPage: React.FC = () => {
   }, []);
 
   const { resume, signal, resuming, signaling } = useHumanInteraction({
-    resume: (request: WorkflowResumeRequest) => consoleApi.resume(request),
-    signal: (request: WorkflowSignalRequest) => consoleApi.signal(request),
+    resume: (request: WorkflowResumeRequest) => runtimeRunsApi.resume(request),
+    signal: (request: WorkflowSignalRequest) => runtimeRunsApi.signal(request),
   });
 
   useEffect(() => () => abortRun(), [abortRun]);
@@ -857,14 +306,14 @@ const RunsPage: React.FC = () => {
       }
 
       setComposerWidth((currentWidth) =>
-        clampComposerWidth(currentWidth, containerRect.width),
+        clampComposerWidth(currentWidth, containerRect.width)
       );
     };
 
     syncComposerWidth();
-    window.addEventListener('resize', syncComposerWidth);
+    window.addEventListener("resize", syncComposerWidth);
     return () => {
-      window.removeEventListener('resize', syncComposerWidth);
+      window.removeEventListener("resize", syncComposerWidth);
     };
   }, []);
 
@@ -880,66 +329,68 @@ const RunsPage: React.FC = () => {
       setIsComposerResizing(false);
     };
 
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
 
     return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
     };
   }, [isComposerResizing, resizeComposerRail]);
 
   const workflowName =
     session.context?.workflowName ??
     wsAck?.workflow ??
-    composerFormRef.current?.getFieldValue('workflow') ??
-    '';
+    composerFormRef.current?.getFieldValue("workflow") ??
+    "";
   const actorId = session.context?.actorId ?? wsAck?.actorId;
-  const commandId = session.context?.commandId ?? wsAck?.commandId ?? '';
+  const commandId = session.context?.commandId ?? wsAck?.commandId ?? "";
 
   const waitingSignal = useMemo(
     () =>
       getLatestCustomEventData(
         session.events,
         CustomEventName.WaitingSignal,
-        parseWaitingSignalData,
+        parseWaitingSignalData
       ),
-    [session.events],
+    [session.events]
   );
   const latestStepRequest = useMemo(
     () =>
       getLatestCustomEventData(
         session.events,
         CustomEventName.StepRequest,
-        parseStepRequestData,
+        parseStepRequestData
       ),
-    [session.events],
+    [session.events]
   );
 
   const actorSnapshotQuery = useQuery({
-    queryKey: ['run-actor-snapshot', actorId],
+    queryKey: ["run-actor-snapshot", actorId],
     enabled: Boolean(actorId),
-    queryFn: () => consoleApi.getActorSnapshot(actorId || ''),
+    queryFn: () => runtimeActorsApi.getActorSnapshot(actorId || ""),
     refetchInterval:
-      actorId && (streaming || session.status === 'running') ? 2_000 : false,
+      actorId && (streaming || session.status === "running") ? 2_000 : false,
   });
 
   const filteredCatalog = useMemo(() => {
     const keyword = catalogSearch.trim().toLowerCase();
-    const items = listVisibleWorkflowCatalogItems(workflowCatalogQuery.data ?? []);
+    const items = listVisibleWorkflowCatalogItems(
+      workflowCatalogQuery.data ?? []
+    );
     if (!keyword) {
       return items;
     }
 
     return items.filter((item) =>
       [item.name, item.description, item.groupLabel, item.category]
-        .join(' ')
+        .join(" ")
         .toLowerCase()
-        .includes(keyword),
+        .includes(keyword)
     );
   }, [catalogSearch, workflowCatalogQuery.data]);
 
@@ -947,16 +398,20 @@ const RunsPage: React.FC = () => {
     const visibleNames = new Set(filteredCatalog.map((item) => item.name));
     return buildWorkflowCatalogOptions(
       workflowCatalogQuery.data ?? [],
-      selectedWorkflowName,
+      selectedWorkflowName
     ).filter(
-      (option) => option.value === selectedWorkflowName || visibleNames.has(option.value),
+      (option) =>
+        option.value === selectedWorkflowName || visibleNames.has(option.value)
     );
   }, [filteredCatalog, selectedWorkflowName, workflowCatalogQuery.data]);
 
   const selectedWorkflowDetails = useMemo(
     () =>
-      findWorkflowCatalogItem(workflowCatalogQuery.data ?? [], selectedWorkflowName),
-    [selectedWorkflowName, workflowCatalogQuery.data],
+      findWorkflowCatalogItem(
+        workflowCatalogQuery.data ?? [],
+        selectedWorkflowName
+      ),
+    [selectedWorkflowName, workflowCatalogQuery.data]
   );
 
   const selectedWorkflowRecord = useMemo<
@@ -971,8 +426,8 @@ const RunsPage: React.FC = () => {
       groupLabel: selectedWorkflowDetails.groupLabel,
       sourceLabel: selectedWorkflowDetails.sourceLabel,
       llmStatus: selectedWorkflowDetails.requiresLlmProvider
-        ? 'processing'
-        : 'success',
+        ? "processing"
+        : "success",
       description: selectedWorkflowDetails.description,
     };
   }, [selectedWorkflowDetails]);
@@ -980,8 +435,8 @@ const RunsPage: React.FC = () => {
   const visiblePresets = useMemo(() => {
     const available = new Set(
       listVisibleWorkflowCatalogItems(workflowCatalogQuery.data ?? []).map(
-        (item) => item.name,
-      ),
+        (item) => item.name
+      )
     );
     return builtInPresets.filter((preset) => available.has(preset.workflow));
   }, [workflowCatalogQuery.data]);
@@ -990,7 +445,7 @@ const RunsPage: React.FC = () => {
     const lastWithContent = [...session.messages]
       .reverse()
       .find((item) => item.content?.trim());
-    return lastWithContent?.content?.trim() ?? '';
+    return lastWithContent?.content?.trim() ?? "";
   }, [session.messages]);
 
   const recentRunRows = useMemo<RecentRunTableRow[]>(
@@ -998,11 +453,11 @@ const RunsPage: React.FC = () => {
       recentRuns.map((entry) => ({
         ...entry,
         key: entry.id,
-        statusValue: ['idle', 'running', 'finished', 'error'].includes(
-          entry.status,
+        statusValue: ["idle", "running", "finished", "error"].includes(
+          entry.status
         )
-          ? (entry.status as RunStatus)
-          : 'unknown',
+          ? (entry.status as RunStatusValue)
+          : "unknown",
         onRestore: () => {
           composerFormRef.current?.setFieldsValue({
             prompt: entry.prompt,
@@ -1015,16 +470,16 @@ const RunsPage: React.FC = () => {
         onOpenActor: entry.actorId
           ? () =>
               history.push(
-                `/actors?actorId=${encodeURIComponent(entry.actorId)}`,
+                `/actors?actorId=${encodeURIComponent(entry.actorId)}`
               )
           : undefined,
       })),
-    [recentRuns, selectedTransport],
+    [recentRuns, selectedTransport]
   );
 
   const eventRows = useMemo<RunEventRow[]>(
     () => buildEventRows(session.events),
-    [session.events],
+    [session.events]
   );
   const waitingSignalRecord = useMemo<WaitingSignalRecord | undefined>(() => {
     if (!waitingSignal) {
@@ -1032,10 +487,10 @@ const RunsPage: React.FC = () => {
     }
 
     return {
-      signalName: waitingSignal.signalName ?? '',
-      stepId: waitingSignal.stepId ?? '',
-      runId: waitingSignal.runId ?? '',
-      prompt: waitingSignal.prompt ?? '',
+      signalName: waitingSignal.signalName ?? "",
+      stepId: waitingSignal.stepId ?? "",
+      runId: waitingSignal.runId ?? "",
+      prompt: waitingSignal.prompt ?? "",
     };
   }, [waitingSignal]);
 
@@ -1046,13 +501,13 @@ const RunsPage: React.FC = () => {
 
     return {
       stepId:
-        session.pendingHumanInput.stepId ?? latestStepRequest?.stepId ?? '',
-      runId: session.pendingHumanInput.runId ?? session.runId ?? '',
+        session.pendingHumanInput.stepId ?? latestStepRequest?.stepId ?? "",
+      runId: session.pendingHumanInput.runId ?? session.runId ?? "",
       suspensionType:
         session.pendingHumanInput.suspensionType ??
         latestStepRequest?.stepType ??
-        '',
-      prompt: session.pendingHumanInput.prompt ?? '',
+        "",
+      prompt: session.pendingHumanInput.prompt ?? "",
       timeoutSeconds: session.pendingHumanInput.timeoutSeconds ?? 0,
     };
   }, [
@@ -1063,76 +518,80 @@ const RunsPage: React.FC = () => {
   ]);
 
   const runFocus = useMemo(() => {
-    if (transportIssue || session.error || session.status === 'error') {
+    if (transportIssue || session.error || session.status === "error") {
       return {
-        status: 'error' as RunFocusStatus,
+        status: "error" as RunFocusStatus,
         label:
-          transportIssue?.message || session.error?.message || 'Run failed',
-        alertType: 'error' as const,
-        title: transportIssue?.code ?? session.error?.code ?? 'Run error',
+          transportIssue?.message || session.error?.message || "Run failed",
+        alertType: "error" as const,
+        title: transportIssue?.code ?? session.error?.code ?? "Run error",
         description:
           transportIssue?.message ||
           session.error?.message ||
-          'The run ended with an error.',
+          "The run ended with an error.",
       };
     }
 
     if (humanInputRecord) {
       const approval = isHumanApprovalSuspension(
-        humanInputRecord.suspensionType,
+        humanInputRecord.suspensionType
       );
       return {
         status: approval
-          ? ('human_approval' as const)
-          : ('human_input' as const),
+          ? ("human_approval" as const)
+          : ("human_input" as const),
         label: approval
-          ? `Awaiting approval on ${humanInputRecord.stepId || 'current step'}`
-          : `Awaiting human input on ${humanInputRecord.stepId || 'current step'}`,
-        alertType: 'warning' as const,
-        title: approval ? 'Approval required' : 'Human input required',
+          ? `Awaiting approval on ${humanInputRecord.stepId || "current step"}`
+          : `Awaiting human input on ${
+              humanInputRecord.stepId || "current step"
+            }`,
+        alertType: "warning" as const,
+        title: approval ? "Approval required" : "Human input required",
         description:
-          humanInputRecord.prompt || 'Operator action is required to continue.',
+          humanInputRecord.prompt || "Operator action is required to continue.",
       };
     }
 
     if (waitingSignalRecord) {
       return {
-        status: 'wait_signal' as const,
-        label: `Waiting for signal ${waitingSignalRecord.signalName || 'unknown'}`,
-        alertType: 'warning' as const,
-        title: 'Waiting for external signal',
+        status: "wait_signal" as const,
+        label: `Waiting for signal ${
+          waitingSignalRecord.signalName || "unknown"
+        }`,
+        alertType: "warning" as const,
+        title: "Waiting for external signal",
         description:
           waitingSignalRecord.prompt ||
-          'The workflow is paused until the expected signal arrives.',
+          "The workflow is paused until the expected signal arrives.",
       };
     }
 
-    if (streaming || session.status === 'running') {
+    if (streaming || session.status === "running") {
       return {
-        status: 'running' as const,
+        status: "running" as const,
         label: `Streaming over ${activeTransport.toUpperCase()}`,
-        alertType: 'info' as const,
-        title: 'Run in progress',
-        description: 'Messages and events are still arriving from the backend.',
+        alertType: "info" as const,
+        title: "Run in progress",
+        description: "Messages and events are still arriving from the backend.",
       };
     }
 
-    if (session.status === 'finished') {
+    if (session.status === "finished") {
       return {
-        status: 'finished' as const,
-        label: 'Run completed',
-        alertType: 'success' as const,
-        title: 'Run finished',
-        description: 'The backend reported a completed run.',
+        status: "finished" as const,
+        label: "Run completed",
+        alertType: "success" as const,
+        title: "Run finished",
+        description: "The backend reported a completed run.",
       };
     }
 
     return {
-      status: 'idle' as const,
-      label: 'Ready to start a run',
-      alertType: 'info' as const,
-      title: 'Idle',
-      description: 'Compose a prompt and start a workflow run.',
+      status: "idle" as const,
+      label: "Ready to start a run",
+      alertType: "info" as const,
+      title: "Idle",
+      description: "Compose a prompt and start a workflow run.",
     };
   }, [
     activeTransport,
@@ -1145,15 +604,15 @@ const RunsPage: React.FC = () => {
   ]);
 
   const hasPendingInteraction = Boolean(
-    humanInputRecord || waitingSignalRecord,
+    humanInputRecord || waitingSignalRecord
   );
   const runStatusText =
     runStatusValueEnum[session.status]?.text ?? session.status;
   const isRunLive =
     streaming ||
-    session.status === 'running' ||
+    session.status === "running" ||
     hasPendingInteraction ||
-    runFocus.status === 'wait_signal';
+    runFocus.status === "wait_signal";
 
   useEffect(() => {
     if (hasPendingInteraction) {
@@ -1185,11 +644,11 @@ const RunsPage: React.FC = () => {
 
   const elapsedLabel = runStartedAtMs
     ? formatElapsedDuration(elapsedNow - runStartedAtMs)
-    : '00:00';
+    : "00:00";
 
   const lastEventAt = useMemo(() => {
     const latest = session.events[session.events.length - 1];
-    return formatDateTime(latest?.timestamp, '');
+    return formatDateTime(latest?.timestamp, "");
   }, [session.events]);
 
   const runSummaryRecord = useMemo<RunSummaryRecord>(
@@ -1197,9 +656,9 @@ const RunsPage: React.FC = () => {
       status: session.status,
       transport: activeTransport,
       workflowName,
-      actorId: actorId ?? '',
+      actorId: actorId ?? "",
       commandId,
-      runId: session.runId ?? '',
+      runId: session.runId ?? "",
       focusStatus: runFocus.status,
       focusLabel: runFocus.label,
       lastEventAt,
@@ -1220,15 +679,15 @@ const RunsPage: React.FC = () => {
       session.runId,
       session.status,
       workflowName,
-    ],
+    ]
   );
 
   useEffect(() => {
-    const prompt = composerFormRef.current?.getFieldValue('prompt') ?? '';
+    const prompt = composerFormRef.current?.getFieldValue("prompt") ?? "";
     const candidateId =
       commandId ??
       session.runId ??
-      (actorId && workflowName ? `${workflowName}:${actorId}` : '');
+      (actorId && workflowName ? `${workflowName}:${actorId}` : "");
 
     if (!candidateId || (!workflowName && !prompt)) {
       return;
@@ -1239,12 +698,12 @@ const RunsPage: React.FC = () => {
         id: candidateId,
         workflowName,
         prompt,
-        actorId: actorId ?? '',
+        actorId: actorId ?? "",
         commandId,
-        runId: session.runId ?? '',
+        runId: session.runId ?? "",
         status: session.status,
         lastMessagePreview: latestMessagePreview,
-      }),
+      })
     );
   }, [
     actorId,
@@ -1259,9 +718,9 @@ const RunsPage: React.FC = () => {
     <div style={workbenchConsoleSurfaceStyle}>
       <div
         style={{
-          borderBottom: '1px solid var(--ant-color-border-secondary)',
-          color: 'var(--ant-color-text-secondary)',
-          padding: '10px 12px',
+          borderBottom: "1px solid var(--ant-color-border-secondary)",
+          color: "var(--ant-color-text-secondary)",
+          padding: "10px 12px",
         }}
       >
         Message stream
@@ -1273,55 +732,55 @@ const RunsPage: React.FC = () => {
               <div
                 key={record.messageId}
                 style={{
-                  alignSelf: record.role === 'user' ? 'flex-end' : 'flex-start',
+                  alignSelf: record.role === "user" ? "flex-end" : "flex-start",
                   background:
-                    record.role === 'user'
-                      ? 'rgba(22, 119, 255, 0.10)'
-                      : 'rgba(15, 23, 42, 0.04)',
+                    record.role === "user"
+                      ? "rgba(22, 119, 255, 0.10)"
+                      : "rgba(15, 23, 42, 0.04)",
                   border:
                     record.complete === false
-                      ? '1px solid rgba(22, 119, 255, 0.28)'
-                      : '1px solid var(--ant-color-border-secondary)',
+                      ? "1px solid rgba(22, 119, 255, 0.28)"
+                      : "1px solid var(--ant-color-border-secondary)",
                   borderRadius: 12,
-                  maxWidth: '88%',
+                  maxWidth: "88%",
                   padding: 12,
                 }}
               >
-                <Space split={<Divider type="vertical" />} size={8}>
+                <Space separator={<Divider orientation="vertical" />} size={8}>
                   <Typography.Text
                     style={{
-                      color: 'var(--ant-color-text)',
-                      fontFamily: 'inherit',
+                      color: "var(--ant-color-text)",
+                      fontFamily: "inherit",
                     }}
                   >
                     {record.role}
                   </Typography.Text>
                   <Typography.Text
                     style={{
-                      color: 'var(--ant-color-text-secondary)',
-                      fontFamily: 'inherit',
+                      color: "var(--ant-color-text-secondary)",
+                      fontFamily: "inherit",
                     }}
                   >
                     {record.messageId}
                   </Typography.Text>
                   <Typography.Text
                     style={{
-                      color: 'var(--ant-color-text-secondary)',
-                      fontFamily: 'inherit',
+                      color: "var(--ant-color-text-secondary)",
+                      fontFamily: "inherit",
                     }}
                   >
-                    {record.complete ? 'complete' : 'streaming'}
+                    {record.complete ? "complete" : "streaming"}
                   </Typography.Text>
                 </Space>
                 <Typography.Paragraph
                   style={{
-                    color: 'var(--ant-color-text)',
-                    fontFamily: 'inherit',
-                    margin: '8px 0 0',
-                    whiteSpace: 'pre-wrap',
+                    color: "var(--ant-color-text)",
+                    fontFamily: "inherit",
+                    margin: "8px 0 0",
+                    whiteSpace: "pre-wrap",
                   }}
                 >
-                  {record.content || '(streaming...)'}
+                  {record.content || "(streaming...)"}
                 </Typography.Paragraph>
               </div>
             ))}
@@ -1349,25 +808,25 @@ const RunsPage: React.FC = () => {
             <div key={record.key} style={workbenchEventRowStyle}>
               <Typography.Text
                 style={{
-                  color: 'var(--ant-color-text-secondary)',
-                  fontFamily: 'inherit',
+                  color: "var(--ant-color-text-secondary)",
+                  fontFamily: "inherit",
                 }}
               >
-                {record.timestamp || 'n/a'}
+                {record.timestamp || "n/a"}
               </Typography.Text>
               <Space direction="vertical" size={4}>
                 <Typography.Text
                   style={{
-                    color: 'var(--ant-color-text)',
-                    fontFamily: 'inherit',
+                    color: "var(--ant-color-text)",
+                    fontFamily: "inherit",
                   }}
                 >
                   {record.eventCategory}
                 </Typography.Text>
                 <Typography.Text
                   style={{
-                    color: 'var(--ant-color-text-secondary)',
-                    fontFamily: 'inherit',
+                    color: "var(--ant-color-text-secondary)",
+                    fontFamily: "inherit",
                   }}
                 >
                   {record.eventStatus}
@@ -1376,23 +835,23 @@ const RunsPage: React.FC = () => {
               <div>
                 <Typography.Text
                   style={{
-                    color: 'var(--ant-color-text)',
-                    fontFamily: 'inherit',
+                    color: "var(--ant-color-text)",
+                    fontFamily: "inherit",
                   }}
                 >
                   {record.eventType}
                 </Typography.Text>
                 <Typography.Paragraph
-                  ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}
+                  ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
                   style={{
-                    color: 'var(--ant-color-text-secondary)',
-                    fontFamily: 'inherit',
-                    margin: '6px 0 0',
-                    whiteSpace: 'pre-wrap',
+                    color: "var(--ant-color-text-secondary)",
+                    fontFamily: "inherit",
+                    margin: "6px 0 0",
+                    whiteSpace: "pre-wrap",
                   }}
                 >
                   {record.description}
-                  {record.payloadPreview ? `\n${record.payloadPreview}` : ''}
+                  {record.payloadPreview ? `\n${record.payloadPreview}` : ""}
                 </Typography.Paragraph>
               </div>
             </div>
@@ -1408,26 +867,70 @@ const RunsPage: React.FC = () => {
   );
 
   return (
-    <PageContainer pageHeaderRender={false} style={{ overflow: 'hidden' }}>
+    <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
       {messageContextHolder}
       <div style={runsWorkbenchShellStyle}>
+        <Alert
+          showIcon
+          type="info"
+          title="Runtime run console"
+          description="Drive runtime workflows over /api/chat or /api/ws/chat, monitor the live event stream, and jump into adjacent runtime surfaces directly from the runtime console."
+          action={
+            <Space wrap>
+              <Button onClick={() => history.push("/workflows")}>
+                Open workflow catalog
+              </Button>
+              <Button
+                onClick={() =>
+                  history.push(
+                    actorId
+                      ? `/actors?actorId=${encodeURIComponent(actorId)}`
+                      : "/actors"
+                  )
+                }
+              >
+                Open runtime explorer
+              </Button>
+              <Button
+                onClick={() =>
+                  history.push(
+                    `/observability?workflow=${encodeURIComponent(
+                      workflowName ||
+                        selectedWorkflowName ||
+                        preferences.preferredWorkflow
+                    )}&actorId=${encodeURIComponent(
+                      actorId ?? ""
+                    )}&commandId=${encodeURIComponent(
+                      commandId
+                    )}&runId=${encodeURIComponent(session.runId ?? "")}`
+                  )
+                }
+              >
+                Open observability hub
+              </Button>
+              <Button onClick={() => history.push("/settings/runtime")}>
+                Open runtime settings
+              </Button>
+            </Space>
+          }
+        />
         <div style={runsWorkbenchHeaderStyle}>
-          <Space split={<Divider type="vertical" />} size={16}>
+          <Space separator={<Divider orientation="vertical" />} size={16}>
             <Space size={8}>
               <Badge
                 status={
                   isRunLive
-                    ? 'processing'
-                    : session.status === 'finished'
-                      ? 'success'
-                      : session.status === 'error'
-                        ? 'error'
-                        : 'default'
+                    ? "processing"
+                    : session.status === "finished"
+                    ? "success"
+                    : session.status === "error"
+                    ? "error"
+                    : "default"
                 }
               />
               <Typography.Text strong>Run ID</Typography.Text>
               <Typography.Text code>
-                {session.runId || commandId || 'Not started'}
+                {session.runId || commandId || "Not started"}
               </Typography.Text>
             </Space>
             <Space size={8}>
@@ -1436,16 +939,16 @@ const RunsPage: React.FC = () => {
             </Space>
             <Space size={8}>
               <Typography.Text type="secondary">Workflow</Typography.Text>
-              <Typography.Text>{workflowName || 'n/a'}</Typography.Text>
+              <Typography.Text>{workflowName || "n/a"}</Typography.Text>
             </Space>
           </Space>
-          <Space split={<Divider type="vertical" />} size={16}>
-            <Tag color={activeTransport === 'ws' ? 'success' : 'processing'}>
+          <Space separator={<Divider orientation="vertical" />} size={16}>
+            <Tag color={activeTransport === "ws" ? "success" : "processing"}>
               {activeTransport.toUpperCase()}
             </Tag>
             <Badge
               color="#ff4d4f"
-              count={hasPendingInteraction ? 'Pending' : 0}
+              count={hasPendingInteraction ? "Pending" : 0}
               offset={[-4, 4]}
             >
               <Button onClick={() => setIsInteractionDrawerOpen(true)}>
@@ -1484,8 +987,8 @@ const RunsPage: React.FC = () => {
                 <Tabs
                   items={[
                     {
-                      key: 'compose',
-                      label: 'Compose',
+                      key: "compose",
+                      label: "Compose",
                       children: (
                         <div style={cardStackStyle}>
                           <ProForm<RunFormValues>
@@ -1493,7 +996,7 @@ const RunsPage: React.FC = () => {
                             layout="vertical"
                             initialValues={initialFormValues}
                             onValuesChange={(_, values) => {
-                              setSelectedWorkflowName(values.workflow ?? '');
+                              setSelectedWorkflowName(values.workflow ?? "");
                               if (values.transport) {
                                 setSelectedTransport(values.transport);
                               }
@@ -1505,7 +1008,7 @@ const RunsPage: React.FC = () => {
                                   workflow: values.workflow,
                                   agentId: values.actorId,
                                 },
-                                values.transport,
+                                values.transport
                               );
                               return true;
                             }}
@@ -1529,7 +1032,9 @@ const RunsPage: React.FC = () => {
                                     <Button
                                       onClick={() =>
                                         history.push(
-                                          `/actors?actorId=${encodeURIComponent(actorId)}`,
+                                          `/actors?actorId=${encodeURIComponent(
+                                            actorId
+                                          )}`
                                         )
                                       }
                                     >
@@ -1548,7 +1053,7 @@ const RunsPage: React.FC = () => {
                               rules={[
                                 {
                                   required: true,
-                                  message: 'Prompt is required.',
+                                  message: "Prompt is required.",
                                 },
                               ]}
                             />
@@ -1557,18 +1062,18 @@ const RunsPage: React.FC = () => {
                               label="Transport"
                               options={[
                                 {
-                                  label: 'SSE /api/chat',
-                                  value: 'sse',
+                                  label: "SSE /api/chat",
+                                  value: "sse",
                                 },
                                 {
-                                  label: 'WebSocket /api/ws/chat',
-                                  value: 'ws',
+                                  label: "WebSocket /api/ws/chat",
+                                  value: "ws",
                                 },
                               ]}
                               rules={[
                                 {
                                   required: true,
-                                  message: 'Transport is required.',
+                                  message: "Transport is required.",
                                 },
                               ]}
                               extra="SSE is the default path. Use WebSocket to validate the alternate live transport already exposed by the backend."
@@ -1609,19 +1114,19 @@ const RunsPage: React.FC = () => {
                               <Alert
                                 showIcon
                                 type={
-                                  selectedTransport === 'ws'
-                                    ? 'success'
-                                    : 'info'
+                                  selectedTransport === "ws"
+                                    ? "success"
+                                    : "info"
                                 }
-                                message={
-                                  selectedTransport === 'ws'
-                                    ? 'WebSocket transport selected'
-                                    : 'SSE transport selected'
+                                title={
+                                  selectedTransport === "ws"
+                                    ? "WebSocket transport selected"
+                                    : "SSE transport selected"
                                 }
                                 description={
-                                  selectedTransport === 'ws'
-                                    ? 'The next run will be sent through /api/ws/chat.'
-                                    : 'The next run will be sent through /api/chat.'
+                                  selectedTransport === "ws"
+                                    ? "The next run will be sent through /api/ws/chat."
+                                    : "The next run will be sent through /api/chat."
                                 }
                                 style={{ marginBottom: 16 }}
                               />
@@ -1635,7 +1140,7 @@ const RunsPage: React.FC = () => {
                                   {selectedWorkflowDetails.primitives.map(
                                     (primitive) => (
                                       <Tag key={primitive}>{primitive}</Tag>
-                                    ),
+                                    )
                                   )}
                                 </Space>
                               ) : null}
@@ -1650,7 +1155,7 @@ const RunsPage: React.FC = () => {
                       ),
                     },
                     {
-                      key: 'recent',
+                      key: "recent",
                       label: `Recent (${recentRunRows.length})`,
                       children: (
                         <div style={cardStackStyle}>
@@ -1686,7 +1191,7 @@ const RunsPage: React.FC = () => {
                       ),
                     },
                     {
-                      key: 'presets',
+                      key: "presets",
                       label: `Presets (${visiblePresets.length})`,
                       children: (
                         <div style={scrollPanelStyle}>
@@ -1705,10 +1210,10 @@ const RunsPage: React.FC = () => {
                             }}
                             metas={{
                               title: {
-                                dataIndex: 'title',
+                                dataIndex: "title",
                               },
                               description: {
-                                dataIndex: 'description',
+                                dataIndex: "description",
                               },
                               subTitle: {
                                 render: (_, record) => (
@@ -1736,12 +1241,12 @@ const RunsPage: React.FC = () => {
                                             workflow: record.workflow,
                                             actorId: undefined,
                                             transport: selectedTransport,
-                                          },
+                                          }
                                         );
                                         setSelectedWorkflowName(
-                                          record.workflow,
+                                          record.workflow
                                         );
-                                        setCatalogSearch('');
+                                        setCatalogSearch("");
                                       }}
                                     >
                                       Use preset
@@ -1767,17 +1272,17 @@ const RunsPage: React.FC = () => {
               setComposerWidthWithinBounds(composerRailDefaultWidth)
             }
             onKeyDown={(event) => {
-              if (event.key === 'ArrowLeft') {
+              if (event.key === "ArrowLeft") {
                 event.preventDefault();
                 setComposerWidthWithinBounds(
-                  composerWidth - composerRailKeyboardStep,
+                  composerWidth - composerRailKeyboardStep
                 );
               }
 
-              if (event.key === 'ArrowRight') {
+              if (event.key === "ArrowRight") {
                 event.preventDefault();
                 setComposerWidthWithinBounds(
-                  composerWidth + composerRailKeyboardStep,
+                  composerWidth + composerRailKeyboardStep
                 );
               }
             }}
@@ -1791,9 +1296,9 @@ const RunsPage: React.FC = () => {
               style={{
                 ...runsWorkbenchResizeHandleStyle,
                 background: isComposerResizing
-                  ? 'var(--ant-color-primary)'
-                  : 'var(--ant-color-border-secondary)',
-                transform: isComposerResizing ? 'scaleX(1.15)' : 'scaleX(1)',
+                  ? "var(--ant-color-primary)"
+                  : "var(--ant-color-border-secondary)",
+                transform: isComposerResizing ? "scaleX(1.15)" : "scaleX(1)",
               }}
             />
           </button>
@@ -1813,12 +1318,12 @@ const RunsPage: React.FC = () => {
                         <Badge
                           status={
                             isRunLive
-                              ? 'processing'
-                              : session.status === 'finished'
-                                ? 'success'
-                                : session.status === 'error'
-                                  ? 'error'
-                                  : 'default'
+                              ? "processing"
+                              : session.status === "finished"
+                              ? "success"
+                              : session.status === "error"
+                              ? "error"
+                              : "default"
                           }
                         />
                         <span>Status</span>
@@ -1834,8 +1339,8 @@ const RunsPage: React.FC = () => {
                         <Badge
                           status={
                             session.messages.length > 0
-                              ? 'processing'
-                              : 'default'
+                              ? "processing"
+                              : "default"
                           }
                         />
                         <span>Messages</span>
@@ -1850,7 +1355,7 @@ const RunsPage: React.FC = () => {
                       <Space size={6}>
                         <Badge
                           status={
-                            session.events.length > 0 ? 'processing' : 'default'
+                            session.events.length > 0 ? "processing" : "default"
                           }
                         />
                         <span>Events</span>
@@ -1865,7 +1370,7 @@ const RunsPage: React.FC = () => {
                       <Space size={6}>
                         <Badge
                           status={
-                            session.activeSteps.size > 0 ? 'warning' : 'default'
+                            session.activeSteps.size > 0 ? "warning" : "default"
                           }
                         />
                         <span>Active steps</span>
@@ -1891,7 +1396,7 @@ const RunsPage: React.FC = () => {
                       <Alert
                         showIcon
                         type={runFocus.alertType}
-                        message={runFocus.title}
+                        title={runFocus.title}
                         description={runFocus.description}
                       />
                       <ProDescriptions<RunSummaryRecord>
@@ -1906,8 +1411,8 @@ const RunsPage: React.FC = () => {
                           </Typography.Text>
                           <Typography.Paragraph
                             style={{
-                              margin: '8px 0 0',
-                              whiteSpace: 'pre-wrap',
+                              margin: "8px 0 0",
+                              whiteSpace: "pre-wrap",
                             }}
                           >
                             {latestMessagePreview}
@@ -1919,27 +1424,27 @@ const RunsPage: React.FC = () => {
                           showIcon
                           type={
                             actorSnapshotQuery.data.lastSuccess === false
-                              ? 'error'
-                              : 'success'
+                              ? "error"
+                              : "success"
                           }
-                          message="Latest actor snapshot"
+                          title="Latest actor snapshot"
                           description={
                             <Space direction="vertical" size={4}>
                               <Typography.Paragraph
                                 ellipsis={{
                                   rows: 2,
                                   expandable: true,
-                                  symbol: 'Expand output',
+                                  symbol: "Expand output",
                                 }}
                                 style={{ marginBottom: 0 }}
                               >
-                                Output:{' '}
-                                {actorSnapshotQuery.data.lastOutput || 'n/a'}
+                                Output:{" "}
+                                {actorSnapshotQuery.data.lastOutput || "n/a"}
                               </Typography.Paragraph>
                               <Typography.Text>
-                                Updated:{' '}
+                                Updated:{" "}
                                 {formatDateTime(
-                                  actorSnapshotQuery.data.lastUpdatedAt,
+                                  actorSnapshotQuery.data.lastUpdatedAt
                                 )}
                               </Typography.Text>
                             </Space>
@@ -1950,7 +1455,7 @@ const RunsPage: React.FC = () => {
                         <Alert
                           showIcon
                           type="error"
-                          message={session.error.code ?? 'Run error'}
+                          title={session.error.code ?? "Run error"}
                           description={session.error.message}
                         />
                       ) : null}
@@ -1979,7 +1484,7 @@ const RunsPage: React.FC = () => {
                             {selectedWorkflowDetails.primitives.map(
                               (primitive) => (
                                 <Tag key={primitive}>{primitive}</Tag>
-                              ),
+                              )
                             )}
                           </Space>
                         ) : null}
@@ -2004,7 +1509,7 @@ const RunsPage: React.FC = () => {
           style={workbenchConsoleCardStyle}
           bodyStyle={workbenchConsoleBodyStyle}
           extra={
-            <Space split={<Divider type="vertical" />} size={12}>
+            <Space separator={<Divider orientation="vertical" />} size={12}>
               <Typography.Text type="secondary">
                 {session.messages.length} messages
               </Typography.Text>
@@ -2012,7 +1517,7 @@ const RunsPage: React.FC = () => {
                 {eventRows.length} events
               </Typography.Text>
               <Typography.Text type="secondary">
-                {hasPendingInteraction ? 'interaction pending' : 'monitoring'}
+                {hasPendingInteraction ? "interaction pending" : "monitoring"}
               </Typography.Text>
             </Space>
           }
@@ -2022,8 +1527,8 @@ const RunsPage: React.FC = () => {
               activeKey={consoleView}
               items={[
                 {
-                  key: 'dual',
-                  label: 'Dual stream',
+                  key: "dual",
+                  label: "Dual stream",
                   children: (
                     <div style={workbenchConsoleTabPanelStyle}>
                       <Row gutter={12} style={{ flex: 1, minHeight: 0 }}>
@@ -2038,8 +1543,8 @@ const RunsPage: React.FC = () => {
                   ),
                 },
                 {
-                  key: 'messages',
-                  label: 'Messages',
+                  key: "messages",
+                  label: "Messages",
                   children: (
                     <div style={workbenchConsoleTabPanelStyle}>
                       {messageConsoleView}
@@ -2047,8 +1552,8 @@ const RunsPage: React.FC = () => {
                   ),
                 },
                 {
-                  key: 'events',
-                  label: 'Events',
+                  key: "events",
+                  label: "Events",
                   children: (
                     <div style={workbenchConsoleTabPanelStyle}>
                       {eventConsoleView}
@@ -2065,14 +1570,14 @@ const RunsPage: React.FC = () => {
           destroyOnHidden
           mask={false}
           open={isInteractionDrawerOpen}
-          title={hasPendingInteraction ? 'Pending interaction' : 'Interaction'}
-          width={420}
+          title={hasPendingInteraction ? "Pending interaction" : "Interaction"}
+          size={420}
           onClose={() => setIsInteractionDrawerOpen(false)}
         >
           <div style={cardStackStyle}>
             {humanInputRecord ? (
               <div style={embeddedPanelStyle}>
-                <Space direction="vertical" style={{ width: '100%' }} size={16}>
+                <Space direction="vertical" style={{ width: "100%" }} size={16}>
                   <ProDescriptions<HumanInputRecord>
                     column={1}
                     dataSource={humanInputRecord}
@@ -2082,7 +1587,7 @@ const RunsPage: React.FC = () => {
                     key={`${humanInputRecord.runId}-${humanInputRecord.stepId}`}
                     formRef={resumeFormRef}
                     layout="vertical"
-                    initialValues={{ approved: true, userInput: '' }}
+                    initialValues={{ approved: true, userInput: "" }}
                     onFinish={async (values) => {
                       if (
                         !actorId ||
@@ -2101,10 +1606,10 @@ const RunsPage: React.FC = () => {
                         commandId,
                       });
 
-                      messageApi.success('Resume request accepted.');
+                      messageApi.success("Resume request accepted.");
                       resumeFormRef.current?.setFieldsValue({
                         approved: true,
-                        userInput: '',
+                        userInput: "",
                       });
                       return true;
                     }}
@@ -2126,10 +1631,10 @@ const RunsPage: React.FC = () => {
                       name="approved"
                       label={
                         isHumanApprovalSuspension(
-                          humanInputRecord.suspensionType,
+                          humanInputRecord.suspensionType
                         )
-                          ? 'Approved'
-                          : 'Continue run'
+                          ? "Approved"
+                          : "Continue run"
                       }
                     />
                     <ProFormTextArea
@@ -2145,7 +1650,7 @@ const RunsPage: React.FC = () => {
 
             {waitingSignalRecord ? (
               <div style={embeddedPanelStyle}>
-                <Space direction="vertical" style={{ width: '100%' }} size={16}>
+                <Space direction="vertical" style={{ width: "100%" }} size={16}>
                   <ProDescriptions<WaitingSignalRecord>
                     column={1}
                     dataSource={waitingSignalRecord}
@@ -2155,7 +1660,7 @@ const RunsPage: React.FC = () => {
                     key={`${waitingSignalRecord.runId}-${waitingSignalRecord.stepId}`}
                     formRef={signalFormRef}
                     layout="vertical"
-                    initialValues={{ payload: '' }}
+                    initialValues={{ payload: "" }}
                     onFinish={async (values) => {
                       if (
                         !actorId ||
@@ -2174,8 +1679,8 @@ const RunsPage: React.FC = () => {
                         commandId,
                       });
 
-                      messageApi.success('Signal accepted.');
-                      signalFormRef.current?.setFieldsValue({ payload: '' });
+                      messageApi.success("Signal accepted.");
+                      signalFormRef.current?.setFieldsValue({ payload: "" });
                       return true;
                     }}
                     submitter={{

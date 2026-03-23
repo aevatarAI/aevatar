@@ -4,13 +4,13 @@ import {
   ProDescriptions,
   ProList,
   ProTable,
-} from '@ant-design/pro-components';
+} from "@ant-design/pro-components";
 import type {
   ProColumns,
   ProDescriptionsItemProps,
-} from '@ant-design/pro-components';
-import { useQuery } from '@tanstack/react-query';
-import { history } from '@umijs/max';
+} from "@ant-design/pro-components";
+import { useQuery } from "@tanstack/react-query";
+import { history } from "@umijs/max";
 import {
   Alert,
   Button,
@@ -22,15 +22,13 @@ import {
   Space,
   Tag,
   Typography,
-} from 'antd';
-import React, { useEffect, useMemo, useState } from 'react';
-import { consoleApi } from '@/shared/api/consoleApi';
+} from "antd";
+import React, { useEffect, useMemo, useState } from "react";
+import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import type {
   WorkflowPrimitiveDescriptor,
   WorkflowPrimitiveParameterDescriptor,
-} from '@/shared/api/models';
-import { buildPlaygroundRoute } from '@/shared/playground/navigation';
-import { buildStudioRoute } from '@/shared/studio/navigation';
+} from "@/shared/models/runtime/query";
 import {
   cardStackStyle,
   compactTableCardProps,
@@ -39,7 +37,7 @@ import {
   moduleCardProps,
   scrollPanelStyle,
   stretchColumnStyle,
-} from '@/shared/ui/proComponents';
+} from "@/shared/ui/proComponents";
 
 type PrimitiveLibraryRow = WorkflowPrimitiveDescriptor & {
   key: string;
@@ -56,86 +54,89 @@ type PrimitiveSummaryRecord = {
 };
 
 function readInitialPrimitiveSelection(): string {
-  if (typeof window === 'undefined') {
-    return '';
+  if (typeof window === "undefined") {
+    return "";
   }
 
-  return new URLSearchParams(window.location.search).get('primitive')?.trim() ?? '';
+  return (
+    new URLSearchParams(window.location.search).get("primitive")?.trim() ?? ""
+  );
 }
 
-const primitiveSummaryColumns: ProDescriptionsItemProps<PrimitiveSummaryRecord>[] = [
-  {
-    title: 'Category',
-    dataIndex: 'category',
-  },
-  {
-    title: 'Aliases',
-    dataIndex: 'aliasCount',
-    valueType: 'digit',
-  },
-  {
-    title: 'Parameters',
-    dataIndex: 'parameterCount',
-    valueType: 'digit',
-  },
-  {
-    title: 'Example workflows',
-    dataIndex: 'exampleWorkflowCount',
-    valueType: 'digit',
-  },
-];
+const primitiveSummaryColumns: ProDescriptionsItemProps<PrimitiveSummaryRecord>[] =
+  [
+    {
+      title: "Category",
+      dataIndex: "category",
+    },
+    {
+      title: "Aliases",
+      dataIndex: "aliasCount",
+      valueType: "digit",
+    },
+    {
+      title: "Parameters",
+      dataIndex: "parameterCount",
+      valueType: "digit",
+    },
+    {
+      title: "Example workflows",
+      dataIndex: "exampleWorkflowCount",
+      valueType: "digit",
+    },
+  ];
 
 const parameterColumns: ProColumns<WorkflowPrimitiveParameterDescriptor>[] = [
   {
-    title: 'Name',
-    dataIndex: 'name',
+    title: "Name",
+    dataIndex: "name",
     width: 180,
   },
   {
-    title: 'Type',
-    dataIndex: 'type',
+    title: "Type",
+    dataIndex: "type",
     width: 120,
   },
   {
-    title: 'Required',
-    dataIndex: 'required',
+    title: "Required",
+    dataIndex: "required",
     width: 120,
     render: (_, record) => (
-      <Tag color={record.required ? 'error' : 'default'}>
-        {record.required ? 'Required' : 'Optional'}
+      <Tag color={record.required ? "error" : "default"}>
+        {record.required ? "Required" : "Optional"}
       </Tag>
     ),
   },
   {
-    title: 'Default',
-    dataIndex: 'default',
+    title: "Default",
+    dataIndex: "default",
     width: 180,
-    render: (_, record) => record.default || 'n/a',
+    render: (_, record) => record.default || "n/a",
   },
   {
-    title: 'Enum',
-    dataIndex: 'enumValues',
+    title: "Enum",
+    dataIndex: "enumValues",
     width: 180,
     render: (_, record) =>
-      record.enumValues.length > 0 ? record.enumValues.join(', ') : 'n/a',
+      record.enumValues.length > 0 ? record.enumValues.join(", ") : "n/a",
   },
   {
-    title: 'Description',
-    dataIndex: 'description',
+    title: "Description",
+    dataIndex: "description",
     ellipsis: true,
   },
 ];
 
 const PrimitivesPage: React.FC = () => {
-  const [keyword, setKeyword] = useState('');
+  const [keyword, setKeyword] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPrimitiveName, setSelectedPrimitiveName] = useState(
-    readInitialPrimitiveSelection(),
+    readInitialPrimitiveSelection()
   );
 
   const primitivesQuery = useQuery({
-    queryKey: ['primitive-library'],
-    queryFn: () => consoleApi.listPrimitives(),
+    queryKey: ["primitive-library"],
+    queryFn: () => runtimeQueryApi.listPrimitives(),
   });
 
   const primitiveRows = useMemo<PrimitiveLibraryRow[]>(
@@ -144,11 +145,11 @@ const PrimitivesPage: React.FC = () => {
         ...primitive,
         key: primitive.name,
         aliasSummary:
-          primitive.aliases.length > 0 ? primitive.aliases.join(', ') : 'n/a',
+          primitive.aliases.length > 0 ? primitive.aliases.join(", ") : "n/a",
         parameterCount: primitive.parameters.length,
         exampleWorkflowCount: primitive.exampleWorkflows.length,
       })),
-    [primitivesQuery.data],
+    [primitivesQuery.data]
   );
 
   const categoryOptions = useMemo(
@@ -156,7 +157,7 @@ const PrimitivesPage: React.FC = () => {
       Array.from(new Set(primitiveRows.map((item) => item.category)))
         .sort((left, right) => left.localeCompare(right))
         .map((category) => ({ label: category, value: category })),
-    [primitiveRows],
+    [primitiveRows]
   );
 
   const filteredRows = useMemo(() => {
@@ -174,13 +175,8 @@ const PrimitivesPage: React.FC = () => {
         return true;
       }
 
-      return [
-        item.name,
-        item.category,
-        item.description,
-        item.aliasSummary,
-      ]
-        .join(' ')
+      return [item.name, item.category, item.description, item.aliasSummary]
+        .join(" ")
         .toLowerCase()
         .includes(normalizedKeyword);
     });
@@ -188,7 +184,7 @@ const PrimitivesPage: React.FC = () => {
 
   useEffect(() => {
     if (filteredRows.length === 0) {
-      setSelectedPrimitiveName('');
+      setSelectedPrimitiveName("");
       return;
     }
 
@@ -201,22 +197,22 @@ const PrimitivesPage: React.FC = () => {
   }, [filteredRows, selectedPrimitiveName]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === "undefined") {
       return;
     }
 
     const url = new URL(window.location.href);
     if (selectedPrimitiveName) {
-      url.searchParams.set('primitive', selectedPrimitiveName);
+      url.searchParams.set("primitive", selectedPrimitiveName);
     } else {
-      url.searchParams.delete('primitive');
+      url.searchParams.delete("primitive");
     }
-    window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   }, [selectedPrimitiveName]);
 
   const selectedPrimitive = useMemo(
     () => primitiveRows.find((item) => item.name === selectedPrimitiveName),
-    [primitiveRows, selectedPrimitiveName],
+    [primitiveRows, selectedPrimitiveName]
   );
 
   const summaryRecord = useMemo<PrimitiveSummaryRecord | undefined>(() => {
@@ -235,49 +231,53 @@ const PrimitivesPage: React.FC = () => {
   const libraryColumns = useMemo<ProColumns<PrimitiveLibraryRow>[]>(
     () => [
       {
-        title: 'Primitive',
-        dataIndex: 'name',
+        title: "Primitive",
+        dataIndex: "name",
         width: 180,
       },
       {
-        title: 'Category',
-        dataIndex: 'category',
+        title: "Category",
+        dataIndex: "category",
         width: 140,
       },
       {
-        title: 'Aliases',
-        dataIndex: 'aliasSummary',
+        title: "Aliases",
+        dataIndex: "aliasSummary",
         ellipsis: true,
       },
       {
-        title: 'Params',
-        dataIndex: 'parameterCount',
+        title: "Params",
+        dataIndex: "parameterCount",
         width: 100,
-        valueType: 'digit',
+        valueType: "digit",
       },
       {
-        title: 'Examples',
-        dataIndex: 'exampleWorkflowCount',
+        title: "Examples",
+        dataIndex: "exampleWorkflowCount",
         width: 100,
-        valueType: 'digit',
+        valueType: "digit",
       },
     ],
-    [],
+    []
   );
 
   return (
     <PageContainer
-      title="Primitives"
-      content="Browse the backend-authored primitive view, including normalized parameters and example workflow references."
+      title="Runtime Primitives"
+      content="Browse the backend-authored runtime primitive view, including normalized parameters and example workflow references."
     >
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} xl={10} style={stretchColumnStyle}>
-          <ProCard title="Primitive library" {...moduleCardProps} style={fillCardStyle}>
+          <ProCard
+            title="Primitive library"
+            {...moduleCardProps}
+            style={fillCardStyle}
+          >
             <div style={cardStackStyle}>
               <Alert
                 showIcon
                 type="info"
-                message="Authoring-backed browser"
+                title="Runtime-backed browser"
                 description="This page is powered by the formal /api/primitives view instead of stitching capability and catalog data in the browser."
               />
 
@@ -293,7 +293,7 @@ const PrimitivesPage: React.FC = () => {
                 allowClear
                 value={selectedCategories}
                 options={categoryOptions}
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 placeholder="Filter categories"
                 onChange={(value) => setSelectedCategories(value)}
               />
@@ -312,7 +312,9 @@ const PrimitivesPage: React.FC = () => {
                   onClick: () => setSelectedPrimitiveName(record.name),
                 })}
                 rowClassName={(record) =>
-                  record.name === selectedPrimitiveName ? 'ant-table-row-selected' : ''
+                  record.name === selectedPrimitiveName
+                    ? "ant-table-row-selected"
+                    : ""
                 }
                 locale={{
                   emptyText: (
@@ -332,7 +334,7 @@ const PrimitivesPage: React.FC = () => {
             title={
               selectedPrimitive
                 ? `Primitive detail · ${selectedPrimitive.name}`
-                : 'Primitive detail'
+                : "Primitive detail"
             }
             {...moduleCardProps}
             style={fillCardStyle}
@@ -341,7 +343,7 @@ const PrimitivesPage: React.FC = () => {
               <Alert
                 showIcon
                 type="error"
-                message="Failed to load primitive library"
+                title="Failed to load primitive library"
                 description={String(primitivesQuery.error)}
               />
             ) : !selectedPrimitive ? (
@@ -400,16 +402,18 @@ const PrimitivesPage: React.FC = () => {
                         rowKey="name"
                         search={false}
                         split
-                        dataSource={selectedPrimitive.exampleWorkflows.map((name) => ({
-                          name,
-                        }))}
+                        dataSource={selectedPrimitive.exampleWorkflows.map(
+                          (name) => ({
+                            name,
+                          })
+                        )}
                         metas={{
                           title: {
-                            dataIndex: 'name',
+                            dataIndex: "name",
                           },
                           description: {
                             render: (_, record) =>
-                              `Open ${record.name} in the workflow library or bring it into Studio as a workflow template.`,
+                              `Open ${record.name} in the runtime workflow library, launch a run, or jump to scope-owned published assets.`,
                           },
                           content: {
                             render: (_, record) => (
@@ -419,37 +423,32 @@ const PrimitivesPage: React.FC = () => {
                                   onClick={() =>
                                     history.push(
                                       `/workflows?workflow=${encodeURIComponent(
-                                        record.name,
-                                      )}&tab=yaml`,
+                                        record.name
+                                      )}&tab=yaml`
                                     )
                                   }
                                 >
-                                  Inspect
+                                  Inspect runtime
                                 </Button>
                                 <Button
                                   type="link"
                                   onClick={() =>
                                     history.push(
-                                      buildStudioRoute({
-                                        template: record.name,
-                                      }),
+                                      `/runs?workflow=${encodeURIComponent(
+                                        record.name
+                                      )}`
                                     )
                                   }
                                 >
-                                  Studio
+                                  Run
                                 </Button>
                                 <Button
                                   type="link"
                                   onClick={() =>
-                                    history.push(
-                                      buildPlaygroundRoute({
-                                        template: record.name,
-                                        importTemplate: true,
-                                      }),
-                                    )
+                                    history.push("/scopes/workflows")
                                   }
                                 >
-                                  Legacy draft
+                                  Scope assets
                                 </Button>
                               </Space>
                             ),

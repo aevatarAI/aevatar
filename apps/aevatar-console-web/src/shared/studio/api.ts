@@ -20,28 +20,28 @@ import type {
   StudioWorkflowFile,
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
-} from './models';
-import type { WorkflowCatalogItemDetail } from '@/shared/api/models';
-import { decodeWorkflowCatalogItemDetailResponse } from '@/shared/api/decoders';
+} from "./models";
+import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
+import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 
 const JSON_HEADERS = {
-  'Content-Type': 'application/json',
-  Accept: 'application/json',
+  "Content-Type": "application/json",
+  Accept: "application/json",
 };
 
 async function studioHostFetch(
   input: string,
-  init?: RequestInit,
+  init?: RequestInit
 ): Promise<Response> {
   return fetch(input, {
-    credentials: 'same-origin',
+    credentials: "same-origin",
     ...init,
   });
 }
 
 function isJsonContentType(contentType: string | null): boolean {
-  const value = String(contentType || '').toLowerCase();
-  return value.includes('application/json') || value.includes('+json');
+  const value = String(contentType || "").toLowerCase();
+  return value.includes("application/json") || value.includes("+json");
 }
 
 function trimOptional(value: string | null | undefined): string | undefined {
@@ -51,7 +51,7 @@ function trimOptional(value: string | null | undefined): string | undefined {
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
 }
 
@@ -89,7 +89,7 @@ async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
 async function requestDecodedJson<T>(
   input: string,
   decoder: (value: unknown) => T,
-  init?: RequestInit,
+  init?: RequestInit
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
@@ -106,12 +106,12 @@ async function requestDecodedJson<T>(
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const isFormDataBody =
-    typeof FormData !== 'undefined' && init?.body instanceof FormData;
-  if (!isFormDataBody && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (!isFormDataBody && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
-  if (!headers.has('Accept')) {
-    headers.set('Accept', 'application/json');
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
   }
 
   const response = await studioHostFetch(input, {
@@ -126,8 +126,8 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
 
-  if (!isJsonContentType(response.headers.get('content-type'))) {
-    throw new Error('Studio API returned an unexpected response format.');
+  if (!isJsonContentType(response.headers.get("content-type"))) {
+    throw new Error("Studio API returned an unexpected response format.");
   }
 
   return (await response.json()) as T;
@@ -137,13 +137,13 @@ async function streamSse(
   input: string,
   body: unknown,
   onFrame: (frame: unknown) => void,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<void> {
   const response = await studioHostFetch(input, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      Accept: 'text/event-stream',
-      'Content-Type': 'application/json',
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
     signal,
@@ -158,28 +158,28 @@ async function streamSse(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
+  let buffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
-    let boundary = buffer.indexOf('\n\n');
+    let boundary = buffer.indexOf("\n\n");
     while (boundary >= 0) {
       const block = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
 
       const data = block
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
         .map((line) => line.slice(5).trim())
-        .join('\n');
+        .join("\n");
 
-      if (data && data !== '[DONE]') {
+      if (data && data !== "[DONE]") {
         onFrame(JSON.parse(data) as unknown);
       }
 
-      boundary = buffer.indexOf('\n\n');
+      boundary = buffer.indexOf("\n\n");
     }
 
     if (done) {
@@ -189,58 +189,55 @@ async function streamSse(
 }
 
 function normalizeAssistantFrame(
-  frame: unknown,
-):
-  | { type: string; delta?: string; message?: string }
-  | null {
-  if (!frame || typeof frame !== 'object') {
+  frame: unknown
+): { type: string; delta?: string; message?: string } | null {
+  if (!frame || typeof frame !== "object") {
     return null;
   }
 
   const candidate = frame as Record<string, unknown>;
-  if (typeof candidate.type === 'string') {
+  if (typeof candidate.type === "string") {
     return {
       type: candidate.type,
-      delta:
-        typeof candidate.delta === 'string' ? candidate.delta : undefined,
+      delta: typeof candidate.delta === "string" ? candidate.delta : undefined,
       message:
-        typeof candidate.message === 'string' ? candidate.message : undefined,
+        typeof candidate.message === "string" ? candidate.message : undefined,
     };
   }
 
   if (candidate.textMessageContent) {
     const payload = candidate.textMessageContent as Record<string, unknown>;
     return {
-      type: 'TEXT_MESSAGE_CONTENT',
-      delta: typeof payload.delta === 'string' ? payload.delta : '',
+      type: "TEXT_MESSAGE_CONTENT",
+      delta: typeof payload.delta === "string" ? payload.delta : "",
     };
   }
 
   if (candidate.textMessageReasoning) {
     const payload = candidate.textMessageReasoning as Record<string, unknown>;
     return {
-      type: 'TEXT_MESSAGE_REASONING',
-      delta: typeof payload.delta === 'string' ? payload.delta : '',
+      type: "TEXT_MESSAGE_REASONING",
+      delta: typeof payload.delta === "string" ? payload.delta : "",
     };
   }
 
   if (candidate.textMessageEnd) {
     const payload = candidate.textMessageEnd as Record<string, unknown>;
     return {
-      type: 'TEXT_MESSAGE_END',
-      delta: typeof payload.delta === 'string' ? payload.delta : '',
-      message: typeof payload.message === 'string' ? payload.message : '',
+      type: "TEXT_MESSAGE_END",
+      delta: typeof payload.delta === "string" ? payload.delta : "",
+      message: typeof payload.message === "string" ? payload.message : "",
     };
   }
 
   if (candidate.runError) {
     const payload = candidate.runError as Record<string, unknown>;
     return {
-      type: 'RUN_ERROR',
+      type: "RUN_ERROR",
       message:
-        typeof payload.message === 'string'
+        typeof payload.message === "string"
           ? payload.message
-          : 'Assistant run failed.',
+          : "Assistant run failed.",
     };
   }
 
@@ -249,37 +246,39 @@ function normalizeAssistantFrame(
 
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
-    return requestJson('/api/app/context');
+    return requestJson("/api/app/context");
   },
 
   getAuthSession(): Promise<StudioAuthSession> {
-    return requestJson('/api/auth/me');
+    return requestJson("/api/auth/me");
   },
 
   getWorkspaceSettings(): Promise<StudioWorkspaceSettings> {
-    return requestJson('/api/workspace/');
+    return requestJson("/api/workspace/");
   },
 
   listWorkflows(): Promise<StudioWorkflowSummary[]> {
-    return requestJson('/api/workspace/workflows');
+    return requestJson("/api/workspace/workflows");
   },
 
-  getTemplateWorkflow(workflowName: string): Promise<WorkflowCatalogItemDetail> {
+  getTemplateWorkflow(
+    workflowName: string
+  ): Promise<WorkflowCatalogItemDetail> {
     return requestDecodedJson(
       `/api/workflows/${encodeURIComponent(workflowName)}`,
-      decodeWorkflowCatalogItemDetailResponse,
+      decodeWorkflowCatalogItemDetailResponse
     );
   },
 
   getWorkflow(workflowId: string): Promise<StudioWorkflowFile> {
     return requestJson(
-      `/api/workspace/workflows/${encodeURIComponent(workflowId)}`,
+      `/api/workspace/workflows/${encodeURIComponent(workflowId)}`
     );
   },
 
   saveWorkflow(input: StudioSaveWorkflowInput): Promise<StudioWorkflowFile> {
-    return requestJson('/api/workspace/workflows', {
-      method: 'POST',
+    return requestJson("/api/workspace/workflows", {
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
@@ -289,7 +288,7 @@ export const studioApi = {
           fileName: trimOptional(input.fileName),
           yaml: input.yaml,
           layout: input.layout,
-        }),
+        })
       ),
     });
   },
@@ -298,8 +297,8 @@ export const studioApi = {
     yaml: string;
     availableWorkflowNames?: string[];
   }): Promise<StudioParseYamlResult> {
-    return requestJson('/api/editor/parse-yaml', {
-      method: 'POST',
+    return requestJson("/api/editor/parse-yaml", {
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         yaml: input.yaml,
@@ -312,8 +311,8 @@ export const studioApi = {
     document: StudioWorkflowDocument;
     availableWorkflowNames?: string[];
   }): Promise<StudioSerializeYamlResult> {
-    return requestJson('/api/editor/serialize-yaml', {
-      method: 'POST',
+    return requestJson("/api/editor/serialize-yaml", {
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         document: input.document,
@@ -323,7 +322,7 @@ export const studioApi = {
   },
 
   listExecutions(): Promise<StudioExecutionSummary[]> {
-    return requestJson('/api/executions/');
+    return requestJson("/api/executions/");
   },
 
   getExecution(executionId: string): Promise<StudioExecutionDetail> {
@@ -331,10 +330,10 @@ export const studioApi = {
   },
 
   startExecution(
-    input: StudioStartExecutionInput,
+    input: StudioStartExecutionInput
   ): Promise<StudioExecutionDetail> {
-    return requestJson('/api/executions/', {
-      method: 'POST',
+    return requestJson("/api/executions/", {
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
@@ -345,22 +344,25 @@ export const studioApi = {
           scopeId: trimOptional(input.scopeId),
           workflowId: trimOptional(input.workflowId),
           eventFormat: trimOptional(input.eventFormat),
-        }),
+        })
       ),
     });
   },
 
   stopExecution(
     executionId: string,
-    input: { reason?: string | null },
+    input: { reason?: string | null }
   ): Promise<StudioExecutionDetail> {
-    return requestJson(`/api/executions/${encodeURIComponent(executionId)}/stop`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        reason: trimOptional(input.reason),
-      }),
-    });
+    return requestJson(
+      `/api/executions/${encodeURIComponent(executionId)}/stop`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          reason: trimOptional(input.reason),
+        }),
+      }
+    );
   },
 
   resumeExecution(
@@ -370,35 +372,38 @@ export const studioApi = {
       stepId: string;
       approved: boolean;
       userInput?: string | null;
-      suspensionType: 'human_input' | 'human_approval';
-    },
+      suspensionType: "human_input" | "human_approval";
+    }
   ): Promise<StudioExecutionDetail> {
-    return requestJson(`/api/executions/${encodeURIComponent(executionId)}/resume`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
-        runId: input.runId,
-        stepId: input.stepId,
-        approved: input.approved,
-        userInput: trimOptional(input.userInput),
-        suspensionType: input.suspensionType,
-      }),
-    });
+    return requestJson(
+      `/api/executions/${encodeURIComponent(executionId)}/resume`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          runId: input.runId,
+          stepId: input.stepId,
+          approved: input.approved,
+          userInput: trimOptional(input.userInput),
+          suspensionType: input.suspensionType,
+        }),
+      }
+    );
   },
 
   getConnectorCatalog(): Promise<StudioConnectorCatalog> {
-    return requestJson('/api/connectors/');
+    return requestJson("/api/connectors/");
   },
 
   getConnectorDraft(): Promise<StudioConnectorDraftResponse> {
-    return requestJson('/api/connectors/draft');
+    return requestJson("/api/connectors/draft");
   },
 
   saveConnectorCatalog(input: {
-    connectors: StudioConnectorCatalog['connectors'];
+    connectors: StudioConnectorCatalog["connectors"];
   }): Promise<StudioConnectorCatalog> {
-    return requestJson('/api/connectors/', {
-      method: 'PUT',
+    return requestJson("/api/connectors/", {
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         connectors: input.connectors,
@@ -407,10 +412,10 @@ export const studioApi = {
   },
 
   saveConnectorDraft(input: {
-    draft: StudioConnectorDraftResponse['draft'];
+    draft: StudioConnectorDraftResponse["draft"];
   }): Promise<StudioConnectorDraftResponse> {
-    return requestJson('/api/connectors/draft', {
-      method: 'PUT',
+    return requestJson("/api/connectors/draft", {
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         draft: input.draft,
@@ -419,33 +424,35 @@ export const studioApi = {
   },
 
   deleteConnectorDraft(): Promise<void> {
-    return request<void>('/api/connectors/draft', {
-      method: 'DELETE',
+    return request<void>("/api/connectors/draft", {
+      method: "DELETE",
     });
   },
 
-  importConnectorCatalog(file: File): Promise<StudioConnectorCatalogImportResult> {
+  importConnectorCatalog(
+    file: File
+  ): Promise<StudioConnectorCatalogImportResult> {
     const form = new FormData();
-    form.set('file', file, file.name);
-    return request('/api/connectors/import', {
-      method: 'POST',
+    form.set("file", file, file.name);
+    return request("/api/connectors/import", {
+      method: "POST",
       body: form,
     });
   },
 
   getRoleCatalog(): Promise<StudioRoleCatalog> {
-    return requestJson('/api/roles/');
+    return requestJson("/api/roles/");
   },
 
   getRoleDraft(): Promise<StudioRoleDraftResponse> {
-    return requestJson('/api/roles/draft');
+    return requestJson("/api/roles/draft");
   },
 
   saveRoleCatalog(input: {
-    roles: StudioRoleCatalog['roles'];
+    roles: StudioRoleCatalog["roles"];
   }): Promise<StudioRoleCatalog> {
-    return requestJson('/api/roles/', {
-      method: 'PUT',
+    return requestJson("/api/roles/", {
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         roles: input.roles,
@@ -454,10 +461,10 @@ export const studioApi = {
   },
 
   saveRoleDraft(input: {
-    draft: StudioRoleDraftResponse['draft'];
+    draft: StudioRoleDraftResponse["draft"];
   }): Promise<StudioRoleDraftResponse> {
-    return requestJson('/api/roles/draft', {
-      method: 'PUT',
+    return requestJson("/api/roles/draft", {
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         draft: input.draft,
@@ -466,27 +473,27 @@ export const studioApi = {
   },
 
   deleteRoleDraft(): Promise<void> {
-    return request<void>('/api/roles/draft', {
-      method: 'DELETE',
+    return request<void>("/api/roles/draft", {
+      method: "DELETE",
     });
   },
 
   importRoleCatalog(file: File): Promise<StudioRoleCatalogImportResult> {
     const form = new FormData();
-    form.set('file', file, file.name);
-    return request('/api/roles/import', {
-      method: 'POST',
+    form.set("file", file, file.name);
+    return request("/api/roles/import", {
+      method: "POST",
       body: form,
     });
   },
 
   getSettings(): Promise<StudioSettings> {
-    return requestJson('/api/settings/');
+    return requestJson("/api/settings/");
   },
 
   saveSettings(input: StudioSaveSettingsInput): Promise<StudioSettings> {
-    return requestJson('/api/settings/', {
-      method: 'PUT',
+    return requestJson("/api/settings/", {
+      method: "PUT",
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
@@ -500,9 +507,9 @@ export const studioApi = {
               endpoint: trimOptional(provider.endpoint),
               apiKey: trimOptional(provider.apiKey),
               clearApiKey: provider.clearApiKey ? true : undefined,
-            }),
+            })
           ),
-        }),
+        })
       ),
     });
   },
@@ -510,8 +517,8 @@ export const studioApi = {
   testRuntimeConnection(input: {
     runtimeBaseUrl?: string | null;
   }): Promise<StudioRuntimeTestResult> {
-    return requestJson('/api/settings/runtime/test', {
-      method: 'POST',
+    return requestJson("/api/settings/runtime/test", {
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({
         runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
@@ -523,22 +530,25 @@ export const studioApi = {
     path: string;
     label?: string | null;
   }): Promise<StudioWorkspaceSettings> {
-    return requestJson('/api/workspace/directories', {
-      method: 'POST',
+    return requestJson("/api/workspace/directories", {
+      method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify(
         compactObject({
           path: input.path.trim(),
           label: trimOptional(input.label),
-        }),
+        })
       ),
     });
   },
 
   removeWorkflowDirectory(directoryId: string): Promise<void> {
-    return request<void>(`/api/workspace/directories/${encodeURIComponent(directoryId)}`, {
-      method: 'DELETE',
-    });
+    return request<void>(
+      `/api/workspace/directories/${encodeURIComponent(directoryId)}`,
+      {
+        method: "DELETE",
+      }
+    );
   },
 
   async authorWorkflow(
@@ -552,13 +562,13 @@ export const studioApi = {
       signal?: AbortSignal;
       onText?: (text: string) => void;
       onReasoning?: (text: string) => void;
-    },
+    }
   ): Promise<string> {
-    let generatedText = '';
-    let reasoningText = '';
+    let generatedText = "";
+    let reasoningText = "";
 
     await streamSse(
-      '/api/app/workflow-generator',
+      "/api/app/workflow-generator",
       {
         prompt: input.prompt.trim(),
         currentYaml: input.currentYaml,
@@ -571,30 +581,30 @@ export const studioApi = {
           return;
         }
 
-        if (normalized.type === 'TEXT_MESSAGE_CONTENT') {
-          generatedText += normalized.delta || '';
+        if (normalized.type === "TEXT_MESSAGE_CONTENT") {
+          generatedText += normalized.delta || "";
           options?.onText?.(generatedText);
           return;
         }
 
-        if (normalized.type === 'TEXT_MESSAGE_REASONING') {
-          reasoningText += normalized.delta || '';
+        if (normalized.type === "TEXT_MESSAGE_REASONING") {
+          reasoningText += normalized.delta || "";
           options?.onReasoning?.(reasoningText);
           return;
         }
 
-        if (normalized.type === 'TEXT_MESSAGE_END') {
+        if (normalized.type === "TEXT_MESSAGE_END") {
           generatedText =
-            generatedText || normalized.message || normalized.delta || '';
+            generatedText || normalized.message || normalized.delta || "";
           options?.onText?.(generatedText);
           return;
         }
 
-        if (normalized.type === 'RUN_ERROR') {
-          throw new Error(normalized.message || 'Assistant run failed.');
+        if (normalized.type === "RUN_ERROR") {
+          throw new Error(normalized.message || "Assistant run failed.");
         }
       },
-      options?.signal,
+      options?.signal
     );
 
     return generatedText;

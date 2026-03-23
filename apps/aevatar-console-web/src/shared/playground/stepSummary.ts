@@ -1,36 +1,34 @@
-import { parseCustomEvent } from '@aevatar-react-sdk/agui';
+import { parseCustomEvent } from "@aevatar-react-sdk/agui";
 import {
   AGUIEventType,
   CustomEventName,
   type AGUIEvent,
-} from '@aevatar-react-sdk/types';
+} from "@aevatar-react-sdk/types";
 import {
   parseHumanInputRequestData,
   parseStepCompletedData,
   parseStepRequestData,
   parseWaitingSignalData,
-} from '@/shared/agui/customEventData';
-import type {
-  WorkflowActorTimelineItem,
-  WorkflowAuthoringStep,
-  WorkflowCatalogStep,
-} from '@/shared/api/models';
+} from "@/shared/agui/customEventData";
+import type { WorkflowActorTimelineItem } from "@/shared/models/runtime/actors";
+import type { WorkflowAuthoringStep } from "@/shared/models/runtime/authoring";
+import type { WorkflowCatalogStep } from "@/shared/models/runtime/catalog";
 
 type PlaygroundReferenceStep = WorkflowCatalogStep | WorkflowAuthoringStep;
 
 export type PlaygroundStepStatus =
-  | 'idle'
-  | 'running'
-  | 'waiting'
-  | 'success'
-  | 'error';
+  | "idle"
+  | "running"
+  | "waiting"
+  | "success"
+  | "error";
 
 export type PlaygroundStepSummary = {
   key: string;
   stepId: string;
   stepType: string;
   targetRole: string;
-  source: 'reference' | 'runtime' | 'merged';
+  source: "reference" | "runtime" | "merged";
   status: PlaygroundStepStatus;
   statusLabel: string;
   checkpointLabel: string;
@@ -55,89 +53,90 @@ export type PlaygroundStepMetrics = {
 type MutableStepSummary = PlaygroundStepSummary;
 
 function isApprovalSuspension(suspensionType?: string | null): boolean {
-  return suspensionType?.toLowerCase().includes('approval') ?? false;
+  return suspensionType?.toLowerCase().includes("approval") ?? false;
 }
 
 function makeDefaultSummary(
   stepId: string,
-  referenceOrder: number,
+  referenceOrder: number
 ): MutableStepSummary {
   return {
     key: stepId || `runtime-${referenceOrder}`,
     stepId,
-    stepType: '',
-    targetRole: '',
-    source: 'runtime',
-    status: 'idle',
-    statusLabel: 'Idle',
-    checkpointLabel: '',
-    lastStage: '',
-    lastMessage: '',
-    agentId: '',
+    stepType: "",
+    targetRole: "",
+    source: "runtime",
+    status: "idle",
+    statusLabel: "Idle",
+    checkpointLabel: "",
+    lastStage: "",
+    lastMessage: "",
+    agentId: "",
     observationCount: 0,
-    startedAt: '',
-    updatedAt: '',
+    startedAt: "",
+    updatedAt: "",
     referenceOrder,
   };
 }
 
 function normalizeTimelineStatus(
-  item: WorkflowActorTimelineItem,
+  item: WorkflowActorTimelineItem
 ): PlaygroundStepStatus {
-  const normalized = `${item.stage} ${item.eventType} ${item.message}`.toLowerCase();
+  const normalized =
+    `${item.stage} ${item.eventType} ${item.message}`.toLowerCase();
 
-  if (normalized.includes('error') || normalized.includes('fail')) {
-    return 'error';
+  if (normalized.includes("error") || normalized.includes("fail")) {
+    return "error";
   }
   if (
-    normalized.includes('wait') ||
-    normalized.includes('signal') ||
-    normalized.includes('approval') ||
-    normalized.includes('human')
+    normalized.includes("wait") ||
+    normalized.includes("signal") ||
+    normalized.includes("approval") ||
+    normalized.includes("human")
   ) {
-    return 'waiting';
+    return "waiting";
   }
   if (
-    normalized.includes('complete') ||
-    normalized.includes('finish') ||
-    normalized.includes('success')
+    normalized.includes("complete") ||
+    normalized.includes("finish") ||
+    normalized.includes("success")
   ) {
-    return 'success';
+    return "success";
   }
   if (
-    normalized.includes('start') ||
-    normalized.includes('run') ||
-    normalized.includes('request')
+    normalized.includes("start") ||
+    normalized.includes("run") ||
+    normalized.includes("request")
   ) {
-    return 'running';
+    return "running";
   }
 
-  return 'idle';
+  return "idle";
 }
 
 function statusLabel(status: PlaygroundStepStatus): string {
   switch (status) {
-    case 'running':
-      return 'Running';
-    case 'waiting':
-      return 'Waiting';
-    case 'success':
-      return 'Completed';
-    case 'error':
-      return 'Failed';
+    case "running":
+      return "Running";
+    case "waiting":
+      return "Waiting";
+    case "success":
+      return "Completed";
+    case "error":
+      return "Failed";
     default:
-      return 'Idle';
+      return "Idle";
   }
 }
 
 function mergeStepSource(
-  source: PlaygroundStepSummary['source'],
-): PlaygroundStepSummary['source'] {
-  if (source === 'reference' || source === 'merged') {
-    return 'merged';
+  source: PlaygroundStepSummary["source"]
+): PlaygroundStepSummary["source"] {
+  if (source === "reference" || source === "merged") {
+    return "merged";
   }
 
-  return 'runtime';
+  return "runtime";
 }
 
 function applyObservation(
@@ -150,7 +149,7 @@ function applyObservation(
     agentId?: string;
     stepType?: string;
     checkpointLabel?: string;
-  },
+  }
 ): void {
   summary.status = input.status;
   summary.statusLabel = statusLabel(input.status);
@@ -182,7 +181,7 @@ function applyObservation(
 function getOrCreateStep(
   map: Map<string, MutableStepSummary>,
   stepId: string,
-  nextRuntimeOrder: () => number,
+  nextRuntimeOrder: () => number
 ): MutableStepSummary {
   if (stepId) {
     const existing = map.get(stepId);
@@ -215,12 +214,12 @@ export function buildPlaygroundStepSummaries(input: {
     const summary = makeDefaultSummary(step.id, index);
     summary.stepType = step.type;
     summary.targetRole = step.targetRole;
-    summary.source = 'reference';
+    summary.source = "reference";
     stepMap.set(step.id, summary);
   }
 
   const orderedTimeline = [...(input.actorTimeline ?? [])].sort((left, right) =>
-    left.timestamp.localeCompare(right.timestamp),
+    left.timestamp.localeCompare(right.timestamp)
   );
 
   for (const item of orderedTimeline) {
@@ -238,43 +237,53 @@ export function buildPlaygroundStepSummaries(input: {
       agentId: item.agentId,
       stepType: item.stepType,
       checkpointLabel:
-        normalizeTimelineStatus(item) === 'waiting'
-          ? item.stepType || 'Checkpoint'
+        normalizeTimelineStatus(item) === "waiting"
+          ? item.stepType || "Checkpoint"
           : summary.checkpointLabel,
     });
   }
 
   const orderedEvents = [...(input.events ?? [])].sort(
-    (left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0),
+    (left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0)
   );
 
   for (const event of orderedEvents) {
-    const updatedAt = event.timestamp ? new Date(event.timestamp).toISOString() : '';
+    const updatedAt = event.timestamp
+      ? new Date(event.timestamp).toISOString()
+      : "";
 
     if (event.type === AGUIEventType.HUMAN_INPUT_REQUEST) {
-      const summary = getOrCreateStep(stepMap, event.stepId ?? '', nextRuntimeOrder);
+      const summary = getOrCreateStep(
+        stepMap,
+        event.stepId ?? "",
+        nextRuntimeOrder
+      );
       summary.source = mergeStepSource(summary.source);
       applyObservation(summary, {
-        status: 'waiting',
+        status: "waiting",
         updatedAt,
         stage: event.type,
         message: event.prompt,
         stepType: event.suspensionType,
         checkpointLabel: isApprovalSuspension(event.suspensionType)
-          ? 'Approval'
-          : 'Human input',
+          ? "Approval"
+          : "Human input",
       });
       continue;
     }
 
     if (event.type === AGUIEventType.HUMAN_INPUT_RESPONSE) {
-      const summary = getOrCreateStep(stepMap, event.stepId ?? '', nextRuntimeOrder);
+      const summary = getOrCreateStep(
+        stepMap,
+        event.stepId ?? "",
+        nextRuntimeOrder
+      );
       summary.source = mergeStepSource(summary.source);
       applyObservation(summary, {
-        status: 'running',
+        status: "running",
         updatedAt,
         stage: event.type,
-        message: `Human input submitted for ${event.stepId ?? 'unknown step'}`,
+        message: `Human input submitted for ${event.stepId ?? "unknown step"}`,
       });
       continue;
     }
@@ -288,15 +297,15 @@ export function buildPlaygroundStepSummaries(input: {
       const data = parseStepRequestData(custom.data);
       const summary = getOrCreateStep(
         stepMap,
-        data?.stepId ?? '',
-        nextRuntimeOrder,
+        data?.stepId ?? "",
+        nextRuntimeOrder
       );
       summary.source = mergeStepSource(summary.source);
       applyObservation(summary, {
-        status: 'running',
+        status: "running",
         updatedAt,
         stage: custom.name,
-        message: data?.stepType || 'Step requested.',
+        message: data?.stepType || "Step requested.",
         stepType: data?.stepType,
       });
       continue;
@@ -306,18 +315,18 @@ export function buildPlaygroundStepSummaries(input: {
       const data = parseStepCompletedData(custom.data);
       const summary = getOrCreateStep(
         stepMap,
-        data?.stepId ?? '',
-        nextRuntimeOrder,
+        data?.stepId ?? "",
+        nextRuntimeOrder
       );
       summary.source = mergeStepSource(summary.source);
       applyObservation(summary, {
-        status: data?.success === false ? 'error' : 'success',
+        status: data?.success === false ? "error" : "success",
         updatedAt,
         stage: custom.name,
         message:
           data?.success === false
-            ? 'Step failed.'
-            : 'Step completed successfully.',
+            ? "Step failed."
+            : "Step completed successfully.",
       });
       continue;
     }
@@ -326,17 +335,18 @@ export function buildPlaygroundStepSummaries(input: {
       const data = parseWaitingSignalData(custom.data);
       const summary = getOrCreateStep(
         stepMap,
-        data?.stepId ?? '',
-        nextRuntimeOrder,
+        data?.stepId ?? "",
+        nextRuntimeOrder
       );
       summary.source = mergeStepSource(summary.source);
       applyObservation(summary, {
-        status: 'waiting',
+        status: "waiting",
         updatedAt,
         stage: custom.name,
         message:
-          data?.prompt || `Waiting for signal ${data?.signalName ?? 'unknown'}.`,
-        checkpointLabel: data?.signalName || 'Signal',
+          data?.prompt ||
+          `Waiting for signal ${data?.signalName ?? "unknown"}.`,
+        checkpointLabel: data?.signalName || "Signal",
       });
       continue;
     }
@@ -345,19 +355,19 @@ export function buildPlaygroundStepSummaries(input: {
       const data = parseHumanInputRequestData(custom.data);
       const summary = getOrCreateStep(
         stepMap,
-        data?.stepId ?? '',
-        nextRuntimeOrder,
+        data?.stepId ?? "",
+        nextRuntimeOrder
       );
       summary.source = mergeStepSource(summary.source);
       applyObservation(summary, {
-        status: 'waiting',
+        status: "waiting",
         updatedAt,
         stage: custom.name,
         message: data?.prompt,
         stepType: data?.suspensionType,
         checkpointLabel: isApprovalSuspension(data?.suspensionType)
-          ? 'Approval'
-          : 'Human input',
+          ? "Approval"
+          : "Human input",
       });
     }
   }
@@ -372,14 +382,15 @@ export function buildPlaygroundStepSummaries(input: {
 }
 
 export function summarizePlaygroundSteps(
-  steps: PlaygroundStepSummary[],
+  steps: PlaygroundStepSummary[]
 ): PlaygroundStepMetrics {
   return {
-    totalReferenceSteps: steps.filter((item) => item.source !== 'runtime').length,
+    totalReferenceSteps: steps.filter((item) => item.source !== "runtime")
+      .length,
     observedSteps: steps.filter((item) => item.observationCount > 0).length,
-    runningSteps: steps.filter((item) => item.status === 'running').length,
-    waitingSteps: steps.filter((item) => item.status === 'waiting').length,
-    successfulSteps: steps.filter((item) => item.status === 'success').length,
-    failedSteps: steps.filter((item) => item.status === 'error').length,
+    runningSteps: steps.filter((item) => item.status === "running").length,
+    waitingSteps: steps.filter((item) => item.status === "waiting").length,
+    successfulSteps: steps.filter((item) => item.status === "success").length,
+    failedSteps: steps.filter((item) => item.status === "error").length,
   };
 }

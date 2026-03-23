@@ -5,25 +5,25 @@ import {
   ProForm,
   ProFormText,
   ProList,
-} from '@ant-design/pro-components';
+} from "@ant-design/pro-components";
 import type {
   ProDescriptionsItemProps,
   ProFormInstance,
-} from '@ant-design/pro-components';
-import { history } from '@umijs/max';
-import { Alert, Button, Col, Empty, Row, Space, Tag, Typography } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+} from "@ant-design/pro-components";
+import { history } from "@umijs/max";
+import { Alert, Button, Col, Empty, Row, Space, Tag, Typography } from "antd";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildObservabilityTargets,
   type ObservabilityContext,
   type ObservabilityTarget,
-} from '@/shared/observability/observabilityLinks';
-import { loadConsolePreferences } from '@/shared/preferences/consolePreferences';
+} from "@/shared/observability/observabilityLinks";
+import { loadConsolePreferences } from "@/shared/preferences/consolePreferences";
 import {
   fillCardStyle,
   moduleCardProps,
   stretchColumnStyle,
-} from '@/shared/ui/proComponents';
+} from "@/shared/ui/proComponents";
 
 type ObservabilityContextForm = ObservabilityContext;
 
@@ -44,56 +44,56 @@ type InternalJumpItem = {
 };
 
 const targetStatusValueEnum = {
-  configured: { text: 'Configured', status: 'Success' },
-  missing: { text: 'Missing', status: 'Default' },
+  configured: { text: "Configured", status: "Success" },
+  missing: { text: "Missing", status: "Default" },
 } as const;
 
 const summaryColumns: ProDescriptionsItemProps<ObservabilitySummaryRecord>[] = [
   {
-    title: 'Configured targets',
-    dataIndex: 'configuredCount',
-    valueType: 'digit',
+    title: "Configured targets",
+    dataIndex: "configuredCount",
+    valueType: "digit",
   },
   {
-    title: 'Missing targets',
-    dataIndex: 'missingCount',
-    valueType: 'digit',
+    title: "Missing targets",
+    dataIndex: "missingCount",
+    valueType: "digit",
   },
   {
-    title: 'Workflow context',
-    dataIndex: 'workflow',
-    render: (_, record) => record.workflow || 'n/a',
+    title: "Workflow context",
+    dataIndex: "workflow",
+    render: (_, record) => record.workflow || "n/a",
   },
   {
-    title: 'Actor context',
-    dataIndex: 'actorId',
-    render: (_, record) => record.actorId || 'n/a',
+    title: "Actor context",
+    dataIndex: "actorId",
+    render: (_, record) => record.actorId || "n/a",
   },
   {
-    title: 'Command context',
-    dataIndex: 'commandId',
-    render: (_, record) => record.commandId || 'n/a',
+    title: "Command context",
+    dataIndex: "commandId",
+    render: (_, record) => record.commandId || "n/a",
   },
 ];
 
 function readContextFromUrl(): ObservabilityContext {
-  if (typeof window === 'undefined') {
+  if (typeof window === "undefined") {
     return {
-      workflow: '',
-      actorId: '',
-      commandId: '',
-      runId: '',
-      stepId: '',
+      workflow: "",
+      actorId: "",
+      commandId: "",
+      runId: "",
+      stepId: "",
     };
   }
 
   const params = new URLSearchParams(window.location.search);
   return {
-    workflow: params.get('workflow') ?? '',
-    actorId: params.get('actorId') ?? '',
-    commandId: params.get('commandId') ?? '',
-    runId: params.get('runId') ?? '',
-    stepId: params.get('stepId') ?? '',
+    workflow: params.get("workflow") ?? "",
+    actorId: params.get("actorId") ?? "",
+    commandId: params.get("commandId") ?? "",
+    runId: params.get("runId") ?? "",
+    stepId: params.get("stepId") ?? "",
   };
 }
 
@@ -101,79 +101,117 @@ const ObservabilityPage: React.FC = () => {
   const preferences = useMemo(() => loadConsolePreferences(), []);
   const initialContext = useMemo(() => readContextFromUrl(), []);
   const formRef = useRef<ProFormInstance<ObservabilityContextForm> | undefined>(
-    undefined,
+    undefined
   );
   const [context, setContext] = useState<ObservabilityContext>(initialContext);
 
   const targets = useMemo(
     () => buildObservabilityTargets(preferences, context),
-    [context, preferences],
+    [context, preferences]
   );
 
   const summaryRecord = useMemo<ObservabilitySummaryRecord>(
     () => ({
-      configuredCount: targets.filter((target) => target.status === 'configured').length,
-      missingCount: targets.filter((target) => target.status === 'missing').length,
+      configuredCount: targets.filter(
+        (target) => target.status === "configured"
+      ).length,
+      missingCount: targets.filter((target) => target.status === "missing")
+        .length,
       workflow: context.workflow,
       actorId: context.actorId,
       commandId: context.commandId,
     }),
-    [context.actorId, context.commandId, context.workflow, targets],
+    [context.actorId, context.commandId, context.workflow, targets]
   );
 
   const internalJumps = useMemo<InternalJumpItem[]>(
     () => [
       {
-        id: 'jump-runs',
-        title: 'Open Runs',
+        id: "jump-runs",
+        title: "Open Runs",
         description: context.workflow
           ? `Open Runs with workflow=${context.workflow}.`
-          : 'Open Runs and keep the current workflow selection manual.',
+          : "Open Runs and keep the current workflow selection manual.",
         href: context.workflow
           ? `/runs?workflow=${encodeURIComponent(context.workflow)}`
-          : '/runs',
+          : "/runs",
         enabled: true,
       },
       {
-        id: 'jump-actors',
-        title: 'Open Actor Explorer',
+        id: "jump-actors",
+        title: "Open Runtime Explorer",
         description: context.actorId
-          ? `Open Actors with actorId=${context.actorId}.`
-          : 'Provide actorId first to jump directly to Actor Explorer.',
+          ? `Open Runtime Explorer with actorId=${context.actorId}.`
+          : "Provide actorId first to jump directly to Runtime Explorer.",
         href: context.actorId
           ? `/actors?actorId=${encodeURIComponent(context.actorId)}`
-          : '/actors',
+          : "/actors",
         enabled: Boolean(context.actorId),
       },
       {
-        id: 'jump-workflows',
-        title: 'Open Workflow Detail',
+        id: "jump-workflows",
+        title: "Open Workflow Detail",
         description: context.workflow
           ? `Open Workflows with workflow=${context.workflow}.`
-          : 'Provide workflow first to jump directly to Workflow detail.',
+          : "Provide workflow first to jump directly to Workflow detail.",
         href: context.workflow
           ? `/workflows?workflow=${encodeURIComponent(context.workflow)}`
-          : '/workflows',
+          : "/workflows",
         enabled: Boolean(context.workflow),
       },
       {
-        id: 'jump-settings',
-        title: 'Open Settings',
-        description: 'Manage observability endpoint URLs and console preferences.',
-        href: '/settings',
+        id: "jump-settings",
+        title: "Open Console Settings",
+        description:
+          "Manage observability endpoint URLs and console preferences.",
+        href: "/settings/console",
+        enabled: true,
+      },
+      {
+        id: "jump-settings-runtime",
+        title: "Open Runtime Settings",
+        description:
+          "Manage local workflows, providers, connectors, MCP servers, secrets, and raw configuration files.",
+        href: "/settings/runtime",
+        enabled: true,
+      },
+      {
+        id: "jump-scopes",
+        title: "Open Scopes",
+        description:
+          "Inspect published workflow and script assets owned by GAgentService scopes.",
+        href: "/scopes",
+        enabled: true,
+      },
+      {
+        id: "jump-services",
+        title: "Open Services",
+        description:
+          "Inspect services, revisions, serving targets, rollouts, and traffic exposure.",
+        href: "/services",
+        enabled: true,
+      },
+      {
+        id: "jump-governance",
+        title: "Open Governance",
+        description:
+          "Inspect bindings, policies, endpoint exposure, and activation capability views.",
+        href: "/governance",
         enabled: true,
       },
     ],
-    [context.actorId, context.workflow],
+    [context.actorId, context.workflow]
   );
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === "undefined") {
       return;
     }
 
     const url = new URL(window.location.href);
-    const entries = Object.entries(context) as Array<[keyof ObservabilityContext, string]>;
+    const entries = Object.entries(context) as Array<
+      [keyof ObservabilityContext, string]
+    >;
     for (const [key, value] of entries) {
       if (value) {
         url.searchParams.set(key, value);
@@ -181,43 +219,50 @@ const ObservabilityPage: React.FC = () => {
         url.searchParams.delete(key);
       }
     }
-    window.history.replaceState(null, '', `${url.pathname}${url.search}`);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   }, [context]);
 
   return (
     <PageContainer
       title="Observability"
-      content="Use the configured external tools as a unified jump hub for logs, traces, and context-driven inspection without adding new backend APIs."
+      content="Use configured external tools as the jump hub for runtime, scopes, services, governance, and local settings without adding new backend APIs."
     >
       <Alert
         showIcon
         type="info"
-        message="External observability only"
+        title="External observability only"
         description="This page only manages outbound links and context handoff. Grafana, Jaeger, and Loki queries are not proxied through the Aevatar backend."
         style={{ marginBottom: 16 }}
       />
 
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} xl={9} style={stretchColumnStyle}>
-          <ProCard title="Observation context" {...moduleCardProps} style={fillCardStyle}>
+          <ProCard
+            title="Observation context"
+            {...moduleCardProps}
+            style={fillCardStyle}
+          >
             <ProForm<ObservabilityContextForm>
               formRef={formRef}
               layout="vertical"
               initialValues={initialContext}
               onFinish={async (values) => {
                 setContext({
-                  workflow: values.workflow?.trim() ?? '',
-                  actorId: values.actorId?.trim() ?? '',
-                  commandId: values.commandId?.trim() ?? '',
-                  runId: values.runId?.trim() ?? '',
-                  stepId: values.stepId?.trim() ?? '',
+                  workflow: values.workflow?.trim() ?? "",
+                  actorId: values.actorId?.trim() ?? "",
+                  commandId: values.commandId?.trim() ?? "",
+                  runId: values.runId?.trim() ?? "",
+                  stepId: values.stepId?.trim() ?? "",
                 });
                 return true;
               }}
               submitter={{
                 render: (props) => (
                   <Space wrap>
-                    <Button type="primary" onClick={() => props.form?.submit?.()}>
+                    <Button
+                      type="primary"
+                      onClick={() => props.form?.submit?.()}
+                    >
                       Apply context
                     </Button>
                     <Button
@@ -232,17 +277,37 @@ const ObservabilityPage: React.FC = () => {
                 ),
               }}
             >
-              <ProFormText name="workflow" label="Workflow" placeholder="direct" />
-              <ProFormText name="actorId" label="ActorId" placeholder="Workflow:19fe1b04" />
-              <ProFormText name="commandId" label="CommandId" placeholder="cmd-123" />
+              <ProFormText
+                name="workflow"
+                label="Workflow"
+                placeholder="direct"
+              />
+              <ProFormText
+                name="actorId"
+                label="ActorId"
+                placeholder="Workflow:19fe1b04"
+              />
+              <ProFormText
+                name="commandId"
+                label="CommandId"
+                placeholder="cmd-123"
+              />
               <ProFormText name="runId" label="RunId" placeholder="run-123" />
-              <ProFormText name="stepId" label="StepId" placeholder="approve_release" />
+              <ProFormText
+                name="stepId"
+                label="StepId"
+                placeholder="approve_release"
+              />
             </ProForm>
           </ProCard>
         </Col>
 
         <Col xs={24} xl={15} style={stretchColumnStyle}>
-          <ProCard title="Observability summary" {...moduleCardProps} style={fillCardStyle}>
+          <ProCard
+            title="Observability summary"
+            {...moduleCardProps}
+            style={fillCardStyle}
+          >
             <ProDescriptions<ObservabilitySummaryRecord>
               column={2}
               dataSource={summaryRecord}
@@ -254,7 +319,11 @@ const ObservabilityPage: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
         <Col xs={24} xl={15} style={stretchColumnStyle}>
-          <ProCard title="Configured targets" {...moduleCardProps} style={fillCardStyle}>
+          <ProCard
+            title="Configured targets"
+            {...moduleCardProps}
+            style={fillCardStyle}
+          >
             <ProList<ObservabilityTarget>
               rowKey="id"
               search={false}
@@ -270,24 +339,28 @@ const ObservabilityPage: React.FC = () => {
               }}
               metas={{
                 title: {
-                  dataIndex: 'label',
+                  dataIndex: "label",
                   render: (_, record) => (
                     <Space wrap size={[8, 8]}>
                       <Typography.Text strong>{record.label}</Typography.Text>
-                      <Tag color={record.status === 'configured' ? 'success' : 'default'}>
+                      <Tag
+                        color={
+                          record.status === "configured" ? "success" : "default"
+                        }
+                      >
                         {record.status}
                       </Tag>
                     </Space>
                   ),
                 },
                 description: {
-                  dataIndex: 'description',
+                  dataIndex: "description",
                 },
                 subTitle: {
                   render: (_, record) => (
                     <Space wrap size={[8, 8]}>
                       <Tag>{record.contextSummary}</Tag>
-                      {record.status === 'configured' ? (
+                      {record.status === "configured" ? (
                         <Tag color="processing">{record.homeUrl}</Tag>
                       ) : (
                         <Tag>No URL configured</Tag>
@@ -300,7 +373,7 @@ const ObservabilityPage: React.FC = () => {
                     <Space wrap>
                       <Button
                         type="primary"
-                        disabled={record.status !== 'configured'}
+                        disabled={record.status !== "configured"}
                         href={record.homeUrl || undefined}
                         target="_blank"
                         rel="noreferrer"
@@ -308,7 +381,7 @@ const ObservabilityPage: React.FC = () => {
                         Open {record.label}
                       </Button>
                       <Button
-                        disabled={record.status !== 'configured'}
+                        disabled={record.status !== "configured"}
                         href={record.exploreUrl || undefined}
                         target="_blank"
                         rel="noreferrer"
@@ -324,7 +397,11 @@ const ObservabilityPage: React.FC = () => {
         </Col>
 
         <Col xs={24} xl={9} style={stretchColumnStyle}>
-          <ProCard title="Internal jumps" {...moduleCardProps} style={fillCardStyle}>
+          <ProCard
+            title="Console surfaces"
+            {...moduleCardProps}
+            style={fillCardStyle}
+          >
             <ProList<InternalJumpItem>
               rowKey="id"
               search={false}
@@ -332,10 +409,10 @@ const ObservabilityPage: React.FC = () => {
               dataSource={internalJumps}
               metas={{
                 title: {
-                  dataIndex: 'title',
+                  dataIndex: "title",
                 },
                 description: {
-                  dataIndex: 'description',
+                  dataIndex: "description",
                 },
                 actions: {
                   render: (_, record) => [

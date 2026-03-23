@@ -1,11 +1,11 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { consoleApi } from '@/shared/api/consoleApi';
+import { runtimeCatalogApi } from '@/shared/api/runtimeCatalogApi';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import WorkflowsPage from './index';
 
-jest.mock('@/shared/api/consoleApi', () => ({
-  consoleApi: {
+jest.mock('@/shared/api/runtimeCatalogApi', () => ({
+  runtimeCatalogApi: {
     listWorkflowCatalog: jest.fn(async () => [
       {
         name: 'demo_flow',
@@ -106,7 +106,7 @@ describe('WorkflowsPage', () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     await waitFor(() => {
-      expect(consoleApi.listWorkflowCatalog).toHaveBeenCalled();
+      expect(runtimeCatalogApi.listWorkflowCatalog).toHaveBeenCalled();
     });
     expect(await screen.findAllByText('demo_flow')).toBeTruthy();
 
@@ -117,9 +117,7 @@ describe('WorkflowsPage', () => {
     expect(
       await screen.findByRole('combobox', { name: 'Groups' }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'More actions for demo_flow' }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Inspect' })).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Copy workflow YAML' }),
     ).toBeTruthy();
@@ -132,7 +130,7 @@ describe('WorkflowsPage', () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     await waitFor(() => {
-      expect(consoleApi.listWorkflowCatalog).toHaveBeenCalled();
+      expect(runtimeCatalogApi.listWorkflowCatalog).toHaveBeenCalled();
     });
 
     expect(
@@ -167,7 +165,9 @@ describe('WorkflowsPage', () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     await waitFor(() => {
-      expect(consoleApi.getWorkflowDetail).toHaveBeenCalledWith('demo_flow');
+      expect(runtimeCatalogApi.getWorkflowDetail).toHaveBeenCalledWith(
+        'demo_flow',
+      );
     });
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Graph' }));
@@ -193,7 +193,9 @@ describe('WorkflowsPage', () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     await waitFor(() => {
-      expect(consoleApi.getWorkflowDetail).toHaveBeenCalledWith('demo_flow');
+      expect(runtimeCatalogApi.getWorkflowDetail).toHaveBeenCalledWith(
+        'demo_flow',
+      );
     });
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Steps (2)' }));
