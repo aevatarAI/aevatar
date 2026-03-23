@@ -17,7 +17,7 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
     private readonly ILogger<DefaultDetachedCommandDispatchService<TCommand, TTarget, TReceipt, TError, TEvent, TFrame, TCompletion>> _logger;
     private readonly CancellationToken _shutdownToken;
     private int _inflightCount;
-    private TaskCompletionSource _drainComplete = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private volatile TaskCompletionSource _drainComplete = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public DefaultDetachedCommandDispatchService(
         ICommandDispatchPipeline<TCommand, TTarget, TReceipt, TError> dispatchPipeline,
@@ -73,7 +73,7 @@ public sealed class DefaultDetachedCommandDispatchService<TCommand, TTarget, TRe
     {
         // Reset drain signal if transitioning from 0 to 1.
         if (Interlocked.Increment(ref _inflightCount) == 1)
-            _drainComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Interlocked.Exchange(ref _drainComplete, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
 
         var task = Task.Run(
             () => DrainAsync(target, receipt, _shutdownToken),

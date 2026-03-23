@@ -13,7 +13,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Avatar, ConfigProvider, Dropdown, Space, Typography } from "antd";
 import enUS from "antd/locale/en_US";
 import React from "react";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import BrandLogo from "@/components/BrandLogo";
 import defaultSettings from "../config/defaultSettings";
 import { errorConfig } from "./requestErrorConfig";

@@ -28,6 +28,7 @@ internal sealed class AppToolHostOptions
     public int Port { get; init; } = 6688;
     public bool NoBrowser { get; init; }
     public string? ApiBaseUrl { get; init; }
+    public string? ListenUrls { get; init; }
     public TaskCompletionSource<bool>? StartedSignal { get; init; }
 }
 
@@ -38,13 +39,6 @@ internal static class AppToolHost
         try
         {
             var port = options.Port <= 0 ? 6688 : options.Port;
-            var localUrl = $"http://localhost:{port}";
-            var sdkBaseUrl = CliAppConfigStore.ResolveApiBaseUrl(options.ApiBaseUrl, localUrl, out var warning);
-            if (!string.IsNullOrWhiteSpace(warning))
-                Console.WriteLine($"[warn] {warning}");
-
-            var embeddedWorkflowMode = ShouldUseEmbeddedWorkflow(localUrl, sdkBaseUrl);
-
             var toolDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
                 ?? Environment.CurrentDirectory;
             var webRootCandidates = new[]
@@ -65,9 +59,21 @@ internal static class AppToolHost
                 WebRootPath = webRootPath,
             });
 
-            builder.WebHost.UseUrls(localUrl);
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
             builder.Configuration.AddAevatarConfig();
+            var listenUrls = ListenUrlResolver.ResolveListenUrls(
+                options.ListenUrls,
+                builder.Configuration,
+                "Cli:App:ListenUrls",
+                port);
+            var localUrl = ListenUrlResolver.ResolveBrowserUrl(listenUrls, port);
+            var sdkBaseUrl = CliAppConfigStore.ResolveApiBaseUrl(options.ApiBaseUrl, localUrl, out var warning);
+            if (!string.IsNullOrWhiteSpace(warning))
+                Console.WriteLine($"[warn] {warning}");
+
+            var embeddedWorkflowMode = ShouldUseEmbeddedWorkflow(localUrl, sdkBaseUrl);
+
+            builder.WebHost.UseUrls(listenUrls);
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
             var nyxIdAuthEnabled = NyxIdAppAuthentication.ResolveIsEnabled(builder.Configuration, embeddedWorkflowMode);
             var nyxIdAuthOptions = NyxIdAppAuthentication.BuildOptions(builder.Configuration);
             builder.Services.Configure<JsonOptions>(json =>
@@ -177,7 +183,7 @@ internal static class AppToolHost
             var loadedConnectors = embeddedWorkflowMode
                 ? LoadNamedConnectors(app.Services)
                 : Array.Empty<string>();
-            PrintBanner(localUrl, sdkBaseUrl, webRootPath, embeddedWorkflowMode, loadedConnectors);
+            PrintBanner(localUrl, listenUrls, sdkBaseUrl, webRootPath, embeddedWorkflowMode, loadedConnectors);
 
             app.Lifetime.ApplicationStarted.Register(() =>
             {
@@ -246,6 +252,7 @@ internal static class AppToolHost
 
     private static void PrintBanner(
         string localUrl,
+        string listenUrls,
         string sdkBaseUrl,
         string webRootPath,
         bool embeddedWorkflowMode,
@@ -260,6 +267,7 @@ internal static class AppToolHost
         Console.WriteLine("║                      aevatar app                          ║");
         Console.WriteLine("╠═══════════════════════════════════════════════════════════╣");
         Console.WriteLine($"║  🌐 Studio:     {localUrl,-41} ║");
+        Console.WriteLine($"║  🪝 Listen:     {listenUrls,-41} ║");
         Console.WriteLine($"║  🔌 SDK base:   {sdkBaseUrl,-41} ║");
         Console.WriteLine($"║  🧠 Mode:       {(embeddedWorkflowMode ? "embedded" : "proxy"),-41} ║");
         Console.WriteLine($"║  🔗 Connectors: {connectorSummary,-41} ║");

@@ -1,6 +1,6 @@
 import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Col, Row, Space } from "antd";
 import React, { useMemo, useState } from "react";
 import { governanceApi } from "@/shared/api/governanceApi";

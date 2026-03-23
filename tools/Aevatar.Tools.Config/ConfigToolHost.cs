@@ -12,6 +12,7 @@ public sealed class ConfigToolHostOptions
     public bool NoBrowser { get; init; }
     public string BannerTitle { get; init; } = "aevatar config";
     public string? DeprecationMessage { get; init; }
+    public string? ListenUrls { get; init; }
     public IReadOnlyList<string>? WebRootCandidates { get; init; }
 }
 
@@ -36,8 +37,14 @@ public static class ConfigToolHost
             ContentRootPath = toolDir,
         });
 
-        var url = $"http://localhost:{options.Port}";
-        builder.WebHost.UseUrls(url);
+        builder.Configuration.AddAevatarConfig();
+        var listenUrls = ListenUrlResolver.ResolveListenUrls(
+            options.ListenUrls,
+            builder.Configuration,
+            "ConfigTool:ListenUrls",
+            options.Port);
+        var url = ListenUrlResolver.ResolveBrowserUrl(listenUrls, options.Port);
+        builder.WebHost.UseUrls(listenUrls);
         builder.Services.Configure<JsonOptions>(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);
         builder.Services.AddSingleton<AevatarSecretsStore>(_ => new AevatarSecretsStore(AevatarPaths.SecretsJson));
         builder.Services.AddSingleton<ISecretsStore>(sp => new SecretsStoreAdapter(sp.GetRequiredService<AevatarSecretsStore>()));

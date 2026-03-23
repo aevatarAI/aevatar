@@ -40,8 +40,11 @@ NYXID_BASE_URL=http://127.0.0.1:3001
 NYXID_CLIENT_ID=your-public-client-id
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
 NYXID_SCOPE="openid profile email"
+# Optional when deploying under a sub-path such as /console/
+AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
+`NYXID_BASE_URL` and `NYXID_CLIENT_ID` are required. The console no longer ships a baked-in NyxID tenant or client id.
 `NYXID_REDIRECT_URI` must exactly match the public client registration in NyxID.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 

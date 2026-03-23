@@ -228,7 +228,7 @@ public sealed class WorkflowRunGAgent
             return;
         }
 
-        if (request.Metadata.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
+        if (request.Headers.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
             !string.IsNullOrWhiteSpace(commandId))
         {
             await PersistDomainEventAsync(
@@ -250,7 +250,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, request.Metadata, State.ScopeId),
+            ScopeId = ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -510,15 +510,6 @@ public sealed class WorkflowRunGAgent
         foreach (var role in _compiledWorkflow.Roles)
         {
             var roleId = role.Id;
-            if (string.IsNullOrWhiteSpace(roleId))
-            {
-                Logger.LogWarning(
-                    "Skip workflow role without id while building agent tree. workflow={WorkflowName} actor={ActorId}",
-                    _compiledWorkflow.Name,
-                    Id);
-                continue;
-            }
-
             var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);

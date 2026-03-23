@@ -10,7 +10,7 @@ import type {
   ProDescriptionsItemProps,
   ProFormInstance,
 } from "@ant-design/pro-components";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Button, Col, Empty, Row, Space, Tag, Typography } from "antd";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {

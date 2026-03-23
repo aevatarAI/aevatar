@@ -1,6 +1,5 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { history } from '@umijs/max';
 import type { Node } from '@xyflow/react';
 import {
   Button,
@@ -13,6 +12,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { history } from '@/shared/navigation/history';
 import {
   CONSOLE_PREFERENCES_UPDATED_EVENT,
   loadConsolePreferences,

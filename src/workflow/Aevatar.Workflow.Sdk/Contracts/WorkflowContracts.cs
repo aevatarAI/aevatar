@@ -5,11 +5,22 @@ namespace Aevatar.Workflow.Sdk.Contracts;
 
 public sealed record ChatRunRequest
 {
-    public required string Prompt { get; init; }
+    public string? Prompt { get; init; }
+    public IReadOnlyList<ChatRunContentPart>? InputParts { get; init; }
     public string? Workflow { get; init; }
     public string? AgentId { get; init; }
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
+}
+
+public sealed record ChatRunContentPart
+{
+    public required string Type { get; init; }
+    public string? Text { get; init; }
+    public string? DataBase64 { get; init; }
+    public string? MediaType { get; init; }
+    public string? Uri { get; init; }
+    public string? Name { get; init; }
 }
 
 public sealed record WorkflowResumeRequest

@@ -7,8 +7,6 @@ export interface NyxIDRuntimeConfig {
   readonly configurationError?: string;
 }
 
-const DEFAULT_NYXID_BASE_URL = 'https://nyx.chrono-ai.fun';
-const DEFAULT_NYXID_CLIENT_ID = 'd7fb34b5-e5fc-4d0f-9997-26c3c0fca1b3';
 const DEFAULT_SCOPE = 'openid profile email';
 const DEFAULT_REDIRECT_PATH = '/auth/callback';
 
@@ -125,10 +123,13 @@ function buildConfigurationError(
   return `${variableName} must be a valid http(s) URL or a root-relative path such as ${exampleValue}.`;
 }
 
+function buildMissingConfigurationError(variableName: 'NYXID_BASE_URL' | 'NYXID_CLIENT_ID'): string {
+  return `${variableName} must be configured to enable NyxID login.`;
+}
+
 export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
-  const baseUrl = trimOptional(process.env.NYXID_BASE_URL) ?? DEFAULT_NYXID_BASE_URL;
-  const clientId =
-    trimOptional(process.env.NYXID_CLIENT_ID) ?? DEFAULT_NYXID_CLIENT_ID;
+  const baseUrl = trimOptional(process.env.NYXID_BASE_URL) ?? '';
+  const clientId = trimOptional(process.env.NYXID_CLIENT_ID) ?? '';
   const redirectUri =
     trimOptional(process.env.NYXID_REDIRECT_URI) ?? resolveDefaultRedirectUri();
   const scope = trimOptional(process.env.NYXID_SCOPE) ?? DEFAULT_SCOPE;
@@ -141,7 +142,11 @@ export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
     trimTrailingSlash: false,
   });
   const configurationError =
-    !normalizedBaseUrl
+    clientId.length === 0
+      ? buildMissingConfigurationError('NYXID_CLIENT_ID')
+      : baseUrl.length === 0
+        ? buildMissingConfigurationError('NYXID_BASE_URL')
+        : !normalizedBaseUrl
       ? buildConfigurationError('NYXID_BASE_URL', '/nyxid')
       : !normalizedRedirectUri
         ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')

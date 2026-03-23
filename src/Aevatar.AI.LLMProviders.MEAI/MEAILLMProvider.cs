@@ -22,11 +22,34 @@ namespace Aevatar.AI.LLMProviders.MEAI;
 /// </summary>
 public sealed class MEAILLMProvider : ILLMProvider
 {
+    private static readonly LLMProviderCapabilities ProviderCapabilities = new()
+    {
+        SupportedInputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+            ContentPartKind.Audio,
+            ContentPartKind.Video,
+        },
+        SupportedOutputModalities = new HashSet<ContentPartKind>
+        {
+            ContentPartKind.Text,
+            ContentPartKind.Image,
+            ContentPartKind.Audio,
+            ContentPartKind.Video,
+        },
+        SupportsStreaming = true,
+        SupportsToolCalls = true,
+        SupportsReasoningDeltas = true,
+    };
+
     private readonly IChatClient _client;
     private readonly ILogger _logger;
 
     /// <summary>提供者名称。</summary>
     public string Name { get; }
+
+    public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     /// <summary>
     /// 创建 MEAI LLM Provider。
@@ -101,6 +124,20 @@ public sealed class MEAILLMProvider : ILLMProvider
                                 DeltaToolCall = ConvertFunctionCallDelta(functionCall),
                             };
                             break;
+                        case DataContent dataContent when TryConvertDataContent(dataContent, out var dataPart):
+                            emittedStreamChunk = true;
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaContentPart = dataPart,
+                            };
+                            break;
+                        case UriContent uriContent when TryConvertUriContent(uriContent, out var uriPart):
+                            emittedStreamChunk = true;
+                            yield return new LLMStreamChunk
+                            {
+                                DeltaContentPart = uriPart,
+                            };
+                            break;
                     }
                 }
             }
@@ -130,6 +167,17 @@ public sealed class MEAILLMProvider : ILLMProvider
                 {
                     DeltaContent = fallback.Content,
                 };
+            }
+
+            if (fallback.ContentParts is { Count: > 0 })
+            {
+                foreach (var contentPart in fallback.ContentParts)
+                {
+                    yield return new LLMStreamChunk
+                    {
+                        DeltaContentPart = contentPart,
+                    };
+                }
             }
 
             if (fallback.ToolCalls is { Count: > 0 })
@@ -227,32 +275,42 @@ public sealed class MEAILLMProvider : ILLMProvider
     {
         foreach (var part in parts)
         {
-            if (part == null || string.IsNullOrWhiteSpace(part.Type))
+            if (part == null || part.Kind == ContentPartKind.Unspecified)
                 continue;
 
-            if (string.Equals(part.Type, "text", StringComparison.OrdinalIgnoreCase))
+            if (part.Kind == ContentPartKind.Text)
             {
                 if (!string.IsNullOrWhiteSpace(part.Text))
                     message.Contents.Add(new TextContent(part.Text));
                 continue;
             }
 
-            if (!string.Equals(part.Type, "image", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (TryCreateImageDataContent(part, out var dataContent) && dataContent != null)
-                message.Contents.Add(dataContent);
+            if (TryCreateBinaryContent(part, out var content) && content != null)
+                message.Contents.Add(content);
         }
     }
 
-    private static bool TryCreateImageDataContent(ContentPart part, out DataContent? content)
+    private static bool TryCreateBinaryContent(ContentPart part, out AIContent? content)
     {
         content = null;
-        if (string.IsNullOrWhiteSpace(part.ImageBase64))
+
+        if (!string.IsNullOrWhiteSpace(part.Uri))
+        {
+            if (Uri.TryCreate(part.Uri, UriKind.Absolute, out var uri))
+            {
+                content = new UriContent(uri, ResolveMediaType(part));
+                return true;
+            }
+
+            content = new UriContent(part.Uri, ResolveMediaType(part));
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(part.DataBase64))
             return false;
 
-        var mediaType = string.IsNullOrWhiteSpace(part.ImageMediaType) ? "image/png" : part.ImageMediaType!;
-        var base64 = part.ImageBase64!.Trim();
+        var mediaType = ResolveMediaType(part);
+        var base64 = part.DataBase64!.Trim();
 
         // Accept both plain base64 and data-uri input.
         if (base64.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -291,10 +349,12 @@ public sealed class MEAILLMProvider : ILLMProvider
             text = message.Content,
             content_parts = message.ContentParts.Select(p => new
             {
-                type = p.Type,
+                kind = p.Kind.ToString(),
                 text = p.Text,
-                image_base64 = p.ImageBase64,
-                image_media_type = p.ImageMediaType,
+                data_base64 = p.DataBase64,
+                media_type = p.MediaType,
+                uri = p.Uri,
+                name = p.Name,
             }).ToArray(),
         };
     }
@@ -361,6 +421,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         var lastMessage = response.Messages.LastOrDefault();
         var content = lastMessage?.Text;
         List<ToolCall>? toolCalls = null;
+        List<ContentPart>? contentParts = null;
 
         // 检查是否有 Tool Calls
         if (lastMessage != null)
@@ -371,6 +432,16 @@ public sealed class MEAILLMProvider : ILLMProvider
                 {
                     toolCalls ??= [];
                     toolCalls.Add(ConvertFunctionCall(fcc));
+                }
+                else if (part is DataContent dataContent && TryConvertDataContent(dataContent, out var dataPart))
+                {
+                    contentParts ??= [];
+                    contentParts.Add(dataPart);
+                }
+                else if (part is UriContent uriContent && TryConvertUriContent(uriContent, out var uriPart))
+                {
+                    contentParts ??= [];
+                    contentParts.Add(uriPart);
                 }
             }
         }
@@ -387,6 +458,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new LLMResponse
         {
             Content = content,
+            ContentParts = contentParts,
             ToolCalls = toolCalls,
             Usage = usage,
             FinishReason = response.FinishReason?.ToString(),
@@ -418,5 +490,68 @@ public sealed class MEAILLMProvider : ILLMProvider
             Name = functionCall.Name ?? string.Empty,
             ArgumentsJson = argsJson,
         };
+    }
+
+    private static bool TryConvertDataContent(DataContent dataContent, out ContentPart part)
+    {
+        var kind = ResolveKind(dataContent.MediaType);
+        if (kind == ContentPartKind.Unspecified)
+        {
+            part = null!;
+            return false;
+        }
+
+        part = new ContentPart
+        {
+            Kind = kind,
+            DataBase64 = dataContent.Base64Data.ToString(),
+            MediaType = dataContent.MediaType,
+            Uri = dataContent.Uri?.ToString(),
+            Name = dataContent.Name,
+        };
+        return true;
+    }
+
+    private static bool TryConvertUriContent(UriContent uriContent, out ContentPart part)
+    {
+        var kind = ResolveKind(uriContent.MediaType);
+        if (kind == ContentPartKind.Unspecified)
+        {
+            part = null!;
+            return false;
+        }
+
+        part = new ContentPart
+        {
+            Kind = kind,
+            Uri = uriContent.Uri?.ToString(),
+            MediaType = uriContent.MediaType,
+        };
+        return true;
+    }
+
+    private static string ResolveMediaType(ContentPart part) =>
+        !string.IsNullOrWhiteSpace(part.MediaType)
+            ? part.MediaType!
+            : part.Kind switch
+            {
+                ContentPartKind.Audio => "audio/wav",
+                ContentPartKind.Video => "video/mp4",
+                _ => "image/png",
+            };
+
+    private static ContentPartKind ResolveKind(string? mediaType)
+    {
+        if (string.IsNullOrWhiteSpace(mediaType))
+            return ContentPartKind.Unspecified;
+
+        var normalized = mediaType.Trim();
+        if (normalized.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            return ContentPartKind.Image;
+        if (normalized.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
+            return ContentPartKind.Audio;
+        if (normalized.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+            return ContentPartKind.Video;
+        return ContentPartKind.Unspecified;
     }
 }
