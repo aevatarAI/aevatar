@@ -1,17 +1,23 @@
-import { waitFor } from '@testing-library/react';
-import React from 'react';
-import { consoleApi } from '@/shared/api/consoleApi';
-import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import OverviewPage from './index';
+import { waitFor } from "@testing-library/react";
+import React from "react";
+import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
+import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
+import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
+import OverviewPage from "./index";
 
-jest.mock('@/shared/api/consoleApi', () => ({
-  consoleApi: {
-    listWorkflows: jest.fn(async () => []),
+jest.mock("@/shared/api/runtimeCatalogApi", () => ({
+  runtimeCatalogApi: {
+    listWorkflowNames: jest.fn(async () => []),
     listWorkflowCatalog: jest.fn(async () => []),
+  },
+}));
+
+jest.mock("@/shared/api/runtimeQueryApi", () => ({
+  runtimeQueryApi: {
     listAgents: jest.fn(async () => []),
     getCapabilities: jest.fn(async () => ({
-      schemaVersion: 'capabilities.v1',
-      generatedAtUtc: '2026-03-12T00:00:00Z',
+      schemaVersion: "capabilities.v1",
+      generatedAtUtc: "2026-03-12T00:00:00Z",
       primitives: [],
       connectors: [],
       workflows: [],
@@ -19,22 +25,29 @@ jest.mock('@/shared/api/consoleApi', () => ({
   },
 }));
 
-describe('OverviewPage', () => {
-  it('renders the overview title', async () => {
-    const { container } = renderWithQueryClient(React.createElement(OverviewPage));
-
-    expect(container.textContent).toContain('Overview');
-    expect(container.textContent).toContain(
-      'Overview of workflows, runtime capabilities, actors, and observability.',
+describe("OverviewPage", () => {
+  it("renders the overview title", async () => {
+    const { container } = renderWithQueryClient(
+      React.createElement(OverviewPage)
     );
-    expect(container.textContent).toContain('Runtime capability snapshot');
-    expect(container.textContent).toContain('Workflow tools');
-    expect(container.textContent).toContain('Workflow library');
-    expect(container.textContent).toContain('New Studio draft');
+
+    expect(container.textContent).toContain("Overview");
+    expect(container.textContent).toContain(
+      "Overview of runtime workflows, scope assets, services, governance, actors, and observability."
+    );
+    expect(container.textContent).toContain("Quick actions");
+    expect(container.textContent).toContain("Platform entry points");
+    expect(container.textContent).toContain("Local console tools");
+    expect(container.textContent).toContain("Capability surfaces");
+    expect(container.textContent).toContain("Service runtime");
+    expect(container.textContent).toContain("Governance");
+    expect(container.textContent).toContain("Open runtime explorer");
+    expect(container.textContent).toContain("Open runtime settings");
+    expect(container.textContent).not.toContain("Open Studio");
     await waitFor(() => {
-      expect(consoleApi.listWorkflows).toHaveBeenCalled();
-      expect(consoleApi.listAgents).toHaveBeenCalled();
-      expect(consoleApi.getCapabilities).toHaveBeenCalled();
+      expect(runtimeCatalogApi.listWorkflowNames).toHaveBeenCalled();
+      expect(runtimeQueryApi.listAgents).toHaveBeenCalled();
+      expect(runtimeQueryApi.getCapabilities).toHaveBeenCalled();
     });
   });
 });

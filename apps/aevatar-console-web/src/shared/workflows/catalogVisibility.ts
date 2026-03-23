@@ -1,4 +1,4 @@
-import type { WorkflowCatalogItem } from '@/shared/api/models';
+import type { WorkflowCatalogItem } from "@/shared/models/runtime/catalog";
 
 export type WorkflowCatalogOption = {
   label: string;
@@ -6,18 +6,18 @@ export type WorkflowCatalogOption = {
 };
 
 function trimOptional(value?: string | null): string {
-  return value?.trim() ?? '';
+  return value?.trim() ?? "";
 }
 
 export function listVisibleWorkflowCatalogItems(
-  items: readonly WorkflowCatalogItem[],
+  items: readonly WorkflowCatalogItem[]
 ): WorkflowCatalogItem[] {
   return items.filter((item) => item.showInLibrary);
 }
 
 export function findWorkflowCatalogItem(
   items: readonly WorkflowCatalogItem[],
-  workflowName?: string | null,
+  workflowName?: string | null
 ): WorkflowCatalogItem | undefined {
   const normalized = trimOptional(workflowName);
   if (!normalized) {
@@ -29,19 +29,19 @@ export function findWorkflowCatalogItem(
 
 export function resolveWorkflowCatalogSelection(
   items: readonly WorkflowCatalogItem[],
-  currentWorkflowName?: string | null,
+  currentWorkflowName?: string | null
 ): string {
   const normalized = trimOptional(currentWorkflowName);
   if (normalized && items.some((item) => item.name === normalized)) {
     return normalized;
   }
 
-  return listVisibleWorkflowCatalogItems(items)[0]?.name ?? '';
+  return listVisibleWorkflowCatalogItems(items)[0]?.name ?? "";
 }
 
 export function buildWorkflowCatalogOptions(
   items: readonly WorkflowCatalogItem[],
-  currentWorkflowName?: string | null,
+  currentWorkflowName?: string | null
 ): WorkflowCatalogOption[] {
   const visibleItems = listVisibleWorkflowCatalogItems(items);
   const options = visibleItems.map((item) => ({
