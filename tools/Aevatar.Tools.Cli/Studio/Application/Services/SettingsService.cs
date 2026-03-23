@@ -1,5 +1,6 @@
 using Aevatar.Tools.Cli.Studio.Application.Abstractions;
 using Aevatar.Tools.Cli.Studio.Application.Contracts;
+using Aevatar.Tools.Cli.Hosting;
 
 namespace Aevatar.Tools.Cli.Studio.Application.Services;
 
@@ -12,20 +13,27 @@ public sealed class SettingsService
 
     private readonly IStudioWorkspaceStore _workspaceStore;
     private readonly IAevatarSettingsStore _aevatarSettingsStore;
+    private readonly AppRuntimeTargetResolver? _runtimeTargetResolver;
 
     public SettingsService(
         IStudioWorkspaceStore workspaceStore,
-        IAevatarSettingsStore aevatarSettingsStore)
+        IAevatarSettingsStore aevatarSettingsStore,
+        AppRuntimeTargetResolver? runtimeTargetResolver = null)
     {
         _workspaceStore = workspaceStore;
         _aevatarSettingsStore = aevatarSettingsStore;
+        _runtimeTargetResolver = runtimeTargetResolver;
     }
 
     public async Task<StudioSettingsResponse> GetAsync(CancellationToken cancellationToken = default)
     {
         var workspace = await _workspaceStore.GetSettingsAsync(cancellationToken);
         var aevatar = await _aevatarSettingsStore.GetAsync(cancellationToken);
-        return ToResponse(workspace.RuntimeBaseUrl, workspace.AppearanceTheme, workspace.ColorMode, aevatar);
+        return ToResponse(
+            await ResolveRuntimeBaseUrlAsync(workspace.RuntimeBaseUrl, cancellationToken),
+            workspace.AppearanceTheme,
+            workspace.ColorMode,
+            aevatar);
     }
 
     public async Task<StudioSettingsResponse> SaveAsync(
@@ -34,7 +42,7 @@ public sealed class SettingsService
     {
         var workspace = await _workspaceStore.GetSettingsAsync(cancellationToken);
         var runtimeBaseUrl = string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
-            ? workspace.RuntimeBaseUrl
+            ? await ResolveRuntimeBaseUrlAsync(workspace.RuntimeBaseUrl, cancellationToken)
             : NormalizeRuntimeBaseUrl(request.RuntimeBaseUrl);
         var appearanceTheme = string.IsNullOrWhiteSpace(request.AppearanceTheme)
             ? workspace.AppearanceTheme
@@ -84,7 +92,7 @@ public sealed class SettingsService
     {
         var workspace = await _workspaceStore.GetSettingsAsync(cancellationToken);
         var runtimeBaseUrl = NormalizeRuntimeBaseUrl(string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
-            ? workspace.RuntimeBaseUrl
+            ? await ResolveRuntimeBaseUrlAsync(workspace.RuntimeBaseUrl, cancellationToken)
             : request.RuntimeBaseUrl!);
 
         if (!Uri.TryCreate(runtimeBaseUrl, UriKind.Absolute, out var runtimeUri) ||
@@ -132,6 +140,15 @@ public sealed class SettingsService
             Message: lastError?.Message ?? "Failed to reach the runtime.");
     }
 
+    private async Task<string> ResolveRuntimeBaseUrlAsync(string currentRuntimeBaseUrl, CancellationToken cancellationToken)
+    {
+        if (_runtimeTargetResolver == null)
+            return currentRuntimeBaseUrl;
+
+        var runtimeTarget = await _runtimeTargetResolver.GetCurrentAsync(cancellationToken);
+        return runtimeTarget.ConfiguredBaseUrl;
+    }
+
     private static StudioSettingsResponse ToResponse(string runtimeBaseUrl, string appearanceTheme, string colorMode, StoredAevatarSettings aevatar) =>
         new(
             runtimeBaseUrl,
@@ -165,7 +182,7 @@ public sealed class SettingsService
     private static string NormalizeRuntimeBaseUrl(string url)
     {
         var normalized = string.IsNullOrWhiteSpace(url)
-            ? "http://127.0.0.1:5100"
+            ? "http://localhost:6688"
             : url.Trim();
 
         return normalized.TrimEnd('/');

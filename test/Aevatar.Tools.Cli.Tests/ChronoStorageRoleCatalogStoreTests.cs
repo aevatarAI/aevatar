@@ -101,7 +101,6 @@ public sealed class ChronoStorageRoleCatalogStoreTests
         var options = Options.Create(new ConnectorCatalogStorageOptions
         {
             Enabled = true,
-            UseNyxProxy = true,
             NyxProxyBaseUrl = "https://nyx.test",
             NyxProxyServiceSlug = "chrono-storage-service",
             Bucket = "studio-catalogs",

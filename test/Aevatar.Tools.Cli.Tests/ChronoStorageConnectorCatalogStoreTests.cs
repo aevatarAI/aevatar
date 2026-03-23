@@ -147,6 +147,79 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
     }
 
     [Fact]
+    public async Task GetConnectorCatalogAsync_WhenCrossOriginDownloadRequiresNyxAuth_ShouldRetryWithAuthorizedClient()
+    {
+        using var workspaceRoot = new TemporaryDirectory();
+        var scopeResolver = new StubAppScopeResolver("scope-cross-origin-auth");
+        var storageServer = new CrossOriginAuthorizedDownloadChronoStorageServer();
+        var blobClient = CreateBlobClient(scopeResolver, storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
+        var remoteContext = blobClient.TryResolveContext("aevatar/connectors/v1", "catalog.json.enc")
+                           ?? throw new InvalidOperationException("Expected remote context.");
+
+        await using var stream = new MemoryStream();
+        await ConnectorCatalogJsonSerializer.WriteCatalogAsync(
+            stream,
+            [CreateConnector("cross_origin_connector", "https://cross-origin.example.com")],
+            CancellationToken.None);
+        storageServer.Store(
+            remoteContext.Bucket,
+            remoteContext.ObjectKey,
+            blobClient.EncryptPayload(remoteContext, stream.ToArray()));
+
+        var store = new ChronoStorageConnectorCatalogStore(
+            new InMemoryStudioWorkspaceStore(),
+            blobClient,
+            CreateOptions(),
+            Options.Create(new StudioStorageOptions
+            {
+                RootDirectory = workspaceRoot.Path,
+            }));
+
+        var catalog = await store.GetConnectorCatalogAsync();
+
+        catalog.FileExists.Should().BeTrue();
+        catalog.Connectors.Should().ContainSingle(x => x.Name == "cross_origin_connector");
+        storageServer.AnonymousDownloadAttempts.Should().Be(1);
+        storageServer.AuthorizedDownloadAttempts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetConnectorCatalogAsync_WhenPresignedUrlDownloadIsTransientlyUnavailable_ShouldRetryWithFreshPresignedUrl()
+    {
+        using var workspaceRoot = new TemporaryDirectory();
+        var scopeResolver = new StubAppScopeResolver("scope-flaky-download");
+        var storageServer = new RetryingDownloadChronoStorageServer();
+        var blobClient = CreateBlobClient(scopeResolver, storageServer.CreateHttpClientFactory(), workspaceRoot.Path);
+        var remoteContext = blobClient.TryResolveContext("aevatar/connectors/v1", "catalog.json.enc")
+                           ?? throw new InvalidOperationException("Expected remote context.");
+
+        await using var stream = new MemoryStream();
+        await ConnectorCatalogJsonSerializer.WriteCatalogAsync(
+            stream,
+            [CreateConnector("retried_connector", "https://retry.example.com")],
+            CancellationToken.None);
+        storageServer.Store(
+            remoteContext.Bucket,
+            remoteContext.ObjectKey,
+            blobClient.EncryptPayload(remoteContext, stream.ToArray()));
+
+        var store = new ChronoStorageConnectorCatalogStore(
+            new InMemoryStudioWorkspaceStore(),
+            blobClient,
+            CreateOptions(),
+            Options.Create(new StudioStorageOptions
+            {
+                RootDirectory = workspaceRoot.Path,
+            }));
+
+        var catalog = await store.GetConnectorCatalogAsync();
+
+        catalog.FileExists.Should().BeTrue();
+        catalog.Connectors.Should().ContainSingle(x => x.Name == "retried_connector");
+        storageServer.PresignedUrlRequestCount.Should().Be(2);
+    }
+
+    [Fact]
     public async Task GetConnectorCatalogAsync_WhenDownloadUrlReturnsNotFound_ShouldNotSilentlyReturnMissingCatalog()
     {
         using var workspaceRoot = new TemporaryDirectory();
@@ -266,7 +339,6 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
         Options.Create(new ConnectorCatalogStorageOptions
         {
             Enabled = true,
-            UseNyxProxy = true,
             NyxProxyBaseUrl = "https://nyx.test",
             NyxProxyServiceSlug = "chrono-storage-service",
             Bucket = "studio-connectors",
@@ -644,6 +716,240 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
                 }
 
                 throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");
+            }
+
+            private static string GetRequiredQueryValue(Uri uri, string key)
+            {
+                var query = uri.Query.TrimStart('?')
+                    .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(pair => pair.Split('=', 2))
+                    .ToDictionary(
+                        pair => Uri.UnescapeDataString(pair[0]),
+                        pair => pair.Length > 1 ? Uri.UnescapeDataString(pair[1]) : string.Empty,
+                        StringComparer.Ordinal);
+                return query.TryGetValue(key, out var value)
+                    ? value
+                    : throw new InvalidOperationException($"Missing query key '{key}'.");
+            }
+
+            private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, object payload) =>
+                new(statusCode)
+                {
+                    Content = JsonContent.Create(payload),
+                };
+        }
+    }
+
+    private sealed class CrossOriginAuthorizedDownloadChronoStorageServer
+    {
+        private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+
+        public int AnonymousDownloadAttempts { get; private set; }
+        public int AuthorizedDownloadAttempts { get; private set; }
+
+        public void Store(string bucket, string objectKey, byte[] payload) =>
+            _objects[$"{bucket}:{objectKey}"] = payload;
+
+        public IHttpClientFactory CreateHttpClientFactory()
+        {
+            var anonymousClient = new HttpClient(new Handler(this, allowBlobDownload: false))
+            {
+                BaseAddress = new Uri("https://nyx.test/"),
+            };
+            var authorizedClient = new HttpClient(new Handler(this, allowBlobDownload: true))
+            {
+                BaseAddress = new Uri("https://nyx.test/"),
+            };
+
+            return new NamedHttpClientFactory(
+                anonymousClient,
+                new Dictionary<string, HttpClient>(StringComparer.Ordinal)
+                {
+                    [ChronoStorageCatalogBlobClient.NyxProxyHttpClientName] = authorizedClient,
+                });
+        }
+
+        private sealed class Handler : HttpMessageHandler
+        {
+            private readonly CrossOriginAuthorizedDownloadChronoStorageServer _server;
+            private readonly bool _allowBlobDownload;
+
+            public Handler(CrossOriginAuthorizedDownloadChronoStorageServer server, bool allowBlobDownload)
+            {
+                _server = server;
+                _allowBlobDownload = allowBlobDownload;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var uri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
+                if (string.Equals(uri.Host, "blob.nyx.test", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(HandleBlobDownload(uri));
+                }
+
+                var path = uri.AbsolutePath.Trim('/');
+                const string proxyPrefix = "api/v1/proxy/s/chrono-storage-service/";
+                if (!path.StartsWith(proxyPrefix, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");
+                }
+
+                var relativePath = path[proxyPrefix.Length..];
+                if (request.Method == HttpMethod.Get && relativePath.StartsWith("api/buckets/", StringComparison.Ordinal) &&
+                    relativePath.Contains("/presigned-url", StringComparison.Ordinal))
+                {
+                    var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    var bucket = segments[2];
+                    var key = GetRequiredQueryValue(uri, "key");
+                    if (!_server._objects.ContainsKey($"{bucket}:{key}"))
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                    }
+
+                    return Task.FromResult(CreateJsonResponse(
+                        HttpStatusCode.OK,
+                        new
+                        {
+                            data = new
+                            {
+                                presignedUrl = $"https://blob.nyx.test/downloads/{bucket}/{Uri.EscapeDataString(key)}",
+                            },
+                            error = (object?)null,
+                        }));
+                }
+
+                throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");
+            }
+
+            private HttpResponseMessage HandleBlobDownload(Uri uri)
+            {
+                if (_allowBlobDownload)
+                {
+                    _server.AuthorizedDownloadAttempts++;
+                }
+                else
+                {
+                    _server.AnonymousDownloadAttempts++;
+                    return new HttpResponseMessage(HttpStatusCode.NotFound);
+                }
+
+                var segments = uri.AbsolutePath.Trim('/').Split('/', 3, StringSplitOptions.RemoveEmptyEntries);
+                var bucket = segments[1];
+                var key = Uri.UnescapeDataString(segments[2]);
+                return _server._objects.TryGetValue($"{bucket}:{key}", out var payload)
+                    ? new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(payload),
+                    }
+                    : new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+
+            private static string GetRequiredQueryValue(Uri uri, string key)
+            {
+                var query = uri.Query.TrimStart('?')
+                    .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(pair => pair.Split('=', 2))
+                    .ToDictionary(
+                        pair => Uri.UnescapeDataString(pair[0]),
+                        pair => pair.Length > 1 ? Uri.UnescapeDataString(pair[1]) : string.Empty,
+                        StringComparer.Ordinal);
+                return query.TryGetValue(key, out var value)
+                    ? value
+                    : throw new InvalidOperationException($"Missing query key '{key}'.");
+            }
+
+            private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, object payload) =>
+                new(statusCode)
+                {
+                    Content = JsonContent.Create(payload),
+                };
+        }
+    }
+
+    private sealed class RetryingDownloadChronoStorageServer
+    {
+        private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, int> _presignedUrlRequestCounts = new(StringComparer.Ordinal);
+
+        public int PresignedUrlRequestCount => _presignedUrlRequestCounts.Values.Sum();
+
+        public void Store(string bucket, string objectKey, byte[] payload) =>
+            _objects[$"{bucket}:{objectKey}"] = payload;
+
+        public IHttpClientFactory CreateHttpClientFactory()
+        {
+            var client = new HttpClient(new Handler(this))
+            {
+                BaseAddress = new Uri("https://nyx.test/"),
+            };
+            return new StubHttpClientFactory(client);
+        }
+
+        private sealed class Handler : HttpMessageHandler
+        {
+            private readonly RetryingDownloadChronoStorageServer _server;
+
+            public Handler(RetryingDownloadChronoStorageServer server)
+            {
+                _server = server;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var uri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
+                if (string.Equals(uri.Host, "download.local", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(HandleDownload(uri));
+                }
+
+                if (request.Method == HttpMethod.Get &&
+                    uri.AbsolutePath.Contains("/presigned-url", StringComparison.Ordinal))
+                {
+                    var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+                    var bucket = segments[^2];
+                    var key = GetRequiredQueryValue(uri, "key");
+                    var objectId = $"{bucket}:{key}";
+                    if (!_server._objects.ContainsKey(objectId))
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                    }
+
+                    _server._presignedUrlRequestCounts.TryGetValue(objectId, out var count);
+                    _server._presignedUrlRequestCounts[objectId] = count + 1;
+                    var mode = count == 0 ? "missing" : "ok";
+                    return Task.FromResult(CreateJsonResponse(
+                        HttpStatusCode.OK,
+                        new
+                        {
+                            data = new
+                            {
+                                presignedUrl = $"https://download.local/{mode}/{bucket}/{Uri.EscapeDataString(key)}",
+                            },
+                            error = (object?)null,
+                        }));
+                }
+
+                throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");
+            }
+
+            private HttpResponseMessage HandleDownload(Uri uri)
+            {
+                var segments = uri.AbsolutePath.Trim('/').Split('/', 3, StringSplitOptions.RemoveEmptyEntries);
+                var mode = segments[0];
+                var bucket = segments[1];
+                var key = Uri.UnescapeDataString(segments[2]);
+                if (!string.Equals(mode, "ok", StringComparison.Ordinal))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.NotFound);
+                }
+
+                return _server._objects.TryGetValue($"{bucket}:{key}", out var payload)
+                    ? new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(payload),
+                    }
+                    : new HttpResponseMessage(HttpStatusCode.NotFound);
             }
 
             private static string GetRequiredQueryValue(Uri uri, string key)

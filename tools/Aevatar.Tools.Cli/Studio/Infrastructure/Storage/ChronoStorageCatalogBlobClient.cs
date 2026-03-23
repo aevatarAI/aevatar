@@ -13,6 +13,7 @@ namespace Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
 internal sealed class ChronoStorageCatalogBlobClient
 {
     public const string NyxProxyHttpClientName = "NyxProxyAuthorized";
+    private const int MaxDownloadUrlAttempts = 2;
 
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IHttpClientFactory _httpClientFactory;
@@ -82,7 +83,6 @@ internal sealed class ChronoStorageCatalogBlobClient
             LegacyObjectKeys: legacyObjectKeys,
             PresignedUrlExpiresInSeconds: Math.Clamp(_options.PresignedUrlExpiresInSeconds <= 0 ? 300 : _options.PresignedUrlExpiresInSeconds, 30, 3600),
             CreateBucketIfMissing: _options.CreateBucketIfMissing,
-            UseNyxProxy: endpoint.UseNyxProxy,
             StaticBearerToken: _options.StaticBearerToken?.Trim());
     }
 
@@ -216,41 +216,25 @@ internal sealed class ChronoStorageCatalogBlobClient
 
     private ChronoStorageApiEndpoint ResolveApiEndpoint()
     {
-        if (_options.UseNyxProxy)
-        {
-            var baseUrl = !string.IsNullOrWhiteSpace(_options.NyxProxyBaseUrl)
-                ? _options.NyxProxyBaseUrl.Trim()
-                : _nyxIdAppAuthOptions?.Authority?.Trim();
-            if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
-            {
-                throw new InvalidOperationException(
-                    "Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl or Cli:App:NyxId:Authority must be a valid absolute URL when Nyx proxy mode is enabled.");
-            }
-
-            var slug = _options.NyxProxyServiceSlug?.Trim();
-            if (string.IsNullOrWhiteSpace(slug))
-            {
-                throw new InvalidOperationException(
-                    "Cli:App:Connectors:ChronoStorage:NyxProxyServiceSlug is required when Nyx proxy mode is enabled.");
-            }
-
-            return new ChronoStorageApiEndpoint(
-                NormalizeBaseUri(baseUri),
-                $"api/v1/proxy/s/{Uri.EscapeDataString(slug)}",
-                UseNyxProxy: true);
-        }
-
-        var directBaseUrl = _options.BaseUrl?.Trim();
-        if (string.IsNullOrWhiteSpace(directBaseUrl) || !Uri.TryCreate(directBaseUrl, UriKind.Absolute, out var directBaseUri))
+        var baseUrl = !string.IsNullOrWhiteSpace(_options.NyxProxyBaseUrl)
+            ? _options.NyxProxyBaseUrl.Trim()
+            : _nyxIdAppAuthOptions?.Authority?.Trim();
+        if (string.IsNullOrWhiteSpace(baseUrl) || !Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri))
         {
             throw new InvalidOperationException(
-                "Cli:App:Connectors:ChronoStorage:BaseUrl must be a valid absolute URL when direct chrono-storage mode is enabled.");
+                "Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl or Cli:App:NyxId:Authority must be a valid absolute URL.");
+        }
+
+        var slug = _options.NyxProxyServiceSlug?.Trim();
+        if (string.IsNullOrWhiteSpace(slug))
+        {
+            throw new InvalidOperationException(
+                "Cli:App:Connectors:ChronoStorage:NyxProxyServiceSlug is required.");
         }
 
         return new ChronoStorageApiEndpoint(
-            NormalizeBaseUri(directBaseUri),
-            ApiRoutePrefix: string.Empty,
-            UseNyxProxy: false);
+            NormalizeBaseUri(baseUri),
+            $"api/v1/proxy/s/{Uri.EscapeDataString(slug)}");
     }
 
     private static HttpRequestMessage CreateChronoStorageRequest(
@@ -273,55 +257,172 @@ internal sealed class ChronoStorageCatalogBlobClient
     }
 
     private HttpClient GetCatalogApiClient(RemoteScopeContext context) =>
-        context.UseNyxProxy
-            ? _httpClientFactory.CreateClient(NyxProxyHttpClientName)
-            : _httpClientFactory.CreateClient();
+        _httpClientFactory.CreateClient(NyxProxyHttpClientName);
 
     private async Task<byte[]?> TryDownloadEncryptedCoreAsync(
         RemoteScopeContext context,
         string objectKey,
         CancellationToken cancellationToken)
     {
-        using var request = CreateChronoStorageRequest(
-            HttpMethod.Get,
-            CreateChronoStorageUri(
-                context,
-                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
-                $"key={Uri.EscapeDataString(objectKey)}&expiresIn={context.PresignedUrlExpiresInSeconds}"),
-            context.StaticBearerToken);
-        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        DownloadAttemptOutcome? lastFailure = null;
+        for (var attempt = 1; attempt <= MaxDownloadUrlAttempts; attempt++)
         {
-            return null;
+            using var request = CreateChronoStorageRequest(
+                HttpMethod.Get,
+                CreateChronoStorageUri(
+                    context,
+                    $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
+                    $"key={Uri.EscapeDataString(objectKey)}&expiresIn={context.PresignedUrlExpiresInSeconds}"),
+                context.StaticBearerToken);
+            using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+
+            response.EnsureSuccessStatusCode();
+            var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
+            var downloadUrl = string.IsNullOrWhiteSpace(envelope?.Data?.PresignedUrl)
+                ? envelope?.Data?.Url?.Trim()
+                : envelope.Data.PresignedUrl.Trim();
+            if (string.IsNullOrWhiteSpace(downloadUrl))
+            {
+                throw new InvalidOperationException("Chrono-storage presigned URL response did not include a usable download URL.");
+            }
+
+            var downloadUri = ResolveDownloadUri(context, downloadUrl);
+            var outcome = await TryDownloadPayloadAsync(context, downloadUri, cancellationToken);
+            if (outcome.Payload != null)
+            {
+                return outcome.Payload;
+            }
+
+            lastFailure = outcome;
+            if (!ShouldRetryDownload(outcome) || attempt >= MaxDownloadUrlAttempts)
+            {
+                throw CreateDownloadFailureException(objectKey, outcome, attempt);
+            }
         }
 
-        response.EnsureSuccessStatusCode();
-        var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
-        var downloadUrl = string.IsNullOrWhiteSpace(envelope?.Data?.PresignedUrl)
-            ? envelope?.Data?.Url?.Trim()
-            : envelope.Data.PresignedUrl.Trim();
-        if (string.IsNullOrWhiteSpace(downloadUrl))
-        {
-            throw new InvalidOperationException("Chrono-storage presigned URL response did not include a usable download URL.");
-        }
-
-        var downloadUri = ResolveDownloadUri(context, downloadUrl);
-        using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, downloadUri);
-        using var downloadResponse = await GetDownloadClient(context, downloadUri).SendAsync(downloadRequest, cancellationToken);
-        if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
-        {
-            throw new CatalogDownloadUnavailableException(
-                $"Chrono-storage download URL returned 404 for object '{objectKey}'. The catalog object exists but could not be downloaded.");
-        }
-
-        downloadResponse.EnsureSuccessStatusCode();
-        return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+        throw CreateDownloadFailureException(
+            objectKey,
+            lastFailure ?? DownloadAttemptOutcome.FromStatusCode(HttpStatusCode.NotFound),
+            MaxDownloadUrlAttempts);
     }
 
-    private HttpClient GetDownloadClient(RemoteScopeContext context, Uri downloadUri) =>
-        IsSameAuthority(downloadUri, context.BaseUri)
-            ? GetCatalogApiClient(context)
-            : _httpClientFactory.CreateClient();
+    private async Task<DownloadAttemptOutcome> TryDownloadPayloadAsync(
+        RemoteScopeContext context,
+        Uri downloadUri,
+        CancellationToken cancellationToken)
+    {
+        var plans = BuildDownloadAttemptPlans(context, downloadUri);
+        for (var index = 0; index < plans.Count; index++)
+        {
+            var plan = plans[index];
+            try
+            {
+                using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, downloadUri);
+                using var downloadResponse = await plan.Client.SendAsync(downloadRequest, cancellationToken);
+                if (downloadResponse.IsSuccessStatusCode)
+                {
+                    return DownloadAttemptOutcome.FromPayload(
+                        await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken));
+                }
+
+                if (index + 1 < plans.Count && ShouldRetryWithAlternateClient(downloadResponse.StatusCode))
+                {
+                    continue;
+                }
+
+                return DownloadAttemptOutcome.FromStatusCode(downloadResponse.StatusCode);
+            }
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+            {
+                if (index + 1 < plans.Count)
+                {
+                    continue;
+                }
+
+                return DownloadAttemptOutcome.FromException(exception);
+            }
+        }
+
+        return DownloadAttemptOutcome.FromStatusCode(HttpStatusCode.NotFound);
+    }
+
+    private IReadOnlyList<DownloadAttemptPlan> BuildDownloadAttemptPlans(RemoteScopeContext context, Uri downloadUri)
+    {
+        if (IsSameAuthority(downloadUri, context.BaseUri))
+        {
+            return
+            [
+                new DownloadAttemptPlan(GetCatalogApiClient(context)),
+            ];
+        }
+
+        var plans = new List<DownloadAttemptPlan>
+        {
+            new(_httpClientFactory.CreateClient()),
+        };
+
+        if (ShouldRetryWithNyxAuth(context, downloadUri))
+        {
+            plans.Add(new DownloadAttemptPlan(GetCatalogApiClient(context)));
+        }
+
+        return plans;
+    }
+
+    private static bool ShouldRetryWithAlternateClient(HttpStatusCode statusCode) =>
+        statusCode == HttpStatusCode.NotFound ||
+        statusCode == HttpStatusCode.Unauthorized ||
+        statusCode == HttpStatusCode.Forbidden ||
+        statusCode == HttpStatusCode.TooManyRequests ||
+        statusCode == HttpStatusCode.BadGateway ||
+        statusCode == HttpStatusCode.ServiceUnavailable ||
+        statusCode == HttpStatusCode.GatewayTimeout;
+
+    private static bool ShouldRetryDownload(DownloadAttemptOutcome outcome) =>
+        outcome.Error is HttpRequestException or TaskCanceledException ||
+        (outcome.StatusCode.HasValue && ShouldRetryWithAlternateClient(outcome.StatusCode.Value));
+
+    private static bool ShouldRetryWithNyxAuth(RemoteScopeContext context, Uri downloadUri)
+    {
+        if (!string.Equals(downloadUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(context.BaseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(downloadUri.Host, context.BaseUri.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return downloadUri.Host.EndsWith($".{context.BaseUri.Host}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Exception CreateDownloadFailureException(
+        string objectKey,
+        DownloadAttemptOutcome outcome,
+        int attempts)
+    {
+        if (outcome.StatusCode == HttpStatusCode.NotFound)
+        {
+            return new CatalogDownloadUnavailableException(
+                $"Chrono-storage download URL returned 404 for object '{objectKey}' after {attempts} attempt(s). The catalog object exists but could not be downloaded.");
+        }
+
+        if (outcome.StatusCode.HasValue)
+        {
+            return new InvalidOperationException(
+                $"Chrono-storage download request failed with HTTP {(int)outcome.StatusCode.Value} for object '{objectKey}' after {attempts} attempt(s).");
+        }
+
+        return new InvalidOperationException(
+            $"Chrono-storage download request failed for object '{objectKey}' after {attempts} attempt(s).",
+            outcome.Error);
+    }
 
     private static Uri ResolveDownloadUri(RemoteScopeContext context, string downloadUrl)
     {
@@ -411,17 +512,36 @@ internal sealed class ChronoStorageCatalogBlobClient
         IReadOnlyList<string> LegacyObjectKeys,
         int PresignedUrlExpiresInSeconds,
         bool CreateBucketIfMissing,
-        bool UseNyxProxy,
         string? StaticBearerToken);
 
     internal sealed record DownloadedCatalogPayload(
         byte[] Payload,
         string ObjectKey);
 
+    private sealed record DownloadAttemptPlan(
+        HttpClient Client);
+
+    private sealed class DownloadAttemptOutcome
+    {
+        private DownloadAttemptOutcome(byte[]? payload, HttpStatusCode? statusCode, Exception? error)
+        {
+            Payload = payload;
+            StatusCode = statusCode;
+            Error = error;
+        }
+
+        public byte[]? Payload { get; }
+        public HttpStatusCode? StatusCode { get; }
+        public Exception? Error { get; }
+
+        public static DownloadAttemptOutcome FromPayload(byte[] payload) => new(payload, null, null);
+        public static DownloadAttemptOutcome FromStatusCode(HttpStatusCode statusCode) => new(null, statusCode, null);
+        public static DownloadAttemptOutcome FromException(Exception exception) => new(null, null, exception);
+    }
+
     private sealed record ChronoStorageApiEndpoint(
         Uri BaseUri,
-        string ApiRoutePrefix,
-        bool UseNyxProxy);
+        string ApiRoutePrefix);
 
     private sealed class ChronoStorageEnvelope<T>
     {

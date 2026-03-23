@@ -13,8 +13,8 @@ internal static class AppStudioEndpoints
 {
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
-        app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
-            HandleGetContext(http, services, embeddedWorkflowMode));
+        app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services, CancellationToken ct) =>
+            HandleGetContext(http, services, embeddedWorkflowMode, ct));
         app.MapPost("/api/app/workflow-generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
@@ -123,11 +123,16 @@ internal static class AppStudioEndpoints
         return $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
     }
 
-    private static IResult HandleGetContext(HttpContext http, IServiceProvider services, bool embeddedWorkflowMode)
+    private static async Task<IResult> HandleGetContext(
+        HttpContext http,
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
     {
-        var publishedWorkflows = !embeddedWorkflowMode || services.GetService<IScopeWorkflowQueryPort>() != null;
+        var runtimeTarget = await ResolveRuntimeTargetAsync(services, embeddedWorkflowMode, ct);
+        var publishedWorkflows = !runtimeTarget.UsesLocalRuntime || services.GetService<IScopeWorkflowQueryPort>() != null;
         var scripts = services.GetService<AppScopedScriptService>() != null ||
-                      (embeddedWorkflowMode &&
+                      (runtimeTarget.UsesLocalRuntime &&
                        services.GetService<IScriptDefinitionCommandPort>() != null &&
                        services.GetService<IScriptRuntimeProvisioningPort>() != null &&
                        services.GetService<IScriptRuntimeCommandPort>() != null);
@@ -135,7 +140,7 @@ internal static class AppStudioEndpoints
 
         return Results.Json(new
         {
-            mode = embeddedWorkflowMode ? "embedded" : "proxy",
+            mode = runtimeTarget.UsesLocalRuntime ? "embedded" : "proxy",
             scopeId = scopeContext?.ScopeId,
             scopeResolved = scopeContext != null,
             scopeSource = scopeContext?.Source,
@@ -168,12 +173,13 @@ internal static class AppStudioEndpoints
         bool embeddedWorkflowMode,
         CancellationToken ct)
     {
-        if (!embeddedWorkflowMode)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(services, embeddedWorkflowMode, ct);
+        if (!runtimeTarget.UsesLocalRuntime)
         {
             return Results.BadRequest(new
             {
                 code = "SCRIPT_DRAFT_RUN_UNAVAILABLE",
-                message = "Script draft run is only available in embedded mode.",
+                message = "Script draft run is only available when the app is using the local embedded runtime.",
             });
         }
 
@@ -618,13 +624,14 @@ internal static class AppStudioEndpoints
         bool embeddedWorkflowMode,
         CancellationToken ct)
     {
-        if (!embeddedWorkflowMode)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(services, embeddedWorkflowMode, ct);
+        if (!runtimeTarget.UsesLocalRuntime)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new
             {
                 code = "WORKFLOW_GENERATOR_UNAVAILABLE",
-                message = "Ask AI workflow generation is only available in embedded mode.",
+                message = "Ask AI workflow generation is only available when the app is using the local embedded runtime.",
             }, ct);
             return;
         }
@@ -739,13 +746,14 @@ internal static class AppStudioEndpoints
         bool embeddedWorkflowMode,
         CancellationToken ct)
     {
-        if (!embeddedWorkflowMode)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(services, embeddedWorkflowMode, ct);
+        if (!runtimeTarget.UsesLocalRuntime)
         {
             http.Response.StatusCode = StatusCodes.Status400BadRequest;
             await http.Response.WriteAsJsonAsync(new
             {
                 code = "SCRIPT_GENERATOR_UNAVAILABLE",
-                message = "Ask AI script generation is only available in embedded mode.",
+                message = "Ask AI script generation is only available when the app is using the local embedded runtime.",
             }, ct);
             return;
         }
@@ -870,6 +878,22 @@ internal static class AppStudioEndpoints
                 message = ex.Message,
             }, ct);
         }
+    }
+
+    private static async Task<AppRuntimeTarget> ResolveRuntimeTargetAsync(
+        IServiceProvider services,
+        bool embeddedWorkflowMode,
+        CancellationToken ct)
+    {
+        var resolver = services.GetService<AppRuntimeTargetResolver>();
+        if (resolver != null)
+            return await resolver.GetCurrentAsync(ct);
+
+        return new AppRuntimeTarget(
+            ConfiguredBaseUrl: string.Empty,
+            EffectiveBaseUrl: string.Empty,
+            UsesLocalRuntime: embeddedWorkflowMode,
+            EmbeddedCapabilitiesAvailable: embeddedWorkflowMode);
     }
 
     private static string ComputeSha256(string source)

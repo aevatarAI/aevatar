@@ -128,6 +128,40 @@ public sealed class AppStudioApiTests
     }
 
     [Fact]
+    public async Task SettingsSave_ShouldSwitchContextToRemoteRuntimeTarget()
+    {
+        const string remoteRuntimeBaseUrl = "https://api.aevatar.ai";
+
+        try
+        {
+            using var savedSettings = await _fixture.PutJsonAsync("/api/settings", new
+            {
+                runtimeBaseUrl = remoteRuntimeBaseUrl,
+            });
+            savedSettings.RootElement.GetProperty("runtimeBaseUrl").GetString().Should().Be(remoteRuntimeBaseUrl);
+
+            using var workspace = await _fixture.GetJsonAsync("/api/workspace");
+            workspace.RootElement.GetProperty("runtimeBaseUrl").GetString().Should().Be(remoteRuntimeBaseUrl);
+
+            using var context = await _fixture.GetJsonAsync("/api/app/context");
+            context.RootElement.GetProperty("mode").GetString().Should().Be("proxy");
+
+            using var workflowGenerator = await _fixture.PostJsonAsync("/api/app/workflow-generator", new
+            {
+                prompt = "build a simple workflow",
+            }, HttpStatusCode.BadRequest);
+            workflowGenerator.RootElement.GetProperty("code").GetString().Should().Be("WORKFLOW_GENERATOR_UNAVAILABLE");
+        }
+        finally
+        {
+            _ = await _fixture.PutJsonAsync("/api/settings", new
+            {
+                runtimeBaseUrl = _fixture.BaseUrl,
+            });
+        }
+    }
+
+    [Fact]
     public async Task ConnectorEndpoints_ShouldSupportCatalogDraftAndImportRoundTrips()
     {
         using var initialCatalog = await _fixture.GetJsonAsync("/api/connectors");

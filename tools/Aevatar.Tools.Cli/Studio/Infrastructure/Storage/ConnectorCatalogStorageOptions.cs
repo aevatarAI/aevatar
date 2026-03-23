@@ -6,13 +6,9 @@ internal sealed class ConnectorCatalogStorageOptions
 
     public bool Enabled { get; set; } = true;
 
-    public bool UseNyxProxy { get; set; } = true;
-
     public string NyxProxyBaseUrl { get; set; } = string.Empty;
 
     public string NyxProxyServiceSlug { get; set; } = "chrono-storage-service";
-
-    public string BaseUrl { get; set; } = string.Empty;
 
     public string Bucket { get; set; } = "studio-catalogs";
 

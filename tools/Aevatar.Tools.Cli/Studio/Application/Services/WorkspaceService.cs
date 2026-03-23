@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Aevatar.Tools.Cli.Hosting;
 using Aevatar.Tools.Cli.Studio.Application.Abstractions;
 using Aevatar.Tools.Cli.Studio.Application.Contracts;
 using Aevatar.Tools.Cli.Studio.Domain.Models;
@@ -11,19 +12,22 @@ public sealed class WorkspaceService
 
     private readonly IStudioWorkspaceStore _store;
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
+    private readonly AppRuntimeTargetResolver? _runtimeTargetResolver;
 
     public WorkspaceService(
         IStudioWorkspaceStore store,
-        IWorkflowYamlDocumentService yamlDocumentService)
+        IWorkflowYamlDocumentService yamlDocumentService,
+        AppRuntimeTargetResolver? runtimeTargetResolver = null)
     {
         _store = store;
         _yamlDocumentService = yamlDocumentService;
+        _runtimeTargetResolver = runtimeTargetResolver;
     }
 
     public async Task<WorkspaceSettingsResponse> GetSettingsAsync(CancellationToken cancellationToken = default)
     {
         var settings = await _store.GetSettingsAsync(cancellationToken);
-        return ToSettingsResponse(settings);
+        return ToSettingsResponse(settings, await ResolveRuntimeBaseUrlAsync(settings.RuntimeBaseUrl, cancellationToken));
     }
 
     public async Task<WorkspaceSettingsResponse> UpdateSettingsAsync(
@@ -33,11 +37,13 @@ public sealed class WorkspaceService
         var settings = await _store.GetSettingsAsync(cancellationToken);
         var updated = settings with
         {
-            RuntimeBaseUrl = NormalizeRuntimeBaseUrl(request.RuntimeBaseUrl),
+            RuntimeBaseUrl = string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
+                ? await ResolveRuntimeBaseUrlAsync(settings.RuntimeBaseUrl, cancellationToken)
+                : NormalizeRuntimeBaseUrl(request.RuntimeBaseUrl),
         };
 
         await _store.SaveSettingsAsync(updated, cancellationToken);
-        return ToSettingsResponse(updated);
+        return ToSettingsResponse(updated, updated.RuntimeBaseUrl);
     }
 
     public async Task<WorkspaceSettingsResponse> AddDirectoryAsync(
@@ -50,7 +56,7 @@ public sealed class WorkspaceService
         var settings = await _store.GetSettingsAsync(cancellationToken);
         if (settings.Directories.Any(directory => string.Equals(directory.Path, normalizedPath, StringComparison.OrdinalIgnoreCase)))
         {
-            return ToSettingsResponse(settings);
+            return ToSettingsResponse(settings, await ResolveRuntimeBaseUrlAsync(settings.RuntimeBaseUrl, cancellationToken));
         }
 
         var directories = settings.Directories
@@ -63,7 +69,7 @@ public sealed class WorkspaceService
 
         var updated = settings with { Directories = directories };
         await _store.SaveSettingsAsync(updated, cancellationToken);
-        return ToSettingsResponse(updated);
+        return ToSettingsResponse(updated, await ResolveRuntimeBaseUrlAsync(updated.RuntimeBaseUrl, cancellationToken));
     }
 
     public async Task<WorkspaceSettingsResponse> RemoveDirectoryAsync(
@@ -79,7 +85,7 @@ public sealed class WorkspaceService
         };
 
         await _store.SaveSettingsAsync(updated, cancellationToken);
-        return ToSettingsResponse(updated);
+        return ToSettingsResponse(updated, await ResolveRuntimeBaseUrlAsync(updated.RuntimeBaseUrl, cancellationToken));
     }
 
     public async Task<IReadOnlyList<WorkflowSummary>> ListWorkflowsAsync(CancellationToken cancellationToken = default)
@@ -165,9 +171,9 @@ public sealed class WorkspaceService
             file.UpdatedAtUtc);
     }
 
-    private static WorkspaceSettingsResponse ToSettingsResponse(StudioWorkspaceSettings settings) =>
+    private static WorkspaceSettingsResponse ToSettingsResponse(StudioWorkspaceSettings settings, string runtimeBaseUrl) =>
         new(
-            settings.RuntimeBaseUrl,
+            runtimeBaseUrl,
             settings.Directories
                 .Select(directory => new WorkflowDirectorySummary(
                     directory.DirectoryId,
@@ -189,10 +195,19 @@ public sealed class WorkspaceService
             file.Layout is not null,
             file.UpdatedAtUtc);
 
+    private async Task<string> ResolveRuntimeBaseUrlAsync(string currentRuntimeBaseUrl, CancellationToken cancellationToken)
+    {
+        if (_runtimeTargetResolver == null)
+            return currentRuntimeBaseUrl;
+
+        var runtimeTarget = await _runtimeTargetResolver.GetCurrentAsync(cancellationToken);
+        return runtimeTarget.ConfiguredBaseUrl;
+    }
+
     private static string NormalizeRuntimeBaseUrl(string url)
     {
         var normalized = string.IsNullOrWhiteSpace(url)
-            ? "http://127.0.0.1:5100"
+            ? "http://localhost:6688"
             : url.Trim();
 
         return normalized.TrimEnd('/');

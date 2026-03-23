@@ -119,9 +119,7 @@ Relevant config keys:
 Optional remote connector and role catalog storage:
 
 ```bash
-# optional overrides when you do not want the built-in Nyx proxy defaults
-aevatar config config-json set Cli:App:Connectors:ChronoStorage:UseNyxProxy false --json
-aevatar config config-json set Cli:App:Connectors:ChronoStorage:BaseUrl https://chrono-storage.example.com --json
+# optional overrides for NyxID proxy-backed chrono-storage
 aevatar config config-json set Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl https://nyx-api.chrono-ai.fun --json
 aevatar config config-json set Cli:App:Connectors:ChronoStorage:NyxProxyServiceSlug chrono-storage-service --json
 aevatar config config-json set Cli:App:Connectors:ChronoStorage:Bucket studio-catalogs --json
@@ -132,7 +130,6 @@ aevatar config secrets set Cli:App:Connectors:ChronoStorage:StaticBearerToken <t
 
 By default, `aevatar app` now enables chrono-storage catalog backing with:
 
-- `Cli:App:Connectors:ChronoStorage:UseNyxProxy = true`
 - `Cli:App:Connectors:ChronoStorage:NyxProxyServiceSlug = chrono-storage-service`
 - `Cli:App:Connectors:ChronoStorage:NyxProxyBaseUrl = <empty>` and falls back to `Cli:App:NyxId:Authority`
 - `Cli:App:Connectors:ChronoStorage:Bucket = studio-catalogs`
@@ -143,7 +140,6 @@ By default, `aevatar app` now enables chrono-storage catalog backing with:
 
 - Connector catalogs use `Cli:App:Connectors:ChronoStorage:Prefix`.
 - Role catalogs use `Cli:App:Connectors:ChronoStorage:RolesPrefix`.
-- Set `UseNyxProxy = false` only when you intentionally want to call a chrono-storage base URL directly.
 - If `Cli:App:Connectors:ChronoStorage:MasterKey` is not configured, the app reuses `~/.aevatar/masterkey.bin`; if that file does not exist yet, it is created automatically on first chrono-storage write.
 - Connector and role drafts stay local under the studio data directory and are separated per scope.
 - Existing local `~/.aevatar/connectors.json` and `~/.aevatar/roles.json` files are not auto-migrated. Use the **Import local** button in the app when you want to copy the local file into `chrono-storage`.

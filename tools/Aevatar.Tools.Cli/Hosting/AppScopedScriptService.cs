@@ -33,9 +33,11 @@ public sealed class AppScopedScriptService
     private readonly IScriptingActorAddressResolver? _scriptingActorAddressResolver;
     private readonly IScriptReadModelQueryApplicationService? _readModelQueryService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly AppRuntimeTargetResolver? _runtimeTargetResolver;
 
     public AppScopedScriptService(
         IHttpClientFactory httpClientFactory,
+        AppRuntimeTargetResolver? runtimeTargetResolver = null,
         IScopeScriptQueryPort? scriptQueryPort = null,
         IScopeScriptCommandPort? scriptCommandPort = null,
         IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
@@ -46,6 +48,7 @@ public sealed class AppScopedScriptService
         IScriptReadModelQueryApplicationService? readModelQueryService = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+        _runtimeTargetResolver = runtimeTargetResolver;
         _scriptQueryPort = scriptQueryPort;
         _scriptCommandPort = scriptCommandPort;
         _definitionSnapshotPort = definitionSnapshotPort;
@@ -61,10 +64,12 @@ public sealed class AppScopedScriptService
         CancellationToken ct = default)
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        if (_scriptQueryPort != null)
-            return await _scriptQueryPort.ListAsync(normalizedScopeId, ct);
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalQuery(runtimeTarget))
+            return await _scriptQueryPort!.ListAsync(normalizedScopeId, ct);
 
         return await SendAsync<List<ScopeScriptSummary>>(
+                   runtimeTarget,
                    HttpMethod.Get,
                    $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts",
                    body: null,
@@ -79,9 +84,10 @@ public sealed class AppScopedScriptService
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedScriptId = NormalizeRequired(scriptId, nameof(scriptId));
-        if (_scriptQueryPort != null && _definitionSnapshotPort != null)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalQuery(runtimeTarget) && _definitionSnapshotPort != null)
         {
-            var script = await _scriptQueryPort.GetByScriptIdAsync(normalizedScopeId, normalizedScriptId, ct);
+            var script = await _scriptQueryPort!.GetByScriptIdAsync(normalizedScopeId, normalizedScriptId, ct);
             if (script == null)
                 return null;
 
@@ -104,6 +110,7 @@ public sealed class AppScopedScriptService
         }
 
         return await SendAsync<ScopeScriptDetail>(
+            runtimeTarget,
             HttpMethod.Get,
             $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(normalizedScriptId)}",
             body: null,
@@ -116,9 +123,10 @@ public sealed class AppScopedScriptService
         CancellationToken ct = default)
     {
         var boundedTake = Math.Clamp(take <= 0 ? 24 : take, 1, 200);
-        if (_readModelQueryService != null)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalReadModel(runtimeTarget))
         {
-            var snapshots = await _readModelQueryService.ListSnapshotsAsync(boundedTake, ct);
+            var snapshots = await _readModelQueryService!.ListSnapshotsAsync(boundedTake, ct);
             return snapshots
                 .Select(static snapshot => new ScriptReadModelSnapshotHttpResponse(
                     snapshot.ActorId,
@@ -134,6 +142,7 @@ public sealed class AppScopedScriptService
         }
 
         return await SendAsync<List<ScriptReadModelSnapshotHttpResponse>>(
+                   runtimeTarget,
                    HttpMethod.Get,
                    $"/api/scripts/runtimes?take={boundedTake}",
                    body: null,
@@ -146,9 +155,10 @@ public sealed class AppScopedScriptService
         CancellationToken ct = default)
     {
         var normalizedActorId = NormalizeRequired(actorId, nameof(actorId));
-        if (_readModelQueryService != null)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalReadModel(runtimeTarget))
         {
-            var snapshot = await _readModelQueryService.GetSnapshotAsync(normalizedActorId, ct);
+            var snapshot = await _readModelQueryService!.GetSnapshotAsync(normalizedActorId, ct);
             return snapshot == null
                 ? null
                 : new ScriptReadModelSnapshotHttpResponse(
@@ -164,6 +174,7 @@ public sealed class AppScopedScriptService
         }
 
         return await SendAsync<ScriptReadModelSnapshotHttpResponse>(
+            runtimeTarget,
             HttpMethod.Get,
             $"/api/scripts/runtimes/{Uri.EscapeDataString(normalizedActorId)}/readmodel",
             body: null,
@@ -178,16 +189,18 @@ public sealed class AppScopedScriptService
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedScriptId = NormalizeRequired(scriptId, nameof(scriptId));
-        if (_scriptCatalogQueryPort != null && _scriptingActorAddressResolver != null)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalCatalog(runtimeTarget))
         {
-            var catalogActorId = _scriptingActorAddressResolver.GetCatalogActorId(normalizedScopeId);
-            var snapshot = await _scriptCatalogQueryPort.GetCatalogEntryAsync(catalogActorId, normalizedScriptId, ct);
+            var catalogActorId = _scriptingActorAddressResolver!.GetCatalogActorId(normalizedScopeId);
+            var snapshot = await _scriptCatalogQueryPort!.GetCatalogEntryAsync(catalogActorId, normalizedScriptId, ct);
             return snapshot == null
                 ? null
                 : ToCatalogSnapshot(snapshot);
         }
 
         return await SendAsync<AppScriptCatalogSnapshot>(
+            runtimeTarget,
             HttpMethod.Get,
             $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(normalizedScriptId)}/catalog",
             body: null,
@@ -200,10 +213,12 @@ public sealed class AppScopedScriptService
         CancellationToken ct = default)
     {
         var normalizedProposalId = NormalizeRequired(proposalId, nameof(proposalId));
-        if (_scriptEvolutionDecisionReadPort != null)
-            return await _scriptEvolutionDecisionReadPort.TryGetAsync(normalizedProposalId, ct);
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalEvolutionDecision(runtimeTarget))
+            return await _scriptEvolutionDecisionReadPort!.TryGetAsync(normalizedProposalId, ct);
 
         return await SendAsync<ScriptPromotionDecision>(
+            runtimeTarget,
             HttpMethod.Get,
             $"/api/scripts/evolutions/{Uri.EscapeDataString(normalizedProposalId)}",
             body: null,
@@ -225,11 +240,12 @@ public sealed class AppScopedScriptService
         var scriptId = string.IsNullOrWhiteSpace(request.ScriptId)
             ? AppStudioEndpoints.NormalizeStudioDocumentId(request.ScriptId, "script")
             : NormalizeRequired(request.ScriptId, nameof(request.ScriptId));
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
 
         ScopeScriptUpsertResult upsertResult;
-        if (_scriptCommandPort != null)
+        if (ShouldUseLocalCommand(runtimeTarget))
         {
-            upsertResult = await _scriptCommandPort.UpsertAsync(
+            upsertResult = await _scriptCommandPort!.UpsertAsync(
                 new ScopeScriptUpsertRequest(
                     normalizedScopeId,
                     scriptId,
@@ -241,6 +257,7 @@ public sealed class AppScopedScriptService
         else
         {
             upsertResult = await SendAsync<ScopeScriptUpsertResult>(
+                runtimeTarget,
                 HttpMethod.Put,
                 $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(scriptId)}",
                 new RemoteUpsertRequest(
@@ -268,9 +285,10 @@ public sealed class AppScopedScriptService
         var candidateSourceHash = string.IsNullOrWhiteSpace(request.CandidateSourceHash)
             ? AppScriptPackagePayloads.ComputeSourceHash(request.CandidatePackage, candidateSource)
             : request.CandidateSourceHash.Trim();
-        if (_scriptEvolutionService != null)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        if (ShouldUseLocalEvolution(runtimeTarget))
         {
-            return await _scriptEvolutionService.ProposeAsync(
+            return await _scriptEvolutionService!.ProposeAsync(
                 new ProposeScriptEvolutionRequest(
                     ScriptId: scriptId,
                     BaseRevision: request.BaseRevision ?? string.Empty,
@@ -284,6 +302,7 @@ public sealed class AppScopedScriptService
         }
 
         return await SendAsync<ScriptPromotionDecision>(
+                   runtimeTarget,
                    HttpMethod.Post,
                    $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(scriptId)}/evolutions/proposals",
                    new RemoteProposeEvolutionRequest(
@@ -298,6 +317,7 @@ public sealed class AppScopedScriptService
     }
 
     private async Task<T?> SendAsync<T>(
+        AppRuntimeTarget? runtimeTarget,
         HttpMethod method,
         string relativePath,
         object? body,
@@ -305,7 +325,9 @@ public sealed class AppScopedScriptService
         bool allowNotFound = false)
     {
         var client = _httpClientFactory.CreateClient(BackendClientName);
-        using var request = new HttpRequestMessage(method, relativePath);
+        using var request = new HttpRequestMessage(
+            method,
+            BuildRequestUri(runtimeTarget, relativePath));
         if (body != null)
             request.Content = JsonContent.Create(body);
 
@@ -344,6 +366,47 @@ public sealed class AppScopedScriptService
                 "Script backend returned invalid JSON.",
                 innerException: ex);
         }
+    }
+
+    private async Task<AppRuntimeTarget?> ResolveRuntimeTargetAsync(CancellationToken ct)
+    {
+        if (_runtimeTargetResolver == null)
+            return null;
+
+        return await _runtimeTargetResolver.GetCurrentAsync(ct);
+    }
+
+    private bool ShouldUseLocalQuery(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _scriptQueryPort != null;
+
+    private bool ShouldUseLocalCommand(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _scriptCommandPort != null;
+
+    private bool ShouldUseLocalCatalog(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _scriptCatalogQueryPort != null &&
+        _scriptingActorAddressResolver != null;
+
+    private bool ShouldUseLocalEvolution(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _scriptEvolutionService != null;
+
+    private bool ShouldUseLocalEvolutionDecision(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _scriptEvolutionDecisionReadPort != null;
+
+    private bool ShouldUseLocalReadModel(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _readModelQueryService != null;
+
+    private Uri BuildRequestUri(AppRuntimeTarget? runtimeTarget, string relativePath)
+    {
+        if (runtimeTarget == null)
+            return new Uri(relativePath, UriKind.Relative);
+
+        return _runtimeTargetResolver!.BuildAbsoluteUri(runtimeTarget.EffectiveBaseUrl, relativePath);
     }
 
     private static async Task<AppApiException> BuildApiExceptionAsync(HttpResponseMessage response, CancellationToken ct)

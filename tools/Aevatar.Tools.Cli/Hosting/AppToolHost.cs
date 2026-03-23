@@ -68,6 +68,11 @@ internal static class AppToolHost
             builder.WebHost.UseUrls(localUrl);
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
             builder.Configuration.AddAevatarConfig();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Studio:Storage:DefaultRuntimeBaseUrl"] = sdkBaseUrl,
+            });
+            var legacyDefaultRuntimeBaseUrl = builder.Configuration["Cli:App:LegacyDefaultRuntimeBaseUrl"];
             var nyxIdAuthEnabled = NyxIdAppAuthentication.ResolveIsEnabled(builder.Configuration, embeddedWorkflowMode);
             var nyxIdAuthOptions = NyxIdAppAuthentication.BuildOptions(builder.Configuration);
             builder.Services.Configure<JsonOptions>(json =>
@@ -112,15 +117,23 @@ internal static class AppToolHost
             builder.Services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
             builder.Services.AddStudioInfrastructure(builder.Configuration);
             builder.Services.AddStudioApplication();
+            builder.Services.AddSingleton(sp => new AppRuntimeTargetResolver(
+                sp.GetRequiredService<IStudioWorkspaceStore>(),
+                localUrl,
+                sdkBaseUrl,
+                embeddedWorkflowMode,
+                legacyDefaultRuntimeBaseUrl));
             builder.Services.AddSingleton<ScriptEditorValidationService>();
             builder.Services.AddSingleton(sp => new AppScopedWorkflowService(
                 sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetRequiredService<Aevatar.Tools.Cli.Studio.Application.Abstractions.IWorkflowYamlDocumentService>(),
+                sp.GetRequiredService<AppRuntimeTargetResolver>(),
                 sp.GetService<IScopeWorkflowQueryPort>(),
                 sp.GetService<IScopeWorkflowCommandPort>(),
                 sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>()));
             builder.Services.AddSingleton(sp => new AppScopedScriptService(
                 sp.GetRequiredService<IHttpClientFactory>(),
+                sp.GetRequiredService<AppRuntimeTargetResolver>(),
                 sp.GetService<IScopeScriptQueryPort>(),
                 sp.GetService<IScopeScriptCommandPort>(),
                 sp.GetService<Aevatar.Scripting.Core.Ports.IScriptDefinitionSnapshotPort>(),
@@ -129,10 +142,9 @@ internal static class AppToolHost
                 sp.GetService<Aevatar.Scripting.Core.Ports.IScriptEvolutionDecisionReadPort>(),
                 sp.GetService<Aevatar.Scripting.Core.Ports.IScriptingActorAddressResolver>(),
                 sp.GetService<Aevatar.Scripting.Application.Queries.IScriptReadModelQueryApplicationService>()));
-            builder.Services.Configure<StudioStorageOptions>(storage =>
+            builder.Services.PostConfigure<StudioStorageOptions>(storage =>
             {
-                storage.DefaultRuntimeBaseUrl = localUrl;
-                storage.ForceLocalRuntime = embeddedWorkflowMode;
+                storage.DefaultRuntimeBaseUrl = sdkBaseUrl;
             });
 
             if (embeddedWorkflowMode)

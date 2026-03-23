@@ -238,7 +238,7 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 ];
 
 const DEFAULT_RUNTIME_BASE_URL =
-  typeof window === 'undefined' ? 'http://127.0.0.1:5100' : window.location.origin;
+  typeof window === 'undefined' ? 'http://localhost:6688' : window.location.origin;
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
 const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
 
@@ -1822,7 +1822,7 @@ function App() {
       },
     });
     const nextSettings = {
-      runtimeBaseUrl: workspaceSettings.runtimeBaseUrl,
+      runtimeBaseUrl: settings?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL,
       directories: Array.isArray(settings?.directories) ? settings.directories : [],
     };
     setWorkspaceSettings(nextSettings);
@@ -2225,7 +2225,7 @@ function App() {
         workflowName: workflowMeta.name.trim() || 'draft',
         prompt: executionPrompt.trim(),
         workflowYamls: [serialized?.yaml || workflowMeta.yaml],
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        runtimeBaseUrl: settingsState.runtimeBaseUrl,
         scopeId: shouldRunPublishedWorkflow ? appContext.scopeId : null,
         workflowId: shouldRunPublishedWorkflow ? workflowMeta.workflowId : null,
         eventFormat: shouldRunPublishedWorkflow ? 'workflow' : null,
@@ -2700,8 +2700,9 @@ function App() {
 
   async function handleSaveSettings() {
     try {
+      const previousRuntimeBaseUrl = settingsState.runtimeBaseUrl;
       const response = await api.settings.save({
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        runtimeBaseUrl: settingsState.runtimeBaseUrl,
         appearanceTheme: settingsState.appearanceTheme,
         colorMode: settingsState.colorMode,
         defaultProviderName: settingsState.defaultProviderName || null,
@@ -2714,11 +2715,22 @@ function App() {
         })),
       });
       hydrateSettings(response);
+      const [context, workspace] = await Promise.all([
+        api.app.getContext(),
+        api.workspace.getSettings(),
+      ]);
+      setAppContext(resolveAppContextState(context));
       setWorkspaceSettings(prev => ({
-        ...prev,
-        runtimeBaseUrl: response?.runtimeBaseUrl || prev.runtimeBaseUrl,
+        runtimeBaseUrl: response?.runtimeBaseUrl || workspace?.runtimeBaseUrl || prev.runtimeBaseUrl,
+        directories: Array.isArray(workspace?.directories) ? workspace.directories : prev.directories,
       }));
-      flash('Settings saved', 'success');
+      const savedRuntimeBaseUrl = response?.runtimeBaseUrl || previousRuntimeBaseUrl;
+      flash(
+        previousRuntimeBaseUrl !== savedRuntimeBaseUrl
+          ? 'Settings saved. Runtime target updated.'
+          : 'Settings saved',
+        'success',
+      );
     } catch (error: any) {
       flash(error?.message || 'Failed to save settings', 'error');
     }
@@ -2750,7 +2762,7 @@ function App() {
       });
 
       const response = await api.settings.testRuntime({
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        runtimeBaseUrl: settingsState.runtimeBaseUrl,
       });
 
       setRuntimeTestState({
@@ -4168,15 +4180,17 @@ function App() {
                     <div className="settings-section-card space-y-5">
                       {appContext.hostMode === 'embedded' ? (
                         <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3 text-[13px] text-gray-600">
-                          Embedded mode runs against the in-memory local mainnet hosted by `aevatar app`.
+                          The studio is currently using the local runtime hosted by `aevatar app`. Save a different URL here to switch the app to a remote runtime.
                         </div>
-                      ) : null}
+                      ) : (
+                        <div className="rounded-[20px] border border-[#E7EEF9] bg-[#F4F8FD] px-4 py-3 text-[13px] text-gray-600">
+                          The studio is routing workflow and script APIs through the configured remote runtime.
+                        </div>
+                      )}
 
                       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
                         <div>
-                          <label className="field-label">
-                            {appContext.hostMode === 'embedded' ? 'Local mainnet URL' : 'Runtime base URL'}
-                          </label>
+                          <label className="field-label">Runtime base URL</label>
                           <input
                             className="panel-input mt-1"
                             value={settingsState.runtimeBaseUrl}
@@ -4189,7 +4203,6 @@ function App() {
                               });
                             }}
                             placeholder={DEFAULT_RUNTIME_BASE_URL}
-                            readOnly={appContext.hostMode === 'embedded'}
                           />
                         </div>
                         <button
@@ -4199,16 +4212,13 @@ function App() {
                         >
                           {runtimeTestState.status === 'testing'
                             ? 'Testing...'
-                            : appContext.hostMode === 'embedded'
-                              ? 'Test local mainnet'
-                              : 'Test connection'}
+                            : 'Test connection'}
                         </button>
                         <button
                           onClick={handleSaveSettings}
                           className="solid-action justify-center"
-                          disabled={appContext.hostMode === 'embedded'}
                         >
-                          {appContext.hostMode === 'embedded' ? 'Managed locally' : 'Save runtime'}
+                          Save runtime
                         </button>
                       </div>
 

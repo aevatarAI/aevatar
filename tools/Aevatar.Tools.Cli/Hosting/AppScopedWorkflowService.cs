@@ -25,16 +25,19 @@ public sealed class AppScopedWorkflowService
     private readonly IWorkflowActorBindingReader? _workflowActorBindingReader;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
+    private readonly AppRuntimeTargetResolver? _runtimeTargetResolver;
 
     public AppScopedWorkflowService(
         IHttpClientFactory httpClientFactory,
         IWorkflowYamlDocumentService yamlDocumentService,
+        AppRuntimeTargetResolver? runtimeTargetResolver = null,
         IScopeWorkflowQueryPort? workflowQueryPort = null,
         IScopeWorkflowCommandPort? workflowCommandPort = null,
         IWorkflowActorBindingReader? workflowActorBindingReader = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
+        _runtimeTargetResolver = runtimeTargetResolver;
         _workflowQueryPort = workflowQueryPort;
         _workflowCommandPort = workflowCommandPort;
         _workflowActorBindingReader = workflowActorBindingReader;
@@ -45,9 +48,11 @@ public sealed class AppScopedWorkflowService
         CancellationToken ct = default)
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
-        var workflows = _workflowQueryPort != null
-            ? await _workflowQueryPort.ListAsync(normalizedScopeId, ct)
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
+        var workflows = ShouldUseLocalQuery(runtimeTarget)
+            ? await _workflowQueryPort!.ListAsync(normalizedScopeId, ct)
             : await SendAsync<List<ScopeWorkflowSummary>>(
+                runtimeTarget,
                 HttpMethod.Get,
                 $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/workflows",
                 body: null,
@@ -66,10 +71,11 @@ public sealed class AppScopedWorkflowService
     {
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
         var normalizedWorkflowId = NormalizeRequired(workflowId, nameof(workflowId));
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
 
-        if (_workflowQueryPort != null && _workflowActorBindingReader != null)
+        if (ShouldUseLocalQuery(runtimeTarget) && _workflowActorBindingReader != null)
         {
-            var workflow = await _workflowQueryPort.GetByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct);
+            var workflow = await _workflowQueryPort!.GetByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct);
             if (workflow == null)
                 return null;
 
@@ -86,6 +92,7 @@ public sealed class AppScopedWorkflowService
         }
 
         var detail = await SendAsync<ScopeWorkflowDetail>(
+            runtimeTarget,
             HttpMethod.Get,
             $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/workflows/{Uri.EscapeDataString(normalizedWorkflowId)}",
             body: null,
@@ -122,11 +129,12 @@ public sealed class AppScopedWorkflowService
         var displayName = string.IsNullOrWhiteSpace(request.WorkflowName)
             ? workflowId
             : request.WorkflowName.Trim();
+        var runtimeTarget = await ResolveRuntimeTargetAsync(ct);
 
         ScopeWorkflowUpsertResult upsert;
-        if (_workflowCommandPort != null)
+        if (ShouldUseLocalCommand(runtimeTarget))
         {
-            upsert = await _workflowCommandPort.UpsertAsync(
+            upsert = await _workflowCommandPort!.UpsertAsync(
                 new ScopeWorkflowUpsertRequest(
                     normalizedScopeId,
                     workflowId,
@@ -138,6 +146,7 @@ public sealed class AppScopedWorkflowService
         else
         {
             upsert = await SendAsync<ScopeWorkflowUpsertResult>(
+                runtimeTarget,
                 HttpMethod.Put,
                 $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/workflows/{Uri.EscapeDataString(workflowId)}",
                 new RemoteUpsertRequest(
@@ -234,6 +243,7 @@ public sealed class AppScopedWorkflowService
     }
 
     private async Task<T?> SendAsync<T>(
+        AppRuntimeTarget? runtimeTarget,
         HttpMethod method,
         string relativePath,
         object? body,
@@ -241,7 +251,9 @@ public sealed class AppScopedWorkflowService
         bool allowNotFound = false)
     {
         var client = _httpClientFactory.CreateClient(BackendClientName);
-        using var request = new HttpRequestMessage(method, relativePath);
+        using var request = new HttpRequestMessage(
+            method,
+            BuildRequestUri(runtimeTarget, relativePath));
         if (body != null)
             request.Content = JsonContent.Create(body);
 
@@ -282,6 +294,30 @@ public sealed class AppScopedWorkflowService
                 "Workflow backend returned invalid JSON.",
                 innerException: ex);
         }
+    }
+
+    private async Task<AppRuntimeTarget?> ResolveRuntimeTargetAsync(CancellationToken ct)
+    {
+        if (_runtimeTargetResolver == null)
+            return null;
+
+        return await _runtimeTargetResolver.GetCurrentAsync(ct);
+    }
+
+    private bool ShouldUseLocalQuery(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _workflowQueryPort != null;
+
+    private bool ShouldUseLocalCommand(AppRuntimeTarget? runtimeTarget) =>
+        runtimeTarget?.UsesLocalRuntime == true &&
+        _workflowCommandPort != null;
+
+    private Uri BuildRequestUri(AppRuntimeTarget? runtimeTarget, string relativePath)
+    {
+        if (runtimeTarget == null)
+            return new Uri(relativePath, UriKind.Relative);
+
+        return _runtimeTargetResolver!.BuildAbsoluteUri(runtimeTarget.EffectiveBaseUrl, relativePath);
     }
 
     private static async Task<AppApiException> BuildApiExceptionAsync(HttpResponseMessage response, CancellationToken ct)

@@ -5,9 +5,7 @@ public sealed class StudioStorageOptions
     public string RootDirectory { get; set; } =
         Path.Combine(StudioStoragePathHelpers.ResolveDefaultAevatarHomeDirectory(), "studio");
 
-    public string DefaultRuntimeBaseUrl { get; set; } = "http://127.0.0.1:5100";
-
-    public bool ForceLocalRuntime { get; set; }
+    public string DefaultRuntimeBaseUrl { get; set; } = "http://localhost:6688";
 }
 
 internal static class StudioStorageOptionsExtensions
@@ -22,7 +20,6 @@ internal static class StudioStorageOptionsExtensions
         {
             RootDirectory = rootDirectory,
             DefaultRuntimeBaseUrl = options.DefaultRuntimeBaseUrl,
-            ForceLocalRuntime = options.ForceLocalRuntime,
         };
     }
 }
