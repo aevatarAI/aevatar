@@ -568,7 +568,7 @@ public sealed class ExecutionService
         using var reader = new StreamReader(stream);
         var dataLines = new List<string>();
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(cancellationToken);

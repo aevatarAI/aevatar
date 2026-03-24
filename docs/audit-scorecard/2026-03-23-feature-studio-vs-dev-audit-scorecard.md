@@ -98,7 +98,7 @@
 | | |
 |---|---|
 | **文件示例** | `tools/Aevatar.Tools.Cli/README.md`, `src/workflow/Aevatar.Workflow.Sdk/README.md`, `src/workflow/Aevatar.Workflow.Sdk/Options/AevatarWorkflowClientOptions.cs` |
-| **问题** | 仓库顶层规则要求默认示例避免 `5000/5050`，但当前仍有若干 CLI / SDK 文档与默认值沿用 `http://localhost:5000`。 |
+| **问题** | 仓库顶层规则要求默认示例避免 `5000/5050`，当时仍有若干 CLI / SDK 文档与默认值沿用旧默认端口。 |
 | **影响** | 不阻塞当前修复合入，但会持续制造 README、示例代码与仓库约束之间的不一致。 |
 | **建议** | 作为后续单独清理项，统一切到仓库当前文档口径（如 `5100`）并同步 Host / SDK / README。 |
 

@@ -33,7 +33,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: null,
                     yes: true,
                     cancellationToken: CancellationToken.None,
@@ -80,7 +80,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: "confirmed",
                     yes: false,
                     cancellationToken: CancellationToken.None,
@@ -120,7 +120,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: "declined",
                     yes: false,
                     cancellationToken: CancellationToken.None,
@@ -174,7 +174,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: "preferred",
                     yes: true,
                     cancellationToken: CancellationToken.None,
