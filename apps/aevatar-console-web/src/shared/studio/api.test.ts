@@ -15,7 +15,7 @@ describe('studioApi host-session requests', () => {
     window.localStorage.clear();
   });
 
-  it('does not inject a bearer token for Studio host endpoints', async () => {
+  it('injects the NyxID bearer token for Studio host endpoints', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -47,10 +47,12 @@ describe('studioApi host-session requests', () => {
     ];
     expect(input).toBe('/api/auth/me');
     expect(init?.credentials).toBe('same-origin');
-    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
   });
 
-  it('loads template workflows from the Studio sidecar instead of console auth APIs', async () => {
+  it('loads template workflows from the Studio host instead of console auth APIs', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
