@@ -5,7 +5,7 @@ namespace Aevatar.Workflow.Sdk.Options;
 
 public sealed class AevatarWorkflowClientOptions
 {
-    public string BaseUrl { get; set; } = "http://localhost:5000";
+    public string BaseUrl { get; set; } = "http://localhost:5100";
 
     public IDictionary<string, string> DefaultHeaders { get; } =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

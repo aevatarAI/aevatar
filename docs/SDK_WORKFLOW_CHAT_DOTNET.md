@@ -16,7 +16,7 @@ using Aevatar.Workflow.Sdk.DependencyInjection;
 var services = new ServiceCollection();
 services.AddAevatarWorkflowSdk(options =>
 {
-    options.BaseUrl = "http://localhost:5000";
+    options.BaseUrl = "http://localhost:5100";
     options.DefaultHeaders["x-api-key"] = "<optional>";
 });
 ```

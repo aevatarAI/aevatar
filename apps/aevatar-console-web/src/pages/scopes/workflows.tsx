@@ -9,7 +9,7 @@ import {
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Button, Col, Drawer, Row, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { scopesApi } from "@/shared/api/scopesApi";

@@ -23,6 +23,7 @@ import type {
 } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
+import { getActiveAccessToken } from "@/shared/auth/session";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -33,9 +34,19 @@ async function studioHostFetch(
   input: string,
   init?: RequestInit
 ): Promise<Response> {
+  const headers = new Headers(init?.headers);
+
+  if (!headers.has("Authorization")) {
+    const accessToken = getActiveAccessToken();
+    if (accessToken) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+  }
+
   return fetch(input, {
     credentials: "same-origin",
     ...init,
+    headers,
   });
 }
 

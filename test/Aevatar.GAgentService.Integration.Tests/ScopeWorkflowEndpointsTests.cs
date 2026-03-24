@@ -524,6 +524,213 @@ public sealed class ScopeWorkflowEndpointsTests
         body.Should().Contain("user requested stop");
     }
 
+    [Fact]
+    public async Task HandleRunWorkflowStreamAsync_ShouldSucceed_WhenScopeClaimMatchesPath()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "msg-1",
+                        Delta = "hi",
+                    },
+                }, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateAuthenticatedHttpContext("user-1");
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("definition-actor-1", "hello"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().NotBe(StatusCodes.Status403Forbidden);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+    }
+
+    [Fact]
+    public async Task HandleRunWorkflowStreamAsync_ShouldSucceed_WhenNoAuthenticationConfigured()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("definition-actor-1", "hello"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().NotBe(StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
+    public async Task HandleListWorkflowsAsync_ShouldReturnEmptyArray_WhenNoWorkflows()
+    {
+        var http = CreateHttpContext();
+
+        var result = await ScopeWorkflowEndpoints.HandleListWorkflowsAsync(
+            http,
+            "user-1",
+            includeSource: false,
+            BuildQueryPort(),
+            new FakeWorkflowActorBindingReader(),
+            artifactStore: null,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Be("[]");
+    }
+
+    [Fact]
+    public async Task HandleGetWorkflowDetailAsync_ShouldReturnNotFound_WhenWorkflowDoesNotExist()
+    {
+        var http = CreateHttpContext();
+
+        var result = await ScopeWorkflowEndpoints.HandleGetWorkflowDetailAsync(
+            http,
+            "user-1",
+            "nonexistent-workflow",
+            BuildQueryPort(),
+            new FakeWorkflowActorBindingReader(),
+            artifactStore: null,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        body.Should().Contain("USER_WORKFLOW_NOT_FOUND");
+        body.Should().Contain("nonexistent-workflow");
+    }
+
+    [Fact]
+    public async Task HandleStopWorkflowRunAsync_ShouldReturnBadRequest_WhenActorIdMissing()
+    {
+        var http = CreateHttpContext();
+
+        var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest(string.Empty, "run-1"),
+            BuildQueryPort(),
+            new FakeWorkflowActorBindingReader(),
+            new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>(),
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("ActorId is required");
+    }
+
+    [Fact]
+    public async Task HandleUpsertWorkflowAsync_ShouldReturnOk_WhenCommandSucceeds()
+    {
+        var http = CreateHttpContext();
+        var snapshot = new ServiceCatalogSnapshot(
+            "tenant-a:workflow-app:user:token:approval",
+            "tenant-a",
+            "workflow-app",
+            "user:user-1-token",
+            "approval",
+            "Approval",
+            "rev-1",
+            "rev-1",
+            "dep-1",
+            "definition-actor-1",
+            "active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult = [snapshot],
+        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
+
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
+            http,
+            "user-1",
+            "approval",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest("name: approval\nsteps: []\n"),
+            BuildCommandPort(queryPort: queryPort),
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+    }
+
     private static IScopeWorkflowCommandPort BuildCommandPort(
         FakeServiceCommandPort? commandPort = null,
         FakeServiceLifecycleQueryPort? queryPort = null,

@@ -12,6 +12,9 @@ public static class ChatQueryEndpoints
         group.MapGet("/agents", ListAgents)
             .Produces(StatusCodes.Status200OK);
 
+        group.MapGet("/primitives", ListPrimitives)
+            .Produces(StatusCodes.Status200OK);
+
         group.MapGet("/workflows", ListWorkflows)
             .Produces(StatusCodes.Status200OK);
 
@@ -35,6 +38,10 @@ public static class ChatQueryEndpoints
         group.MapGet("/actors/{actorId}/graph-edges", ListActorGraphEdges)
             .Produces(StatusCodes.Status200OK);
 
+        group.MapGet("/actors/{actorId}/graph-enriched", GetActorGraphEnriched)
+            .Produces(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status404NotFound);
+
         group.MapGet("/actors/{actorId}/graph-subgraph", GetActorGraphSubgraph)
             .Produces(StatusCodes.Status200OK);
 
@@ -46,6 +53,31 @@ public static class ChatQueryEndpoints
     {
         var agents = await queryService.ListAgentsAsync(ct);
         return Results.Ok(agents);
+    }
+
+    internal static IResult ListPrimitives(IWorkflowExecutionQueryApplicationService queryService)
+    {
+        var capabilities = queryService.GetCapabilities();
+        var exampleWorkflowsByPrimitive = queryService
+            .ListWorkflowCatalog()
+            .Where(static item => item.IsPrimitiveExample)
+            .SelectMany(item => item.Primitives.Select(primitive => new { Primitive = primitive, Workflow = item.Name }))
+            .GroupBy(static item => item.Primitive, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group
+                    .Select(item => item.Workflow)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var primitives = capabilities.Primitives
+            .OrderBy(static primitive => primitive.Category, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static primitive => primitive.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(primitive => MapPrimitive(primitive, exampleWorkflowsByPrimitive))
+            .ToList();
+        return Results.Ok(primitives);
     }
 
     internal static IResult ListWorkflows(IWorkflowExecutionQueryApplicationService queryService) =>
@@ -95,6 +127,24 @@ public static class ChatQueryEndpoints
         var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
         var edges = await queryService.ListActorGraphEdgesAsync(actorId, take, graphOptions, ct);
         return Results.Ok(edges.Select(MapGraphEdge));
+    }
+
+    internal static async Task<IResult> GetActorGraphEnriched(
+        string actorId,
+        IWorkflowExecutionQueryApplicationService queryService,
+        int depth = 2,
+        int take = 200,
+        string? direction = null,
+        string[]? edgeTypes = null,
+        CancellationToken ct = default)
+    {
+        var snapshot = await queryService.GetActorSnapshotAsync(actorId, ct);
+        if (snapshot == null)
+            return Results.NotFound();
+
+        var graphOptions = BuildGraphQueryOptions(direction, edgeTypes);
+        var subgraph = await queryService.GetActorGraphSubgraphAsync(actorId, depth, take, graphOptions, ct);
+        return Results.Ok(new WorkflowActorGraphEnrichedHttpResponse(MapSnapshot(snapshot), MapGraphSubgraph(subgraph)));
     }
 
     internal static async Task<IResult> GetActorGraphSubgraph(
@@ -194,6 +244,36 @@ public static class ChatQueryEndpoints
             subgraph.Nodes.Select(MapGraphNode).ToList(),
             subgraph.Edges.Select(MapGraphEdge).ToList());
 
+    private static WorkflowPrimitiveDescriptorHttpResponse MapPrimitive(
+        WorkflowPrimitiveCapability primitive,
+        IReadOnlyDictionary<string, List<string>> exampleWorkflowsByPrimitive)
+    {
+        return new WorkflowPrimitiveDescriptorHttpResponse(
+            primitive.Name,
+            primitive.Aliases
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static alias => alias, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            primitive.Category,
+            primitive.Description,
+            primitive.Parameters.Select(MapPrimitiveParameter).ToList(),
+            exampleWorkflowsByPrimitive.TryGetValue(primitive.Name, out var exampleWorkflows)
+                ? exampleWorkflows
+                : []);
+    }
+
+    private static WorkflowPrimitiveParameterDescriptorHttpResponse MapPrimitiveParameter(
+        WorkflowPrimitiveParameterCapability parameter) =>
+        new(
+            parameter.Name,
+            parameter.Type,
+            parameter.Required,
+            parameter.Description,
+            parameter.Default,
+            parameter.Enum
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static value => value, StringComparer.OrdinalIgnoreCase)
+                .ToList());
 }
 
 public sealed record WorkflowActorSnapshotHttpResponse(
@@ -240,3 +320,23 @@ public sealed record WorkflowActorGraphSubgraphHttpResponse(
     string RootNodeId,
     List<WorkflowActorGraphNodeHttpResponse> Nodes,
     List<WorkflowActorGraphEdgeHttpResponse> Edges);
+
+public sealed record WorkflowActorGraphEnrichedHttpResponse(
+    WorkflowActorSnapshotHttpResponse Snapshot,
+    WorkflowActorGraphSubgraphHttpResponse Subgraph);
+
+public sealed record WorkflowPrimitiveParameterDescriptorHttpResponse(
+    string Name,
+    string Type,
+    bool Required,
+    string Description,
+    string Default,
+    List<string> EnumValues);
+
+public sealed record WorkflowPrimitiveDescriptorHttpResponse(
+    string Name,
+    List<string> Aliases,
+    string Category,
+    string Description,
+    List<WorkflowPrimitiveParameterDescriptorHttpResponse> Parameters,
+    List<string> ExampleWorkflows);

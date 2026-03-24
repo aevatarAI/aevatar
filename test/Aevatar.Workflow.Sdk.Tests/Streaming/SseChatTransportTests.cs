@@ -29,7 +29,7 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
             {
                 Content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream"),
             }));
-        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") };
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5100") };
         var transport = new SseChatTransport();
 
         var events = new List<WorkflowEvent>();
@@ -64,7 +64,7 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
                     Encoding.UTF8,
                     "application/json"),
             }));
-        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") };
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5100") };
         var transport = new SseChatTransport();
 
         var act = async () =>
@@ -96,7 +96,7 @@ data: {"type":"RUN_STARTED","threadId":"actor-1","source":"playground","extra":{
             {
                 Content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream"),
             }));
-        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") };
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5100") };
         var transport = new SseChatTransport();
 
         var events = new List<WorkflowEvent>();

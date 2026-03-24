@@ -8,6 +8,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
+    <ProjectReference Include="..\Aevatar.Authentication.Hosting\Aevatar.Authentication.Hosting.csproj" />
+    <ProjectReference Include="..\Aevatar.Authentication.Providers.NyxId\Aevatar.Authentication.Providers.NyxId.csproj" />
+    <ProjectReference Include="..\Aevatar.Studio.Hosting\Aevatar.Studio.Hosting.csproj" />
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
   </ItemGroup>
