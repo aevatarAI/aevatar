@@ -159,7 +159,7 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
 
         socket.SentTexts.Should().ContainSingle();
         socket.SentTexts[0].Should().Contain("\"type\":\"command.error\"");
-        socket.SentTexts[0].Should().Contain("PROMPT_REQUIRED");
+        socket.SentTexts[0].Should().Contain("INVALID_INPUT_PART");
         service.LastRequest.Should().BeNull();
     }
 

@@ -1,3 +1,5 @@
+import { resolveAppHref } from './appPath';
+
 type NavigationTarget = string;
 
 function notifyRouteChange(): void {
@@ -9,7 +11,7 @@ function navigate(target: NavigationTarget, replace: boolean): void {
     return;
   }
 
-  const nextUrl = new URL(target, window.location.origin);
+  const nextUrl = new URL(resolveAppHref(target), window.location.origin);
   if (nextUrl.origin !== window.location.origin) {
     if (replace) {
       window.location.replace(nextUrl.toString());

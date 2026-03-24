@@ -16,6 +16,8 @@ public class ChatRunStartErrorMapperTests
     [InlineData(WorkflowChatRunStartError.AgentWorkflowNotConfigured, StatusCodes.Status409Conflict)]
     [InlineData(WorkflowChatRunStartError.InvalidWorkflowYaml, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.WorkflowNameMismatch, StatusCodes.Status400BadRequest)]
+    [InlineData(WorkflowChatRunStartError.InvalidInputPart, StatusCodes.Status400BadRequest)]
+    [InlineData(WorkflowChatRunStartError.InputPartTooLarge, StatusCodes.Status400BadRequest)]
     [InlineData(WorkflowChatRunStartError.None, StatusCodes.Status400BadRequest)]
     public void ToHttpStatusCode_ShouldMapExpectedCode(
         WorkflowChatRunStartError error,
@@ -49,5 +51,23 @@ public class ChatRunStartErrorMapperTests
 
         mapped.Code.Should().Be("INVALID_WORKFLOW_YAML");
         mapped.Message.Should().Be("Workflow YAML is invalid.");
+    }
+
+    [Fact]
+    public void ToCommandError_InvalidInputPart_ShouldMapExpectedPayload()
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.InvalidInputPart);
+
+        mapped.Code.Should().Be("INVALID_INPUT_PART");
+        mapped.Message.Should().Be("One or more inputParts are invalid or unsupported.");
+    }
+
+    [Fact]
+    public void ToCommandError_InputPartTooLarge_ShouldMapExpectedPayload()
+    {
+        var mapped = ChatRunStartErrorMapper.ToCommandError(WorkflowChatRunStartError.InputPartTooLarge);
+
+        mapped.Code.Should().Be("INPUT_PART_TOO_LARGE");
+        mapped.Message.Should().Be("One or more inputParts exceed the allowed size.");
     }
 }

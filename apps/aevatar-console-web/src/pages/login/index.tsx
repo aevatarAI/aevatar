@@ -8,6 +8,7 @@ import {
   NyxIDAuthClient,
 } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { replaceAppLocation } from '@/shared/navigation/appPath';
 import {
   sanitizeReturnTo,
 } from '@/shared/auth/session';
@@ -61,7 +62,7 @@ const LoginPage: React.FC = () => {
         return;
       }
 
-      window.location.replace(redirectTarget);
+      replaceAppLocation(redirectTarget);
     });
 
     return () => {

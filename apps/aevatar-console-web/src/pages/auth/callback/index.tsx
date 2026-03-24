@@ -3,6 +3,7 @@ import { Button, Result } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { prefixAppBasePath, replaceAppLocation } from '@/shared/navigation/appPath';
 import { loadStoredAuthSession } from '@/shared/auth/session';
 
 const CallbackPage: React.FC = () => {
@@ -13,7 +14,7 @@ const CallbackPage: React.FC = () => {
     let cancelled = false;
 
     if (loadStoredAuthSession()) {
-      window.location.replace('/overview');
+      replaceAppLocation('/overview');
       return () => {
         cancelled = true;
       };
@@ -27,7 +28,7 @@ const CallbackPage: React.FC = () => {
           return;
         }
 
-        window.location.replace(result.returnTo);
+        replaceAppLocation(result.returnTo);
       } catch (error) {
         if (cancelled) {
           return;
@@ -48,7 +49,7 @@ const CallbackPage: React.FC = () => {
     return (
       <Result
         extra={[
-          <Button href="/login" key="retry" type="primary">
+          <Button href={prefixAppBasePath('/login')} key="retry" type="primary">
             Back to login
           </Button>,
         ]}

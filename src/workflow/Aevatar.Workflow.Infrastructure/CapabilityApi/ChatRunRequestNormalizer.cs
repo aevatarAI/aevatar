@@ -17,6 +17,20 @@ internal readonly record struct ChatRunRequestNormalizationResult(
         new(null, error);
 }
 
+internal readonly record struct InputPartsNormalizationResult(
+    IReadOnlyList<WorkflowChatInputPart>? InputParts,
+    WorkflowChatRunStartError Error)
+{
+    public bool Succeeded => Error == WorkflowChatRunStartError.None;
+
+    public static InputPartsNormalizationResult Success(
+        IReadOnlyList<WorkflowChatInputPart>? inputParts) =>
+        new(inputParts, WorkflowChatRunStartError.None);
+
+    public static InputPartsNormalizationResult Failed(WorkflowChatRunStartError error) =>
+        new(null, error);
+}
+
 internal static class ChatRunRequestNormalizer
 {
     /// <summary>
@@ -41,9 +55,11 @@ internal static class ChatRunRequestNormalizer
         ArgumentNullException.ThrowIfNull(input);
 
         var normalizedAgentId = NormalizeAgentId(input.AgentId);
-        var normalizedInputParts = NormalizeInputParts(input.InputParts);
-        if (HasOnlyUnsupportedInputParts(input, normalizedInputParts))
-            return ChatRunRequestNormalizationResult.Failed(WorkflowChatRunStartError.PromptRequired);
+        var inputPartsResult = NormalizeInputParts(input.InputParts);
+        if (!inputPartsResult.Succeeded)
+            return ChatRunRequestNormalizationResult.Failed(inputPartsResult.Error);
+
+        var normalizedInputParts = inputPartsResult.InputParts;
 
         var normalizedContext = NormalizeContext(input.ScopeId, input.Metadata, defaultMetadata);
         if (!normalizedContext.Succeeded)
@@ -129,43 +145,45 @@ internal static class ChatRunRequestNormalizer
     private static string NormalizeWorkflowName(string? workflowName) =>
         string.IsNullOrWhiteSpace(workflowName) ? string.Empty : workflowName.Trim();
 
-    private static IReadOnlyList<WorkflowChatInputPart>? NormalizeInputParts(IReadOnlyList<ChatInputContentPart>? inputParts)
+    private static InputPartsNormalizationResult NormalizeInputParts(IReadOnlyList<ChatInputContentPart>? inputParts)
     {
         if (inputParts == null || inputParts.Count == 0)
-            return null;
+            return InputPartsNormalizationResult.Success(null);
 
         var normalized = new List<WorkflowChatInputPart>(inputParts.Count);
         foreach (var part in inputParts)
         {
             if (part == null || string.IsNullOrWhiteSpace(part.Type))
-                continue;
+                return InputPartsNormalizationResult.Failed(WorkflowChatRunStartError.InvalidInputPart);
 
             if (!TryParseContentPartKind(part.Type, out var kind))
-                continue;
+                return InputPartsNormalizationResult.Failed(WorkflowChatRunStartError.InvalidInputPart);
 
-            if (!string.IsNullOrWhiteSpace(part.DataBase64) && part.DataBase64.Length > MaxDataBase64Length)
-                continue;
+            var text = NormalizeOptionalString(part.Text);
+            var dataBase64 = NormalizeOptionalString(part.DataBase64);
+            var mediaType = NormalizeOptionalString(part.MediaType);
+            var uri = NormalizeOptionalString(part.Uri);
+            var name = NormalizeOptionalString(part.Name);
+
+            if (dataBase64 != null && dataBase64.Length > MaxDataBase64Length)
+                return InputPartsNormalizationResult.Failed(WorkflowChatRunStartError.InputPartTooLarge);
+
+            if (!IsValidInputPart(kind, text, dataBase64, uri))
+                return InputPartsNormalizationResult.Failed(WorkflowChatRunStartError.InvalidInputPart);
 
             normalized.Add(new WorkflowChatInputPart
             {
                 Kind = kind,
-                Text = string.IsNullOrWhiteSpace(part.Text) ? null : part.Text,
-                DataBase64 = string.IsNullOrWhiteSpace(part.DataBase64) ? null : part.DataBase64,
-                MediaType = string.IsNullOrWhiteSpace(part.MediaType) ? null : part.MediaType,
-                Uri = string.IsNullOrWhiteSpace(part.Uri) ? null : part.Uri,
-                Name = string.IsNullOrWhiteSpace(part.Name) ? null : part.Name,
+                Text = text,
+                DataBase64 = dataBase64,
+                MediaType = mediaType,
+                Uri = uri,
+                Name = name,
             });
         }
 
-        return normalized.Count == 0 ? null : normalized;
+        return InputPartsNormalizationResult.Success(normalized.Count == 0 ? null : normalized);
     }
-
-    private static bool HasOnlyUnsupportedInputParts(
-        ChatInput input,
-        IReadOnlyList<WorkflowChatInputPart>? normalizedInputParts) =>
-        string.IsNullOrWhiteSpace(input.Prompt) &&
-        input.InputParts is { Count: > 0 } &&
-        normalizedInputParts == null;
 
     private static NormalizedChatContext NormalizeContext(
         string? explicitScopeId,
@@ -243,6 +261,9 @@ internal static class ChatRunRequestNormalizer
     private static string? NormalizeSessionId(string? sessionId) =>
         string.IsNullOrWhiteSpace(sessionId) ? null : sessionId.Trim();
 
+    private static string? NormalizeOptionalString(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static string ResolvePrompt(string? prompt, IReadOnlyList<WorkflowChatInputPart>? inputParts)
     {
         if (!string.IsNullOrWhiteSpace(prompt))
@@ -285,4 +306,21 @@ internal static class ChatRunRequestNormalizer
 
         return kind != WorkflowChatInputPartKind.Unspecified;
     }
+
+    private static bool IsValidInputPart(
+        WorkflowChatInputPartKind kind,
+        string? text,
+        string? dataBase64,
+        string? uri) =>
+        kind switch
+        {
+            WorkflowChatInputPartKind.Text => !string.IsNullOrWhiteSpace(text),
+            WorkflowChatInputPartKind.Image or
+            WorkflowChatInputPartKind.Audio or
+            WorkflowChatInputPartKind.Video or
+            WorkflowChatInputPartKind.Pdf =>
+                !string.IsNullOrWhiteSpace(dataBase64) ||
+                !string.IsNullOrWhiteSpace(uri),
+            _ => false,
+        };
 }

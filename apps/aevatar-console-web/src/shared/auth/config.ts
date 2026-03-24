@@ -1,3 +1,5 @@
+import { prefixAppBasePath } from '../navigation/appPath';
+
 export interface NyxIDRuntimeConfig {
   readonly enabled: boolean;
   readonly baseUrl: string;
@@ -51,7 +53,7 @@ function resolveWindowOrigin(): string {
 }
 
 function resolveDefaultRedirectUri(): string {
-  return `${resolveWindowOrigin()}${DEFAULT_REDIRECT_PATH}`;
+  return `${resolveWindowOrigin()}${prefixAppBasePath(DEFAULT_REDIRECT_PATH)}`;
 }
 
 function isHttpUrl(url: URL): boolean {
@@ -145,11 +147,14 @@ export function getNyxIDRuntimeConfig(): NyxIDRuntimeConfig {
     clientId.length === 0
       ? buildMissingConfigurationError('NYXID_CLIENT_ID')
       : baseUrl.length === 0
-        ? buildMissingConfigurationError('NYXID_BASE_URL')
+      ? buildMissingConfigurationError('NYXID_BASE_URL')
         : !normalizedBaseUrl
       ? buildConfigurationError('NYXID_BASE_URL', '/nyxid')
       : !normalizedRedirectUri
-        ? buildConfigurationError('NYXID_REDIRECT_URI', '/auth/callback')
+        ? buildConfigurationError(
+            'NYXID_REDIRECT_URI',
+            prefixAppBasePath(DEFAULT_REDIRECT_PATH),
+          )
         : undefined;
 
   return {

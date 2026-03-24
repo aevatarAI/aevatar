@@ -44,6 +44,8 @@ public enum WorkflowChatRunStartError
     WorkflowNameMismatch = 8,
     PromptRequired = 9,
     ConflictingScopeId = 10,
+    InvalidInputPart = 11,
+    InputPartTooLarge = 12,
 }
 
 public enum WorkflowProjectionCompletionStatus

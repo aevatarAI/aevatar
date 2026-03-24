@@ -19,6 +19,8 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowNameMismatch => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.PromptRequired => StatusCodes.Status400BadRequest,
             WorkflowChatRunStartError.ConflictingScopeId => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.InvalidInputPart => StatusCodes.Status400BadRequest,
+            WorkflowChatRunStartError.InputPartTooLarge => StatusCodes.Status400BadRequest,
             _ => StatusCodes.Status400BadRequest,
         };
     }
@@ -37,6 +39,8 @@ internal static class ChatRunStartErrorMapper
             WorkflowChatRunStartError.WorkflowNameMismatch => ("WORKFLOW_NAME_MISMATCH", "Workflow name does not match workflow YAML."),
             WorkflowChatRunStartError.PromptRequired => ("PROMPT_REQUIRED", "Prompt is required."),
             WorkflowChatRunStartError.ConflictingScopeId => ("CONFLICTING_SCOPE_ID", "Conflicting scope_id values were provided."),
+            WorkflowChatRunStartError.InvalidInputPart => ("INVALID_INPUT_PART", "One or more inputParts are invalid or unsupported."),
+            WorkflowChatRunStartError.InputPartTooLarge => ("INPUT_PART_TOO_LARGE", "One or more inputParts exceed the allowed size."),
             _ => ("RUN_START_FAILED", "Failed to resolve actor."),
         };
     }

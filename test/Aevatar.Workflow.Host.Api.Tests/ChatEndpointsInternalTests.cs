@@ -209,7 +209,36 @@ public sealed class ChatEndpointsInternalTests
         var body = await ReadBodyAsync(http.Response);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        body.Should().Contain("PROMPT_REQUIRED");
+        body.Should().Contain("INVALID_INPUT_PART");
+        service.LastCommand.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleCommand_ShouldRejectInvalidInputPart_EvenWhenPromptExists()
+    {
+        var service = new FakeCommandDispatchService();
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput
+            {
+                Prompt = "describe this",
+                InputParts =
+                [
+                    new ChatInputContentPart
+                    {
+                        Type = "foo",
+                    },
+                ],
+            },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_INPUT_PART");
         service.LastCommand.Should().BeNull();
     }
 
@@ -310,7 +339,45 @@ public sealed class ChatEndpointsInternalTests
 
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        body.Should().Contain("PROMPT_REQUIRED");
+        body.Should().Contain("INVALID_INPUT_PART");
+        called.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task HandleChat_ShouldRejectInvalidInputPart_EvenWhenPromptExists()
+    {
+        var http = CreateHttpContext();
+        var called = false;
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = (_, _, _, _) =>
+            {
+                called = true;
+                return Task.FromResult(
+                    CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                        .Failure(WorkflowChatRunStartError.AgentNotFound));
+            },
+        };
+
+        await WorkflowCapabilityEndpoints.HandleChat(
+            http,
+            new ChatInput
+            {
+                Prompt = "describe this",
+                InputParts =
+                [
+                    new ChatInputContentPart
+                    {
+                        Type = "foo",
+                    },
+                ],
+            },
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        body.Should().Contain("INVALID_INPUT_PART");
         called.Should().BeFalse();
     }
 

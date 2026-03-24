@@ -74,4 +74,19 @@ describe('NyxID runtime config', () => {
         'NYXID_BASE_URL must be a valid http(s) URL or a root-relative path such as /nyxid.',
     });
   });
+
+  it('uses the configured console public path when deriving the default redirect uri', () => {
+    process.env.NYXID_BASE_URL = 'localhost:3001';
+    process.env.NYXID_REDIRECT_URI = undefined;
+    process.env.AEVATAR_CONSOLE_PUBLIC_PATH = '/console/';
+
+    expect(getNyxIDRuntimeConfig()).toEqual({
+      enabled: true,
+      baseUrl: 'http://localhost:3001',
+      clientId: 'client-1',
+      redirectUri: `${window.location.origin}/console/auth/callback`,
+      scope: 'openid profile email',
+      configurationError: undefined,
+    });
+  });
 });

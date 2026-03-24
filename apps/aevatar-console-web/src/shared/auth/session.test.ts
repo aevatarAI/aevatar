@@ -8,14 +8,21 @@ import {
 } from './session';
 
 describe('auth session storage', () => {
+  const originalEnv = process.env;
+
   beforeEach(() => {
     window.localStorage.clear();
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    process.env = {
+      ...originalEnv,
+      AEVATAR_CONSOLE_PUBLIC_PATH: undefined,
+    };
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
     window.localStorage.clear();
+    process.env = originalEnv;
   });
 
   it('loads a persisted active auth session', () => {
@@ -107,5 +114,17 @@ describe('auth session storage', () => {
     expect(sanitizeReturnTo('https://example.com')).toBe('/overview');
     expect(sanitizeReturnTo('/login?redirect=/overview')).toBe('/overview');
     expect(sanitizeReturnTo('//evil.example.com')).toBe('/overview');
+  });
+
+  it('normalizes base-prefixed redirect targets back to app-relative routes', () => {
+    process.env = {
+      ...originalEnv,
+      AEVATAR_CONSOLE_PUBLIC_PATH: '/console/',
+    };
+
+    expect(sanitizeReturnTo('/console/runs?tab=active')).toBe('/runs?tab=active');
+    expect(
+      sanitizeReturnTo(`${window.location.origin}/console/auth/callback`),
+    ).toBe('/overview');
   });
 });

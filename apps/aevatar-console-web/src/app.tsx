@@ -14,6 +14,10 @@ import { Avatar, ConfigProvider, Dropdown, Space, Typography } from "antd";
 import enUS from "antd/locale/en_US";
 import React from "react";
 import { history } from "@/shared/navigation/history";
+import {
+  getCurrentAppPathname,
+  replaceAppLocation,
+} from "@/shared/navigation/appPath";
 import BrandLogo from "@/components/BrandLogo";
 import defaultSettings from "../config/defaultSettings";
 import { errorConfig } from "./requestErrorConfig";
@@ -125,7 +129,7 @@ export const layout = ({
 }: LayoutRuntimeProps): Record<string, unknown> => {
   return {
     onPageChange: () => {
-      const pathname = window.location.pathname;
+      const pathname = getCurrentAppPathname();
       if (PUBLIC_ROUTES.has(pathname)) {
         return;
       }
@@ -176,7 +180,7 @@ export const layout = ({
 
               if (key === "logout") {
                 clearStoredAuthSession();
-                window.location.replace("/login");
+                replaceAppLocation("/login");
               }
             },
           }}
@@ -230,7 +234,7 @@ export const layout = ({
     childrenRender: (children: React.ReactNode) =>
       initialState ? (
         (() => {
-          const pathname = window.location.pathname;
+          const pathname = getCurrentAppPathname();
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
           const liveSession = loadStoredAuthSession();

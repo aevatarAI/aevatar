@@ -240,7 +240,49 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
         var result = ChatRunRequestNormalizer.Normalize(input);
 
         result.Succeeded.Should().BeFalse();
-        result.Error.Should().Be(WorkflowChatRunStartError.PromptRequired);
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidInputPart);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectInvalidInputPart_EvenWhenPromptExists()
+    {
+        var input = new ChatInput
+        {
+            Prompt = "describe this",
+            InputParts =
+            [
+                new ChatInputContentPart
+                {
+                    Type = "foo",
+                },
+            ],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InvalidInputPart);
+    }
+
+    [Fact]
+    public void ChatRunRequestNormalizer_ShouldRejectOversizedInputPart()
+    {
+        var input = new ChatInput
+        {
+            InputParts =
+            [
+                new ChatInputContentPart
+                {
+                    Type = "image",
+                    DataBase64 = new string('a', ChatRunRequestNormalizer.MaxDataBase64Length + 1),
+                },
+            ],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeFalse();
+        result.Error.Should().Be(WorkflowChatRunStartError.InputPartTooLarge);
     }
 
     [Fact]

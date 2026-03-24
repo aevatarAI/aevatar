@@ -1,5 +1,6 @@
 import { Button, Card, Result } from 'antd';
 import React from 'react';
+import { replaceAppLocation } from '@/shared/navigation/appPath';
 
 const NoFoundPage: React.FC = () => (
   <Card variant="borderless">
@@ -11,7 +12,7 @@ const NoFoundPage: React.FC = () => (
         <Button
           type="primary"
           onClick={() => {
-            window.location.href = '/overview';
+            replaceAppLocation('/overview');
           }}
         >
           Return to overview

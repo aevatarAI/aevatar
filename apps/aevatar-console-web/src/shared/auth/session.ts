@@ -1,4 +1,5 @@
 import type { NyxIDRuntimeConfig } from './config';
+import { stripAppBasePath } from '../navigation/appPath';
 
 export interface NyxIDTokenSet {
   readonly accessToken: string;
@@ -145,14 +146,41 @@ export function buildAuthInitialState(config: NyxIDRuntimeConfig): AuthInitialSt
 
 export function sanitizeReturnTo(value?: string | null): string {
   const normalized = value?.trim();
-  if (!normalized || !normalized.startsWith('/') || normalized.startsWith('//')) {
+  if (!normalized || normalized.startsWith('//')) {
     return '/overview';
   }
 
-  const target = normalized.split('#')[0].split('?')[0];
-  if (AUTH_BLOCKED_PATHS.has(target)) {
+  if (!normalized.startsWith('/') && !hasScheme(normalized)) {
     return '/overview';
   }
 
-  return normalized;
+  try {
+    const candidate = normalized.startsWith('/')
+      ? new URL(normalized, resolveWindowOrigin())
+      : new URL(normalized);
+    if (candidate.origin !== resolveWindowOrigin()) {
+      return '/overview';
+    }
+
+    const target = stripAppBasePath(candidate.pathname);
+    if (AUTH_BLOCKED_PATHS.has(target)) {
+      return '/overview';
+    }
+
+    return `${target}${candidate.search}${candidate.hash}`;
+  } catch {
+    return '/overview';
+  }
+}
+
+function resolveWindowOrigin(): string {
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
+  }
+
+  return 'http://127.0.0.1:5173';
+}
+
+function hasScheme(value: string): boolean {
+  return /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value);
 }
