@@ -8,6 +8,7 @@ enum ChatContentPartKind {
   CHAT_CONTENT_PART_KIND_IMAGE = 2;
   CHAT_CONTENT_PART_KIND_AUDIO = 3;
   CHAT_CONTENT_PART_KIND_VIDEO = 4;
+  CHAT_CONTENT_PART_KIND_PDF = 5;
 }
 
 message ChatContentPart {

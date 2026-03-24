@@ -285,6 +285,13 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
                     MediaType = "image/png",
                     Name = "cat",
                 },
+                new WorkflowChatInputPart
+                {
+                    Kind = WorkflowChatInputPartKind.Pdf,
+                    Uri = "https://example.com/report.pdf",
+                    MediaType = "application/pdf",
+                    Name = "report",
+                },
             ],
             ScopeId: "scope-7");
 
@@ -296,13 +303,17 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         var request = envelope.Payload.Unpack<ChatRequestEvent>();
 
         request.ScopeId.Should().Be("scope-7");
-        request.InputParts.Should().HaveCount(2);
+        request.InputParts.Should().HaveCount(3);
         request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
         request.InputParts[0].Text.Should().Be("describe this");
         request.InputParts[1].Kind.Should().Be(ChatContentPartKind.Image);
         request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
         request.InputParts[1].MediaType.Should().Be("image/png");
         request.InputParts[1].Name.Should().Be("cat");
+        request.InputParts[2].Kind.Should().Be(ChatContentPartKind.Pdf);
+        request.InputParts[2].Uri.Should().Be("https://example.com/report.pdf");
+        request.InputParts[2].MediaType.Should().Be("application/pdf");
+        request.InputParts[2].Name.Should().Be("report");
     }
 
     [Fact]

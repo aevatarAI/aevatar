@@ -150,6 +150,42 @@ public sealed class ChatEndpointsInternalTests
     }
 
     [Fact]
+    public async Task HandleCommand_ShouldAcceptPdfInputWithoutPrompt()
+    {
+        var service = new FakeCommandDispatchService
+        {
+            Result = CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+                new WorkflowChatRunAcceptedReceipt("actor-1", "direct", "cmd-1", "corr-1")),
+        };
+
+        var result = await WorkflowCapabilityEndpoints.HandleCommand(
+            new ChatInput
+            {
+                InputParts =
+                [
+                    new ChatInputContentPart
+                    {
+                        Type = "pdf",
+                        Uri = "https://example.com/spec.pdf",
+                        MediaType = "application/pdf",
+                    },
+                ],
+            },
+            service,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        service.LastCommand.Should().NotBeNull();
+        service.LastCommand!.Prompt.Should().Be("[pdf]");
+        service.LastCommand.InputParts.Should().ContainSingle();
+        service.LastCommand.InputParts![0].Kind.Should().Be(WorkflowChatInputPartKind.Pdf);
+    }
+
+    [Fact]
     public async Task HandleCommand_ShouldRejectUnsupportedOnlyInputParts()
     {
         var service = new FakeCommandDispatchService();

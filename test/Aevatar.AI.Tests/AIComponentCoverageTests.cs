@@ -329,6 +329,44 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public async Task MEAILLMProvider_ShouldMapPdfInputAsBinaryContent()
+    {
+        IReadOnlyList<MeaiChatMessage>? capturedMessages = null;
+
+        var client = new StubChatClient
+        {
+            OnGetResponse = (messages, _, _) =>
+            {
+                capturedMessages = messages.ToList();
+                return Task.FromResult(new ChatResponse(new MeaiChatMessage(ChatRole.Assistant, "ok")));
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai", client);
+
+        await provider.ChatAsync(new LLMRequest
+        {
+            Messages =
+            [
+                AevatarChatMessage.User(
+                    [ContentPart.PdfUriPart("https://example.com/spec.pdf", name: "spec.pdf")],
+                    "summarize this pdf"),
+            ],
+        });
+
+        provider.Capabilities.SupportsInput(ContentPartKind.Pdf).Should().BeTrue();
+        capturedMessages.Should().NotBeNull();
+        capturedMessages!.Should().ContainSingle();
+        capturedMessages[0].Role.Should().Be(ChatRole.User);
+        capturedMessages[0].Contents.Should().ContainSingle();
+        capturedMessages[0].Contents[0].Should().BeOfType<UriContent>();
+
+        var pdfContent = (UriContent)capturedMessages[0].Contents[0];
+        pdfContent.Uri.Should().Be(new Uri("https://example.com/spec.pdf"));
+        pdfContent.MediaType.Should().Be("application/pdf");
+    }
+
+    [Fact]
     public void LLMProviderFactories_ShouldRegisterResolveAndThrowOnMissing()
     {
         var meaiFactory = new MEAILLMProviderFactory();

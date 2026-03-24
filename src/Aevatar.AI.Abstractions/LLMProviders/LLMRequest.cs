@@ -102,12 +102,13 @@ public enum ContentPartKind
     Image = 2,
     Audio = 3,
     Video = 4,
+    Pdf = 5,
 }
 
 /// <summary>多模态内容分片。</summary>
 public sealed class ContentPart
 {
-    /// <summary>分片类型：text / image / audio / video。</summary>
+    /// <summary>分片类型：text / image / audio / video / pdf。</summary>
     public required ContentPartKind Kind { get; init; }
 
     /// <summary>文本分片内容。</summary>
@@ -147,6 +148,12 @@ public sealed class ContentPart
 
     public static ContentPart VideoUriPart(string uri, string mediaType = "video/mp4", string? name = null) =>
         new() { Kind = ContentPartKind.Video, Uri = uri, MediaType = mediaType, Name = name };
+
+    public static ContentPart PdfPart(string dataBase64, string mediaType = "application/pdf", string? name = null) =>
+        new() { Kind = ContentPartKind.Pdf, DataBase64 = dataBase64, MediaType = mediaType, Name = name };
+
+    public static ContentPart PdfUriPart(string uri, string mediaType = "application/pdf", string? name = null) =>
+        new() { Kind = ContentPartKind.Pdf, Uri = uri, MediaType = mediaType, Name = name };
 }
 
 /// <summary>单次工具调用。包含 Id、名称、参数 JSON。</summary>

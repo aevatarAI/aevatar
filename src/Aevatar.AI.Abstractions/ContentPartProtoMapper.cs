@@ -47,6 +47,7 @@ public static class ContentPartProtoMapper
             ContentPartKind.Image => ChatContentPartKind.Image,
             ContentPartKind.Audio => ChatContentPartKind.Audio,
             ContentPartKind.Video => ChatContentPartKind.Video,
+            ContentPartKind.Pdf => ChatContentPartKind.Pdf,
             _ => ChatContentPartKind.Unspecified,
         };
 
@@ -57,6 +58,7 @@ public static class ContentPartProtoMapper
             ChatContentPartKind.Image => ContentPartKind.Image,
             ChatContentPartKind.Audio => ContentPartKind.Audio,
             ChatContentPartKind.Video => ContentPartKind.Video,
+            ChatContentPartKind.Pdf => ContentPartKind.Pdf,
             _ => ContentPartKind.Unspecified,
         };
 }

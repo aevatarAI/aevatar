@@ -54,6 +54,7 @@
 - `workflowYamls` 只表示“inline YAML bundle”，不承担名称查找语义。
 - 若同时传 `workflow` 与 `workflowYamls`，以 `workflowYamls` 为准。
 - `direct/auto/auto_review` 可显式传入，按注册表解析，不要求存在同名文件。
+- `inputParts.type` 当前支持 `text / image / audio / video / pdf`；`pdf` 默认使用 `application/pdf`。
 
 ## 3. 自动编排能力（按 prompt 决策）
 
@@ -152,9 +153,10 @@ POST /api/workflows/signal
   "requestId": "client-req-1",
   "payload": {
     "inputParts": [
-      { "type": "text", "text": "帮我分析这段录音和截图" },
+      { "type": "text", "text": "帮我分析这段录音、截图和 PDF" },
       { "type": "audio", "uri": "https://example.com/call.wav", "mediaType": "audio/wav" },
-      { "type": "image", "uri": "https://example.com/screenshot.png", "mediaType": "image/png" }
+      { "type": "image", "uri": "https://example.com/screenshot.png", "mediaType": "image/png" },
+      { "type": "pdf", "uri": "https://example.com/incident-report.pdf", "mediaType": "application/pdf" }
     ]
   }
 }

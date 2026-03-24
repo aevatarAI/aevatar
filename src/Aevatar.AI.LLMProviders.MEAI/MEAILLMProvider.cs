@@ -30,6 +30,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             ContentPartKind.Image,
             ContentPartKind.Audio,
             ContentPartKind.Video,
+            ContentPartKind.Pdf,
         },
         SupportedOutputModalities = new HashSet<ContentPartKind>
         {
@@ -37,6 +38,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             ContentPartKind.Image,
             ContentPartKind.Audio,
             ContentPartKind.Video,
+            ContentPartKind.Pdf,
         },
         SupportsStreaming = true,
         SupportsToolCalls = true,
@@ -537,6 +539,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             {
                 ContentPartKind.Audio => "audio/wav",
                 ContentPartKind.Video => "video/mp4",
+                ContentPartKind.Pdf => "application/pdf",
                 _ => "image/png",
             };
 
@@ -552,6 +555,8 @@ public sealed class MEAILLMProvider : ILLMProvider
             return ContentPartKind.Audio;
         if (normalized.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
             return ContentPartKind.Video;
+        if (string.Equals(normalized, "application/pdf", StringComparison.OrdinalIgnoreCase))
+            return ContentPartKind.Pdf;
         return ContentPartKind.Unspecified;
     }
 }

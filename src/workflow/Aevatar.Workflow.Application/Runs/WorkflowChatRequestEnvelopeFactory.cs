@@ -53,6 +53,7 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
                 WorkflowChatInputPartKind.Image => ChatContentPartKind.Image,
                 WorkflowChatInputPartKind.Audio => ChatContentPartKind.Audio,
                 WorkflowChatInputPartKind.Video => ChatContentPartKind.Video,
+                WorkflowChatInputPartKind.Pdf => ChatContentPartKind.Pdf,
                 _ => ChatContentPartKind.Unspecified,
             },
             Text = source.Text ?? string.Empty,

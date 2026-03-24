@@ -7,6 +7,7 @@ public enum WorkflowChatInputPartKind
     Image = 2,
     Audio = 3,
     Video = 4,
+    Pdf = 5,
 }
 
 public sealed record WorkflowChatInputPart

@@ -300,7 +300,7 @@ flowchart LR
 | `TextMessageStartEvent` | `RoleGAgent` | 文本消息开始 |
 | `TextMessageContentEvent` | `RoleGAgent` | 文本增量（delta） |
 | `TextMessageEndEvent` | `RoleGAgent` | 文本消息结束（含完整 content） |
-| `MediaContentEvent` | `RoleGAgent` | 多模态媒体分片（image/audio/video） |
+| `MediaContentEvent` | `RoleGAgent` | 多模态媒体分片（image/audio/video/pdf） |
 | `ToolCallEvent` | `RoleGAgent`、`ToolCallModule` | 流式工具调用（LLM delta）与模块级工具调用 |
 | `ToolResultEvent` | `ToolCallModule` | 工具执行结果 |
 | `ChatResponseEvent` | `WorkflowGAgent` 等 | 非流式回退路径 |
@@ -340,7 +340,7 @@ flowchart LR
 | 人工交互事件流 | 已支持 | `CUSTOM` 事件输出 `aevatar.step.request` / `aevatar.step.completed` / `aevatar.workflow.waiting_signal`（含显式 runId），用于 UI 渲染与回传 |
 | 流式 `DeltaToolCall` | 已支持 | Provider -> `ChatRuntime` -> `RoleGAgent` 贯通，转为 `ToolCallEvent` |
 | WS 二进制命令/事件帧 | 已支持 | `ChatWebSocketProtocol` + `ChatWebSocketMessageContracts` 统一 text/binary 与 `ack/event/error` 强类型出站 |
-| 多模态业务事件（音频/图像/video） | 已支持 | `ChatInput.inputParts` -> `ChatRequestEvent.input_parts` -> Provider `ContentPart` -> `MediaContentEvent`，输出侧映射为 `CUSTOM(aevatar.media.chunk)` |
+| 多模态业务事件（音频/图像/video/pdf） | 已支持 | `ChatInput.inputParts` -> `ChatRequestEvent.input_parts` -> Provider `ContentPart` -> `MediaContentEvent`，输出侧映射为 `CUSTOM(aevatar.media.chunk)` |
 
 锚点：
 
@@ -386,7 +386,7 @@ flowchart LR
 
 当前收敛方式：
 
-1. 输入侧统一使用 `ChatInput.inputParts` / `WorkflowChatRunRequest.InputParts` / `ChatRequestEvent.input_parts` 传递 `text/image/audio/video`。
+1. 输入侧统一使用 `ChatInput.inputParts` / `WorkflowChatRunRequest.InputParts` / `ChatRequestEvent.input_parts` 传递 `text/image/audio/video/pdf`。
 2. Provider 通过 `ILLMProvider.Capabilities` 声明支持的输入/输出模态与流式能力，failover 仅在兼容能力集合内切换。
 3. 运行时把媒体增量归一化为 `LLMStreamChunk.DeltaContentPart`，`RoleGAgent` 发布 `MediaContentEvent`，投影侧映射到统一输出链路。
 

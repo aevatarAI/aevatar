@@ -25,13 +25,21 @@ public sealed class AIAbstractionsProtoCoverageTests
                     MediaType = "image/png",
                     Name = "cat",
                 },
+                new ChatContentPart
+                {
+                    Kind = ChatContentPartKind.Pdf,
+                    Uri = "https://example.com/spec.pdf",
+                    MediaType = "application/pdf",
+                    Name = "spec",
+                },
             },
         }, ChatRequestEvent.Parser);
         request.Headers["correlation_id"].Should().Be("c-1");
         request.TimeoutMs.Should().Be(2500);
         request.ScopeId.Should().Be("scope-1");
-        request.InputParts.Should().ContainSingle();
+        request.InputParts.Should().HaveCount(2);
         request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Image);
+        request.InputParts[1].Kind.Should().Be(ChatContentPartKind.Pdf);
 
         var response = RoundTrip(new ChatResponseEvent
         {
@@ -218,6 +226,23 @@ public sealed class AIAbstractionsProtoCoverageTests
         state.Sessions["session-1"].InputParts.Should().ContainSingle();
         state.Sessions["session-1"].OutputParts.Should().ContainSingle();
         state.Sessions["session-1"].ToolCalls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ContentPartProtoMapper_ShouldRoundTripPdfContentPart()
+    {
+        var source = Aevatar.AI.Abstractions.LLMProviders.ContentPart.PdfUriPart(
+            "https://example.com/spec.pdf",
+            name: "spec");
+
+        var proto = ContentPartProtoMapper.ToProto(source);
+        var roundTrip = ContentPartProtoMapper.FromProto(proto);
+
+        proto.Kind.Should().Be(ChatContentPartKind.Pdf);
+        proto.MediaType.Should().Be("application/pdf");
+        roundTrip.Kind.Should().Be(Aevatar.AI.Abstractions.LLMProviders.ContentPartKind.Pdf);
+        roundTrip.Uri.Should().Be("https://example.com/spec.pdf");
+        roundTrip.Name.Should().Be("spec");
     }
 
     [Fact]

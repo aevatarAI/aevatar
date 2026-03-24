@@ -19,6 +19,12 @@ internal readonly record struct ChatRunRequestNormalizationResult(
 
 internal static class ChatRunRequestNormalizer
 {
+    /// <summary>
+    /// Maximum allowed size for inline base64 media data per content part (20 MB encoded).
+    /// Base64 encoding expands data by ~33%, so this corresponds to roughly 15 MB of raw media.
+    /// </summary>
+    internal const int MaxDataBase64Length = 20 * 1024 * 1024;
+
     private readonly record struct NormalizedChatContext(
         IReadOnlyDictionary<string, string> Metadata,
         string? ScopeId,
@@ -135,6 +141,9 @@ internal static class ChatRunRequestNormalizer
                 continue;
 
             if (!TryParseContentPartKind(part.Type, out var kind))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(part.DataBase64) && part.DataBase64.Length > MaxDataBase64Length)
                 continue;
 
             normalized.Add(new WorkflowChatInputPart
@@ -257,6 +266,7 @@ internal static class ChatRunRequestNormalizer
                 WorkflowChatInputPartKind.Image => "[image]",
                 WorkflowChatInputPartKind.Audio => "[audio]",
                 WorkflowChatInputPartKind.Video => "[video]",
+                WorkflowChatInputPartKind.Pdf => "[pdf]",
                 _ => "[content]",
             }));
     }
@@ -269,6 +279,7 @@ internal static class ChatRunRequestNormalizer
             "image" => WorkflowChatInputPartKind.Image,
             "audio" => WorkflowChatInputPartKind.Audio,
             "video" => WorkflowChatInputPartKind.Video,
+            "pdf" => WorkflowChatInputPartKind.Pdf,
             _ => WorkflowChatInputPartKind.Unspecified,
         };
 

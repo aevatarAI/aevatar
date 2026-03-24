@@ -80,6 +80,12 @@ var request = new ChatRunRequest
             Uri = "https://example.com/incident-board.png",
             MediaType = "image/png",
         },
+        new ChatRunContentPart
+        {
+            Type = "pdf",
+            Uri = "https://example.com/postmortem.pdf",
+            MediaType = "application/pdf",
+        },
     ],
 };
 ```

@@ -183,6 +183,33 @@ public sealed class WorkflowCapabilityEndpointsCoverageTests
     }
 
     [Fact]
+    public void ChatRunRequestNormalizer_ShouldAcceptPdfInputWithoutPrompt()
+    {
+        var input = new ChatInput
+        {
+            InputParts =
+            [
+                new ChatInputContentPart
+                {
+                    Type = "pdf",
+                    Uri = "https://example.com/spec.pdf",
+                    MediaType = "application/pdf",
+                    Name = "spec",
+                },
+            ],
+        };
+
+        var result = ChatRunRequestNormalizer.Normalize(input);
+
+        result.Succeeded.Should().BeTrue();
+        result.Request!.Prompt.Should().Be("[pdf]");
+        result.Request.InputParts.Should().ContainSingle();
+        result.Request.InputParts![0].Kind.Should().Be(WorkflowChatInputPartKind.Pdf);
+        result.Request.InputParts[0].Uri.Should().Be("https://example.com/spec.pdf");
+        result.Request.InputParts[0].MediaType.Should().Be("application/pdf");
+    }
+
+    [Fact]
     public void ChatRunRequestNormalizer_ShouldRejectBlankPrompt_WhenNoMultimodalInput()
     {
         var input = new ChatInput

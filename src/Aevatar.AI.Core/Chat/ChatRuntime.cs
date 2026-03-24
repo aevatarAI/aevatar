@@ -295,7 +295,13 @@ public sealed class ChatRuntime
             {
                 collectedHistory = await runTask.ConfigureAwait(false);
             }
-            catch { /* best-effort — errors already surfaced via channel */ }
+            catch (Exception ex)
+            {
+                // Primary error already surfaced via channel.Writer.TryComplete(ex).
+                // Log here to capture history-collection failures that would otherwise be silent.
+                System.Diagnostics.Trace.TraceWarning(
+                    "ChatRuntime: streaming run task failed during history collection: {0}", ex.Message);
+            }
 
             // Apply collected history mutations on the caller context after the background task completes.
             if (collectedHistory != null)
@@ -475,6 +481,7 @@ public sealed class ChatRuntime
                 ContentPartKind.Image => "[image]",
                 ContentPartKind.Audio => "[audio]",
                 ContentPartKind.Video => "[video]",
+                ContentPartKind.Pdf => "[pdf]",
                 _ => "[content]",
             }));
     }
