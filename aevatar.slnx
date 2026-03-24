@@ -67,7 +67,18 @@
     <Project Path="src\platform\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
-	  </Folder>
+  </Folder>
+  <Folder Name="/src/authentication/">
+    <Project Path="src/Aevatar.Authentication.Abstractions/Aevatar.Authentication.Abstractions.csproj" />
+    <Project Path="src/Aevatar.Authentication.Hosting/Aevatar.Authentication.Hosting.csproj" />
+    <Project Path="src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
+  </Folder>
+  <Folder Name="/src/studio/">
+    <Project Path="src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />
+    <Project Path="src/Aevatar.Studio.Application/Aevatar.Studio.Application.csproj" />
+    <Project Path="src/Aevatar.Studio.Infrastructure/Aevatar.Studio.Infrastructure.csproj" />
+    <Project Path="src/Aevatar.Studio.Hosting/Aevatar.Studio.Hosting.csproj" />
+  </Folder>
   <Folder Name="/src/platform/">
     <Project Path="src/platform/Aevatar.GAgentService.Governance.Abstractions/Aevatar.GAgentService.Governance.Abstractions.csproj" />
     <Project Path="src/platform/Aevatar.GAgentService.Governance.Application/Aevatar.GAgentService.Governance.Application.csproj" />
@@ -94,7 +105,6 @@
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/Aevatar.Workflow.Extensions.Bridge.csproj" />
   </Folder>
   <Folder Name="/test/">
-    <Project Path="test/Aevatar.App.Tests/Aevatar.App.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />

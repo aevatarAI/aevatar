@@ -16,7 +16,7 @@ import {
   Typography,
 } from "antd";
 import React, { useMemo } from "react";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import {
   cardStackStyle,

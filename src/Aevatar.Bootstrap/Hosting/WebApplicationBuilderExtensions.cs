@@ -79,6 +79,14 @@ public static class WebApplicationBuilderExtensions
         if (options.EnableCors)
             app.UseCors(options.CorsPolicyName);
 
+        // Authentication middleware: auto-activates when an auth scheme is registered.
+        // This keeps Bootstrap decoupled from any specific auth provider.
+        if (app.Services.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationSchemeProvider>() != null)
+        {
+            app.UseAuthentication();
+            app.UseAuthorization();
+        }
+
         if (options.EnableWebSockets)
             app.UseWebSockets();
 

@@ -15,7 +15,7 @@ import {
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import {
   Alert,
   Button,

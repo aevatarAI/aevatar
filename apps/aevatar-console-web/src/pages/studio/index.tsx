@@ -1,6 +1,6 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { history } from '@umijs/max';
+import { history } from '@/shared/navigation/history';
 import type { Node } from '@xyflow/react';
 import {
   Button,

@@ -1,183 +1,181 @@
 #!/usr/bin/env bash
+#
+# boot.sh — (Re)start Mainnet Host API + aevatar console web frontend.
+#
+# Usage:
+#   ./tools/Aevatar.Tools.Cli/boot.sh [--port PORT] [--no-browser]
+#
+# If any process is already listening on the Mainnet port, it is killed first.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_PATH="${SCRIPT_DIR}/Aevatar.Tools.Cli.csproj"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+MAINNET_PROJECT="${REPO_ROOT}/src/Aevatar.Mainnet.Host.Api/Aevatar.Mainnet.Host.Api.csproj"
+FRONTEND_DIR="${REPO_ROOT}/apps/aevatar-console-web"
 CONFIGURATION="${AEVATAR_APP_CONFIGURATION:-Debug}"
 
+API_PORT="${AEVATAR_APP_PORT:-5080}"
+FRONTEND_PORT="${AEVATAR_CONSOLE_FRONTEND_PORT:-5173}"
+NO_BROWSER=false
+
+# ── Parse args ──────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
 Usage:
-  ./tools/Aevatar.Tools.Cli/boot.sh [port]
-  ./tools/Aevatar.Tools.Cli/boot.sh [app args...]
+  ./tools/Aevatar.Tools.Cli/boot.sh [--port PORT] [--no-browser]
 
 Description:
-  Starts `aevatar app` through `dotnet run` without requiring a global tool install.
-  If the target port is occupied, the process on that port will be killed before
-  the app starts again.
+  Kills any existing process on the API port, starts the Mainnet Host API,
+  starts the aevatar console web frontend, and opens the browser.
 
 Examples:
   ./tools/Aevatar.Tools.Cli/boot.sh
-  ./tools/Aevatar.Tools.Cli/boot.sh 7788
-  ./tools/Aevatar.Tools.Cli/boot.sh --port 7788 --no-browser
-  ./tools/Aevatar.Tools.Cli/boot.sh --api-base http://localhost:5001
+  ./tools/Aevatar.Tools.Cli/boot.sh --port 5080
+  ./tools/Aevatar.Tools.Cli/boot.sh --no-browser
 
 Environment:
-  AEVATAR_APP_CONFIGURATION   dotnet run build configuration, default Debug
+  AEVATAR_APP_CONFIGURATION   dotnet build configuration (default: Debug)
+  AEVATAR_APP_PORT            Mainnet API port (default: 5080)
 EOF
 }
-
-if [[ ! -f "${PROJECT_PATH}" ]]; then
-  echo "Project file not found: ${PROJECT_PATH}" >&2
-  exit 1
-fi
-
-declare -a app_args=()
-PORT="${AEVATAR_APP_PORT:-6688}"
-
-if [[ $# -gt 0 ]]; then
-  case "${1}" in
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    ''|*[!0-9]*)
-      ;;
-    *)
-      PORT="${1}"
-      app_args+=(--port "${1}")
-      shift
-      ;;
-  esac
-fi
 
 while [[ $# -gt 0 ]]; do
   case "${1}" in
     --port)
-      if [[ $# -lt 2 ]]; then
-        echo "Missing value for ${1}" >&2
-        exit 1
-      fi
-      PORT="${2}"
-      app_args+=("${1}" "${2}")
-      shift 2
-      ;;
+      [[ $# -lt 2 ]] && { echo "Missing value for ${1}" >&2; exit 1; }
+      API_PORT="${2}"; shift 2 ;;
     --port=*)
-      PORT="${1#--port=}"
-      app_args+=("${1}")
-      shift
-      ;;
-    --configuration|-c)
-      if [[ $# -lt 2 ]]; then
-        echo "Missing value for ${1}" >&2
-        exit 1
-      fi
-      CONFIGURATION="${2}"
-      shift 2
-      ;;
+      API_PORT="${1#--port=}"; shift ;;
+    --no-browser)
+      NO_BROWSER=true; shift ;;
     -h|--help)
-      usage
-      exit 0
-      ;;
+      usage; exit 0 ;;
     *)
-      app_args+=("${1}")
-      shift
-      ;;
+      if [[ "${1}" =~ ^[0-9]+$ ]]; then
+        API_PORT="${1}"; shift
+      else
+        echo "Unknown option: ${1}" >&2; usage; exit 1
+      fi ;;
   esac
 done
 
+# ── Port management ─────────────────────────────────────────────
 list_listening_pids() {
-  local port="$1"
-  lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u
+  lsof -tiTCP:"${1}" -sTCP:LISTEN 2>/dev/null | sort -u || true
 }
 
-port_has_listener() {
+kill_port() {
   local port="$1"
   local pids
   pids="$(list_listening_pids "${port}")"
-  [[ -n "${pids}" ]]
-}
-
-kill_processes_on_port() {
-  local port="$1"
-  local pids
-  local i
-  local remaining
-
-  pids="$(list_listening_pids "${port}")"
-  if [[ -z "${pids}" ]]; then
-    return 1
-  fi
+  [[ -z "${pids}" ]] && return 0
 
   echo "==> Port ${port} is occupied. PID(s): $(echo "${pids}" | tr '\n' ' ')"
-  echo "==> Stopping process(es) on port ${port}..."
+  echo "==> Stopping..."
   while IFS= read -r pid; do
     [[ -z "${pid}" ]] && continue
     kill "${pid}" 2>/dev/null || true
   done <<< "${pids}"
 
-  i=0
-  while [[ "${i}" -lt 20 ]]; do
-    if ! port_has_listener "${port}"; then
-      break
-    fi
+  for _ in $(seq 1 20); do
+    [[ -z "$(list_listening_pids "${port}")" ]] && return 0
     sleep 0.25
-    i=$((i + 1))
   done
 
-  if port_has_listener "${port}"; then
-    remaining="$(list_listening_pids "${port}")"
-    echo "==> Force killing remaining PID(s): $(echo "${remaining}" | tr '\n' ' ')"
+  pids="$(list_listening_pids "${port}")"
+  if [[ -n "${pids}" ]]; then
+    echo "==> Force killing remaining PID(s)..."
     while IFS= read -r pid; do
       [[ -z "${pid}" ]] && continue
       kill -9 "${pid}" 2>/dev/null || true
-    done <<< "${remaining}"
-
-    i=0
-    while [[ "${i}" -lt 20 ]]; do
-      if ! port_has_listener "${port}"; then
-        break
-      fi
-      sleep 0.25
-      i=$((i + 1))
-    done
+    done <<< "${pids}"
+    sleep 1
   fi
 
-  if port_has_listener "${port}"; then
-    echo "Failed to free port ${port}. Please release it manually and retry." >&2
-    exit 1
+  if [[ -n "$(list_listening_pids "${port}")" ]]; then
+    echo "Failed to free port ${port}." >&2; exit 1
   fi
-
-  return 0
 }
 
-echo "==> Launching aevatar app via dotnet run"
-echo "==> Project: ${PROJECT_PATH}"
-echo "==> Configuration: ${CONFIGURATION}"
-echo "==> Port: ${PORT}"
-if [[ ${#app_args[@]} -gt 0 ]]; then
-  echo "==> App args: ${app_args[*]}"
+cleanup() {
+  echo ""
+  echo "==> Shutting down..."
+  [[ -n "${MAINNET_PID:-}" ]] && kill "${MAINNET_PID}" 2>/dev/null || true
+  [[ -n "${FRONTEND_PID:-}" ]] && kill "${FRONTEND_PID}" 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# ── Validate ────────────────────────────────────────────────────
+if [[ ! -f "${MAINNET_PROJECT}" ]]; then
+  echo "Mainnet project not found: ${MAINNET_PROJECT}" >&2; exit 1
+fi
+
+# ── Kill existing processes ─────────────────────────────────────
+kill_port "${API_PORT}"
+echo "==> Port ${API_PORT} is free."
+
+# ── Banner ──────────────────────────────────────────────────────
+# Use 127.0.0.1 to match NyxID's registered redirect_uri
+API_URL="http://127.0.0.1:${API_PORT}"
+FRONTEND_URL="http://127.0.0.1:${FRONTEND_PORT}"
+
+echo ""
+echo "╔═══════════════════════════════════════════════════════════╗"
+echo "║                      aevatar app                          ║"
+echo "╠═══════════════════════════════════════════════════════════╣"
+printf "║  %-57s ║\n" "API:      ${API_URL}"
+printf "║  %-57s ║\n" "Frontend: ${FRONTEND_URL}"
+printf "║  %-57s ║\n" "Press Ctrl+C to stop"
+echo "╚═══════════════════════════════════════════════════════════╝"
+echo ""
+
+# ── Start Mainnet Host API (background) ─────────────────────────
+echo "==> Starting Mainnet Host API..."
+dotnet run \
+  --project "${MAINNET_PROJECT}" \
+  -c "${CONFIGURATION}" \
+  --urls "${API_URL}" &
+MAINNET_PID=$!
+
+# ── Start frontend dev server (background) ──────────────────────
+if [[ -d "${FRONTEND_DIR}" ]] && [[ -f "${FRONTEND_DIR}/package.json" ]]; then
+  echo "==> Installing frontend dependencies..."
+  (cd "${FRONTEND_DIR}" && pnpm install --frozen-lockfile 2>&1 | tail -3)
+
+  echo "==> Starting frontend dev server..."
+  (
+    cd "${FRONTEND_DIR}"
+    export AEVATAR_API_TARGET="${API_URL}"
+    export AEVATAR_STUDIO_API_TARGET="${API_URL}"
+    export AEVATAR_CONSOLE_FRONTEND_PORT="${FRONTEND_PORT}"
+    pnpm start:dev 2>&1 | sed 's/^/[frontend] /'
+  ) &
+  FRONTEND_PID=$!
 else
-  echo "==> App args: <default>"
+  echo "==> Frontend not found at ${FRONTEND_DIR}, skipping."
 fi
 
-if kill_processes_on_port "${PORT}"; then
-  echo "==> Port ${PORT} has been released."
-else
-  echo "==> Port ${PORT} is free."
+# ── Open browser (wait for frontend to be ready) ────────────────
+if [[ "${NO_BROWSER}" != "true" ]]; then
+  (
+    echo "==> Waiting for frontend to compile..."
+    for _ in $(seq 1 120); do
+      if curl -sf -o /dev/null "${FRONTEND_URL}/"; then
+        echo "==> Opening browser: ${FRONTEND_URL}"
+        if [[ "$(uname)" == "Darwin" ]]; then
+          open "${FRONTEND_URL}" 2>/dev/null
+        elif command -v xdg-open >/dev/null 2>&1; then
+          xdg-open "${FRONTEND_URL}" 2>/dev/null
+        fi
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "==> Frontend did not start within 120s. Open manually: ${FRONTEND_URL}"
+  ) &
 fi
 
-cmd=(
-  dotnet run
-  --project "${PROJECT_PATH}"
-  -c "${CONFIGURATION}"
-  --
-  app
-)
-
-if [[ ${#app_args[@]} -gt 0 ]]; then
-  cmd+=("${app_args[@]}")
-fi
-
-exec "${cmd[@]}"
+# ── Wait for either to exit ─────────────────────────────────────
+wait "${MAINNET_PID}"

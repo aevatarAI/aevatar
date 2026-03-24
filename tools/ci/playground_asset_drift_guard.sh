@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
 
-CLI_PLAYGROUND_DIR="tools/Aevatar.Tools.Cli/wwwroot/playground"
+CLI_FRONTEND_DIR="tools/Aevatar.Tools.Cli/Frontend"
 DEMO_PLAYGROUND_DIR="demos/Aevatar.Demos.Workflow.Web/wwwroot"
 
 failures=0
@@ -64,6 +64,12 @@ compare_files() {
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "${tmp_dir}"' EXIT
+
+CLI_PLAYGROUND_DIR="${tmp_dir}/cli-playground"
+
+echo "Building CLI playground assets into temporary directory..."
+pnpm -C "${CLI_FRONTEND_DIR}" exec tsc -b >/dev/null
+pnpm -C "${CLI_FRONTEND_DIR}" exec vite build --outDir "${CLI_PLAYGROUND_DIR}" >/dev/null
 
 compare_files \
   "app.js" \
