@@ -574,6 +574,171 @@ public sealed class ServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
     }
 
+    [Fact]
+    public async Task GetServiceAsync_ShouldReturnNullBody_WhenServiceDoesNotExist()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // GetServiceResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/nonexistent?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task GetServiceRevisionsAsync_ShouldReturnNullBody_WhenNoRevisions()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // GetServiceRevisionsResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/revisions?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task GetServiceDeploymentsAsync_ShouldReturnNullBody_WhenNoDeployments()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // GetServiceDeploymentsResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/deployments?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task ListServicesAsync_ShouldReturnEmptyArray_WhenNoMatches()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // ListServicesResult defaults to []
+
+        var result = await host.Client.GetFromJsonAsync<List<ServiceCatalogSnapshot>>("/api/services/?tenantId=t&appId=a&namespace=n");
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetServingSetAsync_ShouldReturnNullBody_WhenNoServingSet()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // GetServiceServingSetResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/serving?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task GetRolloutAsync_ShouldReturnNullBody_WhenNoRollout()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // GetServiceRolloutResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/rollouts?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task GetTrafficViewAsync_ShouldReturnNullBody_WhenNoTraffic()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        // GetServiceTrafficViewResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/traffic?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldMapCallerIdentity_WhenProvided()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+        var payload = Convert.ToBase64String([5, 6, 7]);
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/orders/invoke/run", new ServiceEndpoints.InvokeServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            "cmd-5",
+            "corr-5",
+            "type.googleapis.com/demo.Run",
+            payload,
+            "caller-svc-key",
+            "caller-tenant",
+            "caller-app"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.EndpointId.Should().Be("run");
+        host.InvocationPort.LastRequest.Caller.ServiceKey.Should().Be("caller-svc-key");
+        host.InvocationPort.LastRequest.Caller.TenantId.Should().Be("caller-tenant");
+        host.InvocationPort.LastRequest.Caller.AppId.Should().Be("caller-app");
+    }
+
+    [Fact]
+    public async Task CreateServiceAsync_ShouldMapMultipleEndpoints()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/services/", new ServiceEndpoints.CreateServiceHttpRequest(
+            "tenant",
+            "app",
+            "ns",
+            "multi-ep",
+            "Multi Endpoint Service",
+            [
+                new ServiceEndpoints.ServiceEndpointHttpRequest("submit", "Submit", "command", "type.googleapis.com/demo.Submit", "", ""),
+                new ServiceEndpoints.ServiceEndpointHttpRequest("chat", "Chat", "chat", "type.googleapis.com/demo.Chat", "type.googleapis.com/demo.ChatResp", ""),
+            ]));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.CreateServiceCommand!.Spec.Endpoints.Should().HaveCount(2);
+        host.CommandPort.CreateServiceCommand.Spec.Endpoints[0].EndpointId.Should().Be("submit");
+        host.CommandPort.CreateServiceCommand.Spec.Endpoints[1].EndpointId.Should().Be("chat");
+        host.CommandPort.CreateServiceCommand.Spec.Endpoints[1].Kind.Should().Be(ServiceEndpointKind.Chat);
+    }
+
+    [Fact]
+    public async Task ReplaceServingTargetsAsync_ShouldMapMultipleTargets()
+    {
+        await using var host = await EndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync(
+            "/api/services/orders:serving-targets",
+            new ServiceEndpoints.ReplaceServiceServingTargetsHttpRequest(
+                "tenant",
+                "app",
+                "ns",
+                [
+                    new ServiceEndpoints.ServiceServingTargetHttpRequest("rev-1", 70, "active", ["chat", "submit"]),
+                    new ServiceEndpoints.ServiceServingTargetHttpRequest("rev-2", 30, "paused", []),
+                ],
+                "rollout-x",
+                "canary release"));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.CommandPort.ReplaceServiceServingTargetsCommand!.Targets.Should().HaveCount(2);
+        host.CommandPort.ReplaceServiceServingTargetsCommand.Targets[0].RevisionId.Should().Be("rev-1");
+        host.CommandPort.ReplaceServiceServingTargetsCommand.Targets[0].AllocationWeight.Should().Be(70);
+        host.CommandPort.ReplaceServiceServingTargetsCommand.Targets[1].ServingState.Should().Be(ServiceServingState.Paused);
+        host.CommandPort.ReplaceServiceServingTargetsCommand.RolloutId.Should().Be("rollout-x");
+        host.CommandPort.ReplaceServiceServingTargetsCommand.Reason.Should().Be("canary release");
+    }
+
     private sealed class EndpointTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;

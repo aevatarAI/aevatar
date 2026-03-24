@@ -165,6 +165,193 @@ public sealed class ServiceInvocationApplicationServiceTests
         receipt.CorrelationId.Should().Be(dispatcher.Calls[0].request.CorrelationId);
     }
 
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenServiceNotFound()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var resolutionService = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader { GetResult = null },
+            new RecordingTrafficViewQueryReader { GetResult = null },
+            artifactStore);
+        var service = new ServiceInvocationApplicationService(
+            resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
+
+        var act = () => service.InvokeAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*was not found*");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenNoTrafficView()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var resolutionService = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = new ServiceCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    identity.TenantId,
+                    identity.AppId,
+                    identity.Namespace,
+                    identity.ServiceId,
+                    "Orders",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    ServiceDeploymentStatus.Unspecified.ToString(),
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            },
+            new RecordingTrafficViewQueryReader { GetResult = null },
+            artifactStore);
+        var service = new ServiceInvocationApplicationService(
+            resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
+
+        var act = () => service.InvokeAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*has no serving traffic view*");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenEndpointNotInTrafficView()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var resolutionService = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = new ServiceCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    identity.TenantId,
+                    identity.AppId,
+                    identity.Namespace,
+                    identity.ServiceId,
+                    "Orders",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    ServiceDeploymentStatus.Unspecified.ToString(),
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            },
+            new RecordingTrafficViewQueryReader
+            {
+                GetResult = new ServiceTrafficViewSnapshot(
+                    ServiceKeys.Build(identity),
+                    1,
+                    string.Empty,
+                    [
+                        new ServiceTrafficEndpointSnapshot(
+                            "other-endpoint",
+                            [
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-1",
+                                    "r1",
+                                    "actor-1",
+                                    100,
+                                    ServiceServingState.Active.ToString()),
+                            ]),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            artifactStore);
+        var service = new ServiceInvocationApplicationService(
+            resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
+
+        var act = () => service.InvokeAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*has no serving target*");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ShouldThrow_WhenNoActiveTargetsOnEndpoint()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        var resolutionService = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = new ServiceCatalogSnapshot(
+                    ServiceKeys.Build(identity),
+                    identity.TenantId,
+                    identity.AppId,
+                    identity.Namespace,
+                    identity.ServiceId,
+                    "Orders",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    ServiceDeploymentStatus.Unspecified.ToString(),
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            },
+            new RecordingTrafficViewQueryReader
+            {
+                GetResult = new ServiceTrafficViewSnapshot(
+                    ServiceKeys.Build(identity),
+                    1,
+                    string.Empty,
+                    [
+                        new ServiceTrafficEndpointSnapshot(
+                            "chat",
+                            [
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-1",
+                                    "r1",
+                                    "actor-1",
+                                    0,
+                                    ServiceServingState.Active.ToString()),
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-2",
+                                    "r1",
+                                    "actor-2",
+                                    100,
+                                    ServiceServingState.Draining.ToString()),
+                            ]),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            artifactStore);
+        var service = new ServiceInvocationApplicationService(
+            resolutionService, new RecordingAuthorizer(), new RecordingDispatcher());
+
+        var act = () => service.InvokeAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*No active serving targets*");
+    }
+
     private sealed class RecordingCatalogQueryReader : IServiceCatalogQueryReader
     {
         public ServiceCatalogSnapshot? GetResult { get; init; }

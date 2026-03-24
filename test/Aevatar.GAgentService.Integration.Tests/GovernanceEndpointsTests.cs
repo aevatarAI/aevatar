@@ -298,6 +298,95 @@ public sealed class GovernanceEndpointsTests
         host.CapabilityViewReader.LastRevisionId.Should().Be("rev-1");
     }
 
+    [Fact]
+    public async Task BindingEndpoints_ShouldReturnNullBody_WhenNoBindingsExist()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+        // BindingsResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/bindings?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task PolicyEndpoints_ShouldReturnNullBody_WhenNoPoliciesExist()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+        // PoliciesResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/policies?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task EndpointCatalogEndpoints_ShouldReturnNullBody_WhenNoCatalogExists()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+        // EndpointCatalogResult defaults to null
+
+        var response = await host.Client.GetAsync("/api/services/orders/endpoint-catalog?tenantId=t&appId=a&namespace=n");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("null");
+    }
+
+    [Fact]
+    public async Task ActivationCapabilityEndpoint_ShouldReturnEmptyView_WhenNoViewConfigured()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+        // CapabilityViewReader.Result defaults to new ActivationCapabilityView()
+
+        var result = await host.Client.GetFromJsonAsync<ActivationCapabilityView>("/api/services/orders:activation-capability?tenantId=t&appId=a&namespace=n");
+
+        result.Should().NotBeNull();
+        result!.RevisionId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PolicyEndpoints_ShouldCreateAndRetirePoliciesCorrectly()
+    {
+        await using var host = await GovernanceEndpointTestHost.StartAsync();
+        host.QueryPort.PoliciesResult = new ServicePolicyCatalogSnapshot(
+            "tenant:app:ns:orders",
+            [
+                new ServicePolicySnapshot("policy-1", "Test Policy", ["binding-1"], ["caller/key"], true, false),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var createResponse = await host.Client.PostAsJsonAsync("/api/services/orders/policies", new
+        {
+            tenantId = "tenant",
+            appId = "app",
+            @namespace = "ns",
+            policyId = "policy-1",
+            displayName = "Test Policy",
+            activationRequiredBindingIds = new[] { "binding-1" },
+            invokeAllowedCallerServiceKeys = new[] { "caller/key" },
+            invokeRequiresActiveDeployment = true,
+        });
+        var retireResponse = await host.Client.PostAsJsonAsync("/api/services/orders/policies/policy-1:retire", new
+        {
+            tenantId = "tenant",
+            appId = "app",
+            @namespace = "ns",
+        });
+        var getResponse = await host.Client.GetAsync("/api/services/orders/policies?tenantId=tenant&appId=app&namespace=ns");
+
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        retireResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        getResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.CommandPort.CreatePolicyCommand!.Spec.PolicyId.Should().Be("policy-1");
+        host.CommandPort.CreatePolicyCommand.Spec.ActivationRequiredBindingIds.Should().Contain("binding-1");
+        host.CommandPort.RetirePolicyCommand!.PolicyId.Should().Be("policy-1");
+    }
+
     private sealed class GovernanceEndpointTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
