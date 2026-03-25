@@ -9,7 +9,7 @@ import {
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Button, Col, Drawer, Row, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -198,7 +198,7 @@ const ScopeWorkflowsPage: React.FC = () => {
   return (
     <PageContainer
       title="Scope Workflows"
-      content="Inspect published workflow assets for a single scope."
+      content="Inspect published workflow assets for a single scope. tenantId and appId stay platform-managed and hidden behind this view."
       onBack={() => history.push(buildScopeHref("/scopes", activeDraft))}
     >
       <Row gutter={[16, 16]}>

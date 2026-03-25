@@ -1,6 +1,6 @@
 import { PageContainer, ProTable } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Col, Row } from "antd";
 import React, { useMemo, useState } from "react";
 import { governanceApi } from "@/shared/api/governanceApi";
@@ -10,7 +10,9 @@ import { compactTableCardProps } from "@/shared/ui/proComponents";
 import { bindingColumns } from "./components/columns";
 import GovernanceQueryCard from "./components/GovernanceQueryCard";
 import {
+  buildGovernanceServiceOptions,
   buildGovernanceHref,
+  hasGovernanceScope,
   normalizeGovernanceDraft,
   normalizeGovernanceQuery,
   readGovernanceDraft,
@@ -22,6 +24,11 @@ const initialDraft = readGovernanceDraft();
 const GovernanceBindingsPage: React.FC = () => {
   const [draft, setDraft] = useState<GovernanceDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<GovernanceDraft>(initialDraft);
+  const serviceQuery = useMemo(() => normalizeGovernanceQuery(draft), [draft]);
+  const serviceSearchEnabled = useMemo(
+    () => hasGovernanceScope(draft),
+    [draft]
+  );
 
   const query = useMemo(
     () => normalizeGovernanceQuery(activeDraft),
@@ -29,8 +36,9 @@ const GovernanceBindingsPage: React.FC = () => {
   );
 
   const servicesQuery = useQuery({
-    queryKey: ["governance", "bindings", "services", query],
-    queryFn: () => servicesApi.listServices({ ...query, take: 200 }),
+    queryKey: ["governance", "bindings", "services", serviceQuery],
+    enabled: serviceSearchEnabled,
+    queryFn: () => servicesApi.listServices({ ...serviceQuery, take: 200 }),
   });
   const bindingsQuery = useQuery({
     queryKey: ["governance", "bindings", query, activeDraft.serviceId],
@@ -39,29 +47,21 @@ const GovernanceBindingsPage: React.FC = () => {
   });
 
   const serviceOptions = useMemo(
-    () =>
-      (servicesQuery.data ?? []).map((item) => ({
-        label: item.displayName
-          ? `${item.displayName} (${item.serviceId})`
-          : item.serviceId,
-        value: item.serviceId,
-      })),
+    () => buildGovernanceServiceOptions(servicesQuery.data ?? []),
     [servicesQuery.data]
   );
 
   return (
     <PageContainer
-      title="Governance Bindings"
-      content="Inspect bound services, connectors, and secrets for a single service."
-      onBack={() =>
-        history.push(buildGovernanceHref("/governance", activeDraft))
-      }
+      title="Platform Governance Bindings"
+      content="Inspect the raw governance binding view for a single platform service identity."
     >
       <Row gutter={[16, 16]}>
         <Col xs={24}>
           <GovernanceQueryCard
             draft={draft}
             serviceOptions={serviceOptions}
+            serviceSearchEnabled={serviceSearchEnabled}
             onChange={setDraft}
             onLoad={() => {
               const nextActiveDraft = normalizeGovernanceDraft(draft);
@@ -95,7 +95,7 @@ const GovernanceBindingsPage: React.FC = () => {
             <Alert
               showIcon
               type="info"
-              title="Select a service to inspect its binding catalog."
+              title="Select a platform service to inspect its raw binding catalog."
             />
           )}
         </Col>

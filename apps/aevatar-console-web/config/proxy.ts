@@ -10,10 +10,8 @@
  * @doc https://umijs.org/docs/guides/proxy
  */
 const apiTarget = process.env.AEVATAR_API_TARGET || 'http://127.0.0.1:5080';
-const configurationApiTarget =
-  process.env.AEVATAR_CONFIGURATION_API_TARGET || 'http://127.0.0.1:6688';
 const studioApiTarget =
-  process.env.AEVATAR_STUDIO_API_TARGET || 'http://127.0.0.1:6690';
+  process.env.AEVATAR_STUDIO_API_TARGET || apiTarget;
 
 const buildProxyTarget = (target: string) => ({
   target,
@@ -46,11 +44,6 @@ const studioProxyEntries = [
 }, {});
 
 const createProxyConfig = () => ({
-  '/api/configuration/': {
-    target: configurationApiTarget,
-    changeOrigin: true,
-    ws: true,
-  },
   ...studioProxyEntries,
   '/api/': {
     target: apiTarget,

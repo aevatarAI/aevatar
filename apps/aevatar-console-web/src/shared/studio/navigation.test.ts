@@ -36,6 +36,15 @@ describe('buildStudioRoute', () => {
     ).toBe('/studio?workflow=workflow-1&tab=studio');
   });
 
+  it('supports opening the scripts workspace for a specific script', () => {
+    expect(
+      buildStudioRoute({
+        tab: 'scripts',
+        scriptId: 'script-1',
+      }),
+    ).toBe('/studio?script=script-1&tab=scripts');
+  });
+
   it('supports redirecting legacy playground drafts into Studio', () => {
     expect(
       buildStudioRoute({

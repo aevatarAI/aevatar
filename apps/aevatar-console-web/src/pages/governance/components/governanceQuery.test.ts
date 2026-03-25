@@ -1,5 +1,9 @@
 import {
+  applyGovernanceServiceSelection,
+  buildGovernanceServiceOptions,
   buildGovernanceHref,
+  findGovernanceServiceOption,
+  hasGovernanceScope,
   normalizeGovernanceDraft,
   normalizeGovernanceQuery,
   readGovernanceDraft,
@@ -55,5 +59,87 @@ describe('governanceQuery', () => {
     ).toBe(
       '/governance/activation?tenantId=t1&appId=a1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
     );
+  });
+
+  it('builds service picker options and applies their identity to the draft', () => {
+    const options = buildGovernanceServiceOptions([
+      {
+        serviceKey: 't1/a1/n1/svc-1',
+        tenantId: 't1',
+        appId: 'a1',
+        namespace: 'n1',
+        serviceId: 'svc-1',
+        displayName: 'Payments',
+        defaultServingRevisionId: '',
+        activeServingRevisionId: '',
+        deploymentId: '',
+        primaryActorId: '',
+        deploymentStatus: '',
+        endpoints: [],
+        policyIds: [],
+        updatedAt: '2026-03-24T00:00:00Z',
+      },
+    ]);
+
+    expect(options).toEqual([
+      {
+        label: 'Payments (t1/a1/n1/svc-1)',
+        value: 't1/a1/n1/svc-1',
+        tenantId: 't1',
+        appId: 'a1',
+        namespace: 'n1',
+        serviceId: 'svc-1',
+      },
+    ]);
+
+    const selectedOption = findGovernanceServiceOption(options, {
+      tenantId: '',
+      appId: '',
+      namespace: '',
+      serviceId: 'svc-1',
+      revisionId: '',
+    });
+
+    expect(selectedOption).toEqual(options[0]);
+    expect(
+      applyGovernanceServiceSelection(
+        {
+          tenantId: '',
+          appId: '',
+          namespace: '',
+          serviceId: 'svc-1',
+          revisionId: 'rev-2',
+        },
+        options[0],
+      ),
+    ).toEqual({
+      tenantId: 't1',
+      appId: 'a1',
+      namespace: 'n1',
+      serviceId: 'svc-1',
+      revisionId: 'rev-2',
+    });
+  });
+
+  it('requires a full scope before enabling service search', () => {
+    expect(
+      hasGovernanceScope({
+        tenantId: 't1',
+        appId: 'a1',
+        namespace: 'n1',
+        serviceId: '',
+        revisionId: '',
+      }),
+    ).toBe(true);
+
+    expect(
+      hasGovernanceScope({
+        tenantId: 't1',
+        appId: '',
+        namespace: 'n1',
+        serviceId: '',
+        revisionId: '',
+      }),
+    ).toBe(false);
   });
 });

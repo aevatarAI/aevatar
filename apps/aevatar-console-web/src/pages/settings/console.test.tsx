@@ -35,7 +35,6 @@ describe("ConsoleSettingsPage", () => {
     renderWithQueryClient(React.createElement(ConsoleSettingsPage));
 
     expect(await screen.findByText("Console preferences")).toBeTruthy();
-    expect(screen.getByText("Workbench appearance")).toBeTruthy();
     expect(screen.getByText("Workflow defaults")).toBeTruthy();
     expect(screen.getByText("Observability URLs")).toBeTruthy();
     expect(screen.getByText("Runtime explorer defaults")).toBeTruthy();

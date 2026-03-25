@@ -9,7 +9,7 @@ import {
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Button, Col, Row, Space, Tabs, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { servicesApi } from "@/shared/api/servicesApi";
@@ -272,8 +272,8 @@ const ServiceDetailPage: React.FC = () => {
 
   return (
     <PageContainer
-      title={serviceId ? `Service ${serviceId}` : "Service detail"}
-      content="Inspect the service lifecycle view exposed by GAgentService: detail, revisions, deployments, serving, rollout, and traffic."
+      title={serviceId ? `Platform Service ${serviceId}` : "Platform service detail"}
+      content="Inspect the raw GAgentService lifecycle view for one platform service identity: detail, revisions, deployments, serving, rollout, and traffic."
       extra={[
         <Button
           key="back"
@@ -296,7 +296,7 @@ const ServiceDetailPage: React.FC = () => {
             )
           }
         >
-          Open governance
+          Open platform governance
         </Button>,
       ]}
     >
@@ -315,12 +315,21 @@ const ServiceDetailPage: React.FC = () => {
         </Col>
 
         <Col xs={24}>
+          <Alert
+            showIcon
+            type="info"
+            title="Raw platform detail"
+            description="This page inspects a concrete tenantId/appId/namespace-backed service identity. Scope pages keep those platform fields hidden behind the current scope."
+          />
+        </Col>
+
+        <Col xs={24}>
           {!serviceId ? (
             <Alert
               showIcon
               type="warning"
               title="Missing serviceId"
-              description="Open this page from the Services catalog so the route can supply a concrete service identifier."
+              description="Open this page from the Platform Services catalog so the route can supply a concrete service identifier."
             />
           ) : summaryRecord ? (
             <Space direction="vertical" size={16} style={{ width: "100%" }}>

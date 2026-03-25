@@ -1,9 +1,15 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { history } from '@umijs/max';
+import { history } from '@/shared/navigation/history';
+import {
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from '@/shared/navigation/runtimeRoutes';
 import type { Node } from '@xyflow/react';
 import {
+  Alert,
   Button,
+  Modal,
   Space,
 } from 'antd';
 import React, {
@@ -70,8 +76,10 @@ import type {
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioInspectorPane from './components/StudioInspectorPane';
 import StudioShell, {
+  type StudioShellNavItem,
   type StudioWorkspacePage,
 } from './components/StudioShell';
+import ScriptsWorkbenchPage from '@/modules/studio/scripts/ScriptsWorkbenchPage';
 import {
   type StudioCatalogDraftMeta,
   type StudioConnectorCatalogItem,
@@ -91,6 +99,7 @@ import {
 
 type StudioRouteState = {
   workflowId: string;
+  scriptId: string;
   templateWorkflow: string;
   tab: StudioTab;
   draftMode: '' | 'new';
@@ -158,6 +167,7 @@ function trimOptional(value: string | null | undefined): string {
 function parseStudioTab(value: string | null): StudioTab {
   switch (value) {
     case 'studio':
+    case 'scripts':
     case 'executions':
     case 'roles':
     case 'connectors':
@@ -669,6 +679,7 @@ function readInitialStudioRouteState(): StudioRouteState {
   if (typeof window === 'undefined') {
     return {
       workflowId: '',
+      scriptId: '',
       templateWorkflow: '',
       tab: 'workflows',
       draftMode: '',
@@ -682,6 +693,7 @@ function readInitialStudioRouteState(): StudioRouteState {
   const params = new URLSearchParams(window.location.search);
   return {
     workflowId: trimOptional(params.get('workflow')),
+    scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
     tab: parseStudioTab(params.get('tab')),
     draftMode: parseDraftMode(params.get('draft')),
@@ -694,6 +706,8 @@ function readInitialStudioRouteState(): StudioRouteState {
 
 function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage {
   switch (state.tab) {
+    case 'scripts':
+      return 'scripts';
     case 'roles':
     case 'connectors':
     case 'settings':
@@ -777,6 +791,7 @@ const StudioPage: React.FC = () => {
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
     initialState.workflowId,
   );
+  const [selectedScriptId, setSelectedScriptId] = useState(initialState.scriptId);
   const [selectedExecutionId, setSelectedExecutionId] = useState(
     initialState.executionId,
   );
@@ -859,6 +874,9 @@ const StudioPage: React.FC = () => {
   const [promptHistory, setPromptHistory] = useState<
     PlaygroundPromptHistoryEntry[]
   >(() => loadPlaygroundPromptHistory());
+  const [scriptsHasUnsavedChanges, setScriptsHasUnsavedChanges] = useState(false);
+  const [pendingWorkspacePage, setPendingWorkspacePage] =
+    useState<StudioWorkspacePage | null>(null);
   const legacyPlaygroundDraft = useMemo(() => loadPlaygroundDraft(), []);
   const workflowImportInputRef = useRef<HTMLInputElement | null>(null);
   const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -1181,6 +1199,12 @@ const StudioPage: React.FC = () => {
       url.searchParams.delete('workflow');
     }
 
+    if (selectedScriptId) {
+      url.searchParams.set('script', selectedScriptId);
+    } else {
+      url.searchParams.delete('script');
+    }
+
     if (!selectedWorkflowId && templateWorkflow) {
       url.searchParams.set('template', templateWorkflow);
     } else {
@@ -1204,7 +1228,9 @@ const StudioPage: React.FC = () => {
       url.searchParams.delete('legacy');
     }
 
-    if (workspacePage === 'roles') {
+    if (workspacePage === 'scripts') {
+      url.searchParams.set('tab', 'scripts');
+    } else if (workspacePage === 'roles') {
       url.searchParams.set('tab', 'roles');
     } else if (workspacePage === 'connectors') {
       url.searchParams.set('tab', 'connectors');
@@ -1240,6 +1266,7 @@ const StudioPage: React.FC = () => {
     legacySource,
     logsPopoutMode,
     selectedExecutionId,
+    selectedScriptId,
     selectedWorkflowId,
     studioView,
     templateWorkflow,
@@ -3251,42 +3278,67 @@ const StudioPage: React.FC = () => {
     }
   };
 
-  const navItems = [
+  const navItems: StudioShellNavItem[] = [
     {
-      key: 'workflows' as const,
+      key: 'workflows',
       label: 'Workflows',
       description: 'Browse workspace workflows and start new drafts.',
       count: workflowsQuery.data?.length ?? 0,
     },
     {
-      key: 'studio' as const,
+      key: 'studio',
       label: 'Studio',
       description: 'Edit the active draft and inspect execution runs.',
       count: executionsQuery.data?.length ?? 0,
     },
     {
-      key: 'roles' as const,
+      key: 'roles',
       label: 'Roles',
       description: 'Edit, import, and save workflow role definitions.',
       count: rolesQuery.data?.roles.length ?? 0,
     },
     {
-      key: 'connectors' as const,
+      key: 'connectors',
       label: 'Connectors',
       description: 'Edit, import, and save Studio connectors.',
       count: connectorsQuery.data?.connectors.length ?? 0,
     },
     {
-      key: 'settings' as const,
+      key: 'settings',
       label: 'Config',
       description: 'Manage runtime, workflow sources, and provider config.',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
   ];
+  if (appContextQuery.data?.features.scripts) {
+    navItems.splice(2, 0, {
+      key: 'scripts',
+      label: 'Scripts',
+      description: 'Author, validate, run, and promote scope-aware scripts.',
+    });
+  }
+
+  const applyWorkspacePageSelection = React.useCallback(
+    (page: StudioWorkspacePage) => {
+      setWorkspacePage(page);
+      if (page === 'studio' && studioView !== 'execution') {
+        setStudioView('editor');
+      }
+      if (page === 'scripts') {
+        setSelectedWorkflowId('');
+        setTemplateWorkflow('');
+        setDraftMode('');
+        setLegacySource('');
+      }
+    },
+    [studioView],
+  );
 
   const pageTitle =
     workspacePage === 'workflows'
       ? 'Workflows'
+      : workspacePage === 'scripts'
+        ? 'Scripts Studio'
       : workspacePage === 'studio'
         ? studioView === 'execution'
           ? 'Studio execution view'
@@ -3312,6 +3364,12 @@ const StudioPage: React.FC = () => {
         >
           Runs
         </Button>
+        <Button onClick={() => setWorkspacePage('workflows')}>
+          Workflow library
+        </Button>
+      </Space>
+    ) : workspacePage === 'scripts' ? (
+      <Space wrap size={[8, 8]}>
         <Button onClick={() => setWorkspacePage('workflows')}>
           Workflow library
         </Button>
@@ -3551,11 +3609,17 @@ const StudioPage: React.FC = () => {
           onSaveDraft={() => void handleSaveDraft()}
           onInspectPublishedWorkflow={() =>
             history.push(
-              `/workflows?workflow=${encodeURIComponent(templateWorkflow)}`,
+              buildRuntimeWorkflowsHref({
+                workflow: templateWorkflow,
+              }),
             )
           }
           onRunInConsole={() =>
-            history.push(`/runs?workflow=${encodeURIComponent(templateWorkflow)}`)
+            history.push(
+              buildRuntimeRunsHref({
+                workflow: templateWorkflow,
+              }),
+            )
           }
           onAskAiPromptChange={(value) => {
             setAskAiPrompt(value);
@@ -3571,6 +3635,21 @@ const StudioPage: React.FC = () => {
             setWorkspacePage('studio');
             setStudioView('execution');
           }}
+        />
+      )
+    ) : workspacePage === 'scripts' ? (
+      appContextQuery.data?.features.scripts ? (
+        <ScriptsWorkbenchPage
+          appContext={appContextQuery.data}
+          initialScriptId={selectedScriptId}
+          onUnsavedChangesChange={setScriptsHasUnsavedChanges}
+          onSelectScriptId={setSelectedScriptId}
+        />
+      ) : (
+        <Alert
+          showIcon
+          type="warning"
+          title="Scripts Studio is unavailable in the current host."
         />
       )
     ) : workspacePage === 'roles' ? (
@@ -3741,23 +3820,49 @@ const StudioPage: React.FC = () => {
             alerts={workspaceAlerts}
             currentPage={workspacePage}
             navItems={navItems}
-            onSelectPage={(page) => {
-              setWorkspacePage(page);
-              if (page === 'studio' && studioView !== 'execution') {
-                setStudioView('editor');
+            onSelectPage={(page: StudioWorkspacePage) => {
+              if (
+                workspacePage === 'scripts' &&
+                page !== 'scripts' &&
+                scriptsHasUnsavedChanges
+              ) {
+                setPendingWorkspacePage(page);
+                return;
               }
+
+              applyWorkspacePageSelection(page);
             }}
             pageTitle={pageTitle}
             pageToolbar={pageToolbar}
             showPageHeader={
               workspacePage !== 'roles' &&
               workspacePage !== 'connectors' &&
-              workspacePage !== 'studio'
+              workspacePage !== 'studio' &&
+              workspacePage !== 'scripts'
             }
           >
             {currentPageContent}
           </StudioShell>
         )}
+        <Modal
+          open={Boolean(pendingWorkspacePage)}
+          title="Leave Scripts Studio?"
+          okText="Leave page"
+          cancelText="Continue editing"
+          onOk={() => {
+            if (pendingWorkspacePage) {
+              applyWorkspacePageSelection(pendingWorkspacePage);
+            }
+            setPendingWorkspacePage(null);
+          }}
+          onCancel={() => setPendingWorkspacePage(null)}
+        >
+          <div style={{ color: '#4b5563', lineHeight: 1.7 }}>
+            The current script changes have not been saved to Scope yet. Your
+            local draft will still be kept in this browser, but these changes
+            will not be visible in Scope until you save them.
+          </div>
+        </Modal>
       </StudioBootstrapGate>
     </PageContainer>
   );

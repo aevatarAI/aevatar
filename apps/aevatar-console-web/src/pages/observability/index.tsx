@@ -10,7 +10,12 @@ import type {
   ProDescriptionsItemProps,
   ProFormInstance,
 } from "@ant-design/pro-components";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
+import {
+  buildRuntimeExplorerHref,
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import { Alert, Button, Col, Empty, Row, Space, Tag, Typography } from "antd";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -22,6 +27,7 @@ import { loadConsolePreferences } from "@/shared/preferences/consolePreferences"
 import {
   fillCardStyle,
   moduleCardProps,
+  scrollPanelStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
 
@@ -46,6 +52,44 @@ type InternalJumpItem = {
 const targetStatusValueEnum = {
   configured: { text: "Configured", status: "Success" },
   missing: { text: "Missing", status: "Default" },
+} as const;
+
+const consoleSurfacesCardStyle = {
+  ...fillCardStyle,
+  height: 520,
+} as const;
+
+const configuredTargetsCardStyle = {
+  ...fillCardStyle,
+  height: 520,
+} as const;
+
+const consoleSurfacesBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const configuredTargetsBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const consoleSurfacesViewportStyle = {
+  ...scrollPanelStyle,
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
+} as const;
+
+const configuredTargetsViewportStyle = {
+  ...scrollPanelStyle,
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
 } as const;
 
 const summaryColumns: ProDescriptionsItemProps<ObservabilitySummaryRecord>[] = [
@@ -128,13 +172,13 @@ const ObservabilityPage: React.FC = () => {
     () => [
       {
         id: "jump-runs",
-        title: "Open Runs",
+        title: "Open Runtime Runs",
         description: context.workflow
-          ? `Open Runs with workflow=${context.workflow}.`
-          : "Open Runs and keep the current workflow selection manual.",
-        href: context.workflow
-          ? `/runs?workflow=${encodeURIComponent(context.workflow)}`
-          : "/runs",
+          ? `Open Runtime Runs with workflow=${context.workflow}.`
+          : "Open Runtime Runs and keep the current workflow selection manual.",
+        href: buildRuntimeRunsHref({
+          workflow: context.workflow || undefined,
+        }),
         enabled: true,
       },
       {
@@ -143,20 +187,20 @@ const ObservabilityPage: React.FC = () => {
         description: context.actorId
           ? `Open Runtime Explorer with actorId=${context.actorId}.`
           : "Provide actorId first to jump directly to Runtime Explorer.",
-        href: context.actorId
-          ? `/actors?actorId=${encodeURIComponent(context.actorId)}`
-          : "/actors",
+        href: buildRuntimeExplorerHref({
+          actorId: context.actorId || undefined,
+        }),
         enabled: Boolean(context.actorId),
       },
       {
         id: "jump-workflows",
-        title: "Open Workflow Detail",
+        title: "Open Runtime Workflows",
         description: context.workflow
-          ? `Open Workflows with workflow=${context.workflow}.`
-          : "Provide workflow first to jump directly to Workflow detail.",
-        href: context.workflow
-          ? `/workflows?workflow=${encodeURIComponent(context.workflow)}`
-          : "/workflows",
+          ? `Open Runtime Workflows with workflow=${context.workflow}.`
+          : "Provide workflow first to jump directly to Runtime Workflows.",
+        href: buildRuntimeWorkflowsHref({
+          workflow: context.workflow || undefined,
+        }),
         enabled: Boolean(context.workflow),
       },
       {
@@ -168,34 +212,26 @@ const ObservabilityPage: React.FC = () => {
         enabled: true,
       },
       {
-        id: "jump-settings-runtime",
-        title: "Open Runtime Settings",
-        description:
-          "Manage local workflows, providers, connectors, MCP servers, secrets, and raw configuration files.",
-        href: "/settings/runtime",
-        enabled: true,
-      },
-      {
         id: "jump-scopes",
         title: "Open Scopes",
         description:
-          "Inspect published workflow and script assets owned by GAgentService scopes.",
+          "Inspect published workflow and script assets owned by GAgentService scopes without exposing platform tenant/app identity.",
         href: "/scopes",
         enabled: true,
       },
       {
         id: "jump-services",
-        title: "Open Services",
+        title: "Open Platform Services",
         description:
-          "Inspect services, revisions, serving targets, rollouts, and traffic exposure.",
+          "Inspect raw platform services, revisions, serving targets, rollouts, and traffic exposure.",
         href: "/services",
         enabled: true,
       },
       {
         id: "jump-governance",
-        title: "Open Governance",
+        title: "Open Platform Governance",
         description:
-          "Inspect bindings, policies, endpoint exposure, and activation capability views.",
+          "Inspect raw bindings, policies, endpoint exposure, and activation capability views.",
         href: "/governance",
         enabled: true,
       },
@@ -225,7 +261,7 @@ const ObservabilityPage: React.FC = () => {
   return (
     <PageContainer
       title="Observability"
-      content="Use configured external tools as the jump hub for runtime, scopes, services, governance, and local settings without adding new backend APIs."
+      content="Use configured external tools as the jump hub for runtime, scopes, raw platform services, platform governance, and local settings without adding new backend APIs."
     >
       <Alert
         showIcon
@@ -322,77 +358,82 @@ const ObservabilityPage: React.FC = () => {
           <ProCard
             title="Configured targets"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={configuredTargetsCardStyle}
+            bodyStyle={configuredTargetsBodyStyle}
           >
-            <ProList<ObservabilityTarget>
-              rowKey="id"
-              search={false}
-              split
-              dataSource={targets}
-              locale={{
-                emptyText: (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="No observability targets are available."
-                  />
-                ),
-              }}
-              metas={{
-                title: {
-                  dataIndex: "label",
-                  render: (_, record) => (
-                    <Space wrap size={[8, 8]}>
-                      <Typography.Text strong>{record.label}</Typography.Text>
-                      <Tag
-                        color={
-                          record.status === "configured" ? "success" : "default"
-                        }
-                      >
-                        {record.status}
-                      </Tag>
-                    </Space>
+            <div style={configuredTargetsViewportStyle}>
+              <ProList<ObservabilityTarget>
+                rowKey="id"
+                search={false}
+                split
+                dataSource={targets}
+                locale={{
+                  emptyText: (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="No observability targets are available."
+                    />
                   ),
-                },
-                description: {
-                  dataIndex: "description",
-                },
-                subTitle: {
-                  render: (_, record) => (
-                    <Space wrap size={[8, 8]}>
-                      <Tag>{record.contextSummary}</Tag>
-                      {record.status === "configured" ? (
-                        <Tag color="processing">{record.homeUrl}</Tag>
-                      ) : (
-                        <Tag>No URL configured</Tag>
-                      )}
-                    </Space>
-                  ),
-                },
-                content: {
-                  render: (_, record) => (
-                    <Space wrap>
-                      <Button
-                        type="primary"
-                        disabled={record.status !== "configured"}
-                        href={record.homeUrl || undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open {record.label}
-                      </Button>
-                      <Button
-                        disabled={record.status !== "configured"}
-                        href={record.exploreUrl || undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open explore
-                      </Button>
-                    </Space>
-                  ),
-                },
-              }}
-            />
+                }}
+                metas={{
+                  title: {
+                    dataIndex: "label",
+                    render: (_, record) => (
+                      <Space wrap size={[8, 8]}>
+                        <Typography.Text strong>{record.label}</Typography.Text>
+                        <Tag
+                          color={
+                            record.status === "configured"
+                              ? "success"
+                              : "default"
+                          }
+                        >
+                          {record.status}
+                        </Tag>
+                      </Space>
+                    ),
+                  },
+                  description: {
+                    dataIndex: "description",
+                  },
+                  subTitle: {
+                    render: (_, record) => (
+                      <Space wrap size={[8, 8]}>
+                        <Tag>{record.contextSummary}</Tag>
+                        {record.status === "configured" ? (
+                          <Tag color="processing">{record.homeUrl}</Tag>
+                        ) : (
+                          <Tag>No URL configured</Tag>
+                        )}
+                      </Space>
+                    ),
+                  },
+                  content: {
+                    render: (_, record) => (
+                      <Space wrap>
+                        <Button
+                          type="primary"
+                          disabled={record.status !== "configured"}
+                          href={record.homeUrl || undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open {record.label}
+                        </Button>
+                        <Button
+                          disabled={record.status !== "configured"}
+                          href={record.exploreUrl || undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open explore
+                        </Button>
+                      </Space>
+                    ),
+                  },
+                }}
+              />
+            </div>
           </ProCard>
         </Col>
 
@@ -400,34 +441,37 @@ const ObservabilityPage: React.FC = () => {
           <ProCard
             title="Console surfaces"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={consoleSurfacesCardStyle}
+            bodyStyle={consoleSurfacesBodyStyle}
           >
-            <ProList<InternalJumpItem>
-              rowKey="id"
-              search={false}
-              split
-              dataSource={internalJumps}
-              metas={{
-                title: {
-                  dataIndex: "title",
-                },
-                description: {
-                  dataIndex: "description",
-                },
-                actions: {
-                  render: (_, record) => [
-                    <Button
-                      key={`${record.id}-open`}
-                      type="link"
-                      disabled={!record.enabled}
-                      onClick={() => history.push(record.href)}
-                    >
-                      Open
-                    </Button>,
-                  ],
-                },
-              }}
-            />
+            <div style={consoleSurfacesViewportStyle}>
+              <ProList<InternalJumpItem>
+                rowKey="id"
+                search={false}
+                split
+                dataSource={internalJumps}
+                metas={{
+                  title: {
+                    dataIndex: "title",
+                  },
+                  description: {
+                    dataIndex: "description",
+                  },
+                  actions: {
+                    render: (_, record) => [
+                      <Button
+                        key={`${record.id}-open`}
+                        type="link"
+                        disabled={!record.enabled}
+                        onClick={() => history.push(record.href)}
+                      >
+                        Open
+                      </Button>,
+                    ],
+                  },
+                }}
+              />
+            </div>
           </ProCard>
         </Col>
       </Row>

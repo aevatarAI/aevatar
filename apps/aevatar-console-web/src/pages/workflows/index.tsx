@@ -18,7 +18,8 @@ import {
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import type { MenuProps } from "antd";
 import {
   Alert,
@@ -1100,7 +1101,7 @@ const WorkflowsPage: React.FC = () => {
       createWorkflowColumns(
         (workflowName) => setSelectedWorkflow(workflowName),
         (workflowName) =>
-          history.push(`/runs?workflow=${encodeURIComponent(workflowName)}`)
+          history.push(buildRuntimeRunsHref({ workflow: workflowName }))
       ),
     []
   );
@@ -1115,7 +1116,7 @@ const WorkflowsPage: React.FC = () => {
       return;
     }
 
-    history.push(`/runs?workflow=${encodeURIComponent(selectedWorkflow)}`);
+    history.push(buildRuntimeRunsHref({ workflow: selectedWorkflow }));
   }, [selectedWorkflow]);
 
   const workflowSummary = useMemo<WorkflowSummaryRecord | undefined>(() => {
@@ -1724,9 +1725,9 @@ const WorkflowsPage: React.FC = () => {
                       type="primary"
                       onClick={() =>
                         history.push(
-                          `/runs?workflow=${encodeURIComponent(
-                            detailQuery.data.catalog.name
-                          )}`
+                          buildRuntimeRunsHref({
+                            workflow: detailQuery.data.catalog.name,
+                          })
                         )
                       }
                     >

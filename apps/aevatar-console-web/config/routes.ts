@@ -28,6 +28,12 @@ export default [
     component: "./overview",
   },
   {
+    path: "/studio",
+    name: "Studio",
+    icon: "project",
+    component: "./studio",
+  },
+  {
     path: "/scopes",
     name: "Scopes",
     icon: "cluster",
@@ -43,7 +49,7 @@ export default [
   },
   {
     path: "/services",
-    name: "Services",
+    name: "Platform Services",
     icon: "api",
     component: "./services",
   },
@@ -53,7 +59,7 @@ export default [
   },
   {
     path: "/governance",
-    name: "Governance",
+    name: "Platform Governance",
     icon: "safetyCertificate",
     redirect: "/governance/bindings",
   },
@@ -75,39 +81,59 @@ export default [
   },
   {
     path: "/workflows",
-    name: "Runtime Workflows",
-    icon: "branches",
-    component: "./workflows",
-  },
-  {
-    path: "/studio",
-    name: "Studio",
-    icon: "project",
-    component: "./studio",
+    redirect: "/runtime/workflows",
   },
   {
     path: "/primitives",
-    name: "Runtime Primitives",
-    icon: "appstore",
-    component: "./primitives",
+    redirect: "/runtime/primitives",
   },
   {
     path: "/runs",
-    name: "Runtime Runs",
-    icon: "playSquare",
-    component: "./runs",
+    redirect: "/runtime/runs",
   },
   {
     path: "/actors",
-    name: "Runtime Explorer",
-    icon: "apartment",
-    component: "./actors",
+    redirect: "/runtime/explorer",
   },
   {
     path: "/observability",
-    name: "Observability",
-    icon: "eye",
-    component: "./observability",
+    redirect: "/runtime/observability",
+  },
+  {
+    name: "Runtime",
+    icon: "deploymentUnit",
+    path: "/runtime",
+    routes: [
+      {
+        path: "/runtime",
+        redirect: "/runtime/workflows",
+      },
+      {
+        path: "workflows",
+        name: "Workflows",
+        component: "./workflows",
+      },
+      {
+        path: "primitives",
+        name: "Primitives",
+        component: "./primitives",
+      },
+      {
+        path: "runs",
+        name: "Runs",
+        component: "./runs",
+      },
+      {
+        path: "explorer",
+        name: "Explorer",
+        component: "./actors",
+      },
+      {
+        path: "observability",
+        name: "Observability",
+        component: "./observability",
+      },
+    ],
   },
   {
     path: "/settings",
@@ -118,10 +144,6 @@ export default [
   {
     path: "/settings/console",
     component: "./settings/console",
-  },
-  {
-    path: "/settings/runtime",
-    component: "./settings/runtime",
   },
   {
     path: "/",

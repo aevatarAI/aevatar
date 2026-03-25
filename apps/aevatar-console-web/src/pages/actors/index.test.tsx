@@ -31,8 +31,12 @@ describe('ActorsPage', () => {
     expect(container.textContent).toContain(
       'Inspect runtime actor snapshots, filter execution history, and switch across enriched, subgraph, and edges-only topology views.',
     );
-    expect(screen.getByRole('button', { name: 'Open runs' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open workflows' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Open Runtime Runs' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Open Runtime Workflows' }),
+    ).toBeTruthy();
     expect(
       screen.getByRole('button', { name: 'Open observability' }),
     ).toBeTruthy();

@@ -38,9 +38,14 @@ export interface StudioAppContext {
   readonly scopeResolved: boolean;
   readonly scopeSource: string;
   readonly workflowStorageMode: 'workspace' | 'scope';
+  readonly scriptStorageMode: 'draft' | 'scope';
   readonly features: {
     readonly publishedWorkflows: boolean;
     readonly scripts: boolean;
+  };
+  readonly scriptContract: {
+    readonly inputType: string;
+    readonly readModelFields: readonly string[];
   };
 }
 

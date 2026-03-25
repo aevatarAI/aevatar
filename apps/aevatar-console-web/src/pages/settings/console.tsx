@@ -13,7 +13,11 @@ import {
   ProList,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
+import {
+  buildRuntimeObservabilityHref,
+  buildRuntimeRunsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import { Button, Col, Empty, Row, Space, Tag, Typography, message } from "antd";
 import React, { useMemo, useRef, useState } from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
@@ -27,8 +31,6 @@ import {
   loadConsolePreferences,
   resetConsolePreferences,
   saveConsolePreferences,
-  type StudioAppearanceTheme,
-  type StudioColorMode,
 } from "@/shared/preferences/consolePreferences";
 import { buildWorkflowCatalogOptions } from "@/shared/workflows/catalogVisibility";
 import {
@@ -40,8 +42,6 @@ import {
 type ConsoleSettingsSummaryRecord = {
   preferredWorkflow: string;
   graphDirection: ActorGraphDirection;
-  studioAppearanceTheme: StudioAppearanceTheme;
-  studioColorMode: StudioColorMode;
   observabilityTargetsConfigured: number;
 };
 
@@ -59,36 +59,11 @@ const summaryColumns: ProDescriptionsItemProps<ConsoleSettingsSummaryRecord>[] =
       dataIndex: "graphDirection",
     },
     {
-      title: "Accent theme",
-      dataIndex: "studioAppearanceTheme",
-    },
-    {
-      title: "Color mode",
-      dataIndex: "studioColorMode",
-    },
-    {
       title: "Configured targets",
       dataIndex: "observabilityTargetsConfigured",
       valueType: "digit",
     },
   ];
-
-const studioAppearanceOptions: Array<{
-  label: string;
-  value: StudioAppearanceTheme;
-}> = [
-  { label: "Blue", value: "blue" },
-  { label: "Coral", value: "coral" },
-  { label: "Forest", value: "forest" },
-];
-
-const studioColorModeOptions: Array<{
-  label: string;
-  value: StudioColorMode;
-}> = [
-  { label: "Light", value: "light" },
-  { label: "Dark", value: "dark" },
-];
 
 const consoleUsageNotes = [
   {
@@ -140,8 +115,6 @@ const ConsoleSettingsPage: React.FC = () => {
     () => ({
       preferredWorkflow: preferences.preferredWorkflow,
       graphDirection: preferences.actorGraphDirection,
-      studioAppearanceTheme: preferences.studioAppearanceTheme,
-      studioColorMode: preferences.studioColorMode,
       observabilityTargetsConfigured: observabilityTargets.filter(
         (target) => target.status === "configured"
       ).length,
@@ -171,7 +144,7 @@ const ConsoleSettingsPage: React.FC = () => {
       extra={[
         <Button
           key="observability"
-          onClick={() => history.push("/observability")}
+          onClick={() => history.push(buildRuntimeObservabilityHref())}
         >
           Open observability hub
         </Button>,
@@ -205,11 +178,12 @@ const ConsoleSettingsPage: React.FC = () => {
                     <Button
                       onClick={() =>
                         history.push(
-                          `/runs?workflow=${encodeURIComponent(
-                            formRef.current?.getFieldValue(
-                              "preferredWorkflow"
-                            ) ?? preferences.preferredWorkflow
-                          )}`
+                          buildRuntimeRunsHref({
+                            workflow:
+                              formRef.current?.getFieldValue(
+                                "preferredWorkflow"
+                              ) ?? preferences.preferredWorkflow,
+                          })
                         )
                       }
                     >
@@ -220,41 +194,6 @@ const ConsoleSettingsPage: React.FC = () => {
               }}
             >
               <Space direction="vertical" style={{ width: "100%" }} size={16}>
-                <ProCard title="Workbench appearance" ghost>
-                  <Row gutter={[16, 0]}>
-                    <Col xs={24} md={12}>
-                      <ProFormSelect<StudioAppearanceTheme>
-                        name="studioAppearanceTheme"
-                        label="Accent theme"
-                        options={studioAppearanceOptions}
-                        rules={[
-                          {
-                            required: true,
-                            message: "Accent theme is required.",
-                          },
-                        ]}
-                      />
-                    </Col>
-                    <Col xs={24} md={12}>
-                      <ProFormSelect<StudioColorMode>
-                        name="studioColorMode"
-                        label="Color mode"
-                        options={studioColorModeOptions}
-                        rules={[
-                          {
-                            required: true,
-                            message: "Color mode is required.",
-                          },
-                        ]}
-                      />
-                    </Col>
-                  </Row>
-                  <Typography.Text type="secondary">
-                    These appearance preferences are stored locally and reused
-                    by linked console workbench surfaces.
-                  </Typography.Text>
-                </ProCard>
-
                 <ProCard title="Workflow defaults" ghost>
                   <Row gutter={[16, 0]}>
                     <Col xs={24}>

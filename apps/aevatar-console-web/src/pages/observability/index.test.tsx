@@ -19,15 +19,14 @@ describe("ObservabilityPage", () => {
 
     expect(container.textContent).toContain("Observability");
     expect(container.textContent).toContain(
-      "Use configured external tools as the jump hub for runtime, scopes, services, governance, and local settings without adding new backend APIs."
+      "Use configured external tools as the jump hub for runtime, scopes, raw platform services, platform governance, and local settings without adding new backend APIs."
     );
     expect(container.textContent).toContain("Console surfaces");
     expect(container.textContent).toContain("Open Runtime Explorer");
-    expect(container.textContent).toContain("Open Runtime Settings");
     expect(container.textContent).toContain("Open Console Settings");
     expect(container.textContent).toContain("Open Scopes");
-    expect(container.textContent).toContain("Open Services");
-    expect(container.textContent).toContain("Open Governance");
+    expect(container.textContent).toContain("Open Platform Services");
+    expect(container.textContent).toContain("Open Platform Governance");
     expect(screen.getByText("direct")).toBeTruthy();
     expect(screen.getByText("Workflow:19fe1b04")).toBeTruthy();
     expect(screen.getByText("cmd-123")).toBeTruthy();

@@ -16,7 +16,14 @@ import {
   Typography,
 } from "antd";
 import React, { useMemo } from "react";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
+import {
+  buildRuntimeExplorerHref,
+  buildRuntimeObservabilityHref,
+  buildRuntimePrimitivesHref,
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import {
   cardStackStyle,
@@ -60,6 +67,25 @@ const capabilitySurfacesScrollStyle = {
   maxHeight: 552,
 };
 
+const boundedOverviewCardStyle = {
+  ...fillCardStyle,
+  height: 520,
+} as const;
+
+const boundedOverviewCardBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+const boundedOverviewCardViewportStyle = {
+  ...scrollPanelStyle,
+  flex: 1,
+  minHeight: 0,
+  maxHeight: "none",
+} as const;
+
 const profileColumns: ProDescriptionsItemProps<ConsoleProfileItem>[] = [
   {
     title: "Preferred workflow",
@@ -97,17 +123,8 @@ const OverviewPage: React.FC = () => {
         summary: `${visibleCatalogItems.length} library entries`,
         description:
           "Browse runtime workflow definitions, inspect coverage, and launch runs from the runtime-facing workflow library.",
-        actionLabel: "Open workflows",
-        onOpen: () => history.push("/workflows"),
-      },
-      {
-        id: "surface-runtime-state",
-        title: "Runtime state",
-        summary: `${agentsQuery.data?.length ?? 0} live actors`,
-        description:
-          "Inspect active runs, runtime actors, and execution-side state directly from the runtime-facing surfaces.",
-        actionLabel: "Open runs",
-        onOpen: () => history.push("/runs"),
+        actionLabel: "Open Runtime Workflows",
+        onOpen: () => history.push(buildRuntimeWorkflowsHref()),
       },
       {
         id: "surface-primitives",
@@ -117,35 +134,26 @@ const OverviewPage: React.FC = () => {
         } capabilities`,
         description:
           "Inspect primitive categories, parameters, aliases, and the workflows that currently use them.",
-        actionLabel: "Open primitives",
-        onOpen: () => history.push("/primitives"),
+        actionLabel: "Open Runtime Primitives",
+        onOpen: () => history.push(buildRuntimePrimitivesHref()),
       },
       {
-        id: "surface-scopes",
-        title: "Scope assets",
-        summary: "Published workflows and scripts",
+        id: "surface-runtime-runs",
+        title: "Runtime runs",
+        summary: "SSE / WS console",
         description:
-          "Inspect scope-owned workflow and script assets directly from GAgentService.",
-        actionLabel: "Open scopes",
-        onOpen: () => history.push("/scopes"),
+          "Start runs, monitor live events, and handle resume or signal interactions from the runtime console.",
+        actionLabel: "Open Runtime Runs",
+        onOpen: () => history.push(buildRuntimeRunsHref()),
       },
       {
-        id: "surface-services",
-        title: "Service runtime",
-        summary: "Lifecycle, deployments, and traffic",
+        id: "surface-runtime-explorer",
+        title: "Runtime explorer",
+        summary: `${agentsQuery.data?.length ?? 0} live actors`,
         description:
-          "Inspect service catalog snapshots, revisions, serving targets, rollouts, and traffic.",
-        actionLabel: "Open services",
-        onOpen: () => history.push("/services"),
-      },
-      {
-        id: "surface-governance",
-        title: "Governance",
-        summary: "Bindings, policies, and endpoint exposure",
-        description:
-          "Inspect service governance state and activation capability views.",
-        actionLabel: "Open governance",
-        onOpen: () => history.push("/governance"),
+          "Inspect actor snapshots, timeline history, and graph topology for the current workflow runtime.",
+        actionLabel: "Open Runtime Explorer",
+        onOpen: () => history.push(buildRuntimeExplorerHref()),
       },
       {
         id: "surface-observability",
@@ -153,13 +161,40 @@ const OverviewPage: React.FC = () => {
         summary: `${configuredObservabilityCount}/${observabilityTargets.length} targets configured`,
         description:
           "Drive Grafana, Jaeger, Loki, and other external tools with the current runtime context.",
-        actionLabel: "Open observability",
+        actionLabel: "Open Runtime Observability",
         onOpen: () =>
           history.push(
-            `/observability?workflow=${encodeURIComponent(
-              preferences.preferredWorkflow
-            )}`
+            buildRuntimeObservabilityHref({
+              workflow: preferences.preferredWorkflow,
+            })
           ),
+      },
+      {
+        id: "surface-scopes",
+        title: "Scope assets",
+        summary: "Published workflows and scripts",
+        description:
+          "Inspect scope-owned workflow and script assets without exposing tenantId or appId in the frontend.",
+        actionLabel: "Open scopes",
+        onOpen: () => history.push("/scopes"),
+      },
+      {
+        id: "surface-services",
+        title: "Platform services",
+        summary: "Raw lifecycle, deployments, and traffic",
+        description:
+          "Inspect the raw platform service catalog keyed by tenantId, appId, and namespace.",
+        actionLabel: "Open platform services",
+        onOpen: () => history.push("/services"),
+      },
+      {
+        id: "surface-governance",
+        title: "Platform governance",
+        summary: "Raw bindings, policies, and endpoint exposure",
+        description:
+          "Inspect raw governance state and activation capability views for concrete platform service identities.",
+        actionLabel: "Open platform governance",
+        onOpen: () => history.push("/governance"),
       },
     ],
     [
@@ -179,25 +214,40 @@ const OverviewPage: React.FC = () => {
         primary: true,
         onOpen: () =>
           history.push(
-            `/runs?workflow=${encodeURIComponent(
-              preferences.preferredWorkflow
-            )}`
+            buildRuntimeRunsHref({
+              workflow: preferences.preferredWorkflow,
+            })
           ),
       },
       {
         id: "quick-workflows",
-        label: "Open workflow library",
-        onOpen: () => history.push("/workflows"),
+        label: "Open Runtime Workflows",
+        onOpen: () => history.push(buildRuntimeWorkflowsHref()),
+      },
+      {
+        id: "quick-primitives",
+        label: "Open Runtime Primitives",
+        onOpen: () => history.push(buildRuntimePrimitivesHref()),
       },
       {
         id: "quick-runs",
-        label: "Open runs",
-        onOpen: () => history.push("/runs"),
+        label: "Open Runtime Runs",
+        onOpen: () => history.push(buildRuntimeRunsHref()),
       },
       {
         id: "quick-actors",
-        label: "Open runtime explorer",
-        onOpen: () => history.push("/actors"),
+        label: "Open Runtime Explorer",
+        onOpen: () => history.push(buildRuntimeExplorerHref()),
+      },
+      {
+        id: "quick-observability",
+        label: "Open Runtime Observability",
+        onOpen: () =>
+          history.push(
+            buildRuntimeObservabilityHref({
+              workflow: preferences.preferredWorkflow,
+            })
+          ),
       },
       {
         id: "quick-scopes",
@@ -206,18 +256,13 @@ const OverviewPage: React.FC = () => {
       },
       {
         id: "quick-services",
-        label: "Open services",
+        label: "Open platform services",
         onOpen: () => history.push("/services"),
       },
       {
         id: "quick-governance",
-        label: "Open governance",
+        label: "Open platform governance",
         onOpen: () => history.push("/governance"),
-      },
-      {
-        id: "quick-primitives",
-        label: "Open primitives",
-        onOpen: () => history.push("/primitives"),
       },
     ],
     [preferences.preferredWorkflow]
@@ -226,24 +271,9 @@ const OverviewPage: React.FC = () => {
     () =>
       [
         {
-          id: "quick-runtime-settings",
-          label: "Open runtime settings",
-          onOpen: () => history.push("/settings/runtime"),
-        },
-        {
           id: "quick-console-settings",
           label: "Open console settings",
           onOpen: () => history.push("/settings/console"),
-        },
-        {
-          id: "quick-observability",
-          label: "Open observability",
-          onOpen: () =>
-            history.push(
-              `/observability?workflow=${encodeURIComponent(
-                preferences.preferredWorkflow
-              )}`
-            ),
         },
         grafanaBaseUrl
           ? {
@@ -255,13 +285,13 @@ const OverviewPage: React.FC = () => {
             }
           : null,
       ].filter(Boolean) as QuickActionItem[],
-    [grafanaBaseUrl, preferences.preferredWorkflow]
+    [grafanaBaseUrl]
   );
 
   return (
     <PageContainer
       title="Overview"
-      content="Overview of runtime workflows, scope assets, services, governance, actors, and observability."
+      content="Overview of runtime workflows, scope assets, raw platform services, platform governance, actors, and observability."
     >
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} lg={8} style={stretchColumnStyle}>
@@ -331,89 +361,94 @@ const OverviewPage: React.FC = () => {
           <ProCard
             title="Quick actions"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={boundedOverviewCardStyle}
+            bodyStyle={boundedOverviewCardBodyStyle}
           >
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <div>
-                <Typography.Text strong>Platform entry points</Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  style={{ display: "block", marginTop: 4 }}
-                >
-                  Open runtime, scope, service, governance, and capability
-                  surfaces.
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {platformQuickActions.map((item) => (
-                      <Button
-                        key={item.id}
-                        type={item.primary ? "primary" : "default"}
-                        onClick={item.onOpen}
-                      >
-                        {item.label}
-                      </Button>
-                    ))}
-                  </Space>
-                </div>
-              </div>
-
-              <div>
-                <Typography.Text strong>Local console tools</Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  style={{ display: "block", marginTop: 4 }}
-                >
-                  Jump into browser-level preferences, local runtime
-                  configuration, and external observability tools.
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {localQuickActions.map((item) => (
-                      <Button
-                        key={item.id}
-                        href={item.href}
-                        onClick={item.onOpen}
-                        target={item.target}
-                        rel={item.rel}
-                      >
-                        {item.label}
-                      </Button>
-                    ))}
-                  </Space>
-                </div>
-              </div>
-
-              <div>
-                <Typography.Text strong>
-                  Human-in-the-loop workflows
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {humanFocusedWorkflows.length > 0 ? (
-                      humanFocusedWorkflows.map((item) => (
+            <div style={boundedOverviewCardViewportStyle}>
+              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+                <div>
+                  <Typography.Text strong>Platform entry points</Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", marginTop: 4 }}
+                  >
+                    Open runtime, scope, service, governance, and capability
+                    surfaces.
+                  </Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {platformQuickActions.map((item) => (
                         <Button
-                          key={item.name}
-                          type="dashed"
-                          onClick={() =>
-                            history.push(
-                              `/runs?workflow=${encodeURIComponent(item.name)}`
-                            )
-                          }
+                          key={item.id}
+                          type={item.primary ? "primary" : "default"}
+                          onClick={item.onOpen}
                         >
-                          {item.name}
+                          {item.label}
                         </Button>
-                      ))
-                    ) : (
-                      <Typography.Text type="secondary">
-                        No human-interaction workflows were discovered in the
-                        catalog.
-                      </Typography.Text>
-                    )}
-                  </Space>
+                      ))}
+                    </Space>
+                  </div>
                 </div>
-              </div>
-            </Space>
+
+                <div>
+                  <Typography.Text strong>Local console tools</Typography.Text>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", marginTop: 4 }}
+                  >
+                    Jump into browser-level preferences, local runtime
+                    configuration, and external observability tools.
+                  </Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {localQuickActions.map((item) => (
+                        <Button
+                          key={item.id}
+                          href={item.href}
+                          onClick={item.onOpen}
+                          target={item.target}
+                          rel={item.rel}
+                        >
+                          {item.label}
+                        </Button>
+                      ))}
+                    </Space>
+                  </div>
+                </div>
+
+                <div>
+                  <Typography.Text strong>
+                    Human-in-the-loop workflows
+                  </Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {humanFocusedWorkflows.length > 0 ? (
+                        humanFocusedWorkflows.map((item) => (
+                          <Button
+                            key={item.name}
+                            type="dashed"
+                            onClick={() =>
+                              history.push(
+                                buildRuntimeRunsHref({
+                                  workflow: item.name,
+                                })
+                              )
+                            }
+                          >
+                            {item.name}
+                          </Button>
+                        ))
+                      ) : (
+                        <Typography.Text type="secondary">
+                          No human-interaction workflows were discovered in the
+                          catalog.
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  </div>
+                </div>
+              </Space>
+            </div>
           </ProCard>
         </Col>
 
@@ -421,41 +456,46 @@ const OverviewPage: React.FC = () => {
           <ProCard
             title="Console profile"
             {...moduleCardProps}
-            style={fillCardStyle}
+            style={boundedOverviewCardStyle}
+            bodyStyle={boundedOverviewCardBodyStyle}
           >
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <ProDescriptions<ConsoleProfileItem>
-                column={1}
-                dataSource={profileData}
-                columns={profileColumns}
-              />
+            <div style={boundedOverviewCardViewportStyle}>
+              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+                <ProDescriptions<ConsoleProfileItem>
+                  column={1}
+                  dataSource={profileData}
+                  columns={profileColumns}
+                />
 
-              <div>
-                <Typography.Text strong>Live actor shortcuts</Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {liveActors.length > 0 ? (
-                      liveActors.map((agent) => (
-                        <Button
-                          key={agent.id}
-                          onClick={() =>
-                            history.push(
-                              `/actors?actorId=${encodeURIComponent(agent.id)}`
-                            )
-                          }
-                        >
-                          {agent.id}
-                        </Button>
-                      ))
-                    ) : (
-                      <Typography.Text type="secondary">
-                        No live actors were returned by the backend.
-                      </Typography.Text>
-                    )}
-                  </Space>
+                <div>
+                  <Typography.Text strong>Live actor shortcuts</Typography.Text>
+                  <div style={{ marginTop: 12 }}>
+                    <Space wrap size={[8, 8]}>
+                      {liveActors.length > 0 ? (
+                        liveActors.map((agent) => (
+                          <Button
+                            key={agent.id}
+                            onClick={() =>
+                              history.push(
+                                buildRuntimeExplorerHref({
+                                  actorId: agent.id,
+                                })
+                              )
+                            }
+                          >
+                            {agent.id}
+                          </Button>
+                        ))
+                      ) : (
+                        <Typography.Text type="secondary">
+                          No live actors were returned by the backend.
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  </div>
                 </div>
-              </div>
-            </Space>
+              </Space>
+            </div>
           </ProCard>
         </Col>
       </Row>
@@ -590,19 +630,20 @@ const OverviewPage: React.FC = () => {
                 </div>
 
                 <Typography.Text type="secondary">
-                  Overview keeps this as a digest. Use Primitives, Workflows,
-                  and Runtime Settings for full details.
+                  Overview keeps this as a digest. Use Primitives and
+                  Workflows for the rest of the runtime operating context.
                 </Typography.Text>
 
                 <Space wrap>
-                  <Button onClick={() => history.push("/primitives")}>
-                    Open primitive browser
+                  <Button
+                    onClick={() => history.push(buildRuntimePrimitivesHref())}
+                  >
+                    Open Runtime Primitives
                   </Button>
-                  <Button onClick={() => history.push("/workflows")}>
-                    Open workflow library
-                  </Button>
-                  <Button onClick={() => history.push("/settings/runtime")}>
-                    Open runtime settings
+                  <Button
+                    onClick={() => history.push(buildRuntimeWorkflowsHref())}
+                  >
+                    Open Runtime Workflows
                   </Button>
                 </Space>
               </div>
@@ -664,9 +705,9 @@ const OverviewPage: React.FC = () => {
                       type="link"
                       onClick={() =>
                         history.push(
-                          `/observability?workflow=${encodeURIComponent(
-                            preferences.preferredWorkflow
-                          )}`
+                          buildRuntimeObservabilityHref({
+                            workflow: preferences.preferredWorkflow,
+                          })
                         )
                       }
                     >
