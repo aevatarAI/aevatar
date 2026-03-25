@@ -10,7 +10,8 @@ import {
 } from '@ant-design/pro-components';
 import { useQuery } from '@tanstack/react-query';
 import { history } from '@/shared/navigation/history';
-import { Button, Col, Row, Space, Statistic, Typography } from 'antd';
+import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
+import { Alert, Button, Col, Row, Space, Statistic, Typography } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { servicesApi } from '@/shared/api/servicesApi';
 import { formatDateTime } from '@/shared/datetime/dateTime';
@@ -156,7 +157,7 @@ const ServicesPage: React.FC = () => {
               )
             }
           >
-            Governance
+            Platform governance
           </Button>,
         ],
       },
@@ -184,8 +185,8 @@ const ServicesPage: React.FC = () => {
 
   return (
     <PageContainer
-      title="Services"
-      content="Browse the service catalog, then open a dedicated detail page for revisions, deployments, serving, rollout, and traffic."
+      title="Platform Services"
+      content="Browse the raw platform service catalog keyed by tenantId, appId, and namespace. End-user workflow and script flows should stay on Scopes."
     >
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24}>
@@ -198,6 +199,15 @@ const ServicesPage: React.FC = () => {
               setDraft(nextDraft);
               setQuery(trimServiceQuery(nextDraft));
             }}
+          />
+        </Col>
+
+        <Col xs={24}>
+          <Alert
+            showIcon
+            type="info"
+            title="Scope-first frontend"
+            description="Use Scopes for normal user-facing workflow assets. This page exposes raw GAgentService service identities for platform diagnostics and operator workflows."
           />
         </Col>
 
@@ -240,14 +250,14 @@ const ServicesPage: React.FC = () => {
             title="Related views"
           >
             <Space wrap>
-              <Button onClick={() => history.push('/governance')}>
-                Open governance hub
-              </Button>
               <Button onClick={() => history.push('/scopes')}>
                 Open scopes
               </Button>
-              <Button onClick={() => history.push('/runs')}>
-                Open runtime runs
+              <Button onClick={() => history.push('/governance')}>
+                Open platform governance
+              </Button>
+              <Button onClick={() => history.push(buildRuntimeRunsHref())}>
+                Open Runtime Runs
               </Button>
             </Space>
           </ProCard>

@@ -12,6 +12,10 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import {
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import {
   Alert,
   Button,
   Col,
@@ -422,9 +426,10 @@ const PrimitivesPage: React.FC = () => {
                                   type="link"
                                   onClick={() =>
                                     history.push(
-                                      `/workflows?workflow=${encodeURIComponent(
-                                        record.name
-                                      )}&tab=yaml`
+                                      buildRuntimeWorkflowsHref({
+                                        workflow: record.name,
+                                        tab: "yaml",
+                                      })
                                     )
                                   }
                                 >
@@ -434,9 +439,9 @@ const PrimitivesPage: React.FC = () => {
                                   type="link"
                                   onClick={() =>
                                     history.push(
-                                      `/runs?workflow=${encodeURIComponent(
-                                        record.name
-                                      )}`
+                                      buildRuntimeRunsHref({
+                                        workflow: record.name,
+                                      })
                                     )
                                   }
                                 >

@@ -55,24 +55,26 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
       <div className="mt-3 flex flex-wrap items-center gap-2">
         {normalizedResolvedScopeId ? (
           <>
-            <Typography.Text type="secondary">Current scope</Typography.Text>
+            <Typography.Text type="secondary">Resolved scope</Typography.Text>
             <Typography.Text code copyable>
               {normalizedResolvedScopeId}
             </Typography.Text>
             {normalizedResolvedScopeSource ? (
               <Typography.Text type="secondary">
-                Resolved from {normalizedResolvedScopeSource}
+                Resolved from the current session via {normalizedResolvedScopeSource}
               </Typography.Text>
             ) : null}
             {canUseResolvedScope ? (
               <Button size="small" onClick={onUseResolvedScope}>
-                Use current scope
+                Use resolved scope
               </Button>
             ) : null}
           </>
         ) : (
           <Typography.Text type="secondary">
-            No scope was resolved from the current session. Enter a scopeId manually.
+            No scope was resolved from the current session. Enter a scopeId
+            manually. tenantId and appId stay platform-managed and hidden in this
+            flow.
           </Typography.Text>
         )}
       </div>

@@ -23,6 +23,7 @@ import type {
 } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
+import { authFetch } from "@/shared/auth/fetch";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -33,7 +34,7 @@ async function studioHostFetch(
   input: string,
   init?: RequestInit
 ): Promise<Response> {
-  return fetch(input, {
+  return authFetch(input, {
     credentials: "same-origin",
     ...init,
   });

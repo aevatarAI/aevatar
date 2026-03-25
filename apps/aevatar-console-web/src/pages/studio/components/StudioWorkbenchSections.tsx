@@ -938,7 +938,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                 </Typography.Text>
                 <Typography.Text style={workflowSectionCopyStyle}>
                   {workflowStorageMode === 'scope'
-                    ? 'Workflows are loaded from and saved to the current login scope.'
+                    ? 'Workflows follow the current resolved scope. tenantId and appId stay platform-managed and hidden from Studio.'
                     : 'New workflows are created in the selected directory.'}
                 </Typography.Text>
               </div>

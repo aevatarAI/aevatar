@@ -21,7 +21,9 @@ import {
 } from "./components/columns";
 import GovernanceQueryCard from "./components/GovernanceQueryCard";
 import {
+  buildGovernanceServiceOptions,
   buildGovernanceHref,
+  hasGovernanceScope,
   normalizeGovernanceDraft,
   normalizeGovernanceQuery,
   readGovernanceDraft,
@@ -33,6 +35,11 @@ const initialDraft = readGovernanceDraft();
 const GovernanceActivationPage: React.FC = () => {
   const [draft, setDraft] = useState<GovernanceDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<GovernanceDraft>(initialDraft);
+  const serviceQuery = useMemo(() => normalizeGovernanceQuery(draft), [draft]);
+  const serviceSearchEnabled = useMemo(
+    () => hasGovernanceScope(draft),
+    [draft]
+  );
 
   const query = useMemo(
     () => normalizeGovernanceQuery(activeDraft),
@@ -40,8 +47,9 @@ const GovernanceActivationPage: React.FC = () => {
   );
 
   const servicesQuery = useQuery({
-    queryKey: ["governance", "activation", "services", query],
-    queryFn: () => servicesApi.listServices({ ...query, take: 200 }),
+    queryKey: ["governance", "activation", "services", serviceQuery],
+    enabled: serviceSearchEnabled,
+    queryFn: () => servicesApi.listServices({ ...serviceQuery, take: 200 }),
   });
   const activationQuery = useQuery({
     queryKey: [
@@ -62,13 +70,7 @@ const GovernanceActivationPage: React.FC = () => {
   });
 
   const serviceOptions = useMemo(
-    () =>
-      (servicesQuery.data ?? []).map((item) => ({
-        label: item.displayName
-          ? `${item.displayName} (${item.serviceId})`
-          : item.serviceId,
-        value: item.serviceId,
-      })),
+    () => buildGovernanceServiceOptions(servicesQuery.data ?? []),
     [servicesQuery.data]
   );
 
@@ -76,8 +78,8 @@ const GovernanceActivationPage: React.FC = () => {
 
   return (
     <PageContainer
-      title="Governance Activation Capability"
-      content="Inspect the revision-specific assembled activation view exposed by governance."
+      title="Platform Governance Activation Capability"
+      content="Inspect the revision-specific raw activation view assembled for one platform service identity."
       onBack={() =>
         history.push(buildGovernanceHref("/governance", activeDraft))
       }
@@ -87,6 +89,7 @@ const GovernanceActivationPage: React.FC = () => {
           <GovernanceQueryCard
             draft={draft}
             serviceOptions={serviceOptions}
+            serviceSearchEnabled={serviceSearchEnabled}
             includeRevision
             loadLabel="Load activation capability"
             onChange={setDraft}
@@ -111,7 +114,7 @@ const GovernanceActivationPage: React.FC = () => {
             <Alert
               showIcon
               type="info"
-              title="Select a service and revision to assemble the activation capability view."
+              title="Select a platform service and revision to assemble the raw activation capability view."
             />
           ) : activationView ? (
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -169,7 +172,7 @@ const GovernanceActivationPage: React.FC = () => {
             <Alert
               showIcon
               type="info"
-              title="Activation capability view is unavailable."
+              title="Raw activation capability view is unavailable."
             />
           )}
         </Col>

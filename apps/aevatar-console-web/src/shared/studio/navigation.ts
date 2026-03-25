@@ -1,6 +1,7 @@
 export type StudioTab =
   | 'workflows'
   | 'studio'
+  | 'scripts'
   | 'executions'
   | 'roles'
   | 'connectors'
@@ -8,6 +9,7 @@ export type StudioTab =
 
 export function buildStudioRoute(options?: {
   workflowId?: string;
+  scriptId?: string;
   template?: string;
   tab?: StudioTab;
   draftMode?: 'new';
@@ -19,6 +21,9 @@ export function buildStudioRoute(options?: {
   const params = new URLSearchParams();
   if (options?.workflowId?.trim()) {
     params.set('workflow', options.workflowId.trim());
+  }
+  if (options?.scriptId?.trim()) {
+    params.set('script', options.scriptId.trim());
   }
   if (options?.template?.trim()) {
     params.set('template', options.template.trim());

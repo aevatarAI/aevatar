@@ -11,6 +11,11 @@ import type {
   ProFormInstance,
 } from "@ant-design/pro-components";
 import { history } from "@/shared/navigation/history";
+import {
+  buildRuntimeExplorerHref,
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import { Alert, Button, Col, Empty, Row, Space, Tag, Typography } from "antd";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -167,13 +172,13 @@ const ObservabilityPage: React.FC = () => {
     () => [
       {
         id: "jump-runs",
-        title: "Open Runs",
+        title: "Open Runtime Runs",
         description: context.workflow
-          ? `Open Runs with workflow=${context.workflow}.`
-          : "Open Runs and keep the current workflow selection manual.",
-        href: context.workflow
-          ? `/runs?workflow=${encodeURIComponent(context.workflow)}`
-          : "/runs",
+          ? `Open Runtime Runs with workflow=${context.workflow}.`
+          : "Open Runtime Runs and keep the current workflow selection manual.",
+        href: buildRuntimeRunsHref({
+          workflow: context.workflow || undefined,
+        }),
         enabled: true,
       },
       {
@@ -182,20 +187,20 @@ const ObservabilityPage: React.FC = () => {
         description: context.actorId
           ? `Open Runtime Explorer with actorId=${context.actorId}.`
           : "Provide actorId first to jump directly to Runtime Explorer.",
-        href: context.actorId
-          ? `/actors?actorId=${encodeURIComponent(context.actorId)}`
-          : "/actors",
+        href: buildRuntimeExplorerHref({
+          actorId: context.actorId || undefined,
+        }),
         enabled: Boolean(context.actorId),
       },
       {
         id: "jump-workflows",
-        title: "Open Workflow Detail",
+        title: "Open Runtime Workflows",
         description: context.workflow
-          ? `Open Workflows with workflow=${context.workflow}.`
-          : "Provide workflow first to jump directly to Workflow detail.",
-        href: context.workflow
-          ? `/workflows?workflow=${encodeURIComponent(context.workflow)}`
-          : "/workflows",
+          ? `Open Runtime Workflows with workflow=${context.workflow}.`
+          : "Provide workflow first to jump directly to Runtime Workflows.",
+        href: buildRuntimeWorkflowsHref({
+          workflow: context.workflow || undefined,
+        }),
         enabled: Boolean(context.workflow),
       },
       {
@@ -207,34 +212,26 @@ const ObservabilityPage: React.FC = () => {
         enabled: true,
       },
       {
-        id: "jump-settings-runtime",
-        title: "Open Runtime Settings",
-        description:
-          "Manage local workflows, providers, connectors, MCP servers, secrets, and raw configuration files.",
-        href: "/settings/runtime",
-        enabled: true,
-      },
-      {
         id: "jump-scopes",
         title: "Open Scopes",
         description:
-          "Inspect published workflow and script assets owned by GAgentService scopes.",
+          "Inspect published workflow and script assets owned by GAgentService scopes without exposing platform tenant/app identity.",
         href: "/scopes",
         enabled: true,
       },
       {
         id: "jump-services",
-        title: "Open Services",
+        title: "Open Platform Services",
         description:
-          "Inspect services, revisions, serving targets, rollouts, and traffic exposure.",
+          "Inspect raw platform services, revisions, serving targets, rollouts, and traffic exposure.",
         href: "/services",
         enabled: true,
       },
       {
         id: "jump-governance",
-        title: "Open Governance",
+        title: "Open Platform Governance",
         description:
-          "Inspect bindings, policies, endpoint exposure, and activation capability views.",
+          "Inspect raw bindings, policies, endpoint exposure, and activation capability views.",
         href: "/governance",
         enabled: true,
       },
@@ -264,7 +261,7 @@ const ObservabilityPage: React.FC = () => {
   return (
     <PageContainer
       title="Observability"
-      content="Use configured external tools as the jump hub for runtime, scopes, services, governance, and local settings without adding new backend APIs."
+      content="Use configured external tools as the jump hub for runtime, scopes, raw platform services, platform governance, and local settings without adding new backend APIs."
     >
       <Alert
         showIcon

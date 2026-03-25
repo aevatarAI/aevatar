@@ -10,7 +10,9 @@ import { compactTableCardProps } from "@/shared/ui/proComponents";
 import { endpointColumns } from "./components/columns";
 import GovernanceQueryCard from "./components/GovernanceQueryCard";
 import {
+  buildGovernanceServiceOptions,
   buildGovernanceHref,
+  hasGovernanceScope,
   normalizeGovernanceDraft,
   normalizeGovernanceQuery,
   readGovernanceDraft,
@@ -22,6 +24,11 @@ const initialDraft = readGovernanceDraft();
 const GovernanceEndpointsPage: React.FC = () => {
   const [draft, setDraft] = useState<GovernanceDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<GovernanceDraft>(initialDraft);
+  const serviceQuery = useMemo(() => normalizeGovernanceQuery(draft), [draft]);
+  const serviceSearchEnabled = useMemo(
+    () => hasGovernanceScope(draft),
+    [draft]
+  );
 
   const query = useMemo(
     () => normalizeGovernanceQuery(activeDraft),
@@ -29,8 +36,9 @@ const GovernanceEndpointsPage: React.FC = () => {
   );
 
   const servicesQuery = useQuery({
-    queryKey: ["governance", "endpoints", "services", query],
-    queryFn: () => servicesApi.listServices({ ...query, take: 200 }),
+    queryKey: ["governance", "endpoints", "services", serviceQuery],
+    enabled: serviceSearchEnabled,
+    queryFn: () => servicesApi.listServices({ ...serviceQuery, take: 200 }),
   });
   const endpointsQuery = useQuery({
     queryKey: ["governance", "endpoints", query, activeDraft.serviceId],
@@ -40,20 +48,14 @@ const GovernanceEndpointsPage: React.FC = () => {
   });
 
   const serviceOptions = useMemo(
-    () =>
-      (servicesQuery.data ?? []).map((item) => ({
-        label: item.displayName
-          ? `${item.displayName} (${item.serviceId})`
-          : item.serviceId,
-        value: item.serviceId,
-      })),
+    () => buildGovernanceServiceOptions(servicesQuery.data ?? []),
     [servicesQuery.data]
   );
 
   return (
     <PageContainer
-      title="Governance Endpoint Catalog"
-      content="Inspect endpoint exposure modes and attached policies for a single service."
+      title="Platform Governance Endpoint Catalog"
+      content="Inspect raw endpoint exposure modes and attached policies for one platform service identity."
       onBack={() =>
         history.push(buildGovernanceHref("/governance", activeDraft))
       }
@@ -63,6 +65,7 @@ const GovernanceEndpointsPage: React.FC = () => {
           <GovernanceQueryCard
             draft={draft}
             serviceOptions={serviceOptions}
+            serviceSearchEnabled={serviceSearchEnabled}
             onChange={setDraft}
             onLoad={() => {
               const nextActiveDraft = normalizeGovernanceDraft(draft);
@@ -96,7 +99,7 @@ const GovernanceEndpointsPage: React.FC = () => {
             <Alert
               showIcon
               type="info"
-              title="Select a service to inspect its endpoint exposure catalog."
+              title="Select a platform service to inspect its raw endpoint exposure catalog."
             />
           )}
         </Col>

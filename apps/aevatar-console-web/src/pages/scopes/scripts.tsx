@@ -14,6 +14,7 @@ import { Alert, Button, Col, Drawer, Row, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { studioApi } from "@/shared/studio/api";
+import { buildStudioRoute } from "@/shared/studio/navigation";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type {
   ScopeScriptCatalog,
@@ -186,6 +187,20 @@ const ScopeScriptsPage: React.FC = () => {
           >
             Inspect
           </Button>,
+          <Button
+            key={`studio-${record.scriptId}`}
+            type="link"
+            onClick={() =>
+              history.push(
+                buildStudioRoute({
+                  tab: "scripts",
+                  scriptId: record.scriptId,
+                })
+              )
+            }
+          >
+            Open In Studio
+          </Button>,
         ],
       },
     ],
@@ -195,7 +210,7 @@ const ScopeScriptsPage: React.FC = () => {
   return (
     <PageContainer
       title="Scope Scripts"
-      content="Inspect script catalog state and source material for a single scope."
+      content="Inspect script catalog state and source material for a single scope. tenantId and appId stay platform-managed and hidden behind this view."
       onBack={() => history.push(buildScopeHref("/scopes", activeDraft))}
     >
       <Row gutter={[16, 16]}>
@@ -283,6 +298,19 @@ const ScopeScriptsPage: React.FC = () => {
             <ProCard title="Source text" {...moduleCardProps}>
               {renderMultilineText(scriptDetailQuery.data.source?.sourceText)}
             </ProCard>
+            <Button
+              type="primary"
+              onClick={() =>
+                history.push(
+                  buildStudioRoute({
+                    tab: "scripts",
+                    scriptId: selectedScriptId,
+                  })
+                )
+              }
+            >
+              Open In Studio
+            </Button>
           </Space>
         ) : (
           <Alert

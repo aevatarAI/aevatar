@@ -67,16 +67,13 @@ describe("RunsPage", () => {
       "Drive runtime workflows over /api/chat or /api/ws/chat, monitor the live event stream, and jump into adjacent runtime surfaces directly from the runtime console."
     );
     expect(
-      screen.getByRole("button", { name: "Open workflow catalog" })
+      screen.getByRole("button", { name: "Open Runtime Workflows" })
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Open runtime explorer" })
+      screen.getByRole("button", { name: "Open Runtime Explorer" })
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Open observability hub" })
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Open runtime settings" })
     ).toBeTruthy();
     expect(container.textContent).toContain("Composer");
     expect(container.textContent).toContain("Metric HUD");

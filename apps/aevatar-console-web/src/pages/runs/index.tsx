@@ -28,6 +28,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import {
+  buildRuntimeExplorerHref,
+  buildRuntimeObservabilityHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import {
   Alert,
   Badge,
   Button,
@@ -470,7 +475,9 @@ const RunsPage: React.FC = () => {
         onOpenActor: entry.actorId
           ? () =>
               history.push(
-                `/actors?actorId=${encodeURIComponent(entry.actorId)}`
+                buildRuntimeExplorerHref({
+                  actorId: entry.actorId,
+                })
               )
           : undefined,
       })),
@@ -877,39 +884,36 @@ const RunsPage: React.FC = () => {
           description="Drive runtime workflows over /api/chat or /api/ws/chat, monitor the live event stream, and jump into adjacent runtime surfaces directly from the runtime console."
           action={
             <Space wrap>
-              <Button onClick={() => history.push("/workflows")}>
-                Open workflow catalog
+              <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
+                Open Runtime Workflows
               </Button>
               <Button
                 onClick={() =>
                   history.push(
-                    actorId
-                      ? `/actors?actorId=${encodeURIComponent(actorId)}`
-                      : "/actors"
+                    buildRuntimeExplorerHref({
+                      actorId: actorId ?? undefined,
+                    })
                   )
                 }
               >
-                Open runtime explorer
+                Open Runtime Explorer
               </Button>
               <Button
                 onClick={() =>
                   history.push(
-                    `/observability?workflow=${encodeURIComponent(
-                      workflowName ||
+                    buildRuntimeObservabilityHref({
+                      workflow:
+                        workflowName ||
                         selectedWorkflowName ||
-                        preferences.preferredWorkflow
-                    )}&actorId=${encodeURIComponent(
-                      actorId ?? ""
-                    )}&commandId=${encodeURIComponent(
-                      commandId
-                    )}&runId=${encodeURIComponent(session.runId ?? "")}`
+                        preferences.preferredWorkflow,
+                      actorId: actorId ?? undefined,
+                      commandId: commandId || undefined,
+                      runId: session.runId ?? undefined,
+                    })
                   )
                 }
               >
                 Open observability hub
-              </Button>
-              <Button onClick={() => history.push("/settings/runtime")}>
-                Open runtime settings
               </Button>
             </Space>
           }
@@ -1032,9 +1036,9 @@ const RunsPage: React.FC = () => {
                                     <Button
                                       onClick={() =>
                                         history.push(
-                                          `/actors?actorId=${encodeURIComponent(
-                                            actorId
-                                          )}`
+                                          buildRuntimeExplorerHref({
+                                            actorId,
+                                          })
                                         )
                                       }
                                     >

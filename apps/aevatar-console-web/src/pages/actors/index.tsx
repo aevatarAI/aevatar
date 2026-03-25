@@ -17,6 +17,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import {
+  buildRuntimeObservabilityHref,
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import {
   Alert,
   Button,
   Col,
@@ -842,16 +847,18 @@ const ActorsPage: React.FC = () => {
         {...moduleCardProps}
         extra={
           <Space wrap>
-            <Button onClick={() => history.push("/runs")}>Open runs</Button>
-            <Button onClick={() => history.push("/workflows")}>
-              Open workflows
+            <Button onClick={() => history.push(buildRuntimeRunsHref())}>
+              Open Runtime Runs
+            </Button>
+            <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
+              Open Runtime Workflows
             </Button>
             <Button
               onClick={() =>
                 history.push(
-                  `/observability?actorId=${encodeURIComponent(
-                    filters.actorId
-                  )}`
+                  buildRuntimeObservabilityHref({
+                    actorId: filters.actorId,
+                  })
                 )
               }
             >

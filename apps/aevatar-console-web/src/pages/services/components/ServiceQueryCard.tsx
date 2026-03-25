@@ -1,5 +1,5 @@
 import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, InputNumber, Space } from 'antd';
+import { Button, Input, InputNumber, Space, Typography } from 'antd';
 import React from 'react';
 import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ServiceQueryDraft } from './serviceQuery';
@@ -23,7 +23,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
     <ProCard {...moduleCardProps}>
       <Space wrap>
         <Input
-          placeholder="tenantId"
+          placeholder="platform tenantId"
           style={{ width: 180 }}
           value={draft.tenantId}
           onChange={(event) =>
@@ -34,7 +34,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           }
         />
         <Input
-          placeholder="appId"
+          placeholder="platform appId"
           style={{ width: 180 }}
           value={draft.appId}
           onChange={(event) =>
@@ -71,6 +71,13 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         </Button>
         {onReset ? <Button onClick={onReset}>Reset</Button> : null}
       </Space>
+      <Typography.Text
+        type="secondary"
+        style={{ display: 'block', marginTop: 12 }}
+      >
+        Raw platform catalog only. `tenantId` and `appId` are platform-managed
+        identity fields. End-user workflow assets should be opened from Scopes.
+      </Typography.Text>
     </ProCard>
   );
 };

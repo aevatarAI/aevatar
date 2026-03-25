@@ -6,6 +6,7 @@ import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
 
 const PROMPT_HISTORY_STORAGE_KEY = "aevatar-console-playground-prompt-history";
+const SCRIPTS_STUDIO_STORAGE_KEY = "aevatar:console:scripts-studio:v1";
 
 type MockChildrenProps = {
   readonly children?: any;
@@ -108,6 +109,22 @@ let mockConnectorDraftResponse: any;
 let mockRoleCatalog: any;
 let mockRoleDraftResponse: any;
 let mockSettings: any;
+const defaultStudioAppContext = {
+  mode: "proxy",
+  scopeId: null,
+  scopeResolved: false,
+  scopeSource: "",
+  workflowStorageMode: "workspace",
+  scriptStorageMode: "draft",
+  features: {
+    publishedWorkflows: true,
+    scripts: false,
+  },
+  scriptContract: {
+    inputType: "type.googleapis.com/example.Command",
+    readModelFields: ["input", "output"],
+  },
+};
 
 function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
@@ -222,17 +239,7 @@ function resetMockState(): void {
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
-    getAppContext: jest.fn(async () => ({
-      mode: "proxy",
-      scopeId: null,
-      scopeResolved: false,
-      scopeSource: "",
-      workflowStorageMode: "workspace",
-      features: {
-        publishedWorkflows: true,
-        scripts: false,
-      },
-    })),
+    getAppContext: jest.fn(async () => defaultStudioAppContext),
     getAuthSession: jest.fn(async () => ({
       enabled: false,
       authenticated: false,
@@ -599,6 +606,64 @@ jest.mock("@/shared/studio/api", () => ({
   },
 }));
 
+jest.mock("@/shared/studio/scriptsApi", () => ({
+  scriptsApi: {
+    listScripts: jest.fn(async () => []),
+    listRuntimes: jest.fn(async () => []),
+    getScriptCatalog: jest.fn(async () => ({
+      scriptId: "script-1",
+      activeRevision: "rev-1",
+      activeDefinitionActorId: "definition-1",
+      activeSourceHash: "hash-1",
+      previousRevision: "",
+      revisionHistory: ["rev-1"],
+      lastProposalId: "",
+      catalogActorId: "catalog-1",
+      scopeId: "scope-1",
+      updatedAt: "2026-03-18T00:00:00Z",
+    })),
+    getEvolutionDecision: jest.fn(async () => ({
+      accepted: true,
+      proposalId: "proposal-1",
+      scriptId: "script-1",
+      baseRevision: "rev-1",
+      candidateRevision: "rev-2",
+      status: "accepted",
+      failureReason: "",
+      definitionActorId: "definition-1",
+      catalogActorId: "catalog-1",
+      validationReport: {
+        isSuccess: true,
+        diagnostics: [],
+      },
+    })),
+    getRuntimeReadModel: jest.fn(async () => ({
+      actorId: "runtime-1",
+      scriptId: "script-1",
+      definitionActorId: "definition-1",
+      revision: "rev-1",
+      readModelTypeUrl: "type.googleapis.com/example.ReadModel",
+      readModelPayloadJson: '{"status":"ok"}',
+      stateVersion: 1,
+      lastEventId: "event-1",
+      updatedAt: "2026-03-18T00:00:00Z",
+    })),
+    validateDraft: jest.fn(async () => ({
+      success: true,
+      scriptId: "script-1",
+      scriptRevision: "draft-1",
+      primarySourcePath: "Behavior.cs",
+      errorCount: 0,
+      warningCount: 0,
+      diagnostics: [],
+    })),
+    saveScript: jest.fn(),
+    runDraftScript: jest.fn(),
+    proposeEvolution: jest.fn(),
+    generateScript: jest.fn(),
+  },
+}));
+
 jest.mock("./components/StudioBootstrapGate", () => ({
   __esModule: true,
   default: ({ children }: MockChildrenProps) => children,
@@ -606,13 +671,26 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 
 jest.mock("./components/StudioShell", () => ({
   __esModule: true,
-  default: ({ children }: MockChildrenProps) => {
+  default: ({ children, navItems = [], onSelectPage }: any) => {
     const React = require("react");
     return React.createElement(
       "div",
       null,
-      React.createElement("div", null, "Workbench"),
-      children
+      [
+        React.createElement("div", { key: "workbench" }, "Workbench"),
+        ...navItems.map((item: any) =>
+          React.createElement(
+            "button",
+            {
+              key: item.key,
+              type: "button",
+              onClick: () => onSelectPage?.(item.key),
+            },
+            item.label
+          )
+        ),
+        children,
+      ]
     );
   },
 }));
@@ -1043,6 +1121,9 @@ describe("StudioPage", () => {
     window.localStorage.clear();
     resetMockState();
     jest.clearAllMocks();
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue(
+      defaultStudioAppContext
+    );
   });
 
   it("loads workspace data and shows the Studio workbench by default", async () => {
@@ -1059,9 +1140,87 @@ describe("StudioPage", () => {
 
     expect(await screen.findByText("workspace-demo")).toBeTruthy();
     expect(screen.getByText("Workbench")).toBeTruthy();
-    expect(screen.getByText("Workflows")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
     expect(screen.getByText("Current draft")).toBeTruthy();
     expect(screen.getByPlaceholderText("Search workflows")).toBeTruthy();
+  });
+
+  it("shows a custom confirm modal before leaving Scripts with unsaved scope changes", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      scriptStorageMode: "scope",
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+    });
+    window.localStorage.setItem(
+      SCRIPTS_STUDIO_STORAGE_KEY,
+      JSON.stringify([
+        {
+          key: "script-draft-1",
+          scriptId: "script-1",
+          revision: "rev-2",
+          package: {
+            format: "aevatar-script-package/v1",
+            csharpSources: [
+              {
+                path: "Behavior.cs",
+                content: "using System;\\n// dirty",
+              },
+            ],
+            protoFiles: [],
+            entryBehaviorTypeName: "DraftBehavior",
+            entrySourcePath: "Behavior.cs",
+          },
+          selectedFilePath: "Behavior.cs",
+          scopeDetail: {
+            available: true,
+            scopeId: "scope-1",
+            script: {
+              scopeId: "scope-1",
+              scriptId: "script-1",
+              catalogActorId: "catalog-1",
+              definitionActorId: "definition-1",
+              activeRevision: "rev-1",
+              activeSourceHash: "hash-1",
+              updatedAt: "2026-03-24T00:00:00Z",
+            },
+            source: {
+              sourceText: "using System;",
+              definitionActorId: "definition-1",
+              revision: "rev-1",
+              sourceHash: "hash-1",
+            },
+          },
+        },
+      ])
+    );
+
+    renderStudioPage("/studio?tab=scripts");
+
+    await screen.findByLabelText("Script ID");
+    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+
+    expect(await screen.findByText("Leave Scripts Studio?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The current script changes have not been saved to Scope yet. Your local draft will still be kept in this browser, but these changes will not be visible in Scope until you save them."
+      )
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue editing" }));
+    await waitFor(() => {
+      expect(screen.getByText("Leave Scripts Studio?")).not.toBeVisible();
+    });
+    expect(screen.getByLabelText("Script ID")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Leave page" }));
+
+    expect(await screen.findByText("Current draft")).toBeTruthy();
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
@@ -1392,9 +1551,14 @@ describe("StudioPage", () => {
       scopeResolved: false,
       scopeSource: "",
       workflowStorageMode: "workspace",
+      scriptStorageMode: "draft",
       features: {
         publishedWorkflows: true,
         scripts: false,
+      },
+      scriptContract: {
+        inputType: "type.googleapis.com/example.Command",
+        readModelFields: ["input", "output"],
       },
     });
 
