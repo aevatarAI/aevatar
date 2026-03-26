@@ -25,7 +25,6 @@ public static class AppStartupValidation
         if (!environment.IsDevelopment())
         {
             Require(configuration, "Firebase:ProjectId", missingKeys);
-            Require(configuration, "RevenueCat:WebhookSecret", missingKeys);
         }
 
         if (missingKeys.Count > 0)
