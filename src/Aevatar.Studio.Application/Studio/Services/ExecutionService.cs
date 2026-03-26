@@ -971,7 +971,18 @@ public sealed class ExecutionService
 
     private static bool ShouldUsePublishedFunctionRun(StartExecutionRequest request) =>
         !string.IsNullOrWhiteSpace(request.AppId) &&
-        !string.IsNullOrWhiteSpace(request.FunctionId);
+        !string.IsNullOrWhiteSpace(request.FunctionId) &&
+        IsValidResourceIdFormat(request.AppId) &&
+        IsValidResourceIdFormat(request.FunctionId);
+
+    private static bool IsValidResourceIdFormat(string value)
+    {
+        var trimmed = value.Trim();
+        return !string.IsNullOrEmpty(trimmed) && _resourceIdFormatRegex.IsMatch(trimmed);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex _resourceIdFormatRegex =
+        new(@"^[a-zA-Z0-9_-]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static bool ShouldUsePublishedWorkflowRun(StartExecutionRequest request) =>
         !string.IsNullOrWhiteSpace(request.ScopeId) &&
