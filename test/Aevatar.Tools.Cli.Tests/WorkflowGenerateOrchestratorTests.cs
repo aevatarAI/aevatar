@@ -1,8 +1,8 @@
-using Aevatar.Tools.Cli.Hosting;
-using Aevatar.Tools.Cli.Studio.Application.Services;
-using Aevatar.Tools.Cli.Studio.Domain.Compatibility;
-using Aevatar.Tools.Cli.Studio.Domain.Services;
-using Aevatar.Tools.Cli.Studio.Infrastructure.Serialization;
+using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Compatibility;
+using Aevatar.Studio.Domain.Studio.Services;
+using Aevatar.Studio.Hosting.Endpoints;
+using Aevatar.Studio.Infrastructure.Serialization;
 using FluentAssertions;
 
 namespace Aevatar.Tools.Cli.Tests;

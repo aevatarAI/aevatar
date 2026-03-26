@@ -106,6 +106,31 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
+    public void Validate_WhenRoleIdMissing_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles =
+            [
+                new RoleDefinition { Id = "", Name = "RoleWithoutId" },
+            ],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "llm_call",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+
+        errors.Should().Contain(e => e.Contains("缺少 id 的角色"));
+    }
+
+    [Fact]
     public void Validate_WhenWhileMissingTermination_ShouldReportError()
     {
         var wf = new WorkflowDefinition

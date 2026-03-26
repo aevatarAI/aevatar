@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Aevatar.AppPlatform.Tests</AssemblyName>
+    <RootNamespace>Aevatar.AppPlatform.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Hosting\Aevatar.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.AppPlatform.Abstractions\Aevatar.AppPlatform.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.AppPlatform.Application\Aevatar.AppPlatform.Application.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.AppPlatform.Infrastructure\Aevatar.AppPlatform.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.AppPlatform.Hosting\Aevatar.AppPlatform.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+</Project>

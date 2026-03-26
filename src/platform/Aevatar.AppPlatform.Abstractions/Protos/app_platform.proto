@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package aevatar.appplatform;
+
+option csharp_namespace = "Aevatar.AppPlatform.Abstractions";
+
+enum AppVisibility {
+  APP_VISIBILITY_UNSPECIFIED = 0;
+  APP_VISIBILITY_PRIVATE = 1;
+  APP_VISIBILITY_PUBLIC = 2;
+}
+
+enum AppReleaseStatus {
+  APP_RELEASE_STATUS_UNSPECIFIED = 0;
+  APP_RELEASE_STATUS_DRAFT = 1;
+  APP_RELEASE_STATUS_PUBLISHED = 2;
+  APP_RELEASE_STATUS_ARCHIVED = 3;
+}
+
+enum AppImplementationKind {
+  APP_IMPLEMENTATION_KIND_UNSPECIFIED = 0;
+  APP_IMPLEMENTATION_KIND_STATIC = 1;
+  APP_IMPLEMENTATION_KIND_SCRIPTING = 2;
+  APP_IMPLEMENTATION_KIND_WORKFLOW = 3;
+}
+
+enum AppServiceRole {
+  APP_SERVICE_ROLE_UNSPECIFIED = 0;
+  APP_SERVICE_ROLE_ENTRY = 1;
+  APP_SERVICE_ROLE_COMPANION = 2;
+  APP_SERVICE_ROLE_INTERNAL = 3;
+}
+
+message AppDefinitionSnapshot {
+  string app_id = 1;
+  string owner_scope_id = 2;
+  string display_name = 3;
+  string description = 4;
+  AppVisibility visibility = 5;
+  string default_release_id = 6;
+  repeated string route_paths = 7;
+}
+
+message AppServiceRef {
+  string tenant_id = 1;
+  string app_id = 2;
+  string namespace = 3;
+  string service_id = 4;
+  string revision_id = 5;
+  AppImplementationKind implementation_kind = 6;
+  AppServiceRole role = 7;
+}
+
+message AppEntryRef {
+  string entry_id = 1;
+  string service_id = 2;
+  string endpoint_id = 3;
+}
+
+message AppReleaseSnapshot {
+  string release_id = 1;
+  string app_id = 2;
+  string display_name = 3;
+  AppReleaseStatus status = 4;
+  repeated AppServiceRef service_refs = 5;
+  repeated AppEntryRef entry_refs = 6;
+}
+
+message AppRouteSnapshot {
+  string route_path = 1;
+  string app_id = 2;
+  string release_id = 3;
+  string entry_id = 4;
+}
+
+message AppResolvedEntryPoint {
+  string entry_id = 1;
+  string endpoint_id = 2;
+  AppServiceRef service_ref = 3;
+}
+
+message AppRouteResolution {
+  string route_path = 1;
+  AppDefinitionSnapshot app = 2;
+  AppReleaseSnapshot release = 3;
+  AppResolvedEntryPoint entry = 4;
+}

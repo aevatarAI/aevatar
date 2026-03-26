@@ -362,6 +362,64 @@ public sealed class WorkflowRunGAgent
         await HandleWorkflowCompleted(completed);
     }
 
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleWorkflowStoppedEnvelope(EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(WorkflowStoppedEvent.Descriptor) != true)
+            return;
+
+        var stopped = envelope.Payload.Unpack<WorkflowStoppedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (await _subWorkflowOrchestrator.TryHandleStoppedAsync(
+                stopped,
+                publisherActorId,
+                State,
+                CancellationToken.None))
+        {
+            return;
+        }
+
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal))
+        {
+            Logger.LogDebug(
+                "Ignore external WorkflowStoppedEvent from publisher={PublisherId} run={RunId}.",
+                publisherActorId,
+                stopped.RunId);
+            return;
+        }
+
+        await HandleWorkflowStopped(stopped);
+    }
+
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleWorkflowRunStoppedEnvelope(EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(WorkflowRunStoppedEvent.Descriptor) != true)
+            return;
+
+        var stopped = envelope.Payload.Unpack<WorkflowRunStoppedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (await _subWorkflowOrchestrator.TryHandleRunStoppedAsync(
+                stopped,
+                publisherActorId,
+                State,
+                CancellationToken.None))
+        {
+            return;
+        }
+
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal))
+        {
+            Logger.LogDebug(
+                "Ignore external WorkflowRunStoppedEvent from publisher={PublisherId} run={RunId}.",
+                publisherActorId,
+                stopped.RunId);
+            return;
+        }
+
+        await HandleWorkflowRunStoppedAsync(stopped);
+    }
+
     public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
     {
         var stateBeforeCompletion = State.Clone();
@@ -486,9 +544,6 @@ public sealed class WorkflowRunGAgent
 
         foreach (var role in _compiledWorkflow.Roles)
         {
-            if (string.IsNullOrWhiteSpace(role.Id))
-                continue;
-
             roleActorIds.Add(BuildChildActorId(role.Id));
         }
 
@@ -510,15 +565,6 @@ public sealed class WorkflowRunGAgent
         foreach (var role in _compiledWorkflow.Roles)
         {
             var roleId = role.Id;
-            if (string.IsNullOrWhiteSpace(roleId))
-            {
-                Logger.LogWarning(
-                    "Skip workflow role without id while building agent tree. workflow={WorkflowName} actor={ActorId}",
-                    _compiledWorkflow.Name,
-                    Id);
-                continue;
-            }
-
             var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);

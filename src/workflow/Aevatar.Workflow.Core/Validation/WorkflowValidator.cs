@@ -51,7 +51,18 @@ public static class WorkflowValidator
                 errors.Add($"步骤 '{step.Id}' 重复");
         }
 
-        var roleIds = wf.Roles.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        var roleIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var role in wf.Roles)
+        {
+            if (string.IsNullOrWhiteSpace(role.Id))
+            {
+                errors.Add("存在缺少 id 的角色");
+                continue;
+            }
+
+            roleIds.Add(role.Id);
+        }
+
         foreach (var step in allSteps)
         {
             var hasAgentTypeOverride = HasAgentTypeOverride(step);

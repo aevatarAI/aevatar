@@ -1,9 +1,10 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Aevatar.Tools.Cli.Studio.Application.Abstractions;
-using Aevatar.Tools.Cli.Studio.Application.Contracts;
-using Aevatar.Tools.Cli.Studio.Application.Services;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Models;
 using FluentAssertions;
 
 namespace Aevatar.Tools.Cli.Tests;
@@ -114,6 +115,34 @@ public sealed class ExecutionServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenStreamEndsWithoutTerminalEvent_ShouldPersistFailureAndKeepObservedFrames()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateSseResponse("""
+                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-eof","workflowName":"approval"}}}
+
+                data: {"runStarted":{"threadId":"run-actor-eof","runId":"run-eof-1"}}
+
+                data: [DONE]
+
+                """)));
+        var (service, store) = CreateService(handler);
+
+        var detail = await service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "approval",
+            Prompt: "hello",
+            WorkflowYamls: ["name: approval"],
+            RuntimeBaseUrl: "https://runtime.example"));
+        var failed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "failed");
+
+        failed.ActorId.Should().Be("run-actor-eof");
+        failed.Error.Should().Be("Execution stream ended before a terminal event was observed.");
+        failed.Frames.Should().HaveCount(3);
+        using var payload = JsonDocument.Parse(failed.Frames.Last().Payload);
+        payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("EXECUTION_STREAM_TERMINATED");
+    }
+
+    [Fact]
     public async Task StartAsync_WhenAuthSnapshotCaptured_ShouldReplayHeadersInBackgroundRequest()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
@@ -173,6 +202,32 @@ public sealed class ExecutionServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_WhenStreamFailsMidFlight_ShouldAppendSyntheticErrorWithoutDroppingObservedFrames()
+    {
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFaultingSseResponse("""
+                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-fault","workflowName":"approval"}}}
+
+                data: {"runStarted":{"threadId":"run-actor-fault","runId":"run-fault-1"}}
+
+                """)));
+        var (service, store) = CreateService(handler);
+
+        var detail = await service.StartAsync(new StartExecutionRequest(
+            WorkflowName: "approval",
+            Prompt: "hello",
+            WorkflowYamls: ["name: approval"],
+            RuntimeBaseUrl: "https://runtime.example"));
+        var failed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "failed");
+
+        failed.ActorId.Should().Be("run-actor-fault");
+        failed.Frames.Should().HaveCount(2);
+        failed.Frames[0].Payload.Should().Contain("aevatar.run.context");
+        using var payload = JsonDocument.Parse(failed.Frames.Last().Payload);
+        payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("EXECUTION_STREAM_FAILED");
+    }
+
+    [Fact]
     public async Task StartAsync_WhenAguiStoppedCustomEventObserved_ShouldPersistStoppedStatus()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
@@ -223,7 +278,10 @@ public sealed class ExecutionServiceTests
             [
                 new StoredExecutionFrame(
                     DateTimeOffset.UtcNow,
-                    """{"runStarted":{"threadId":"run-actor-stop-1","runId":"run-stop-1"}}""")
+                    """{"runStarted":{"threadId":"run-actor-stop-1","runId":"run-stop-1"}}"""),
+                new StoredExecutionFrame(
+                    DateTimeOffset.UtcNow,
+                    """{"custom":{"name":"aevatar.human_input.request","payload":{"stepId":"approval-step-1"}}}""")
             ]);
         await store.SaveExecutionAsync(seed);
 
@@ -291,7 +349,7 @@ public sealed class ExecutionServiceTests
     }
 
     [Fact]
-    public async Task StopAsync_WhenRuntimeReportsRunAlreadyClosed_ShouldReturnReconciledDetail()
+    public async Task StopAsync_WhenExecutionAlreadyCompleted_ShouldReturnReconciledDetailWithoutCallingRuntime()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
@@ -326,22 +384,68 @@ public sealed class ExecutionServiceTests
 
         var detail = await service.StopAsync("exec-stop-closed-1", new StopExecutionRequest("manual"), CancellationToken.None);
 
-        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest.Should().BeNull();
         detail.Should().NotBeNull();
         detail!.Status.Should().Be("completed");
         detail.CompletedAtUtc.Should().Be(finishedAtUtc);
         detail.Frames.Should().HaveCount(2);
     }
 
+    [Fact]
+    public async Task GetAsync_WhenObservationSessionWasLost_ShouldMarkExecutionFailed()
+    {
+        var store = new InMemoryStudioWorkspaceStore();
+        var handler = new RecordingHttpMessageHandler((request, _) =>
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(handler, store: store);
+        var observedAtUtc = DateTimeOffset.UtcNow.AddSeconds(-5);
+        var seed = new StoredExecutionRecord(
+            ExecutionId: "exec-orphan-1",
+            WorkflowName: "approval",
+            Prompt: "hello",
+            RuntimeBaseUrl: "https://runtime.example",
+            Status: "waiting",
+            StartedAtUtc: observedAtUtc.AddMinutes(-1),
+            CompletedAtUtc: null,
+            ActorId: "WorkflowRun:exec-orphan-1",
+            Error: null,
+            Frames:
+            [
+                new StoredExecutionFrame(
+                    observedAtUtc,
+                    """{"custom":{"name":"aevatar.human_input.request","payload":{"stepId":"approval-step-1"}}}""")
+            ],
+            ObservationSessionId: "stale-session",
+            ObservationActive: true,
+            LastObservedAtUtc: observedAtUtc);
+        await store.SaveExecutionAsync(seed);
+
+        var detail = await service.GetAsync("exec-orphan-1", CancellationToken.None);
+        var failed = await store.GetExecutionAsync("exec-orphan-1", CancellationToken.None);
+
+        detail.Should().NotBeNull();
+        detail!.Status.Should().Be("failed");
+        detail.Error.Should().Be("Studio execution observer was lost before a terminal event was observed.");
+        detail.Frames.Should().HaveCount(2);
+
+        failed.Should().NotBeNull();
+        failed!.Status.Should().Be("failed");
+        failed.ObservationActive.Should().BeFalse();
+        using var payload = JsonDocument.Parse(failed.Frames.Last().Payload);
+        payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("EXECUTION_OBSERVER_LOST");
+        payload.RootElement.GetProperty("runError").GetProperty("message").GetString().Should().Be("Studio execution observer was lost before a terminal event was observed.");
+    }
+
     private static (ExecutionService Service, InMemoryStudioWorkspaceStore Store) CreateService(
         RecordingHttpMessageHandler handler,
-        IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null)
+        IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null,
+        InMemoryStudioWorkspaceStore? store = null)
     {
         var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://backend.example"),
         };
-        var store = new InMemoryStudioWorkspaceStore();
+        store ??= new InMemoryStudioWorkspaceStore();
 
         return (
             new ExecutionService(
@@ -355,6 +459,12 @@ public sealed class ExecutionServiceTests
         new(HttpStatusCode.OK)
         {
             Content = new StringContent(payload, Encoding.UTF8, "text/event-stream"),
+        };
+
+    private static HttpResponseMessage CreateFaultingSseResponse(string payload) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new FaultingReadStream(payload)),
         };
 
     private sealed class StubHttpClientFactory : IHttpClientFactory
@@ -409,6 +519,77 @@ public sealed class ExecutionServiceTests
             response.RequestMessage ??= request;
             return response;
         }
+    }
+
+    private sealed class FaultingReadStream : Stream
+    {
+        private readonly MemoryStream _inner;
+        private bool _faulted;
+
+        public FaultingReadStream(string payload)
+        {
+            _inner = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => _inner.Length;
+
+        public override long Position
+        {
+            get => _inner.Position;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = _inner.Read(buffer, offset, count);
+            if (read > 0)
+            {
+                return read;
+            }
+
+            if (_faulted)
+            {
+                return 0;
+            }
+
+            _faulted = true;
+            throw new IOException("Simulated SSE stream failure.");
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var read = await _inner.ReadAsync(buffer, cancellationToken);
+            if (read > 0)
+            {
+                return read;
+            }
+
+            if (_faulted)
+            {
+                return 0;
+            }
+
+            _faulted = true;
+            throw new IOException("Simulated SSE stream failure.");
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore

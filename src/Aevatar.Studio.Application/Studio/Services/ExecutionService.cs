@@ -10,10 +10,16 @@ namespace Aevatar.Studio.Application.Studio.Services;
 public sealed class ExecutionService
 {
     private const string BackendClientName = "AppBridgeBackend";
+    private const string ExecutionObserverLostFailureCode = "EXECUTION_OBSERVER_LOST";
+    private const string ExecutionObserverLostFailureMessage = "Studio execution observer was lost before a terminal event was observed.";
+    private const string ExecutionStreamClosedFailureCode = "EXECUTION_STREAM_TERMINATED";
+    private const string ExecutionStreamClosedFailureMessage = "Execution stream ended before a terminal event was observed.";
+    private const string ExecutionStreamFailedCode = "EXECUTION_STREAM_FAILED";
 
     private readonly IStudioWorkspaceStore _store;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IStudioBackendRequestAuthSnapshotProvider? _authSnapshotProvider;
+    private readonly string _observationSessionId = Guid.NewGuid().ToString("N");
 
     public ExecutionService(
         IStudioWorkspaceStore store,
@@ -27,7 +33,7 @@ public sealed class ExecutionService
 
     public async Task<IReadOnlyList<ExecutionSummary>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var records = await _store.ListExecutionsAsync(cancellationToken);
+        var records = await LoadReconciledExecutionRecordsAsync(cancellationToken);
         return records
             .OrderByDescending(record => record.StartedAtUtc)
             .Select(ToSummary)
@@ -36,7 +42,7 @@ public sealed class ExecutionService
 
     public async Task<ExecutionDetail?> GetAsync(string executionId, CancellationToken cancellationToken = default)
     {
-        var record = await _store.GetExecutionAsync(executionId, cancellationToken);
+        var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
         return record is null ? null : ToDetail(record);
     }
 
@@ -48,17 +54,21 @@ public sealed class ExecutionService
             : request.RuntimeBaseUrl.Trim().TrimEnd('/');
 
         var executionId = Guid.NewGuid().ToString("N");
+        var startedAtUtc = DateTimeOffset.UtcNow;
         var record = new StoredExecutionRecord(
             ExecutionId: executionId,
             WorkflowName: string.IsNullOrWhiteSpace(request.WorkflowName) ? "workflow_editor" : request.WorkflowName.Trim(),
             Prompt: request.Prompt,
             RuntimeBaseUrl: runtimeBaseUrl,
             Status: "running",
-            StartedAtUtc: DateTimeOffset.UtcNow,
+            StartedAtUtc: startedAtUtc,
             CompletedAtUtc: null,
             ActorId: null,
             Error: null,
-            Frames: []);
+            Frames: [],
+            ObservationSessionId: _observationSessionId,
+            ObservationActive: true,
+            LastObservedAtUtc: startedAtUtc);
 
         await _store.SaveExecutionAsync(record, cancellationToken);
         var authSnapshot = _authSnapshotProvider == null
@@ -73,10 +83,16 @@ public sealed class ExecutionService
         ResumeExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
-        var record = await _store.GetExecutionAsync(executionId, cancellationToken);
+        var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
         if (record is null)
         {
             return null;
+        }
+
+        if (IsTerminalExecutionStatus(record.Status))
+        {
+            throw new InvalidOperationException(
+                $"Execution is already in terminal status '{record.Status}' and cannot be resumed.");
         }
 
         var actorId = record.ActorId?.Trim();
@@ -149,7 +165,7 @@ public sealed class ExecutionService
         StopExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
-        var record = await _store.GetExecutionAsync(executionId, cancellationToken);
+        var record = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken);
         if (record is null)
         {
             return null;
@@ -225,14 +241,49 @@ public sealed class ExecutionService
         StoredExecutionRecord fallbackRecord,
         CancellationToken cancellationToken)
     {
-        var latestRecord = await _store.GetExecutionAsync(executionId, cancellationToken) ?? fallbackRecord;
-        var reconciledRecord = ReconcileExecutionRecord(latestRecord);
-        if (!Equals(reconciledRecord, latestRecord))
+        var latestRecord = await LoadReconciledExecutionRecordAsync(executionId, cancellationToken) ?? fallbackRecord;
+        return ToDetail(latestRecord);
+    }
+
+    private async Task<IReadOnlyList<StoredExecutionRecord>> LoadReconciledExecutionRecordsAsync(
+        CancellationToken cancellationToken)
+    {
+        var records = await _store.ListExecutionsAsync(cancellationToken);
+        var reconciled = new List<StoredExecutionRecord>(records.Count);
+        foreach (var record in records)
+        {
+            reconciled.Add(await ReconcileExecutionRecordAsync(record, cancellationToken));
+        }
+
+        return reconciled;
+    }
+
+    private async Task<StoredExecutionRecord?> LoadReconciledExecutionRecordAsync(
+        string executionId,
+        CancellationToken cancellationToken)
+    {
+        var record = await _store.GetExecutionAsync(executionId, cancellationToken);
+        return record is null
+            ? null
+            : await ReconcileExecutionRecordAsync(record, cancellationToken);
+    }
+
+    private async Task<StoredExecutionRecord> ReconcileExecutionRecordAsync(
+        StoredExecutionRecord record,
+        CancellationToken cancellationToken)
+    {
+        var reconciledRecord = ReconcileExecutionRecord(record);
+        if (ShouldFailLostObservation(reconciledRecord))
+        {
+            reconciledRecord = MarkExecutionObserverLost(reconciledRecord);
+        }
+
+        if (!Equals(reconciledRecord, record))
         {
             await _store.SaveExecutionAsync(reconciledRecord, cancellationToken);
         }
 
-        return ToDetail(reconciledRecord);
+        return reconciledRecord;
     }
 
     private static string? TryExtractActorId(string payload)
@@ -404,6 +455,7 @@ public sealed class ExecutionService
         var nextCompletedAtUtc = IsTerminalExecutionStatus(status)
             ? completedAtUtc ?? record.CompletedAtUtc
             : null;
+        var lastObservedAtUtc = record.Frames[^1].ReceivedAtUtc;
 
         return record with
         {
@@ -411,6 +463,38 @@ public sealed class ExecutionService
             CompletedAtUtc = nextCompletedAtUtc,
             ActorId = actorId,
             Error = terminalError,
+            ObservationActive = record.ObservationActive && !IsTerminalExecutionStatus(status),
+            LastObservedAtUtc = lastObservedAtUtc,
+        };
+    }
+
+    private bool ShouldFailLostObservation(StoredExecutionRecord record)
+    {
+        if (IsTerminalExecutionStatus(record.Status) || !record.ObservationActive)
+            return false;
+
+        var observationSessionId = record.ObservationSessionId?.Trim();
+        return !string.IsNullOrWhiteSpace(observationSessionId) &&
+               !string.Equals(observationSessionId, _observationSessionId, StringComparison.Ordinal);
+    }
+
+    private StoredExecutionRecord MarkExecutionObserverLost(StoredExecutionRecord record)
+    {
+        var failedAtUtc = DateTimeOffset.UtcNow;
+        var frames = record.Frames.ToList();
+        frames.Add(new StoredExecutionFrame(
+            failedAtUtc,
+            BuildRunErrorFrame(ExecutionObserverLostFailureMessage, ExecutionObserverLostFailureCode)));
+
+        return record with
+        {
+            Status = "failed",
+            CompletedAtUtc = record.CompletedAtUtc ?? failedAtUtc,
+            Error = ExecutionObserverLostFailureMessage,
+            Frames = frames,
+            ObservationSessionId = _observationSessionId,
+            ObservationActive = false,
+            LastObservedAtUtc = failedAtUtc,
         };
     }
 
@@ -460,36 +544,79 @@ public sealed class ExecutionService
         var runFailed = false;
         var runStopped = false;
         string? error = seedRecord.Error;
+        var latestRecord = seedRecord;
 
-        await foreach (var payload in ReadSsePayloadsAsync(stream, cancellationToken))
+        try
         {
-            var receivedAtUtc = DateTimeOffset.UtcNow;
-            frames.Add(new StoredExecutionFrame(receivedAtUtc, payload));
-            actorId ??= TryExtractActorId(payload);
-            TrackExecutionState(payload, pendingHumanSteps, ref runFinished, ref runFailed, ref runStopped);
-            error ??= TryExtractExecutionError(payload);
-
-            var liveStatus = ResolveLiveExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
-            var liveRecord = seedRecord with
+            await foreach (var payload in ReadSsePayloadsAsync(stream, cancellationToken))
             {
-                Status = liveStatus,
-                CompletedAtUtc = liveStatus is "completed" or "failed" or "stopped" ? receivedAtUtc : null,
-                ActorId = actorId,
-                Error = liveStatus is "failed" or "stopped" ? error : null,
-                Frames = frames.ToArray(),
-            };
+                var receivedAtUtc = DateTimeOffset.UtcNow;
+                frames.Add(new StoredExecutionFrame(receivedAtUtc, payload));
+                actorId ??= TryExtractActorId(payload);
+                TrackExecutionState(payload, pendingHumanSteps, ref runFinished, ref runFailed, ref runStopped);
+                error ??= TryExtractExecutionError(payload);
 
-            await _store.SaveExecutionAsync(liveRecord, cancellationToken);
+                var liveStatus = ResolveLiveExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
+                latestRecord = seedRecord with
+                {
+                    Status = liveStatus,
+                    CompletedAtUtc = liveStatus is "completed" or "failed" or "stopped" ? receivedAtUtc : null,
+                    ActorId = actorId,
+                    Error = liveStatus is "failed" or "stopped" ? error : null,
+                    Frames = frames.ToArray(),
+                    ObservationSessionId = _observationSessionId,
+                    ObservationActive = !IsTerminalExecutionStatus(liveStatus),
+                    LastObservedAtUtc = receivedAtUtc,
+                };
+
+                await _store.SaveExecutionAsync(latestRecord, cancellationToken);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await SaveExecutionFailureAsync(
+                latestRecord with
+                {
+                    ActorId = actorId,
+                    Error = error,
+                    Frames = frames.ToArray(),
+                },
+                new ExecutionStartFailure(
+                    string.IsNullOrWhiteSpace(exception.Message)
+                        ? "Execution stream failed before a terminal event was observed."
+                        : exception.Message.Trim(),
+                    ExecutionStreamFailedCode));
+            return;
         }
 
         var finalStatus = ResolveCompletedExecutionStatus(runFinished, runFailed, runStopped, pendingHumanSteps.Count > 0);
-        var finalRecord = seedRecord with
+        if (string.Equals(finalStatus, "failed", StringComparison.Ordinal))
+        {
+            await SaveExecutionFailureAsync(
+                latestRecord with
+                {
+                    ActorId = actorId,
+                    Error = error,
+                    Frames = frames.ToArray(),
+                },
+                new ExecutionStartFailure(
+                    string.IsNullOrWhiteSpace(error) ? ExecutionStreamClosedFailureMessage : error,
+                    string.IsNullOrWhiteSpace(error) ? ExecutionStreamClosedFailureCode : null));
+            return;
+        }
+
+        var finalRecord = latestRecord with
         {
             Status = finalStatus,
-            CompletedAtUtc = finalStatus is "completed" or "failed" or "stopped" ? DateTimeOffset.UtcNow : null,
+            CompletedAtUtc = finalStatus is "completed" or "failed" or "stopped"
+                ? latestRecord.CompletedAtUtc ?? DateTimeOffset.UtcNow
+                : null,
             ActorId = actorId,
             Error = finalStatus is "failed" or "stopped" ? error : null,
             Frames = frames.ToArray(),
+            ObservationSessionId = _observationSessionId,
+            ObservationActive = !IsTerminalExecutionStatus(finalStatus),
+            LastObservedAtUtc = frames.Count > 0 ? frames[^1].ReceivedAtUtc : latestRecord.LastObservedAtUtc,
         };
 
         await _store.SaveExecutionAsync(finalRecord, cancellationToken);
@@ -497,17 +624,20 @@ public sealed class ExecutionService
 
     private async Task SaveExecutionFailureAsync(StoredExecutionRecord record, ExecutionStartFailure failure)
     {
+        var failedAtUtc = DateTimeOffset.UtcNow;
+        var frames = record.Frames.ToList();
+        frames.Add(new StoredExecutionFrame(
+            failedAtUtc,
+            BuildRunErrorFrame(failure.Message, failure.Code)));
         var failedRecord = record with
         {
             Status = "failed",
-            CompletedAtUtc = DateTimeOffset.UtcNow,
+            CompletedAtUtc = record.CompletedAtUtc ?? failedAtUtc,
             Error = failure.Message,
-            Frames =
-            [
-                new StoredExecutionFrame(
-                    DateTimeOffset.UtcNow,
-                    BuildRunErrorFrame(failure.Message, failure.Code))
-            ],
+            Frames = frames,
+            ObservationSessionId = _observationSessionId,
+            ObservationActive = false,
+            LastObservedAtUtc = failedAtUtc,
         };
 
         await _store.SaveExecutionAsync(failedRecord, CancellationToken.None);
@@ -770,7 +900,7 @@ public sealed class ExecutionService
             return "waiting";
         }
 
-        return runFinished ? "completed" : "completed";
+        return runFinished ? "completed" : "failed";
     }
 
     private static HttpRequestMessage BuildStartExecutionRequest(

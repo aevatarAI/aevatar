@@ -242,21 +242,28 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
-    public async Task WorkflowRunGAgent_WhenRoleIdMissing_ShouldThrow()
+    public async Task WorkflowRunGAgent_WhenRoleIdMissing_ShouldMarkInvalidAndRejectExecution()
     {
+        var publisher = new RecordingEventPublisher();
         var agent = CreateRunAgent(
             runtime: new RecordingActorRuntime(),
             roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        agent.EventPublisher = publisher;
         await agent.BindWorkflowRunDefinitionAsync(
             "definition-1",
             BuildValidWorkflowYaml("", "RoleNoId"),
             "wf_missing_role",
             runId: "run-missing-role");
 
-        var act = () => agent.HandleChatRequest(new ChatRequestEvent { Prompt = "x", SessionId = "s" });
+        agent.State.Compiled.Should().BeFalse();
+        agent.State.CompilationError.Should().Contain("缺少 id 的角色");
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Role id is required*");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "x", SessionId = "s" });
+
+        publisher.Published.Select(x => x.evt).OfType<ChatResponseEvent>()
+            .Should().ContainSingle(response =>
+                response.SessionId == "s" &&
+                response.Content.Contains("not definition-bound or compiled", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -545,6 +552,109 @@ public class WorkflowGAgentCoverageTests
         parentCompletion.RunId.Should().Be("parent-run");
         parentCompletion.Success.Should().BeTrue();
         parentCompletion.Output.Should().Be("child-done");
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
+        runPublisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenChildWorkflowStops_ShouldTranslateToParentStepFailure()
+    {
+        var runtime = new RecordingActorRuntime();
+        var runPublisher = new RecordingEventPublisher();
+        var definitionPublisher = new RecordingEventPublisher();
+        var definitionAgent = await CreateRegisteredDefinitionAgentAsync(
+            runtime,
+            definitionPublisher,
+            "workflow-definition:sub_flow",
+            "sub_flow",
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-parent-stopped");
+        agent.EventPublisher = runPublisher;
+
+        await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-child-stop",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-child",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "singleton",
+        });
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
+
+        var pending = agent.State.PendingSubWorkflowInvocations.Single();
+        await agent.HandleWorkflowStoppedEnvelope(Envelope(
+            new WorkflowStoppedEvent
+            {
+                WorkflowName = "sub_flow",
+                RunId = pending.ChildRunId,
+                Reason = "manual",
+            },
+            pending.ChildActorId,
+            TopologyAudience.ParentAndChildren));
+
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+        agent.State.PendingChildRunIdsByParentRunId.Should().BeEmpty();
+
+        var parentCompletion = runPublisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        parentCompletion.StepId.Should().Be("step-child");
+        parentCompletion.RunId.Should().Be("parent-run");
+        parentCompletion.Success.Should().BeFalse();
+        parentCompletion.Output.Should().BeEmpty();
+        parentCompletion.Error.Should().Be("workflow_call child workflow stopped: manual");
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
+        runPublisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenChildWorkflowRunStops_ShouldTranslateToParentStepFailure()
+    {
+        var runtime = new RecordingActorRuntime();
+        var runPublisher = new RecordingEventPublisher();
+        var definitionPublisher = new RecordingEventPublisher();
+        var definitionAgent = await CreateRegisteredDefinitionAgentAsync(
+            runtime,
+            definitionPublisher,
+            "workflow-definition:sub_flow",
+            "sub_flow",
+            BuildValidWorkflowYaml("sub_role", "SubRole", workflowName: "sub_flow"));
+        var agent = CreateRunAgent(runtime: runtime);
+        SetAgentId(agent, "workflow-run-parent-run-stopped");
+        agent.EventPublisher = runPublisher;
+
+        await agent.HandleSubWorkflowInvokeRequested(new SubWorkflowInvokeRequestedEvent
+        {
+            InvocationId = "invoke-child-run-stop",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-child",
+            WorkflowName = "sub_flow",
+            Input = "payload",
+            Lifecycle = "singleton",
+        });
+        await ResolveLatestDefinitionRequestAsync(agent, runPublisher, definitionAgent, definitionPublisher);
+
+        var pending = agent.State.PendingSubWorkflowInvocations.Single();
+        await agent.HandleWorkflowRunStoppedEnvelope(Envelope(
+            new WorkflowRunStoppedEvent
+            {
+                RunId = pending.ChildRunId,
+                Reason = "operator stop",
+            },
+            pending.ChildActorId,
+            TopologyAudience.ParentAndChildren));
+
+        agent.State.PendingSubWorkflowInvocations.Should().BeEmpty();
+        agent.State.PendingSubWorkflowInvocationIndexByChildRunId.Should().BeEmpty();
+        agent.State.PendingChildRunIdsByParentRunId.Should().BeEmpty();
+
+        var parentCompletion = runPublisher.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        parentCompletion.StepId.Should().Be("step-child");
+        parentCompletion.RunId.Should().Be("parent-run");
+        parentCompletion.Success.Should().BeFalse();
+        parentCompletion.Output.Should().BeEmpty();
+        parentCompletion.Error.Should().Be("workflow_call child workflow stopped: operator stop");
         parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be(pending.ChildRunId);
         runPublisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Should().BeEmpty();
     }

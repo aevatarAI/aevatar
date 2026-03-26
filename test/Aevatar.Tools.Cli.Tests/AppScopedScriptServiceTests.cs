@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
-using Aevatar.Tools.Cli.Hosting;
+using Aevatar.Studio.Application;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 

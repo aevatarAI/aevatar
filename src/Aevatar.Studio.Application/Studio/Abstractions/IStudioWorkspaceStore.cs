@@ -74,7 +74,10 @@ public sealed record StoredExecutionRecord(
     DateTimeOffset? CompletedAtUtc,
     string? ActorId,
     string? Error,
-    IReadOnlyList<StoredExecutionFrame> Frames);
+    IReadOnlyList<StoredExecutionFrame> Frames,
+    string? ObservationSessionId = null,
+    bool ObservationActive = false,
+    DateTimeOffset? LastObservedAtUtc = null);
 
 public sealed record StoredExecutionFrame(
     DateTimeOffset ReceivedAtUtc,
