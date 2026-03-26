@@ -1,14 +1,24 @@
-import { PageContainer, ProTable } from "@ant-design/pro-components";
-import { useQuery } from "@tanstack/react-query";
-import { history } from "@/shared/navigation/history";
-import { Alert, Col, Row } from "antd";
-import React, { useMemo, useState } from "react";
-import { governanceApi } from "@/shared/api/governanceApi";
-import { servicesApi } from "@/shared/api/servicesApi";
-import type { ServiceEndpointExposureSnapshot } from "@/shared/models/governance";
-import { compactTableCardProps } from "@/shared/ui/proComponents";
-import { endpointColumns } from "./components/columns";
-import GovernanceQueryCard from "./components/GovernanceQueryCard";
+import { PageContainer, ProCard, ProTable } from '@ant-design/pro-components';
+import { useQuery } from '@tanstack/react-query';
+import { Col, Row } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { governanceApi } from '@/shared/api/governanceApi';
+import { servicesApi } from '@/shared/api/servicesApi';
+import { history } from '@/shared/navigation/history';
+import type { ServiceEndpointExposureSnapshot } from '@/shared/models/governance';
+import {
+  cardStackStyle,
+  compactTableCardProps,
+  moduleCardProps,
+} from '@/shared/ui/proComponents';
+import { endpointColumns } from './components/columns';
+import GovernanceQueryCard from './components/GovernanceQueryCard';
+import {
+  formatGovernanceTimestamp,
+  GovernanceSelectionNotice,
+  GovernanceSummaryPanel,
+  type GovernanceSummaryMetric,
+} from './components/GovernanceResultPanels';
 import {
   buildGovernanceServiceOptions,
   buildGovernanceHref,
@@ -17,7 +27,7 @@ import {
   normalizeGovernanceQuery,
   readGovernanceDraft,
   type GovernanceDraft,
-} from "./components/governanceQuery";
+} from './components/governanceQuery';
 
 const initialDraft = readGovernanceDraft();
 
@@ -50,6 +60,35 @@ const GovernanceEndpointsPage: React.FC = () => {
   const serviceOptions = useMemo(
     () => buildGovernanceServiceOptions(servicesQuery.data ?? []),
     [servicesQuery.data]
+  );
+
+  const endpointCatalog = endpointsQuery.data;
+  const endpointMetrics = useMemo<GovernanceSummaryMetric[]>(
+    () => [
+      {
+        label: 'Endpoints',
+        value: String(endpointCatalog?.endpoints.length ?? 0),
+      },
+      {
+        label: 'Public',
+        value: String(
+          endpointCatalog?.endpoints.filter(
+            (endpoint) => endpoint.exposureKind === 'public',
+          ).length ?? 0,
+        ),
+        tone: 'success',
+      },
+      {
+        label: 'Disabled',
+        value: String(
+          endpointCatalog?.endpoints.filter(
+            (endpoint) => endpoint.exposureKind === 'disabled',
+          ).length ?? 0,
+        ),
+        tone: 'warning',
+      },
+    ],
+    [endpointCatalog],
   );
 
   return (
@@ -85,21 +124,40 @@ const GovernanceEndpointsPage: React.FC = () => {
         </Col>
         <Col xs={24}>
           {activeDraft.serviceId.trim() ? (
-            <ProTable<ServiceEndpointExposureSnapshot>
-              columns={endpointColumns}
-              dataSource={endpointsQuery.data?.endpoints ?? []}
-              loading={endpointsQuery.isLoading}
-              rowKey="endpointId"
-              search={false}
-              pagination={false}
-              cardProps={compactTableCardProps}
-              toolBarRender={false}
-            />
+            <div style={cardStackStyle}>
+              <GovernanceSummaryPanel
+                title="Endpoint catalog"
+                description="Review raw endpoint exposure modes, request contracts, and attached policy references."
+                draft={activeDraft}
+                extraFields={[
+                  {
+                    label: 'Catalog updated',
+                    value: formatGovernanceTimestamp(endpointCatalog?.updatedAt),
+                  },
+                ]}
+                metrics={endpointMetrics}
+                status={{
+                  color: endpointsQuery.isLoading ? 'processing' : 'success',
+                  label: endpointsQuery.isLoading ? 'Loading' : 'Loaded',
+                }}
+              />
+              <ProCard title="Endpoints" {...moduleCardProps}>
+                <ProTable<ServiceEndpointExposureSnapshot>
+                  columns={endpointColumns}
+                  dataSource={endpointCatalog?.endpoints ?? []}
+                  loading={endpointsQuery.isLoading}
+                  rowKey="endpointId"
+                  search={false}
+                  pagination={false}
+                  cardProps={compactTableCardProps}
+                  toolBarRender={false}
+                />
+              </ProCard>
+            </div>
           ) : (
-            <Alert
-              showIcon
-              type="info"
-              title="Select a platform service to inspect its raw endpoint exposure catalog."
+            <GovernanceSelectionNotice
+              title="Select a platform service"
+              description="Load a service identity to inspect raw endpoint exposure modes and attached policy references."
             />
           )}
         </Col>

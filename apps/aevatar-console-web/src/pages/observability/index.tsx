@@ -4,7 +4,6 @@ import {
   ProDescriptions,
   ProForm,
   ProFormText,
-  ProList,
 } from "@ant-design/pro-components";
 import type {
   ProDescriptionsItemProps,
@@ -25,9 +24,17 @@ import {
 } from "@/shared/observability/observabilityLinks";
 import { loadConsolePreferences } from "@/shared/preferences/consolePreferences";
 import {
+  cardListActionStyle,
+  cardListHeaderStyle,
+  cardListItemStyle,
+  cardListMainStyle,
+  cardListStyle,
+  cardListUrlStyle,
+  compactPanelHeight,
   fillCardStyle,
   moduleCardProps,
-  scrollPanelStyle,
+  scrollViewportBodyStyle,
+  scrollViewportStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
 
@@ -49,48 +56,29 @@ type InternalJumpItem = {
   enabled: boolean;
 };
 
-const targetStatusValueEnum = {
-  configured: { text: "Configured", status: "Success" },
-  missing: { text: "Missing", status: "Default" },
-} as const;
-
 const consoleSurfacesCardStyle = {
   ...fillCardStyle,
-  height: 520,
+  height: compactPanelHeight,
 } as const;
 
 const configuredTargetsCardStyle = {
   ...fillCardStyle,
-  height: 520,
+  height: compactPanelHeight,
 } as const;
 
-const consoleSurfacesBodyStyle = {
+const consoleSurfacesBodyStyle = scrollViewportBodyStyle;
+
+const configuredTargetsBodyStyle = scrollViewportBodyStyle;
+
+const consoleSurfacesViewportStyle = scrollViewportStyle;
+
+const configuredTargetsViewportStyle = scrollViewportStyle;
+
+const cardListMetaWrapStyle: React.CSSProperties = {
   display: "flex",
-  flexDirection: "column",
-  minHeight: 0,
-  overflow: "hidden",
-} as const;
-
-const configuredTargetsBodyStyle = {
-  display: "flex",
-  flexDirection: "column",
-  minHeight: 0,
-  overflow: "hidden",
-} as const;
-
-const consoleSurfacesViewportStyle = {
-  ...scrollPanelStyle,
-  flex: 1,
-  minHeight: 0,
-  maxHeight: "none",
-} as const;
-
-const configuredTargetsViewportStyle = {
-  ...scrollPanelStyle,
-  flex: 1,
-  minHeight: 0,
-  maxHeight: "none",
-} as const;
+  flexWrap: "wrap",
+  gap: 8,
+};
 
 const summaryColumns: ProDescriptionsItemProps<ObservabilitySummaryRecord>[] = [
   {
@@ -139,6 +127,132 @@ function readContextFromUrl(): ObservabilityContext {
     runId: params.get("runId") ?? "",
     stepId: params.get("stepId") ?? "",
   };
+}
+
+function renderConfiguredTargetCards(
+  targets: ObservabilityTarget[]
+): React.ReactNode {
+  if (targets.length === 0) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="No observability targets are available."
+      />
+    );
+  }
+
+  return (
+    <div style={cardListStyle}>
+      {targets.map((record) => (
+        <div key={record.id} style={cardListItemStyle}>
+          <div style={cardListHeaderStyle}>
+            <div style={cardListMainStyle}>
+              <Space wrap size={[8, 8]}>
+                <Typography.Text strong>{record.label}</Typography.Text>
+                <Tag color={record.status === "configured" ? "success" : "default"}>
+                  {record.status}
+                </Tag>
+              </Space>
+              <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+                {record.description}
+              </Typography.Paragraph>
+            </div>
+          </div>
+
+          <div style={cardListMetaWrapStyle}>
+            <Tag>{record.contextSummary}</Tag>
+            <Tag color={record.status === "configured" ? "processing" : "default"}>
+              {record.status === "configured"
+                ? "External target ready"
+                : "No URL configured"}
+            </Tag>
+          </div>
+
+          {record.homeUrl ? (
+            <Typography.Paragraph
+              copyable={{ text: record.homeUrl }}
+              ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
+              style={cardListUrlStyle}
+              type="secondary"
+            >
+              {record.homeUrl}
+            </Typography.Paragraph>
+          ) : (
+            <Typography.Text type="secondary">No URL configured.</Typography.Text>
+          )}
+
+          <div style={cardListActionStyle}>
+            <Button
+              type="primary"
+              disabled={record.status !== "configured"}
+              href={record.homeUrl || undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open {record.label}
+            </Button>
+            <Button
+              disabled={record.status !== "configured"}
+              href={record.exploreUrl || undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open explore
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderInternalJumpCards(
+  internalJumps: InternalJumpItem[]
+): React.ReactNode {
+  if (internalJumps.length === 0) {
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="No runtime surfaces are available."
+      />
+    );
+  }
+
+  return (
+    <div style={cardListStyle}>
+      {internalJumps.map((record) => (
+        <div key={record.id} style={cardListItemStyle}>
+          <div style={cardListHeaderStyle}>
+            <div style={cardListMainStyle}>
+              <Space wrap size={[8, 8]}>
+                <Typography.Text strong>{record.title}</Typography.Text>
+                <Tag color={record.enabled ? "success" : "default"}>
+                  {record.enabled ? "Ready" : "Missing context"}
+                </Tag>
+              </Space>
+              <Typography.Paragraph
+                ellipsis={{ rows: 3, expandable: true, symbol: "more" }}
+                style={{ margin: 0 }}
+                type="secondary"
+              >
+                {record.description}
+              </Typography.Paragraph>
+            </div>
+          </div>
+
+          <div style={cardListActionStyle}>
+            <Button
+              type="link"
+              disabled={!record.enabled}
+              onClick={() => history.push(record.href)}
+            >
+              Open
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 const ObservabilityPage: React.FC = () => {
@@ -362,77 +476,7 @@ const ObservabilityPage: React.FC = () => {
             bodyStyle={configuredTargetsBodyStyle}
           >
             <div style={configuredTargetsViewportStyle}>
-              <ProList<ObservabilityTarget>
-                rowKey="id"
-                search={false}
-                split
-                dataSource={targets}
-                locale={{
-                  emptyText: (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="No observability targets are available."
-                    />
-                  ),
-                }}
-                metas={{
-                  title: {
-                    dataIndex: "label",
-                    render: (_, record) => (
-                      <Space wrap size={[8, 8]}>
-                        <Typography.Text strong>{record.label}</Typography.Text>
-                        <Tag
-                          color={
-                            record.status === "configured"
-                              ? "success"
-                              : "default"
-                          }
-                        >
-                          {record.status}
-                        </Tag>
-                      </Space>
-                    ),
-                  },
-                  description: {
-                    dataIndex: "description",
-                  },
-                  subTitle: {
-                    render: (_, record) => (
-                      <Space wrap size={[8, 8]}>
-                        <Tag>{record.contextSummary}</Tag>
-                        {record.status === "configured" ? (
-                          <Tag color="processing">{record.homeUrl}</Tag>
-                        ) : (
-                          <Tag>No URL configured</Tag>
-                        )}
-                      </Space>
-                    ),
-                  },
-                  content: {
-                    render: (_, record) => (
-                      <Space wrap>
-                        <Button
-                          type="primary"
-                          disabled={record.status !== "configured"}
-                          href={record.homeUrl || undefined}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open {record.label}
-                        </Button>
-                        <Button
-                          disabled={record.status !== "configured"}
-                          href={record.exploreUrl || undefined}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Open explore
-                        </Button>
-                      </Space>
-                    ),
-                  },
-                }}
-              />
+              {renderConfiguredTargetCards(targets)}
             </div>
           </ProCard>
         </Col>
@@ -445,32 +489,7 @@ const ObservabilityPage: React.FC = () => {
             bodyStyle={consoleSurfacesBodyStyle}
           >
             <div style={consoleSurfacesViewportStyle}>
-              <ProList<InternalJumpItem>
-                rowKey="id"
-                search={false}
-                split
-                dataSource={internalJumps}
-                metas={{
-                  title: {
-                    dataIndex: "title",
-                  },
-                  description: {
-                    dataIndex: "description",
-                  },
-                  actions: {
-                    render: (_, record) => [
-                      <Button
-                        key={`${record.id}-open`}
-                        type="link"
-                        disabled={!record.enabled}
-                        onClick={() => history.push(record.href)}
-                      >
-                        Open
-                      </Button>,
-                    ],
-                  },
-                }}
-              />
+              {renderInternalJumpCards(internalJumps)}
             </div>
           </ProCard>
         </Col>

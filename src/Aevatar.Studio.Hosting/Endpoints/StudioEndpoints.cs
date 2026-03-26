@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,7 @@ internal static class StudioEndpoints
 {
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
-        app.MapGet("/api/auth/me", HandleGetAuthMe);
+        app.MapGet("/api/auth/me", HandleGetAuthMeAsync);
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode));
         app.MapPost("/api/app/workflow-generator", (
@@ -134,16 +135,20 @@ internal static class StudioEndpoints
         return $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
     }
 
-    private static IResult HandleGetAuthMe(HttpContext http)
+    private static async Task<IResult> HandleGetAuthMeAsync(HttpContext http, CancellationToken ct)
     {
         var user = http.User;
         var isAuthenticated = user?.Identity?.IsAuthenticated == true;
         var scopeResolver = http.RequestServices.GetService<IAppScopeResolver>();
         var scope = scopeResolver?.Resolve(http);
+        var schemeProvider = http.RequestServices.GetService<IAuthenticationSchemeProvider>();
+        var authEnabled = schemeProvider != null &&
+                          (await schemeProvider.GetAllSchemesAsync())
+                          .Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
 
         return Results.Json(new
         {
-            enabled = true,
+            enabled = authEnabled,
             authenticated = isAuthenticated,
             name = user?.Identity?.Name,
             email = user?.FindFirst("email")?.Value,

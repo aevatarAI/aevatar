@@ -1,12 +1,15 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
+import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
 
 const PROMPT_HISTORY_STORAGE_KEY = "aevatar-console-playground-prompt-history";
 const SCRIPTS_STUDIO_STORAGE_KEY = "aevatar:console:scripts-studio:v1";
+const STUDIO_AUTO_RELOGIN_ATTEMPT_KEY =
+  "aevatar-console:studio:auto-relogin:";
 
 type MockChildrenProps = {
   readonly children?: any;
@@ -236,6 +239,15 @@ function resetMockState(): void {
     ],
   };
 }
+
+jest.mock("@/shared/auth/client", () => ({
+  ensureActiveAuthSession: jest.fn(async () => null),
+}));
+
+const mockEnsureActiveAuthSession =
+  ensureActiveAuthSession as jest.MockedFunction<
+    (_config?: unknown) => Promise<Record<string, unknown> | null>
+  >;
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
@@ -1119,8 +1131,16 @@ describe("StudioPage", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/studio");
     window.localStorage.clear();
+    window.sessionStorage.clear();
     resetMockState();
     jest.clearAllMocks();
+    mockEnsureActiveAuthSession.mockReset();
+    mockEnsureActiveAuthSession.mockResolvedValue(null);
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: false,
+      authenticated: false,
+      providerDisplayName: "NyxID",
+    });
     (studioApi.getAppContext as jest.Mock).mockResolvedValue(
       defaultStudioAppContext
     );
@@ -1143,6 +1163,84 @@ describe("StudioPage", () => {
     expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
     expect(screen.getByText("Current draft")).toBeTruthy();
     expect(screen.getByPlaceholderText("Search workflows")).toBeTruthy();
+  });
+
+  it("tries to restore auth first and then loads Studio when the host session recovers", async () => {
+    (studioApi.getAuthSession as jest.Mock)
+      .mockResolvedValueOnce({
+        enabled: true,
+        authenticated: false,
+        providerDisplayName: "NyxID",
+      })
+      .mockResolvedValue({
+        enabled: true,
+        authenticated: true,
+        providerDisplayName: "NyxID",
+      });
+    mockEnsureActiveAuthSession.mockResolvedValue({
+      tokens: {
+        accessToken: "token",
+        tokenType: "Bearer",
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3600_000,
+      },
+      user: {
+        sub: "user-1",
+      },
+    });
+
+    renderStudioPage("/studio?tab=studio");
+
+    await waitFor(() => {
+      expect(mockEnsureActiveAuthSession).toHaveBeenCalledTimes(1);
+      expect(studioApi.getAppContext).toHaveBeenCalled();
+    });
+
+    expect(window.location.pathname).toBe("/studio");
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("tab")).toBe("studio");
+    expect(searchParams.get("workflow")).toBe("workflow-1");
+    expect(searchParams.get("execution")).toBe("execution-1");
+  });
+
+  it("redirects to login when Studio auth stays unauthenticated after refresh", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      authenticated: false,
+      providerDisplayName: "NyxID",
+    });
+
+    renderStudioPage("/studio?tab=studio&workflowId=workflow-1");
+
+    await waitFor(() => {
+      expect(mockEnsureActiveAuthSession).toHaveBeenCalledTimes(1);
+      expect(window.location.pathname).toBe("/login");
+    });
+
+    expect(new URLSearchParams(window.location.search).get("redirect")).toBe(
+      "/studio?tab=studio&workflowId=workflow-1"
+    );
+  });
+
+  it("does not auto-redirect again after a previous Studio relogin attempt", async () => {
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      authenticated: false,
+      providerDisplayName: "NyxID",
+    });
+    window.sessionStorage.setItem(
+      `${STUDIO_AUTO_RELOGIN_ATTEMPT_KEY}/studio`,
+      "1"
+    );
+
+    renderStudioPage("/studio");
+
+    await waitFor(() => {
+      expect(studioApi.getAuthSession).toHaveBeenCalled();
+    });
+
+    expect(mockEnsureActiveAuthSession).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/studio");
   });
 
   it("shows a custom confirm modal before leaving Scripts with unsaved scope changes", async () => {
