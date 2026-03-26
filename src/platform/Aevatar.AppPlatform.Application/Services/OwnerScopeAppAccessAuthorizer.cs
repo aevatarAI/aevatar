@@ -21,6 +21,11 @@ public sealed class OwnerScopeAppAccessAuthorizer : IAppAccessAuthorizer
         return Task.FromResult(action switch
         {
             AppAccessActions.Read => AuthorizeRead(subjectScopeId, ownerScopeId, request.Resource.IsPublic),
+            AppAccessActions.Write => AuthorizeManage(subjectScopeId, ownerScopeId),
+            AppAccessActions.Invoke => AuthorizeRead(subjectScopeId, ownerScopeId, request.Resource.IsPublic),
+            AppAccessActions.Observe => AuthorizeRead(subjectScopeId, ownerScopeId, request.Resource.IsPublic),
+            AppAccessActions.Publish => AuthorizeManage(subjectScopeId, ownerScopeId),
+            AppAccessActions.ManageResources => AuthorizeManage(subjectScopeId, ownerScopeId),
             AppAccessActions.Manage => AuthorizeManage(subjectScopeId, ownerScopeId),
             _ => Deny($"Unsupported app access action '{request.Action}'."),
         });

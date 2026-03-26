@@ -30,7 +30,31 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
         result.Should().HaveCount(2);
         result[0].WorkflowId.Should().Be("wf-b", "newer service should come first");
+        result[0].AppId.Should().Be(DefaultOptions.AppId);
         result[1].WorkflowId.Should().Be("wf-a");
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldUseRequestedAppId_WhenProvided()
+    {
+        const string appId = "copilot";
+        var services = new[]
+        {
+            CreateServiceSnapshot("wf-a", "Workflow A", appId: appId),
+        };
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(listResult: services);
+        var bindingReader = new FakeWorkflowActorBindingReader();
+        var service = CreateService(lifecyclePort, bindingReader);
+
+        var result = await service.ListAsync(ScopeId, appId);
+
+        result.Should().ContainSingle();
+        result[0].AppId.Should().Be(appId);
+        lifecyclePort.LastListRequest.Should().BeEquivalentTo(new FakeServiceLifecycleQueryPort.ListRequest(
+            DefaultOptions.TenantId,
+            appId,
+            DefaultOptions.BuildNamespace(ScopeId),
+            DefaultOptions.ListTake));
     }
 
     [Fact]
@@ -99,6 +123,7 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
         result.Should().NotBeNull();
         result!.ScopeId.Should().Be(ScopeId);
+        result.AppId.Should().Be(DefaultOptions.AppId);
         result.WorkflowId.Should().Be("wf-found");
         result.DisplayName.Should().Be("Found Workflow");
         result.ActiveRevisionId.Should().Be("rev-5");
@@ -169,15 +194,17 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         DateTimeOffset? updatedAt = null,
         string activeRevisionId = "rev-1",
         string deploymentId = "dep-default",
-        string primaryActorId = "actor-default")
+        string primaryActorId = "actor-default",
+        string? appId = null)
     {
         var options = new ScopeWorkflowCapabilityOptions();
         var ns = options.BuildNamespace(ScopeId);
-        var serviceKey = ServiceKeys.Build(options.TenantId, options.AppId, ns, serviceId);
+        var resolvedAppId = string.IsNullOrWhiteSpace(appId) ? options.AppId : appId.Trim();
+        var serviceKey = ServiceKeys.Build(options.TenantId, resolvedAppId, ns, serviceId);
         return new ServiceCatalogSnapshot(
             ServiceKey: serviceKey,
             TenantId: options.TenantId,
-            AppId: options.AppId,
+            AppId: resolvedAppId,
             Namespace: ns,
             ServiceId: serviceId,
             DisplayName: displayName,
@@ -195,6 +222,7 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     {
         private readonly IReadOnlyList<ServiceCatalogSnapshot> _listResult;
         private readonly ServiceCatalogSnapshot? _getResult;
+        public ListRequest? LastListRequest { get; private set; }
 
         public FakeServiceLifecycleQueryPort(
             IReadOnlyList<ServiceCatalogSnapshot>? listResult = null,
@@ -214,8 +242,11 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             string appId,
             string @namespace,
             int take = 200,
-            CancellationToken ct = default) =>
-            Task.FromResult(_listResult);
+            CancellationToken ct = default)
+        {
+            LastListRequest = new ListRequest(tenantId, appId, @namespace, take);
+            return Task.FromResult(_listResult);
+        }
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
             ServiceIdentity identity,
@@ -226,6 +257,8 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             ServiceIdentity identity,
             CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+
+        public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
     }
 
     private sealed class FakeWorkflowActorBindingReader : IWorkflowActorBindingReader

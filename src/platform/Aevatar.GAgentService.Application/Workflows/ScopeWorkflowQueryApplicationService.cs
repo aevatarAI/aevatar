@@ -28,10 +28,20 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         string scopeId,
         CancellationToken ct = default)
     {
+        var resolvedAppId = ScopeWorkflowCapabilityConventions.ResolveAppId(_options, appId: null);
+        return await ListAsync(scopeId, resolvedAppId, ct);
+    }
+
+    public async Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
+        string scopeId,
+        string appId,
+        CancellationToken ct = default)
+    {
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        var resolvedAppId = ScopeWorkflowCapabilityConventions.ResolveAppId(_options, appId);
         var services = await _serviceLifecycleQueryPort.ListServicesAsync(
             _options.TenantId,
-            _options.AppId,
+            resolvedAppId,
             _options.BuildNamespace(normalizedScopeId),
             _options.ListTake,
             ct);
@@ -41,8 +51,9 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         {
             summaries.Add(await BuildWorkflowSummaryAsync(
                 normalizedScopeId,
+                resolvedAppId,
                 service,
-                BuildIdentity(normalizedScopeId, service.ServiceId),
+                BuildIdentity(normalizedScopeId, service.ServiceId, resolvedAppId),
                 service.ServiceId,
                 service.DisplayName,
                 fallbackWorkflowName: null,
@@ -60,15 +71,27 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         string workflowId,
         CancellationToken ct = default)
     {
+        var resolvedAppId = ScopeWorkflowCapabilityConventions.ResolveAppId(_options, appId: null);
+        return await GetByWorkflowIdAsync(scopeId, resolvedAppId, workflowId, ct);
+    }
+
+    public async Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
+        string scopeId,
+        string appId,
+        string workflowId,
+        CancellationToken ct = default)
+    {
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        var resolvedAppId = ScopeWorkflowCapabilityConventions.ResolveAppId(_options, appId);
         var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(workflowId);
-        var identity = BuildIdentity(normalizedScopeId, normalizedWorkflowId);
+        var identity = BuildIdentity(normalizedScopeId, normalizedWorkflowId, resolvedAppId);
         var serviceSnapshot = await GetExistingServiceAsync(identity, ct);
         if (serviceSnapshot == null)
             return null;
 
         return await BuildWorkflowSummaryAsync(
             normalizedScopeId,
+            resolvedAppId,
             serviceSnapshot,
             identity,
             normalizedWorkflowId,
@@ -85,12 +108,22 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         string actorId,
         CancellationToken ct = default)
     {
+        var resolvedAppId = ScopeWorkflowCapabilityConventions.ResolveAppId(_options, appId: null);
+        return await GetByActorIdAsync(scopeId, resolvedAppId, actorId, ct);
+    }
+
+    public async Task<ScopeWorkflowSummary?> GetByActorIdAsync(
+        string scopeId,
+        string appId,
+        string actorId,
+        CancellationToken ct = default)
+    {
         var normalizedActorId = ScopeWorkflowCapabilityOptions.NormalizeRequired(actorId, nameof(actorId));
         var binding = await _workflowActorBindingReader.GetAsync(normalizedActorId, ct);
         var resolvedDefinitionActorId = !string.IsNullOrWhiteSpace(binding?.EffectiveDefinitionActorId)
             ? binding.EffectiveDefinitionActorId
             : normalizedActorId;
-        var workflows = await ListAsync(scopeId, ct);
+        var workflows = await ListAsync(scopeId, appId, ct);
         return workflows.FirstOrDefault(workflow =>
             string.Equals(workflow.ActorId, resolvedDefinitionActorId, StringComparison.Ordinal));
     }
@@ -100,11 +133,12 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
         CancellationToken ct) =>
         _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
 
-    internal ServiceIdentity BuildIdentity(string scopeId, string workflowId) =>
-        ScopeWorkflowCapabilityConventions.BuildIdentity(_options, scopeId, workflowId);
+    internal ServiceIdentity BuildIdentity(string scopeId, string workflowId, string? appId = null) =>
+        ScopeWorkflowCapabilityConventions.BuildIdentity(_options, scopeId, workflowId, appId);
 
     private async Task<ScopeWorkflowSummary> BuildWorkflowSummaryAsync(
         string scopeId,
+        string appId,
         ServiceCatalogSnapshot? serviceSnapshot,
         ServiceIdentity identity,
         string workflowId,
@@ -137,6 +171,7 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
 
         return new ScopeWorkflowSummary(
             scopeId,
+            serviceSnapshot?.AppId?.Trim() is { Length: > 0 } snapshotAppId ? snapshotAppId : appId,
             workflowId,
             displayName,
             serviceSnapshot?.ServiceKey ?? ServiceKeys.Build(identity),

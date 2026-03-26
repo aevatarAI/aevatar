@@ -68,7 +68,10 @@ public sealed class ExecutionService
             Frames: [],
             ObservationSessionId: _observationSessionId,
             ObservationActive: true,
-            LastObservedAtUtc: startedAtUtc);
+            LastObservedAtUtc: startedAtUtc,
+            AppId: string.IsNullOrWhiteSpace(request.AppId) ? null : request.AppId.Trim(),
+            ReleaseId: string.IsNullOrWhiteSpace(request.ReleaseId) ? null : request.ReleaseId.Trim(),
+            FunctionId: string.IsNullOrWhiteSpace(request.FunctionId) ? null : request.FunctionId.Trim());
 
         await _store.SaveExecutionAsync(record, cancellationToken);
         var authSnapshot = _authSnapshotProvider == null
@@ -108,7 +111,7 @@ public sealed class ExecutionService
             throw new InvalidOperationException("runId and stepId are required to resume this execution.");
         }
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{record.RuntimeBaseUrl.TrimEnd('/')}/api/workflows/resume");
+        using var httpRequest = BuildResumeExecutionRequest(record);
         httpRequest.Content = JsonContent.Create(new
         {
             actorId,
@@ -195,7 +198,7 @@ public sealed class ExecutionService
             ? "user requested stop"
             : request.Reason.Trim();
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{record.RuntimeBaseUrl.TrimEnd('/')}/api/workflows/stop");
+        using var httpRequest = BuildStopExecutionRequest(record);
         httpRequest.Content = JsonContent.Create(new
         {
             actorId,
@@ -767,6 +770,17 @@ public sealed class ExecutionService
                 }
             }
 
+            if (string.Equals(customName, "studio.human.resume", StringComparison.Ordinal) &&
+                customElement.TryGetProperty("payload", out var resumePayload) &&
+                resumePayload.TryGetProperty("stepId", out var resumedStepElement))
+            {
+                var resumedStepId = resumedStepElement.GetString();
+                if (!string.IsNullOrWhiteSpace(resumedStepId))
+                {
+                    pendingHumanSteps.Remove(resumedStepId);
+                }
+            }
+
             if (string.Equals(customName, "aevatar.step.completed", StringComparison.Ordinal) &&
                 customElement.TryGetProperty("payload", out var completedPayload) &&
                 completedPayload.TryGetProperty("stepId", out var completedStepElement))
@@ -912,13 +926,32 @@ public sealed class ExecutionService
         var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{normalizedBaseUrl}/api/chat");
         httpRequest.Headers.Accept.ParseAdd("text/event-stream");
 
+        if (ShouldUsePublishedFunctionRun(request))
+        {
+            var appId = request.AppId!.Trim();
+            var functionId = request.FunctionId!.Trim();
+            var releaseId = request.ReleaseId?.Trim();
+            var requestPath = string.IsNullOrWhiteSpace(releaseId)
+                ? $"{normalizedBaseUrl}/api/apps/{Uri.EscapeDataString(appId)}/functions/{Uri.EscapeDataString(functionId)}:stream"
+                : $"{normalizedBaseUrl}/api/apps/{Uri.EscapeDataString(appId)}/releases/{Uri.EscapeDataString(releaseId)}/functions/{Uri.EscapeDataString(functionId)}:stream";
+            httpRequest.RequestUri = new Uri(requestPath, UriKind.Absolute);
+            httpRequest.Content = JsonContent.Create(new
+            {
+                prompt = request.Prompt,
+                eventFormat = string.IsNullOrWhiteSpace(request.EventFormat) ? "workflow" : request.EventFormat.Trim(),
+            });
+            return httpRequest;
+        }
+
         if (ShouldUsePublishedWorkflowRun(request))
         {
             var scopeId = request.ScopeId!.Trim();
+            var appId = request.AppId?.Trim();
             var workflowId = request.WorkflowId!.Trim();
-            httpRequest.RequestUri = new Uri(
-                $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/runs:stream",
-                UriKind.Absolute);
+            var requestPath = string.IsNullOrWhiteSpace(appId)
+                ? $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/runs:stream"
+                : $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/apps/{Uri.EscapeDataString(appId)}/workflows/{Uri.EscapeDataString(workflowId)}/runs:stream";
+            httpRequest.RequestUri = new Uri(requestPath, UriKind.Absolute);
             httpRequest.Content = JsonContent.Create(new
             {
                 prompt = request.Prompt,
@@ -936,9 +969,50 @@ public sealed class ExecutionService
         return httpRequest;
     }
 
+    private static bool ShouldUsePublishedFunctionRun(StartExecutionRequest request) =>
+        !string.IsNullOrWhiteSpace(request.AppId) &&
+        !string.IsNullOrWhiteSpace(request.FunctionId);
+
     private static bool ShouldUsePublishedWorkflowRun(StartExecutionRequest request) =>
         !string.IsNullOrWhiteSpace(request.ScopeId) &&
         !string.IsNullOrWhiteSpace(request.WorkflowId);
+
+    private static HttpRequestMessage BuildResumeExecutionRequest(
+        StoredExecutionRecord record)
+    {
+        var baseUrl = record.RuntimeBaseUrl.TrimEnd('/');
+        if (!string.IsNullOrWhiteSpace(record.AppId) &&
+            !string.IsNullOrWhiteSpace(record.FunctionId))
+        {
+            var appId = Uri.EscapeDataString(record.AppId.Trim());
+            var functionId = Uri.EscapeDataString(record.FunctionId.Trim());
+            var releaseId = record.ReleaseId?.Trim();
+            var path = string.IsNullOrWhiteSpace(releaseId)
+                ? $"{baseUrl}/api/apps/{appId}/functions/{functionId}/runs:resume"
+                : $"{baseUrl}/api/apps/{appId}/releases/{Uri.EscapeDataString(releaseId)}/functions/{functionId}/runs:resume";
+            return new HttpRequestMessage(HttpMethod.Post, path);
+        }
+
+        return new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/workflows/resume");
+    }
+
+    private static HttpRequestMessage BuildStopExecutionRequest(StoredExecutionRecord record)
+    {
+        var baseUrl = record.RuntimeBaseUrl.TrimEnd('/');
+        if (!string.IsNullOrWhiteSpace(record.AppId) &&
+            !string.IsNullOrWhiteSpace(record.FunctionId))
+        {
+            var appId = Uri.EscapeDataString(record.AppId.Trim());
+            var functionId = Uri.EscapeDataString(record.FunctionId.Trim());
+            var releaseId = record.ReleaseId?.Trim();
+            var path = string.IsNullOrWhiteSpace(releaseId)
+                ? $"{baseUrl}/api/apps/{appId}/functions/{functionId}/runs:stop"
+                : $"{baseUrl}/api/apps/{appId}/releases/{Uri.EscapeDataString(releaseId)}/functions/{functionId}/runs:stop";
+            return new HttpRequestMessage(HttpMethod.Post, path);
+        }
+
+        return new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/workflows/stop");
+    }
 
     private static string BuildStudioResumeFrame(
         string actorId,

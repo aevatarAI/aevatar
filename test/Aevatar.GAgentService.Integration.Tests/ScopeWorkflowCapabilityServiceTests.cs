@@ -72,6 +72,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
             RevisionId: revisionId));
 
         result.Workflow.ScopeId.Should().Be("external-user-1");
+        result.Workflow.AppId.Should().Be("workflow-app");
         result.Workflow.ActorId.Should().Be(expectedActorId);
         result.DefinitionActorIdPrefix.Should().Be(expectedActorPrefix);
         commandPort.CreateServiceCommand.Should().NotBeNull();
@@ -135,6 +136,7 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var workflows = await service.ListAsync("external-user-2");
 
         workflows.Should().ContainSingle();
+        workflows[0].AppId.Should().Be("workflow-app");
         workflows[0].WorkflowId.Should().Be("approval-flow");
         workflows[0].ActorId.Should().Be(actorId);
         workflows[0].WorkflowName.Should().Be("approval");
@@ -195,7 +197,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var workflow = await service.GetByActorIdAsync("external-user-3", runActorId);
 
         workflow.Should().NotBeNull();
-        workflow!.WorkflowId.Should().Be("approval-flow");
+        workflow!.AppId.Should().Be("workflow-app");
+        workflow.WorkflowId.Should().Be("approval-flow");
         workflow.ActorId.Should().Be(definitionActorId);
     }
 

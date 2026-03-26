@@ -1,6 +1,7 @@
 using Aevatar.Workflow.Core.Connectors;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -22,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddWorkflowModulePack<WorkflowCoreModulePack>();
         services.TryAddSingleton<IEventModuleFactory<IWorkflowExecutionContext>, WorkflowModuleFactory>();
         services.TryAddSingleton<IConnectorRegistry, ConfiguredConnectorRegistry>();
+        services.TryAddSingleton<IWorkflowConnectorResolver, RegistryBackedWorkflowConnectorResolver>();
         services.TryAddSingleton<WorkflowStepTargetAgentResolver>();
         return services;
     }

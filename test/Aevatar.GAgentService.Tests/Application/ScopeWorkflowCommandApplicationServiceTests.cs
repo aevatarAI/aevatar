@@ -35,7 +35,28 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         commandPort.Calls[5].Method.Should().Be("ActivateServiceRevisionAsync");
         result.Workflow.Should().NotBeNull();
         result.Workflow.ScopeId.Should().Be(ScopeId);
+        result.Workflow.AppId.Should().Be(DefaultOptions.AppId);
         result.Workflow.WorkflowId.Should().Be(WorkflowId);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldUseRequestedAppId_WhenProvided()
+    {
+        const string appId = "copilot";
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
+        var service = CreateService(commandPort, lifecyclePort, queryPort);
+
+        var result = await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
+            ScopeId, WorkflowId, WorkflowYaml, AppId: appId));
+
+        result.Workflow.AppId.Should().Be(appId);
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be(appId);
+        var createRevision = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
+        createRevision.Spec.Identity.AppId.Should().Be(appId);
+        createRevision.Spec.WorkflowSpec.DefinitionActorId.Should().Contain(appId, "non-default app ids should participate in actor identity");
     }
 
     [Fact]
@@ -293,12 +314,24 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
             string scopeId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(Array.Empty<ScopeWorkflowSummary>());
 
+        public Task<IReadOnlyList<ScopeWorkflowSummary>> ListAsync(
+            string scopeId, string appId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<ScopeWorkflowSummary>>(Array.Empty<ScopeWorkflowSummary>());
+
         public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
             string scopeId, string workflowId, CancellationToken ct = default) =>
             Task.FromResult(_getByWorkflowIdResult);
 
+        public Task<ScopeWorkflowSummary?> GetByWorkflowIdAsync(
+            string scopeId, string appId, string workflowId, CancellationToken ct = default) =>
+            Task.FromResult(_getByWorkflowIdResult);
+
         public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
             string scopeId, string actorId, CancellationToken ct = default) =>
+            Task.FromResult<ScopeWorkflowSummary?>(null);
+
+        public Task<ScopeWorkflowSummary?> GetByActorIdAsync(
+            string scopeId, string appId, string actorId, CancellationToken ct = default) =>
             Task.FromResult<ScopeWorkflowSummary?>(null);
     }
 }

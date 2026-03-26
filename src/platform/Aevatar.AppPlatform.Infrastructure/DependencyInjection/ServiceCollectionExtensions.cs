@@ -1,6 +1,6 @@
 using Aevatar.AppPlatform.Abstractions.Ports;
 using Aevatar.AppPlatform.Infrastructure.Configuration;
-using Aevatar.AppPlatform.Infrastructure.Readers;
+using Aevatar.AppPlatform.Infrastructure.Stores;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -18,7 +18,10 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<AppPlatformOptions>()
             .Bind(configuration.GetSection(AppPlatformOptions.SectionName));
-        services.TryAddSingleton<IAppRegistryReader, ConfiguredAppRegistryReader>();
+        services.TryAddSingleton<InMemoryAppRegistryStore>();
+        services.TryAddSingleton<IAppOperationStore, InMemoryOperationStore>();
+        services.TryAddSingleton<IAppRegistryReader>(sp => sp.GetRequiredService<InMemoryAppRegistryStore>());
+        services.TryAddSingleton<IAppRegistryWriter>(sp => sp.GetRequiredService<InMemoryAppRegistryStore>());
         return services;
     }
 }

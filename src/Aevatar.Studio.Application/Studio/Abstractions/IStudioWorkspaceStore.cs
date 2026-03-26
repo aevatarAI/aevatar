@@ -77,7 +77,10 @@ public sealed record StoredExecutionRecord(
     IReadOnlyList<StoredExecutionFrame> Frames,
     string? ObservationSessionId = null,
     bool ObservationActive = false,
-    DateTimeOffset? LastObservedAtUtc = null);
+    DateTimeOffset? LastObservedAtUtc = null,
+    string? AppId = null,
+    string? ReleaseId = null,
+    string? FunctionId = null);
 
 public sealed record StoredExecutionFrame(
     DateTimeOffset ReceivedAtUtc,

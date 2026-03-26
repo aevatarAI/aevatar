@@ -6,8 +6,11 @@ public sealed record StartExecutionRequest(
     IReadOnlyList<string> WorkflowYamls,
     string? RuntimeBaseUrl = null,
     string? ScopeId = null,
+    string? AppId = null,
     string? WorkflowId = null,
-    string? EventFormat = null);
+    string? EventFormat = null,
+    string? FunctionId = null,
+    string? ReleaseId = null);
 
 public sealed record ResumeExecutionRequest(
     string RunId,

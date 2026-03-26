@@ -37,6 +37,10 @@ public class ConfiguredAppRegistryReaderTests
                 ["AppPlatform:Apps:0:Releases:0:Entries:0:EntryId"] = "default-chat",
                 ["AppPlatform:Apps:0:Releases:0:Entries:0:ServiceId"] = "chat-gateway",
                 ["AppPlatform:Apps:0:Releases:0:Entries:0:EndpointId"] = "chat",
+                ["AppPlatform:Apps:0:Releases:0:Connectors:0:ResourceId"] = "knowledge-storage",
+                ["AppPlatform:Apps:0:Releases:0:Connectors:0:ConnectorName"] = "chrono_storage",
+                ["AppPlatform:Apps:0:Releases:0:Secrets:0:ResourceId"] = "knowledge-storage-key",
+                ["AppPlatform:Apps:0:Releases:0:Secrets:0:SecretName"] = "chrono_storage_api_key",
             })
             .Build();
 
@@ -47,16 +51,26 @@ public class ConfiguredAppRegistryReaderTests
         var appQueryPort = provider.GetRequiredService<IAppDefinitionQueryPort>();
         var releaseQueryPort = provider.GetRequiredService<IAppReleaseQueryPort>();
         var routeQueryPort = provider.GetRequiredService<IAppRouteQueryPort>();
+        var resourceQueryPort = provider.GetRequiredService<IAppResourceQueryPort>();
+        var functionQueryPort = provider.GetRequiredService<IAppFunctionQueryPort>();
 
         var apps = await appQueryPort.ListAsync("scope-dev");
         var release = await releaseQueryPort.GetAsync("copilot", "prod-2026-03-25");
         var resolution = await routeQueryPort.ResolveAsync("/COPILOT/");
+        var resources = await resourceQueryPort.GetReleaseResourcesAsync("copilot", "prod-2026-03-25");
+        var functions = await functionQueryPort.ListAsync("copilot");
 
         apps.Should().ContainSingle();
         apps[0].AppId.Should().Be("copilot");
         apps[0].Visibility.Should().Be(AppVisibility.Public);
         release.Should().NotBeNull();
         release!.Status.Should().Be(AppReleaseStatus.Published);
+        release.ConnectorRefs.Should().ContainSingle();
+        release.ConnectorRefs[0].ResourceId.Should().Be("knowledge-storage");
+        release.ConnectorRefs[0].ConnectorName.Should().Be("chrono_storage");
+        release.SecretRefs.Should().ContainSingle();
+        release.SecretRefs[0].ResourceId.Should().Be("knowledge-storage-key");
+        release.SecretRefs[0].SecretName.Should().Be("chrono_storage_api_key");
         resolution.Should().NotBeNull();
         resolution!.RoutePath.Should().Be("/copilot");
         resolution.App.AppId.Should().Be("copilot");
@@ -66,5 +80,14 @@ public class ConfiguredAppRegistryReaderTests
         resolution.Entry.ServiceRef.ServiceId.Should().Be("chat-gateway");
         resolution.Entry.ServiceRef.Role.Should().Be(AppServiceRole.Entry);
         resolution.Entry.ServiceRef.ImplementationKind.Should().Be(AppImplementationKind.Workflow);
+        resources.Should().NotBeNull();
+        resources!.ConnectorRefs.Should().ContainSingle();
+        resources.ConnectorRefs[0].ResourceId.Should().Be("knowledge-storage");
+        resources.SecretRefs.Should().ContainSingle();
+        resources.SecretRefs[0].SecretName.Should().Be("chrono_storage_api_key");
+        functions.Should().ContainSingle();
+        functions[0].FunctionId.Should().Be("default-chat");
+        functions[0].ServiceId.Should().Be("chat-gateway");
+        functions[0].EndpointId.Should().Be("chat");
     }
 }

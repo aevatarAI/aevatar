@@ -5,6 +5,24 @@ namespace Aevatar.GAgentService.Application.Workflows;
 
 internal static class ScopeWorkflowCapabilityConventions
 {
+    public static string ResolveAppId(
+        ScopeWorkflowCapabilityOptions options,
+        string? appId)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var normalized = NormalizeOptional(appId);
+        if (string.IsNullOrWhiteSpace(normalized))
+            normalized = NormalizeOptional(options.AppId);
+
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new InvalidOperationException("appId is required.");
+        if (normalized.Contains(':', StringComparison.Ordinal))
+            throw new InvalidOperationException("appId must not contain ':'.");
+
+        return normalized;
+    }
+
     public static string NormalizeWorkflowId(string workflowId)
     {
         var normalized = ScopeWorkflowCapabilityOptions.NormalizeRequired(workflowId, nameof(workflowId));
@@ -51,12 +69,26 @@ internal static class ScopeWorkflowCapabilityConventions
     public static ServiceIdentity BuildIdentity(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,
-        string workflowId) =>
-        new()
+        string workflowId,
+        string? appId = null)
+    {
+        var resolvedAppId = ResolveAppId(options, appId);
+        return new()
         {
             TenantId = options.TenantId.Trim(),
-            AppId = options.AppId.Trim(),
+            AppId = resolvedAppId,
             Namespace = options.BuildNamespace(scopeId),
             ServiceId = workflowId,
         };
+    }
+
+    public static string BuildDefinitionActorIdPrefix(
+        ScopeWorkflowCapabilityOptions options,
+        string scopeId,
+        string workflowId,
+        string? appId = null) =>
+        options.BuildDefinitionActorIdPrefix(
+            scopeId,
+            workflowId,
+            ResolveAppId(options, appId));
 }

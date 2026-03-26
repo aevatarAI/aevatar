@@ -97,9 +97,19 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 - `GET /api/scopes/{scopeId}/workflows/{workflowId}`
 - `PUT /api/scopes/{scopeId}/workflows/{workflowId}`
 - `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+- `GET /api/scopes/{scopeId}/apps/{appId}/workflows`
+- `GET /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}`
+- `PUT /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}`
+- `POST /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}/runs:stream`
 - `POST /api/scopes/{scopeId}/workflow-runs:stream`（兼容旧 actorId 调用）
+- `POST /api/scopes/{scopeId}/apps/{appId}/workflow-runs:stream`（app-aware actorId 调用）
 
 `/api/scopes/{scopeId}/workflows/{workflowId}/runs:stream` 支持请求体字段 `eventFormat`：
 
 - `workflow`：返回现有 workflow frame SSE。
 - `agui`：返回 AGUI 原始事件 SSE，供 app 前端展示 workflow execution 过程。
+
+说明：
+
+- 不带 `appId` 的旧路径继续表示该 `scope` 下的默认 workflow app。
+- 带 `appId` 的新路径可显式区分同一 `scope` 下的多个 workflow app。

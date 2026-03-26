@@ -4,6 +4,9 @@ package aevatar.appplatform;
 
 option csharp_namespace = "Aevatar.AppPlatform.Abstractions";
 
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
 enum AppVisibility {
   APP_VISIBILITY_UNSPECIFIED = 0;
   APP_VISIBILITY_PRIVATE = 1;
@@ -22,6 +25,26 @@ enum AppImplementationKind {
   APP_IMPLEMENTATION_KIND_STATIC = 1;
   APP_IMPLEMENTATION_KIND_SCRIPTING = 2;
   APP_IMPLEMENTATION_KIND_WORKFLOW = 3;
+}
+
+enum AppFunctionEndpointKind {
+  APP_FUNCTION_ENDPOINT_KIND_UNSPECIFIED = 0;
+  APP_FUNCTION_ENDPOINT_KIND_COMMAND = 1;
+  APP_FUNCTION_ENDPOINT_KIND_CHAT = 2;
+}
+
+enum AppOperationKind {
+  APP_OPERATION_KIND_UNSPECIFIED = 0;
+  APP_OPERATION_KIND_FUNCTION_INVOKE = 1;
+}
+
+enum AppOperationStatus {
+  APP_OPERATION_STATUS_UNSPECIFIED = 0;
+  APP_OPERATION_STATUS_ACCEPTED = 1;
+  APP_OPERATION_STATUS_RUNNING = 2;
+  APP_OPERATION_STATUS_COMPLETED = 3;
+  APP_OPERATION_STATUS_FAILED = 4;
+  APP_OPERATION_STATUS_CANCELLED = 5;
 }
 
 enum AppServiceRole {
@@ -57,6 +80,16 @@ message AppEntryRef {
   string endpoint_id = 3;
 }
 
+message AppConnectorRef {
+  string resource_id = 1;
+  string connector_name = 2;
+}
+
+message AppSecretRef {
+  string resource_id = 1;
+  string secret_name = 2;
+}
+
 message AppReleaseSnapshot {
   string release_id = 1;
   string app_id = 2;
@@ -64,6 +97,15 @@ message AppReleaseSnapshot {
   AppReleaseStatus status = 4;
   repeated AppServiceRef service_refs = 5;
   repeated AppEntryRef entry_refs = 6;
+  repeated AppConnectorRef connector_refs = 7;
+  repeated AppSecretRef secret_refs = 8;
+}
+
+message AppReleaseResourcesSnapshot {
+  string app_id = 1;
+  string release_id = 2;
+  repeated AppConnectorRef connector_refs = 3;
+  repeated AppSecretRef secret_refs = 4;
 }
 
 message AppRouteSnapshot {
@@ -84,4 +126,92 @@ message AppRouteResolution {
   AppDefinitionSnapshot app = 2;
   AppReleaseSnapshot release = 3;
   AppResolvedEntryPoint entry = 4;
+}
+
+message AppFunctionDescriptor {
+  string function_id = 1;
+  string display_name = 2;
+  string description = 3;
+  string app_id = 4;
+  string release_id = 5;
+  string service_id = 6;
+  string endpoint_id = 7;
+  AppFunctionEndpointKind endpoint_kind = 8;
+  string request_type_url = 9;
+  string response_type_url = 10;
+}
+
+message AppFunctionCaller {
+  string service_key = 1;
+  string tenant_id = 2;
+  string app_id = 3;
+  string scope_id = 4;
+  string session_id = 5;
+}
+
+message AppFunctionInvokeRequest {
+  google.protobuf.Any payload = 1;
+  string command_id = 2;
+  string correlation_id = 3;
+  AppFunctionCaller caller = 4;
+}
+
+message AppFunctionInvokeAcceptedReceipt {
+  string app_id = 1;
+  string release_id = 2;
+  string function_id = 3;
+  string service_id = 4;
+  string endpoint_id = 5;
+  string request_id = 6;
+  string target_actor_id = 7;
+  string command_id = 8;
+  string correlation_id = 9;
+  string operation_id = 10;
+  string status_url = 11;
+  string events_url = 12;
+  string result_url = 13;
+  string stream_url = 14;
+}
+
+message AppOperationSnapshot {
+  string operation_id = 1;
+  AppOperationKind kind = 2;
+  AppOperationStatus status = 3;
+  string app_id = 4;
+  string release_id = 5;
+  string function_id = 6;
+  string service_id = 7;
+  string endpoint_id = 8;
+  string request_id = 9;
+  string target_actor_id = 10;
+  string command_id = 11;
+  string correlation_id = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message AppOperationResult {
+  string operation_id = 1;
+  AppOperationStatus status = 2;
+  string result_code = 3;
+  string message = 4;
+  google.protobuf.Any payload = 5;
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+message AppOperationEvent {
+  string operation_id = 1;
+  uint64 sequence = 2;
+  AppOperationStatus status = 3;
+  string event_code = 4;
+  string message = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+message AppOperationUpdate {
+  string operation_id = 1;
+  AppOperationStatus status = 2;
+  string event_code = 3;
+  string message = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  AppOperationResult result = 6;
 }

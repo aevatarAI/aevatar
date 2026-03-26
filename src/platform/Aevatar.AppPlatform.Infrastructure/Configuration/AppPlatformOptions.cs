@@ -37,6 +37,10 @@ public sealed class ConfiguredAppReleaseOptions
     public List<ConfiguredAppServiceRefOptions> Services { get; set; } = [];
 
     public List<ConfiguredAppEntryRefOptions> Entries { get; set; } = [];
+
+    public List<ConfiguredAppConnectorRefOptions> Connectors { get; set; } = [];
+
+    public List<ConfiguredAppSecretRefOptions> Secrets { get; set; } = [];
 }
 
 public sealed class ConfiguredAppServiceRefOptions
@@ -63,6 +67,20 @@ public sealed class ConfiguredAppEntryRefOptions
     public string ServiceId { get; set; } = string.Empty;
 
     public string EndpointId { get; set; } = string.Empty;
+}
+
+public sealed class ConfiguredAppConnectorRefOptions
+{
+    public string ResourceId { get; set; } = string.Empty;
+
+    public string ConnectorName { get; set; } = string.Empty;
+}
+
+public sealed class ConfiguredAppSecretRefOptions
+{
+    public string ResourceId { get; set; } = string.Empty;
+
+    public string SecretName { get; set; } = string.Empty;
 }
 
 public sealed class ConfiguredAppRouteOptions
