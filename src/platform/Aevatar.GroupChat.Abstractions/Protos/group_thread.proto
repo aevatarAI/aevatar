@@ -1,0 +1,325 @@
+syntax = "proto3";
+
+package aevatar.groupchat;
+
+option csharp_namespace = "Aevatar.GroupChat.Abstractions";
+
+enum GroupMessageSenderKind {
+  GROUP_MESSAGE_SENDER_KIND_UNSPECIFIED = 0;
+  GROUP_MESSAGE_SENDER_KIND_USER = 1;
+  GROUP_MESSAGE_SENDER_KIND_AGENT = 2;
+}
+
+enum GroupSignalKind {
+  GROUP_SIGNAL_KIND_UNSPECIFIED = 0;
+  GROUP_SIGNAL_KIND_OBSERVATION = 1;
+  GROUP_SIGNAL_KIND_QUESTION = 2;
+  GROUP_SIGNAL_KIND_PROPOSAL = 3;
+  GROUP_SIGNAL_KIND_RESULT = 4;
+  GROUP_SIGNAL_KIND_CRITIQUE = 5;
+  GROUP_SIGNAL_KIND_REFERENCE = 6;
+}
+
+enum GroupSourceKind {
+  GROUP_SOURCE_KIND_UNSPECIFIED = 0;
+  GROUP_SOURCE_KIND_USER_INPUT = 1;
+  GROUP_SOURCE_KIND_CODE_FILE = 2;
+  GROUP_SOURCE_KIND_DOCUMENT = 3;
+  GROUP_SOURCE_KIND_WEB_PAGE = 4;
+  GROUP_SOURCE_KIND_API_RESPONSE = 5;
+  GROUP_SOURCE_KIND_DATABASE_RECORD = 6;
+  GROUP_SOURCE_KIND_AGENT_SIGNAL = 7;
+}
+
+enum GroupSourceAuthorityClass {
+  GROUP_SOURCE_AUTHORITY_CLASS_UNSPECIFIED = 0;
+  GROUP_SOURCE_AUTHORITY_CLASS_INTERNAL_AUTHORITATIVE = 1;
+  GROUP_SOURCE_AUTHORITY_CLASS_EXTERNAL_AUTHORITATIVE = 2;
+  GROUP_SOURCE_AUTHORITY_CLASS_COMMUNITY_CURATED = 3;
+  GROUP_SOURCE_AUTHORITY_CLASS_UNTRUSTED = 4;
+}
+
+enum GroupSourceVerificationStatus {
+  GROUP_SOURCE_VERIFICATION_STATUS_UNSPECIFIED = 0;
+  GROUP_SOURCE_VERIFICATION_STATUS_UNVERIFIED = 1;
+  GROUP_SOURCE_VERIFICATION_STATUS_VERIFIED = 2;
+  GROUP_SOURCE_VERIFICATION_STATUS_REJECTED = 3;
+}
+
+enum GroupFeedAcceptReason {
+  GROUP_FEED_ACCEPT_REASON_UNSPECIFIED = 0;
+  GROUP_FEED_ACCEPT_REASON_DIRECT_HINT = 1;
+  GROUP_FEED_ACCEPT_REASON_TOPIC_SUBSCRIPTION = 2;
+  GROUP_FEED_ACCEPT_REASON_PUBLISHER_SUBSCRIPTION = 3;
+}
+
+message GroupSourceRef {
+  GroupSourceKind source_kind = 1;
+  string locator = 2;
+  string source_id = 3;
+}
+
+message GroupEvidenceRef {
+  string evidence_id = 1;
+  string source_locator = 2;
+  string locator = 3;
+  string excerpt_summary = 4;
+  string source_id = 5;
+}
+
+message GroupThreadState {
+  string group_id = 1;
+  string thread_id = 2;
+  string display_name = 3;
+  repeated string participant_agent_ids = 4;
+  repeated GroupThreadMessageState message_entries = 5;
+  int64 last_applied_event_version = 6;
+  string last_event_id = 7;
+  repeated GroupParticipantRuntimeBinding participant_runtime_binding_entries = 8;
+}
+
+message GroupThreadMessageState {
+  string message_id = 1;
+  int64 timeline_cursor = 2;
+  GroupMessageSenderKind sender_kind = 3;
+  string sender_id = 4;
+  string text = 5;
+  string reply_to_message_id = 6;
+  string topic_id = 7;
+  GroupSignalKind signal_kind = 8;
+  repeated GroupSourceRef source_refs = 9;
+  repeated GroupEvidenceRef evidence_refs = 10;
+  repeated string derived_from_signal_ids = 11;
+  repeated string direct_hint_agent_ids = 12;
+}
+
+message CreateGroupThreadCommand {
+  string group_id = 1;
+  string thread_id = 2;
+  string display_name = 3;
+  repeated string participant_agent_ids = 4;
+  repeated GroupParticipantRuntimeBinding participant_runtime_binding_entries = 5;
+}
+
+message PostUserMessageCommand {
+  string group_id = 1;
+  string thread_id = 2;
+  string message_id = 3;
+  string sender_user_id = 4;
+  string text = 5;
+  string topic_id = 6;
+  GroupSignalKind signal_kind = 7;
+  repeated GroupSourceRef source_refs = 8;
+  repeated GroupEvidenceRef evidence_refs = 9;
+  repeated string derived_from_signal_ids = 10;
+  repeated string direct_hint_agent_ids = 11;
+}
+
+message AppendAgentMessageCommand {
+  string group_id = 1;
+  string thread_id = 2;
+  string message_id = 3;
+  string participant_agent_id = 4;
+  string text = 5;
+  string reply_to_message_id = 6;
+  string topic_id = 7;
+  GroupSignalKind signal_kind = 8;
+  repeated GroupSourceRef source_refs = 9;
+  repeated GroupEvidenceRef evidence_refs = 10;
+  repeated string derived_from_signal_ids = 11;
+  repeated string direct_hint_agent_ids = 12;
+}
+
+message GroupThreadCreatedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string display_name = 3;
+  repeated string participant_agent_ids = 4;
+  repeated GroupParticipantRuntimeBinding participant_runtime_binding_entries = 5;
+}
+
+message UserMessagePostedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string message_id = 3;
+  string sender_user_id = 4;
+  string text = 5;
+  string topic_id = 6;
+  GroupSignalKind signal_kind = 7;
+  repeated GroupSourceRef source_refs = 8;
+  repeated GroupEvidenceRef evidence_refs = 9;
+  repeated string derived_from_signal_ids = 10;
+  repeated string direct_hint_agent_ids = 11;
+}
+
+message AgentMessageAppendedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string message_id = 3;
+  string participant_agent_id = 4;
+  string text = 5;
+  string reply_to_message_id = 6;
+  string topic_id = 7;
+  GroupSignalKind signal_kind = 8;
+  repeated GroupSourceRef source_refs = 9;
+  repeated GroupEvidenceRef evidence_refs = 10;
+  repeated string derived_from_signal_ids = 11;
+  repeated string direct_hint_agent_ids = 12;
+}
+
+message GroupMentionHint {
+  string group_id = 1;
+  string thread_id = 2;
+  string message_id = 3;
+  string participant_agent_id = 4;
+  string source_event_id = 5;
+  int64 source_state_version = 6;
+  int64 timeline_cursor = 7;
+  repeated string direct_hint_agent_ids = 8;
+  string topic_id = 9;
+  GroupMessageSenderKind sender_kind = 10;
+  string sender_id = 11;
+  GroupSignalKind signal_kind = 12;
+  repeated string source_ids = 13;
+  repeated GroupSourceKind source_kinds = 14;
+  int32 evidence_ref_count = 15;
+}
+
+message GroupParticipantRuntimeBinding {
+  string participant_agent_id = 1;
+  string tenant_id = 2;
+  string app_id = 3;
+  string namespace = 4;
+  string service_id = 5;
+  string endpoint_id = 6;
+  string scope_id = 7;
+}
+
+message GroupParticipantReplyCompletedEvent {
+  string root_actor_id = 1;
+  string session_id = 2;
+  string group_id = 3;
+  string thread_id = 4;
+  string reply_to_message_id = 5;
+  string participant_agent_id = 6;
+  string source_event_id = 7;
+  string reply_message_id = 8;
+  string content = 9;
+  string topic_id = 10;
+}
+
+message GroupSourceRegistryState {
+  string source_id = 1;
+  GroupSourceKind source_kind = 2;
+  string canonical_locator = 3;
+  GroupSourceAuthorityClass authority_class = 4;
+  GroupSourceVerificationStatus verification_status = 5;
+  int64 last_applied_event_version = 6;
+  string last_event_id = 7;
+}
+
+message RegisterGroupSourceCommand {
+  string source_id = 1;
+  GroupSourceKind source_kind = 2;
+  string canonical_locator = 3;
+}
+
+message UpdateGroupSourceTrustCommand {
+  string source_id = 1;
+  GroupSourceAuthorityClass authority_class = 2;
+  GroupSourceVerificationStatus verification_status = 3;
+}
+
+message GroupSourceRegisteredEvent {
+  string source_id = 1;
+  GroupSourceKind source_kind = 2;
+  string canonical_locator = 3;
+}
+
+message GroupSourceTrustUpdatedEvent {
+  string source_id = 1;
+  GroupSourceAuthorityClass authority_class = 2;
+  GroupSourceVerificationStatus verification_status = 3;
+}
+
+message AgentFeedState {
+  string agent_id = 1;
+  int64 feed_cursor = 2;
+  repeated AgentFeedItemState next_item_entries = 3;
+  repeated string seen_signal_id_entries = 4;
+  int64 last_applied_event_version = 5;
+  string last_event_id = 6;
+}
+
+message AgentFeedItemState {
+  string signal_id = 1;
+  string group_id = 2;
+  string thread_id = 3;
+  string topic_id = 4;
+  GroupMessageSenderKind sender_kind = 5;
+  string sender_id = 6;
+  GroupSignalKind signal_kind = 7;
+  string source_event_id = 8;
+  int64 source_state_version = 9;
+  int64 timeline_cursor = 10;
+  GroupFeedAcceptReason accept_reason = 11;
+  int32 rank_score = 12;
+}
+
+message AcceptSignalToFeedCommand {
+  string agent_id = 1;
+  string signal_id = 2;
+  string group_id = 3;
+  string thread_id = 4;
+  string topic_id = 5;
+  GroupMessageSenderKind sender_kind = 6;
+  string sender_id = 7;
+  GroupSignalKind signal_kind = 8;
+  string source_event_id = 9;
+  int64 source_state_version = 10;
+  int64 timeline_cursor = 11;
+  GroupFeedAcceptReason accept_reason = 12;
+  int32 rank_score = 13;
+}
+
+message AdvanceFeedCursorCommand {
+  string agent_id = 1;
+  string signal_id = 2;
+}
+
+message FeedSignalAcceptedEvent {
+  string agent_id = 1;
+  string signal_id = 2;
+  string group_id = 3;
+  string thread_id = 4;
+  string topic_id = 5;
+  GroupMessageSenderKind sender_kind = 6;
+  string sender_id = 7;
+  GroupSignalKind signal_kind = 8;
+  string source_event_id = 9;
+  int64 source_state_version = 10;
+  int64 timeline_cursor = 11;
+  GroupFeedAcceptReason accept_reason = 12;
+  int32 rank_score = 13;
+}
+
+message FeedCursorAdvancedEvent {
+  string agent_id = 1;
+  string signal_id = 2;
+}
+
+message AgentFeedHint {
+  string agent_id = 1;
+  string signal_id = 2;
+  string source_event_id = 3;
+  string group_id = 4;
+  string thread_id = 5;
+  string topic_id = 6;
+  GroupMessageSenderKind sender_kind = 7;
+  string sender_id = 8;
+  GroupSignalKind signal_kind = 9;
+  int64 source_state_version = 10;
+  int64 timeline_cursor = 11;
+  GroupFeedAcceptReason accept_reason = 12;
+  int32 rank_score = 13;
+}

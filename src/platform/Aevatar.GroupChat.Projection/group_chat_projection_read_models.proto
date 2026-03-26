@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package aevatar.groupchat.projection.readmodels;
+
+option csharp_namespace = "Aevatar.GroupChat.Projection.ReadModels";
+
+import "google/protobuf/timestamp.proto";
+
+message GroupTimelineReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string group_id = 6;
+  string thread_id = 7;
+  string display_name = 8;
+  repeated string participant_agent_id_entries = 9;
+  repeated GroupTimelineMessageReadModel message_entries = 10;
+  repeated GroupParticipantRuntimeBindingReadModel participant_runtime_binding_entries = 11;
+}
+
+message GroupTimelineMessageReadModel {
+  string message_id = 1;
+  int64 timeline_cursor = 2;
+  int32 sender_kind_value = 3;
+  string sender_id = 4;
+  string text = 5;
+  string reply_to_message_id = 6;
+  string topic_id = 7;
+  int32 signal_kind_value = 8;
+  repeated GroupTimelineSourceRefReadModel source_ref_entries = 9;
+  repeated GroupTimelineEvidenceRefReadModel evidence_ref_entries = 10;
+  repeated string derived_from_signal_id_entries = 11;
+  repeated string direct_hint_agent_id_entries = 12;
+}
+
+message GroupParticipantRuntimeBindingReadModel {
+  string participant_agent_id = 1;
+  string tenant_id = 2;
+  string app_id = 3;
+  string namespace = 4;
+  string service_id = 5;
+  string endpoint_id = 6;
+  string scope_id = 7;
+}
+
+message AgentFeedReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string agent_id = 6;
+  int64 feed_cursor = 7;
+  repeated AgentFeedItemReadModel next_item_entries = 8;
+}
+
+message AgentFeedItemReadModel {
+  string signal_id = 1;
+  string group_id = 2;
+  string thread_id = 3;
+  string topic_id = 4;
+  int32 sender_kind_value = 5;
+  string sender_id = 6;
+  int32 signal_kind_value = 7;
+  string source_event_id = 8;
+  int64 source_state_version = 9;
+  int64 timeline_cursor = 10;
+  int32 accept_reason_value = 11;
+  int32 rank_score = 12;
+}
+
+message SourceCatalogReadModel {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at_utc_value = 5;
+  string source_id = 6;
+  int32 source_kind_value = 7;
+  string canonical_locator = 8;
+  int32 authority_class_value = 9;
+  int32 verification_status_value = 10;
+}
+
+message GroupTimelineSourceRefReadModel {
+  int32 source_kind_value = 1;
+  string locator = 2;
+  string source_id = 3;
+}
+
+message GroupTimelineEvidenceRefReadModel {
+  string evidence_id = 1;
+  string source_locator = 2;
+  string locator = 3;
+  string excerpt_summary = 4;
+  string source_id = 5;
+}

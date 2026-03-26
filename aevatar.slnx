@@ -62,6 +62,11 @@
 	    <Project Path="src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
 	    <Project Path="src\Aevatar.Scripting.Projection\Aevatar.Scripting.Projection.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Abstractions\Aevatar.GAgentService.Abstractions.csproj" />
+    <Project Path="src\platform\Aevatar.GroupChat.Abstractions\Aevatar.GroupChat.Abstractions.csproj" />
+    <Project Path="src\platform\Aevatar.GroupChat.Application\Aevatar.GroupChat.Application.csproj" />
+    <Project Path="src\platform\Aevatar.GroupChat.Core\Aevatar.GroupChat.Core.csproj" />
+    <Project Path="src\platform\Aevatar.GroupChat.Hosting\Aevatar.GroupChat.Hosting.csproj" />
+    <Project Path="src\platform\Aevatar.GroupChat.Projection\Aevatar.GroupChat.Projection.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Core\Aevatar.GAgentService.Core.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Application\Aevatar.GAgentService.Application.csproj" />
     <Project Path="src\platform\Aevatar.GAgentService.Infrastructure\Aevatar.GAgentService.Infrastructure.csproj" />
@@ -105,7 +110,8 @@
     <Project Path="test\Aevatar.Foundation.Runtime.Hosting.Tests\Aevatar.Foundation.Runtime.Hosting.Tests.csproj" />
     <Project Path="test\Aevatar.Hosting.Tests\Aevatar.Hosting.Tests.csproj" />
 	    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
-	    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.GroupChat.Tests\Aevatar.GroupChat.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Tests\Aevatar.GAgentService.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Integration.Tests\Aevatar.GAgentService.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />

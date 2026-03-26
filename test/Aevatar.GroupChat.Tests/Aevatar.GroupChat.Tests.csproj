@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Aevatar.GroupChat.Tests</AssemblyName>
+    <RootNamespace>Aevatar.GroupChat.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\platform\Aevatar.GroupChat.Abstractions\Aevatar.GroupChat.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GroupChat.Application\Aevatar.GroupChat.Application.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GroupChat.Core\Aevatar.GroupChat.Core.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GroupChat.Hosting\Aevatar.GroupChat.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\platform\Aevatar.GroupChat.Projection\Aevatar.GroupChat.Projection.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+</Project>

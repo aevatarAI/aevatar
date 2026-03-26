@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.GroupChat.Hosting.Endpoints;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Host.Api;
 
@@ -22,6 +23,7 @@ builder.AddAevatarDefaultHost(
         options.EnableWebSockets = true;
     });
 builder.AddAevatarPlatform();
+builder.AddGroupChatCapabilityBundle();
 builder.AddAevatarWorkflowObservability();
 
 var app = builder.Build();
