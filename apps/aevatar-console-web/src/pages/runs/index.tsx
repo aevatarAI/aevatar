@@ -12,18 +12,14 @@ import {
   type WorkflowResumeRequest,
   type WorkflowSignalRequest,
 } from "@aevatar-react-sdk/types";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import type { ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
-  ProCard,
   ProDescriptions,
   ProForm,
-  ProFormSelect,
   ProFormSwitch,
-  ProFormText,
   ProFormTextArea,
-  ProList,
-  ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
@@ -33,19 +29,14 @@ import {
   buildRuntimeWorkflowsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import {
-  Alert,
-  Badge,
   Button,
-  Col,
   Divider,
   Drawer,
   Empty,
   message,
-  Row,
+  Popover,
   Space,
-  Statistic,
   Tabs,
-  Tag,
   Typography,
 } from "antd";
 import React, {
@@ -78,70 +69,84 @@ import {
 } from "@/shared/workflows/catalogVisibility";
 import {
   cardStackStyle,
-  compactTableCardProps,
+  drawerBodyStyle,
+  drawerScrollStyle,
   embeddedPanelStyle,
-  moduleCardProps,
-  scrollPanelStyle,
-  stretchColumnStyle,
 } from "@/shared/ui/proComponents";
+import RunsInspectorPane from "./components/RunsInspectorPane";
+import RunsLaunchRail from "./components/RunsLaunchRail";
+import RunsStatusStrip from "./components/RunsStatusStrip";
+import RunsTracePane from "./components/RunsTracePane";
+import RunsTimelineView from "./components/RunsTimelineView";
 import {
+  buildTimelineGroups,
   buildEventRows,
   isHumanApprovalSuspension,
   type RunEventRow,
+  type RunTimelineGroup,
   type RunTransport,
 } from "./runEventPresentation";
 import {
   builtInPresets,
-  clampComposerWidth,
   composerRailDefaultWidth,
   composerRailKeyboardStep,
-  composerRailMinWidth,
   type ConsoleViewKey,
   formatElapsedDuration,
   humanInputColumns,
   type HumanInputRecord,
-  monitorWorkbenchMinWidth,
   readInitialRunFormValues,
-  recentRunColumns,
-  type RecentRunRow,
   type RecentRunTableRow,
   type ResumeFormValues,
-  type RunFocusStatus,
+  type RunFocusRecord,
   type RunFormValues,
-  type RunPreset,
   type RunStatusValue,
-  runSummaryColumns,
   runStatusValueEnum,
   runsWorkbenchComposerRailStyle,
-  runsWorkbenchHeaderStyle,
   runsWorkbenchMainStyle,
   runsWorkbenchMonitorStyle,
   runsWorkbenchResizeHandleStyle,
   runsWorkbenchResizeRailStyle,
   runsWorkbenchShellStyle,
+  resolveResponsiveComposerWidth,
   type RunSummaryRecord,
   type SelectedWorkflowRecord,
   type SignalFormValues,
   waitingSignalColumns,
   type WaitingSignalRecord,
-  workbenchCardStyle,
-  workbenchCardBodyStyle,
-  workbenchConsoleBodyStyle,
-  workbenchConsoleCardStyle,
   workbenchConsoleScrollStyle,
   workbenchConsoleSurfaceStyle,
-  workbenchConsoleTabPanelStyle,
-  workbenchConsoleViewportStyle,
   workbenchEventHeaderStyle,
   workbenchEventRowStyle,
-  workbenchHudBodyStyle,
-  workbenchHudCardStyle,
   workbenchMessageListStyle,
-  workbenchOverviewCardStyle,
   workbenchOverviewGridStyle,
-  workbenchScrollableBodyStyle,
-  workflowDescriptionColumns,
 } from "./runWorkbenchConfig";
+
+const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
+  alignItems: "center",
+  background: "var(--ant-color-bg-container)",
+  border: "1px solid var(--ant-color-border-secondary)",
+  borderRadius: 12,
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 16,
+  justifyContent: "space-between",
+  padding: "14px 16px",
+};
+
+const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: 8,
+  minWidth: 0,
+};
+
+const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  justifyContent: "flex-end",
+};
 
 const RunsPage: React.FC = () => {
   const preferences = useMemo(() => loadConsolePreferences(), []);
@@ -170,12 +175,13 @@ const RunsPage: React.FC = () => {
   const [selectedTransport, setSelectedTransport] = useState<RunTransport>(
     initialFormValues.transport
   );
+  const [selectedTraceItemKey, setSelectedTraceItemKey] = useState("");
   const [composerWidth, setComposerWidth] = useState(composerRailDefaultWidth);
   const [activeTransport, setActiveTransport] = useState<RunTransport>(
     initialFormValues.transport
   );
-  const [consoleView, setConsoleView] = useState<ConsoleViewKey>("dual");
-  const [isInteractionDrawerOpen, setIsInteractionDrawerOpen] = useState(false);
+  const [consoleView, setConsoleView] = useState<ConsoleViewKey>("timeline");
+  const [isInspectorDrawerOpen, setIsInspectorDrawerOpen] = useState(false);
   const [isComposerResizing, setIsComposerResizing] = useState(false);
   const [runStartedAtMs, setRunStartedAtMs] = useState<number | undefined>(
     undefined
@@ -281,7 +287,10 @@ const RunsPage: React.FC = () => {
     }
 
     setComposerWidth(
-      clampComposerWidth(clientX - containerRect.left, containerRect.width)
+      resolveResponsiveComposerWidth(
+        clientX - containerRect.left,
+        containerRect.width
+      )
     );
   }, []);
 
@@ -292,7 +301,9 @@ const RunsPage: React.FC = () => {
       return;
     }
 
-    setComposerWidth(clampComposerWidth(requestedWidth, containerRect.width));
+    setComposerWidth(
+      resolveResponsiveComposerWidth(requestedWidth, containerRect.width)
+    );
   }, []);
 
   const { resume, signal, resuming, signaling } = useHumanInteraction({
@@ -311,7 +322,7 @@ const RunsPage: React.FC = () => {
       }
 
       setComposerWidth((currentWidth) =>
-        clampComposerWidth(currentWidth, containerRect.width)
+        resolveResponsiveComposerWidth(currentWidth, containerRect.width)
       );
     };
 
@@ -488,6 +499,14 @@ const RunsPage: React.FC = () => {
     () => buildEventRows(session.events),
     [session.events]
   );
+  const timelineGroups = useMemo<RunTimelineGroup[]>(
+    () => buildTimelineGroups(eventRows),
+    [eventRows]
+  );
+  const selectedTraceItem = useMemo(
+    () => eventRows.find((item) => item.key === selectedTraceItemKey),
+    [eventRows, selectedTraceItemKey]
+  );
   const waitingSignalRecord = useMemo<WaitingSignalRecord | undefined>(() => {
     if (!waitingSignal) {
       return undefined;
@@ -500,6 +519,19 @@ const RunsPage: React.FC = () => {
       prompt: waitingSignal.prompt ?? "",
     };
   }, [waitingSignal]);
+
+  useEffect(() => {
+    if (eventRows.length === 0) {
+      if (selectedTraceItemKey) {
+        setSelectedTraceItemKey("");
+      }
+      return;
+    }
+
+    if (!eventRows.some((item) => item.key === selectedTraceItemKey)) {
+      setSelectedTraceItemKey(eventRows[0].key);
+    }
+  }, [eventRows, selectedTraceItemKey]);
 
   const humanInputRecord = useMemo<HumanInputRecord | undefined>(() => {
     if (!session.pendingHumanInput) {
@@ -524,10 +556,10 @@ const RunsPage: React.FC = () => {
     session.runId,
   ]);
 
-  const runFocus = useMemo(() => {
+  const runFocus = useMemo<RunFocusRecord>(() => {
     if (transportIssue || session.error || session.status === "error") {
       return {
-        status: "error" as RunFocusStatus,
+        status: "error" as const,
         label:
           transportIssue?.message || session.error?.message || "Run failed",
         alertType: "error" as const,
@@ -620,14 +652,18 @@ const RunsPage: React.FC = () => {
     session.status === "running" ||
     hasPendingInteraction ||
     runFocus.status === "wait_signal";
+  const runStatusTone = isRunLive
+    ? ("processing" as const)
+    : session.status === "finished"
+    ? ("success" as const)
+    : session.status === "error"
+    ? ("error" as const)
+    : ("default" as const);
 
   useEffect(() => {
     if (hasPendingInteraction) {
-      setIsInteractionDrawerOpen(true);
-      return;
+      setIsInspectorDrawerOpen(true);
     }
-
-    setIsInteractionDrawerOpen(false);
   }, [hasPendingInteraction]);
 
   useEffect(() => {
@@ -877,98 +913,82 @@ const RunsPage: React.FC = () => {
     <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
       {messageContextHolder}
       <div style={runsWorkbenchShellStyle}>
-        <Alert
-          showIcon
-          type="info"
-          title="Runtime run console"
-          description="Drive runtime workflows over /api/chat or /api/ws/chat, monitor the live event stream, and jump into adjacent runtime surfaces directly from the runtime console."
-          action={
-            <Space wrap>
-              <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
-                Open Runtime Workflows
-              </Button>
+        <div style={runsWorkbenchHeaderBarStyle}>
+          <div style={runsWorkbenchHeaderTitleStyle}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              Runtime run console
+            </Typography.Title>
+            <Popover
+              content={
+                <Typography.Paragraph
+                  style={{ margin: 0, maxWidth: 360 }}
+                  type="secondary"
+                >
+                  Drive runtime workflows over /api/chat or /api/ws/chat,
+                  monitor the live event stream, and jump into adjacent runtime
+                  surfaces directly from the runtime console.
+                </Typography.Paragraph>
+              }
+              placement="bottomLeft"
+              trigger={["hover", "click"]}
+            >
               <Button
-                onClick={() =>
-                  history.push(
-                    buildRuntimeExplorerHref({
-                      actorId: actorId ?? undefined,
-                    })
-                  )
-                }
-              >
-                Open Runtime Explorer
-              </Button>
-              <Button
-                onClick={() =>
-                  history.push(
-                    buildRuntimeObservabilityHref({
-                      workflow:
-                        workflowName ||
-                        selectedWorkflowName ||
-                        preferences.preferredWorkflow,
-                      actorId: actorId ?? undefined,
-                      commandId: commandId || undefined,
-                      runId: session.runId ?? undefined,
-                    })
-                  )
-                }
-              >
-                Open observability hub
-              </Button>
-            </Space>
-          }
-        />
-        <div style={runsWorkbenchHeaderStyle}>
-          <Space separator={<Divider orientation="vertical" />} size={16}>
-            <Space size={8}>
-              <Badge
-                status={
-                  isRunLive
-                    ? "processing"
-                    : session.status === "finished"
-                    ? "success"
-                    : session.status === "error"
-                    ? "error"
-                    : "default"
-                }
+                aria-label="Open runtime console guide"
+                icon={<InfoCircleOutlined />}
+                shape="circle"
+                type="text"
               />
-              <Typography.Text strong>Run ID</Typography.Text>
-              <Typography.Text code>
-                {session.runId || commandId || "Not started"}
-              </Typography.Text>
-            </Space>
-            <Space size={8}>
-              <Typography.Text type="secondary">Elapsed</Typography.Text>
-              <Typography.Text code>{elapsedLabel}</Typography.Text>
-            </Space>
-            <Space size={8}>
-              <Typography.Text type="secondary">Workflow</Typography.Text>
-              <Typography.Text>{workflowName || "n/a"}</Typography.Text>
-            </Space>
-          </Space>
-          <Space separator={<Divider orientation="vertical" />} size={16}>
-            <Tag color={activeTransport === "ws" ? "success" : "processing"}>
-              {activeTransport.toUpperCase()}
-            </Tag>
-            <Badge
-              color="#ff4d4f"
-              count={hasPendingInteraction ? "Pending" : 0}
-              offset={[-4, 4]}
-            >
-              <Button onClick={() => setIsInteractionDrawerOpen(true)}>
-                Interaction
-              </Button>
-            </Badge>
-            <Button
-              danger
-              type="primary"
-              disabled={!isRunLive}
-              onClick={abortRun}
-            >
-              Abort
+            </Popover>
+          </div>
+          <div style={runsWorkbenchHeaderActionStyle}>
+            <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
+              Open Runtime Workflows
             </Button>
-          </Space>
+            <Button
+              onClick={() =>
+                history.push(
+                  buildRuntimeExplorerHref({
+                    actorId: actorId ?? undefined,
+                  })
+                )
+              }
+            >
+              Open Runtime Explorer
+            </Button>
+            <Button
+              onClick={() =>
+                history.push(
+                  buildRuntimeObservabilityHref({
+                    workflow:
+                      workflowName ||
+                      selectedWorkflowName ||
+                      preferences.preferredWorkflow,
+                    actorId: actorId ?? undefined,
+                    commandId: commandId || undefined,
+                    runId: session.runId ?? undefined,
+                  })
+                )
+              }
+            >
+              Open observability hub
+            </Button>
+          </div>
         </div>
+        <RunsStatusStrip
+          activeStepCount={session.activeSteps.size}
+          elapsedLabel={elapsedLabel}
+          eventCount={session.events.length}
+          hasPendingInteraction={hasPendingInteraction}
+          isRunLive={isRunLive}
+          messageCount={session.messages.length}
+          onAbort={abortRun}
+          onOpenInspector={() => setIsInspectorDrawerOpen(true)}
+          runId={session.runId || commandId || "Not started"}
+          runStatusLabel={runStatusText}
+          statusTone={runStatusTone}
+          transport={activeTransport}
+          workflowName={workflowName || "n/a"}
+        />
 
         <div ref={runsWorkbenchMainRef} style={runsWorkbenchMainStyle}>
           <div
@@ -980,293 +1000,51 @@ const RunsPage: React.FC = () => {
               width: composerWidth,
             }}
           >
-            <ProCard
-              title="Composer"
-              hoverable
-              {...moduleCardProps}
-              style={workbenchCardStyle}
-              bodyStyle={workbenchCardBodyStyle}
-            >
-              <div style={workbenchScrollableBodyStyle}>
-                <Tabs
-                  items={[
-                    {
-                      key: "compose",
-                      label: "Compose",
-                      children: (
-                        <div style={cardStackStyle}>
-                          <ProForm<RunFormValues>
-                            formRef={composerFormRef}
-                            layout="vertical"
-                            initialValues={initialFormValues}
-                            onValuesChange={(_, values) => {
-                              setSelectedWorkflowName(values.workflow ?? "");
-                              if (values.transport) {
-                                setSelectedTransport(values.transport);
-                              }
-                            }}
-                            onFinish={async (values) => {
-                              await sendRun(
-                                {
-                                  prompt: values.prompt,
-                                  workflow: values.workflow,
-                                  agentId: values.actorId,
-                                },
-                                values.transport
-                              );
-                              return true;
-                            }}
-                            submitter={{
-                              render: (props) => (
-                                <Space wrap>
-                                  <Button
-                                    type="primary"
-                                    loading={streaming}
-                                    onClick={() => props.form?.submit?.()}
-                                  >
-                                    Start run
-                                  </Button>
-                                  <Button
-                                    onClick={abortRun}
-                                    disabled={!streaming}
-                                  >
-                                    Abort run
-                                  </Button>
-                                  {actorId ? (
-                                    <Button
-                                      onClick={() =>
-                                        history.push(
-                                          buildRuntimeExplorerHref({
-                                            actorId,
-                                          })
-                                        )
-                                      }
-                                    >
-                                      Open actor
-                                    </Button>
-                                  ) : null}
-                                </Space>
-                              ),
-                            }}
-                          >
-                            <ProFormTextArea
-                              name="prompt"
-                              label="Prompt"
-                              fieldProps={{ rows: 8 }}
-                              placeholder="Describe the task for this run."
-                              rules={[
-                                {
-                                  required: true,
-                                  message: "Prompt is required.",
-                                },
-                              ]}
-                            />
-                            <ProFormSelect<RunTransport>
-                              name="transport"
-                              label="Transport"
-                              options={[
-                                {
-                                  label: "SSE /api/chat",
-                                  value: "sse",
-                                },
-                                {
-                                  label: "WebSocket /api/ws/chat",
-                                  value: "ws",
-                                },
-                              ]}
-                              rules={[
-                                {
-                                  required: true,
-                                  message: "Transport is required.",
-                                },
-                              ]}
-                              extra="SSE is the default path. Use WebSocket to validate the alternate live transport already exposed by the backend."
-                            />
-                            <ProFormSelect
-                              name="workflow"
-                              label="Workflow"
-                              placeholder="Select a workflow"
-                              options={workflowOptions}
-                              fieldProps={{
-                                allowClear: true,
-                                showSearch: true,
-                                filterOption: false,
-                                onSearch: setCatalogSearch,
-                                notFoundContent:
-                                  workflowCatalogQuery.isLoading ? (
-                                    <Typography.Text type="secondary">
-                                      Loading workflows...
-                                    </Typography.Text>
-                                  ) : (
-                                    <Empty
-                                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                      description="No workflows available."
-                                    />
-                                  ),
-                              }}
-                            />
-                            <ProFormText
-                              name="actorId"
-                              label="Existing actorId (optional)"
-                              placeholder="Workflow:..."
-                              extra="Provide an actorId to continue on a bound workflow actor."
-                            />
-                          </ProForm>
-
-                          {selectedWorkflowRecord ? (
-                            <div style={embeddedPanelStyle}>
-                              <Alert
-                                showIcon
-                                type={
-                                  selectedTransport === "ws"
-                                    ? "success"
-                                    : "info"
-                                }
-                                title={
-                                  selectedTransport === "ws"
-                                    ? "WebSocket transport selected"
-                                    : "SSE transport selected"
-                                }
-                                description={
-                                  selectedTransport === "ws"
-                                    ? "The next run will be sent through /api/ws/chat."
-                                    : "The next run will be sent through /api/chat."
-                                }
-                                style={{ marginBottom: 16 }}
-                              />
-                              <ProDescriptions<SelectedWorkflowRecord>
-                                column={1}
-                                dataSource={selectedWorkflowRecord}
-                                columns={workflowDescriptionColumns}
-                              />
-                              {selectedWorkflowDetails?.primitives.length ? (
-                                <Space wrap size={[8, 8]}>
-                                  {selectedWorkflowDetails.primitives.map(
-                                    (primitive) => (
-                                      <Tag key={primitive}>{primitive}</Tag>
-                                    )
-                                  )}
-                                </Space>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <Empty
-                              image={Empty.PRESENTED_IMAGE_SIMPLE}
-                              description="Select a workflow to see its profile."
-                            />
-                          )}
-                        </div>
-                      ),
-                    },
-                    {
-                      key: "recent",
-                      label: `Recent (${recentRunRows.length})`,
-                      children: (
-                        <div style={cardStackStyle}>
-                          <ProTable<RecentRunTableRow>
-                            rowKey="key"
-                            search={false}
-                            options={false}
-                            pagination={false}
-                            columns={recentRunColumns}
-                            dataSource={recentRunRows}
-                            cardProps={compactTableCardProps}
-                            scroll={{ y: 420 }}
-                            locale={{
-                              emptyText: (
-                                <Empty
-                                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                  description="No local runs have been recorded yet."
-                                />
-                              ),
-                            }}
-                          />
-                          {recentRunRows.length > 0 ? (
-                            <Space>
-                              <Button
-                                danger
-                                onClick={() => setRecentRuns(clearRecentRuns())}
-                              >
-                                Clear local runs
-                              </Button>
-                            </Space>
-                          ) : null}
-                        </div>
-                      ),
-                    },
-                    {
-                      key: "presets",
-                      label: `Presets (${visiblePresets.length})`,
-                      children: (
-                        <div style={scrollPanelStyle}>
-                          <ProList<RunPreset>
-                            rowKey="key"
-                            search={false}
-                            split
-                            dataSource={visiblePresets}
-                            locale={{
-                              emptyText: (
-                                <Empty
-                                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                  description="No presets are currently available."
-                                />
-                              ),
-                            }}
-                            metas={{
-                              title: {
-                                dataIndex: "title",
-                              },
-                              description: {
-                                dataIndex: "description",
-                              },
-                              subTitle: {
-                                render: (_, record) => (
-                                  <Space wrap size={[4, 4]}>
-                                    <Tag color="processing">
-                                      {record.workflow}
-                                    </Tag>
-                                    {record.tags.map((tag) => (
-                                      <Tag key={`${record.key}-${tag}`}>
-                                        {tag}
-                                      </Tag>
-                                    ))}
-                                  </Space>
-                                ),
-                              },
-                              actions: {
-                                render: (_, record) => [
-                                  <Space key={`${record.key}-actions`}>
-                                    <Button
-                                      type="link"
-                                      onClick={() => {
-                                        composerFormRef.current?.setFieldsValue(
-                                          {
-                                            prompt: record.prompt,
-                                            workflow: record.workflow,
-                                            actorId: undefined,
-                                            transport: selectedTransport,
-                                          }
-                                        );
-                                        setSelectedWorkflowName(
-                                          record.workflow
-                                        );
-                                        setCatalogSearch("");
-                                      }}
-                                    >
-                                      Use preset
-                                    </Button>
-                                  </Space>,
-                                ],
-                              },
-                            }}
-                          />
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </div>
-            </ProCard>
+            <RunsLaunchRail
+              actorId={actorId ?? undefined}
+              catalogSearch={catalogSearch}
+              composerFormRef={composerFormRef}
+              initialFormValues={initialFormValues}
+              recentRunRows={recentRunRows}
+              selectedTransport={selectedTransport}
+              selectedWorkflowDetailsPrimitives={
+                selectedWorkflowDetails?.primitives ?? []
+              }
+              selectedWorkflowRecord={selectedWorkflowRecord}
+              streaming={streaming}
+              transportOptions={[
+                { label: "SSE /api/chat", value: "sse" },
+                { label: "WebSocket /api/ws/chat", value: "ws" },
+              ]}
+              visiblePresets={visiblePresets}
+              workflowCatalogLoading={workflowCatalogQuery.isLoading}
+              workflowOptions={workflowOptions}
+              onAbortRun={abortRun}
+              onCatalogSearchChange={setCatalogSearch}
+              onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
+              onSelectWorkflowName={setSelectedWorkflowName}
+              onSubmitRun={async (values) => {
+                await sendRun(
+                  {
+                    prompt: values.prompt,
+                    workflow: values.workflow,
+                    agentId: values.actorId,
+                  },
+                  values.transport
+                );
+              }}
+              onTransportChange={setSelectedTransport}
+              onUsePreset={(record) => {
+                composerFormRef.current?.setFieldsValue({
+                  prompt: record.prompt,
+                  workflow: record.workflow,
+                  actorId: undefined,
+                  transport: selectedTransport,
+                });
+                setSelectedWorkflowName(record.workflow);
+                setCatalogSearch("");
+              }}
+            />
           </div>
           <button
             aria-label="Resize composer panel"
@@ -1307,278 +1085,72 @@ const RunsPage: React.FC = () => {
             />
           </button>
           <div style={runsWorkbenchMonitorStyle}>
-            <ProCard
-              title="Metric HUD"
-              hoverable
-              {...moduleCardProps}
-              style={workbenchHudCardStyle}
-              bodyStyle={workbenchHudBodyStyle}
-            >
-              <Row gutter={12}>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            isRunLive
-                              ? "processing"
-                              : session.status === "finished"
-                              ? "success"
-                              : session.status === "error"
-                              ? "error"
-                              : "default"
+            <div style={workbenchOverviewGridStyle}>
+              <Tabs
+                activeKey="trace-layout"
+                items={[
+                  {
+                    key: "trace-layout",
+                    label: "Trace workspace",
+                    children: (
+                      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+                        <RunsTracePane
+                          consoleView={consoleView}
+                          eventConsoleView={eventConsoleView}
+                          eventCount={eventRows.length}
+                          hasPendingInteraction={hasPendingInteraction}
+                          messageConsoleView={messageConsoleView}
+                          messageCount={session.messages.length}
+                          onConsoleViewChange={setConsoleView}
+                          timelineView={
+                            <RunsTimelineView
+                              groups={timelineGroups}
+                              onSelectItem={(item) => {
+                                setSelectedTraceItemKey(item.key);
+                                setIsInspectorDrawerOpen(true);
+                              }}
+                              selectedItemKey={selectedTraceItemKey}
+                            />
                           }
                         />
-                        <span>Status</span>
-                      </Space>
-                    }
-                    value={runStatusText}
-                  />
-                </Col>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            session.messages.length > 0
-                              ? "processing"
-                              : "default"
-                          }
-                        />
-                        <span>Messages</span>
-                      </Space>
-                    }
-                    value={session.messages.length}
-                  />
-                </Col>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            session.events.length > 0 ? "processing" : "default"
-                          }
-                        />
-                        <span>Events</span>
-                      </Space>
-                    }
-                    value={session.events.length}
-                  />
-                </Col>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            session.activeSteps.size > 0 ? "warning" : "default"
-                          }
-                        />
-                        <span>Active steps</span>
-                      </Space>
-                    }
-                    value={session.activeSteps.size}
-                  />
-                </Col>
-              </Row>
-            </ProCard>
-
-            <Row gutter={12} style={workbenchOverviewGridStyle}>
-              <Col xs={24} xl={14} style={stretchColumnStyle}>
-                <ProCard
-                  title="Live overview"
-                  hoverable
-                  {...moduleCardProps}
-                  style={workbenchOverviewCardStyle}
-                  bodyStyle={workbenchCardBodyStyle}
-                >
-                  <div style={workbenchScrollableBodyStyle}>
-                    <div style={cardStackStyle}>
-                      <Alert
-                        showIcon
-                        type={runFocus.alertType}
-                        title={runFocus.title}
-                        description={runFocus.description}
-                      />
-                      <ProDescriptions<RunSummaryRecord>
-                        column={1}
-                        dataSource={runSummaryRecord}
-                        columns={runSummaryColumns}
-                      />
-                      {latestMessagePreview ? (
-                        <div style={embeddedPanelStyle}>
-                          <Typography.Text type="secondary">
-                            Latest message preview
-                          </Typography.Text>
-                          <Typography.Paragraph
-                            style={{
-                              margin: "8px 0 0",
-                              whiteSpace: "pre-wrap",
-                            }}
-                          >
-                            {latestMessagePreview}
-                          </Typography.Paragraph>
-                        </div>
-                      ) : null}
-                      {actorSnapshotQuery.data ? (
-                        <Alert
-                          showIcon
-                          type={
-                            actorSnapshotQuery.data.lastSuccess === false
-                              ? "error"
-                              : "success"
-                          }
-                          title="Latest actor snapshot"
-                          description={
-                            <Space direction="vertical" size={4}>
-                              <Typography.Paragraph
-                                ellipsis={{
-                                  rows: 2,
-                                  expandable: true,
-                                  symbol: "Expand output",
-                                }}
-                                style={{ marginBottom: 0 }}
-                              >
-                                Output:{" "}
-                                {actorSnapshotQuery.data.lastOutput || "n/a"}
-                              </Typography.Paragraph>
-                              <Typography.Text>
-                                Updated:{" "}
-                                {formatDateTime(
-                                  actorSnapshotQuery.data.lastUpdatedAt
-                                )}
-                              </Typography.Text>
-                            </Space>
-                          }
-                        />
-                      ) : null}
-                      {session.error ? (
-                        <Alert
-                          showIcon
-                          type="error"
-                          title={session.error.code ?? "Run error"}
-                          description={session.error.message}
-                        />
-                      ) : null}
-                    </div>
-                  </div>
-                </ProCard>
-              </Col>
-              <Col xs={24} xl={10} style={stretchColumnStyle}>
-                <ProCard
-                  title="Workflow profile"
-                  hoverable
-                  {...moduleCardProps}
-                  style={workbenchOverviewCardStyle}
-                  bodyStyle={workbenchCardBodyStyle}
-                >
-                  <div style={workbenchScrollableBodyStyle}>
-                    {selectedWorkflowRecord ? (
-                      <div style={cardStackStyle}>
-                        <ProDescriptions<SelectedWorkflowRecord>
-                          column={1}
-                          dataSource={selectedWorkflowRecord}
-                          columns={workflowDescriptionColumns}
-                        />
-                        {selectedWorkflowDetails?.primitives.length ? (
-                          <Space wrap size={[8, 8]}>
-                            {selectedWorkflowDetails.primitives.map(
-                              (primitive) => (
-                                <Tag key={primitive}>{primitive}</Tag>
-                              )
-                            )}
-                          </Space>
-                        ) : null}
                       </div>
-                    ) : (
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description="Select a workflow to inspect its profile."
-                      />
-                    )}
-                  </div>
-                </ProCard>
-              </Col>
-            </Row>
+                    ),
+                  },
+                ]}
+              />
+            </div>
           </div>
         </div>
-
-        <ProCard
-          title="Console"
-          hoverable
-          {...moduleCardProps}
-          style={workbenchConsoleCardStyle}
-          bodyStyle={workbenchConsoleBodyStyle}
-          extra={
-            <Space separator={<Divider orientation="vertical" />} size={12}>
-              <Typography.Text type="secondary">
-                {session.messages.length} messages
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                {eventRows.length} events
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                {hasPendingInteraction ? "interaction pending" : "monitoring"}
-              </Typography.Text>
-            </Space>
-          }
-        >
-          <div style={workbenchConsoleViewportStyle}>
-            <Tabs
-              activeKey={consoleView}
-              items={[
-                {
-                  key: "dual",
-                  label: "Dual stream",
-                  children: (
-                    <div style={workbenchConsoleTabPanelStyle}>
-                      <Row gutter={12} style={{ flex: 1, minHeight: 0 }}>
-                        <Col span={12} style={stretchColumnStyle}>
-                          {messageConsoleView}
-                        </Col>
-                        <Col span={12} style={stretchColumnStyle}>
-                          {eventConsoleView}
-                        </Col>
-                      </Row>
-                    </div>
-                  ),
-                },
-                {
-                  key: "messages",
-                  label: "Messages",
-                  children: (
-                    <div style={workbenchConsoleTabPanelStyle}>
-                      {messageConsoleView}
-                    </div>
-                  ),
-                },
-                {
-                  key: "events",
-                  label: "Events",
-                  children: (
-                    <div style={workbenchConsoleTabPanelStyle}>
-                      {eventConsoleView}
-                    </div>
-                  ),
-                },
-              ]}
-              onChange={(key) => setConsoleView(key as ConsoleViewKey)}
-            />
-          </div>
-        </ProCard>
 
         <Drawer
           destroyOnHidden
           mask={false}
-          open={isInteractionDrawerOpen}
-          title={hasPendingInteraction ? "Pending interaction" : "Interaction"}
-          size={420}
-          onClose={() => setIsInteractionDrawerOpen(false)}
+          open={isInspectorDrawerOpen}
+          styles={{ body: drawerBodyStyle }}
+          title={hasPendingInteraction ? "Inspector · interaction pending" : "Inspector"}
+          size={520}
+          onClose={() => setIsInspectorDrawerOpen(false)}
         >
-          <div style={cardStackStyle}>
+          <div style={drawerScrollStyle}>
+            <div style={cardStackStyle}>
+            <RunsInspectorPane
+              actorSnapshot={actorSnapshotQuery.data}
+              actorSnapshotLoading={
+                actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
+              }
+              humanInputRecord={humanInputRecord}
+              latestMessagePreview={latestMessagePreview}
+              runFocus={runFocus}
+              runSummaryRecord={runSummaryRecord}
+              selectedTraceItem={selectedTraceItem}
+              selectedWorkflowPrimitives={
+                selectedWorkflowDetails?.primitives ?? []
+              }
+              selectedWorkflowRecord={selectedWorkflowRecord}
+              showInteractionAction={false}
+              variant="plain"
+              waitingSignalRecord={waitingSignalRecord}
+            />
             {humanInputRecord ? (
               <div style={embeddedPanelStyle}>
                 <Space direction="vertical" style={{ width: "100%" }} size={16}>
@@ -1711,13 +1283,7 @@ const RunsPage: React.FC = () => {
                 </Space>
               </div>
             ) : null}
-
-            {!humanInputRecord && !waitingSignalRecord ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="No pending human interaction."
-              />
-            ) : null}
+            </div>
           </div>
         </Drawer>
       </div>

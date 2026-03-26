@@ -1,5 +1,6 @@
 import { Typography } from 'antd';
 import React from 'react';
+import { codeBlockStyle } from '@/shared/ui/proComponents';
 
 export function renderMultilineText(value: string | null | undefined) {
   if (!value) {
@@ -11,12 +12,7 @@ export function renderMultilineText(value: string | null | undefined) {
   return (
     <Typography.Paragraph
       copyable
-      style={{
-        marginBottom: 0,
-        maxHeight: 360,
-        overflow: 'auto',
-        whiteSpace: 'pre-wrap',
-      }}
+      style={{ ...codeBlockStyle, marginBottom: 0, maxHeight: 360 }}
     >
       {value}
     </Typography.Paragraph>

@@ -1,16 +1,11 @@
-import type {
-  ProDescriptionsItemProps,
-  ProFormInstance,
-} from "@ant-design/pro-components";
+import type { ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProForm,
   ProFormDigit,
   ProFormSelect,
   ProFormText,
-  ProList,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
@@ -34,8 +29,21 @@ import {
 } from "@/shared/preferences/consolePreferences";
 import { buildWorkflowCatalogOptions } from "@/shared/workflows/catalogVisibility";
 import {
+  cardListActionStyle,
+  cardListHeaderStyle,
+  cardListItemStyle,
+  cardListMainStyle,
+  cardListStyle,
+  cardListUrlStyle,
+  cardStackStyle,
   fillCardStyle,
   moduleCardProps,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
 
@@ -44,26 +52,6 @@ type ConsoleSettingsSummaryRecord = {
   graphDirection: ActorGraphDirection;
   observabilityTargetsConfigured: number;
 };
-
-const summaryColumns: ProDescriptionsItemProps<ConsoleSettingsSummaryRecord>[] =
-  [
-    {
-      title: "Preferred workflow",
-      dataIndex: "preferredWorkflow",
-      render: (_, record) => (
-        <Tag color="processing">{record.preferredWorkflow}</Tag>
-      ),
-    },
-    {
-      title: "Graph direction",
-      dataIndex: "graphDirection",
-    },
-    {
-      title: "Configured targets",
-      dataIndex: "observabilityTargetsConfigured",
-      valueType: "digit",
-    },
-  ];
 
 const consoleUsageNotes = [
   {
@@ -75,6 +63,98 @@ const consoleUsageNotes = [
     text: "Grafana, Jaeger, and Loki URLs are not proxied. The console only builds outbound links and preserves current workflow context.",
   },
 ];
+
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+type SummaryMetricProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text>{value}</Typography.Text>
+  </div>
+);
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
+  </div>
+);
+
+function renderObservabilityEndpointCards(
+  observabilityTargets: ObservabilityTarget[],
+): React.ReactNode {
+  if (observabilityTargets.length === 0) {
+    return (
+      <Typography.Text type="secondary">
+        No observability targets configured.
+      </Typography.Text>
+    );
+  }
+
+  return (
+    <div style={cardListStyle}>
+      {observabilityTargets.map((record) => (
+        <div key={record.id} style={cardListItemStyle}>
+          <div style={cardListHeaderStyle}>
+            <div style={cardListMainStyle}>
+              <Space wrap size={[8, 8]}>
+                <Typography.Text strong>{record.label}</Typography.Text>
+                <Tag color={record.status === "configured" ? "success" : "default"}>
+                  {record.status}
+                </Tag>
+              </Space>
+              <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+                {record.description}
+              </Typography.Paragraph>
+            </div>
+          </div>
+
+          {record.homeUrl ? (
+            <Typography.Paragraph
+              copyable={{ text: record.homeUrl }}
+              ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
+              style={cardListUrlStyle}
+              type="secondary"
+            >
+              {record.homeUrl}
+            </Typography.Paragraph>
+          ) : (
+            <Typography.Text type="secondary">No URL configured.</Typography.Text>
+          )}
+
+          <div style={cardListActionStyle}>
+            <Button
+              type="link"
+              disabled={record.status !== "configured"}
+              href={record.homeUrl || undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open
+            </Button>
+            <Button
+              type="link"
+              disabled={record.status !== "configured"}
+              href={record.exploreUrl || undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Explore
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const ConsoleSettingsPage: React.FC = () => {
   const formRef = useRef<ProFormInstance<ConsolePreferences> | undefined>(
@@ -331,85 +411,49 @@ const ConsoleSettingsPage: React.FC = () => {
               {...moduleCardProps}
               style={fillCardStyle}
             >
-              <ProDescriptions<ConsoleSettingsSummaryRecord>
-                column={1}
-                dataSource={summaryRecord}
-                columns={summaryColumns}
-              />
+              <div style={cardStackStyle}>
+                <Space wrap size={[8, 8]}>
+                  <Tag color="processing">{summaryRecord.preferredWorkflow}</Tag>
+                  <Tag>{summaryRecord.graphDirection}</Tag>
+                </Space>
+
+                <div style={summaryMetricGridStyle}>
+                  <SummaryMetric
+                    label="Configured targets"
+                    value={`${summaryRecord.observabilityTargetsConfigured}/${observabilityTargets.length}`}
+                  />
+                  <SummaryMetric
+                    label="Graph direction"
+                    value={summaryRecord.graphDirection}
+                  />
+                </div>
+
+                <div style={summaryFieldGridStyle}>
+                  <SummaryField
+                    label="Preferred workflow"
+                    value={summaryRecord.preferredWorkflow}
+                  />
+                  <SummaryField
+                    label="Grafana"
+                    value={preferences.grafanaBaseUrl || "Not configured"}
+                  />
+                  <SummaryField
+                    label="Jaeger"
+                    value={preferences.jaegerBaseUrl || "Not configured"}
+                  />
+                  <SummaryField
+                    label="Loki"
+                    value={preferences.lokiBaseUrl || "Not configured"}
+                  />
+                </div>
+              </div>
             </ProCard>
             <ProCard
               title="Observability endpoints"
               {...moduleCardProps}
               style={fillCardStyle}
             >
-              <ProList<ObservabilityTarget>
-                rowKey="id"
-                search={false}
-                split
-                dataSource={observabilityTargets}
-                locale={{
-                  emptyText: (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="No observability targets configured."
-                    />
-                  ),
-                }}
-                metas={{
-                  title: {
-                    dataIndex: "label",
-                    render: (_, record) => (
-                      <Space wrap size={[8, 8]}>
-                        <Typography.Text strong>{record.label}</Typography.Text>
-                        <Tag
-                          color={
-                            record.status === "configured"
-                              ? "success"
-                              : "default"
-                          }
-                        >
-                          {record.status}
-                        </Tag>
-                      </Space>
-                    ),
-                  },
-                  description: {
-                    dataIndex: "description",
-                  },
-                  subTitle: {
-                    render: (_, record) =>
-                      record.homeUrl ? (
-                        <Tag>{record.homeUrl}</Tag>
-                      ) : (
-                        <Tag>No URL configured</Tag>
-                      ),
-                  },
-                  actions: {
-                    render: (_, record) => [
-                      <Button
-                        key={`${record.id}-open`}
-                        type="link"
-                        disabled={record.status !== "configured"}
-                        href={record.homeUrl || undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open
-                      </Button>,
-                      <Button
-                        key={`${record.id}-explore`}
-                        type="link"
-                        disabled={record.status !== "configured"}
-                        href={record.exploreUrl || undefined}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Explore
-                      </Button>,
-                    ],
-                  },
-                }}
-              />
+              {renderObservabilityEndpointCards(observabilityTargets)}
             </ProCard>
             <ProCard
               title="Usage notes"

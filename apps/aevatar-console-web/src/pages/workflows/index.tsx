@@ -9,18 +9,15 @@ import {
 } from "@ant-design/icons";
 import type {
   ProColumns,
-  ProDescriptionsItemProps,
 } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
-import type { MenuProps } from "antd";
 import {
   Alert,
   Button,
@@ -31,7 +28,6 @@ import {
   Row,
   Select,
   Space,
-  Statistic,
   Tabs,
   Tag,
   Typography,
@@ -59,7 +55,14 @@ import {
   embeddedPanelStyle,
   fillCardStyle,
   moduleCardProps,
-  scrollPanelStyle,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
+  tallPanelHeight,
+  tallScrollPanelStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
 import WorkflowYamlViewer from "./WorkflowYamlViewer";
@@ -103,6 +106,16 @@ type WorkflowSummaryMetric = {
 type WorkflowGraphInteractionContextValue = {
   focusRoleGraph: (roleId: string) => void;
   focusStepGraph: (stepId: string, targetRole?: string) => void;
+};
+
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+type SummaryMetricProps = {
+  label: string;
+  value: React.ReactNode;
 };
 
 type WorkflowRoleSplitPanelProps = {
@@ -186,14 +199,6 @@ const workflowDetailDescriptionStyle = {
   maxWidth: "100%",
 } as const;
 
-const workflowSummaryCardStyle = {
-  height: "100%",
-  border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 12,
-  padding: 12,
-  background: "var(--ant-color-fill-quaternary)",
-} as const;
-
 const collapsedLibraryBodyStyle = {
   ...embeddedPanelStyle,
   alignItems: "flex-start",
@@ -212,13 +217,13 @@ const splitPaneListShellStyle = {
 
 const splitPaneDetailShellStyle = {
   ...embeddedPanelStyle,
-  minHeight: 540,
+  minHeight: tallPanelHeight,
   background: "var(--ant-color-fill-quaternary)",
 } as const;
 
 const splitPaneScrollableListStyle = {
-  ...scrollPanelStyle,
-  maxHeight: 540,
+  ...tallScrollPanelStyle,
+  maxHeight: tallPanelHeight,
   paddingRight: 0,
 } as const;
 
@@ -252,8 +257,7 @@ const definitionSectionTitleStyle = {
 } as const;
 
 const detailMetaGridStyle = {
-  display: "grid",
-  gap: 12,
+  ...summaryMetricGridStyle,
   gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
 } as const;
 
@@ -301,6 +305,24 @@ const highlightedTabLabelStyle = {
 
 const WorkflowGraphInteractionContext =
   React.createContext<WorkflowGraphInteractionContextValue | null>(null);
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    {typeof value === "string" || typeof value === "number" ? (
+      <Typography.Text>{value}</Typography.Text>
+    ) : (
+      value
+    )}
+  </div>
+);
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
+  </div>
+);
 
 function useWorkflowGraphInteraction(): WorkflowGraphInteractionContextValue {
   const value = useContext(WorkflowGraphInteractionContext);
@@ -508,42 +530,30 @@ const WorkflowRoleSplitPanel: React.FC<WorkflowRoleSplitPanelProps> = ({
             </div>
 
             <div style={detailMetaGridStyle}>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Temperature"
-                  value={renderMetricValue(activeRole.temperature)}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Max tokens"
-                  value={renderMetricValue(activeRole.maxTokens)}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Tool rounds"
-                  value={renderMetricValue(activeRole.maxToolRounds)}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="History"
-                  value={renderMetricValue(activeRole.maxHistoryMessages)}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Stream buffer"
-                  value={renderMetricValue(activeRole.streamBufferCapacity)}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Connectors"
-                  value={activeRole.connectors.length}
-                />
-              </div>
+              <SummaryMetric
+                label="Temperature"
+                value={renderMetricValue(activeRole.temperature)}
+              />
+              <SummaryMetric
+                label="Max tokens"
+                value={renderMetricValue(activeRole.maxTokens)}
+              />
+              <SummaryMetric
+                label="Tool rounds"
+                value={renderMetricValue(activeRole.maxToolRounds)}
+              />
+              <SummaryMetric
+                label="History"
+                value={renderMetricValue(activeRole.maxHistoryMessages)}
+              />
+              <SummaryMetric
+                label="Stream buffer"
+                value={renderMetricValue(activeRole.streamBufferCapacity)}
+              />
+              <SummaryMetric
+                label="Connectors"
+                value={activeRole.connectors.length}
+              />
             </div>
 
             <div style={embeddedPanelStyle}>
@@ -721,27 +731,20 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
             </div>
 
             <div style={detailMetaGridStyle}>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Target role"
-                  value={activeStep.targetRole || "n/a"}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic title="Next" value={activeStep.next || "n/a"} />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic
-                  title="Parameters"
-                  value={activeStep.parameterCount}
-                />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic title="Branches" value={activeStep.branchCount} />
-              </div>
-              <div style={workflowSummaryCardStyle}>
-                <Statistic title="Children" value={activeStep.childCount} />
-              </div>
+              <SummaryMetric
+                label="Target role"
+                value={activeStep.targetRole || "n/a"}
+              />
+              <SummaryMetric label="Next" value={activeStep.next || "n/a"} />
+              <SummaryMetric
+                label="Parameters"
+                value={activeStep.parameterCount}
+              />
+              <SummaryMetric
+                label="Branches"
+                value={activeStep.branchCount}
+              />
+              <SummaryMetric label="Children" value={activeStep.childCount} />
             </div>
 
             <DictionarySection
@@ -761,38 +764,6 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
     </Row>
   );
 };
-
-const focusColumns: ProDescriptionsItemProps<WorkflowFocusRecord>[] = [
-  {
-    title: "Focus type",
-    dataIndex: "focusType",
-    render: (_, record) => focusTypeLabels[record.focusType],
-  },
-  {
-    title: "Identifier",
-    dataIndex: "focusId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.focusId}</Typography.Text>
-    ),
-  },
-  {
-    title: "Related role",
-    dataIndex: "relatedRole",
-    render: (_, record) => record.relatedRole || "n/a",
-  },
-  {
-    title: "Related steps",
-    dataIndex: "relatedStepCount",
-    valueType: "digit",
-  },
-  {
-    title: "Graph node",
-    dataIndex: "graphNodeId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.graphNodeId}</Typography.Text>
-    ),
-  },
-];
 
 function parseDetailTab(value: string | null): WorkflowDetailTab {
   if (
@@ -1238,7 +1209,7 @@ const WorkflowsPage: React.FC = () => {
     );
   }, [activeDetailTab, selectedGraphNodeId]);
   const fullscreenGraphHeight = useMemo(
-    () => Math.max(viewportHeight - 220, 560),
+    () => Math.max(viewportHeight - 220, tallPanelHeight),
     [viewportHeight]
   );
 
@@ -1454,25 +1425,32 @@ const WorkflowsPage: React.FC = () => {
                   </Typography.Text>
                 </div>
                 <div style={cardStackStyle}>
-                  <div style={workflowSummaryCardStyle}>
-                    <Statistic
-                      title="Visible workflows"
+                  <div style={summaryMetricGridStyle}>
+                    <SummaryMetric
+                      label="Visible workflows"
                       value={filteredCatalog.length}
                     />
                   </div>
-                  <div style={workflowSummaryCardStyle}>
-                    <Typography.Text type="secondary">
-                      Current selection
-                    </Typography.Text>
-                    <Typography.Paragraph
-                      ellipsis={{
-                        rows: 2,
-                        tooltip: selectedWorkflow || "No workflow selected",
-                      }}
-                      style={{ margin: "8px 0 0" }}
-                    >
-                      {selectedWorkflow || "No workflow selected"}
-                    </Typography.Paragraph>
+                  <div
+                    style={{
+                      ...embeddedPanelStyle,
+                      background: "var(--ant-color-fill-quaternary)",
+                    }}
+                  >
+                    <div style={summaryFieldGridStyle}>
+                      <SummaryField
+                        label="Current selection"
+                        value={
+                          <Typography.Text
+                            ellipsis={{
+                              tooltip: selectedWorkflow || "No workflow selected",
+                            }}
+                          >
+                            {selectedWorkflow || "No workflow selected"}
+                          </Typography.Text>
+                        }
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1628,7 +1606,7 @@ const WorkflowsPage: React.FC = () => {
                   dataSource={filteredCatalog}
                   loading={catalogQuery.isLoading}
                   cardProps={compactTableCardProps}
-                  scroll={{ x: 940, y: 560 }}
+                  scroll={{ x: 940, y: tallPanelHeight }}
                   onRow={(record) => ({
                     onClick: () => setSelectedWorkflow(record.name),
                   })}
@@ -1739,15 +1717,15 @@ const WorkflowsPage: React.FC = () => {
                   </div>
                 </div>
 
-                <Row gutter={[12, 12]}>
+                <div style={detailMetaGridStyle}>
                   {workflowSummaryMetrics.map((item) => (
-                    <Col key={item.id} xs={12} md={8}>
-                      <div style={workflowSummaryCardStyle}>
-                        <Statistic title={item.title} value={item.value} />
-                      </div>
-                    </Col>
+                    <SummaryMetric
+                      key={item.id}
+                      label={item.title}
+                      value={item.value}
+                    />
                   ))}
-                </Row>
+                </div>
 
                 {focusRecord ? (
                   <div style={embeddedPanelStyle}>
@@ -1760,11 +1738,36 @@ const WorkflowsPage: React.FC = () => {
                         <Tag>{focusRecord.relatedRole}</Tag>
                       ) : null}
                     </Space>
-                    <ProDescriptions<WorkflowFocusRecord>
-                      column={2}
-                      dataSource={focusRecord}
-                      columns={focusColumns}
-                    />
+                    <div style={summaryFieldGridStyle}>
+                      <SummaryField
+                        label="Focus type"
+                        value={focusTypeLabels[focusRecord.focusType]}
+                      />
+                      <SummaryField
+                        label="Identifier"
+                        value={
+                          <Typography.Text copyable>
+                            {focusRecord.focusId}
+                          </Typography.Text>
+                        }
+                      />
+                      <SummaryField
+                        label="Related role"
+                        value={focusRecord.relatedRole || "n/a"}
+                      />
+                      <SummaryField
+                        label="Related steps"
+                        value={focusRecord.relatedStepCount}
+                      />
+                      <SummaryField
+                        label="Graph node"
+                        value={
+                          <Typography.Text copyable>
+                            {focusRecord.graphNodeId}
+                          </Typography.Text>
+                        }
+                      />
+                    </div>
                   </div>
                 ) : null}
 
@@ -1852,7 +1855,7 @@ const WorkflowsPage: React.FC = () => {
                               edges={graphElements.edges}
                               selectedNodeId={selectedGraphNodeId}
                               onNodeSelect={handleGraphNodeSelect}
-                              height={560}
+                              height={tallPanelHeight}
                             />
                           </div>
                         ),

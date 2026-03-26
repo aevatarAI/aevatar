@@ -1,14 +1,24 @@
-import { PageContainer, ProTable } from "@ant-design/pro-components";
-import { useQuery } from "@tanstack/react-query";
-import { history } from "@/shared/navigation/history";
-import { Alert, Col, Row } from "antd";
-import React, { useMemo, useState } from "react";
-import { governanceApi } from "@/shared/api/governanceApi";
-import { servicesApi } from "@/shared/api/servicesApi";
-import type { ServiceBindingSnapshot } from "@/shared/models/governance";
-import { compactTableCardProps } from "@/shared/ui/proComponents";
-import { bindingColumns } from "./components/columns";
-import GovernanceQueryCard from "./components/GovernanceQueryCard";
+import { PageContainer, ProCard, ProTable } from '@ant-design/pro-components';
+import { useQuery } from '@tanstack/react-query';
+import { Col, Row } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { governanceApi } from '@/shared/api/governanceApi';
+import { servicesApi } from '@/shared/api/servicesApi';
+import { history } from '@/shared/navigation/history';
+import type { ServiceBindingSnapshot } from '@/shared/models/governance';
+import {
+  cardStackStyle,
+  compactTableCardProps,
+  moduleCardProps,
+} from '@/shared/ui/proComponents';
+import { bindingColumns } from './components/columns';
+import GovernanceQueryCard from './components/GovernanceQueryCard';
+import {
+  formatGovernanceTimestamp,
+  GovernanceSelectionNotice,
+  GovernanceSummaryPanel,
+  type GovernanceSummaryMetric,
+} from './components/GovernanceResultPanels';
 import {
   buildGovernanceServiceOptions,
   buildGovernanceHref,
@@ -17,7 +27,7 @@ import {
   normalizeGovernanceQuery,
   readGovernanceDraft,
   type GovernanceDraft,
-} from "./components/governanceQuery";
+} from './components/governanceQuery';
 
 const initialDraft = readGovernanceDraft();
 
@@ -51,6 +61,32 @@ const GovernanceBindingsPage: React.FC = () => {
     [servicesQuery.data]
   );
 
+  const bindingCatalog = bindingsQuery.data;
+  const bindingMetrics = useMemo<GovernanceSummaryMetric[]>(
+    () => [
+      {
+        label: 'Bindings',
+        value: String(bindingCatalog?.bindings.length ?? 0),
+      },
+      {
+        label: 'With policies',
+        value: String(
+          bindingCatalog?.bindings.filter((binding) => binding.policyIds.length > 0)
+            .length ?? 0,
+        ),
+        tone: 'success',
+      },
+      {
+        label: 'Retired',
+        value: String(
+          bindingCatalog?.bindings.filter((binding) => binding.retired).length ?? 0,
+        ),
+        tone: 'warning',
+      },
+    ],
+    [bindingCatalog],
+  );
+
   return (
     <PageContainer
       title="Platform Governance Bindings"
@@ -81,21 +117,40 @@ const GovernanceBindingsPage: React.FC = () => {
         </Col>
         <Col xs={24}>
           {activeDraft.serviceId.trim() ? (
-            <ProTable<ServiceBindingSnapshot>
-              columns={bindingColumns}
-              dataSource={bindingsQuery.data?.bindings ?? []}
-              loading={bindingsQuery.isLoading}
-              rowKey="bindingId"
-              search={false}
-              pagination={false}
-              cardProps={compactTableCardProps}
-              toolBarRender={false}
-            />
+            <div style={cardStackStyle}>
+              <GovernanceSummaryPanel
+                title="Binding catalog"
+                description="Review raw binding targets, attached policies, and retirement state for the selected platform service."
+                draft={activeDraft}
+                extraFields={[
+                  {
+                    label: 'Catalog updated',
+                    value: formatGovernanceTimestamp(bindingCatalog?.updatedAt),
+                  },
+                ]}
+                metrics={bindingMetrics}
+                status={{
+                  color: bindingsQuery.isLoading ? 'processing' : 'success',
+                  label: bindingsQuery.isLoading ? 'Loading' : 'Loaded',
+                }}
+              />
+              <ProCard title="Bindings" {...moduleCardProps}>
+                <ProTable<ServiceBindingSnapshot>
+                  columns={bindingColumns}
+                  dataSource={bindingCatalog?.bindings ?? []}
+                  loading={bindingsQuery.isLoading}
+                  rowKey="bindingId"
+                  search={false}
+                  pagination={false}
+                  cardProps={compactTableCardProps}
+                  toolBarRender={false}
+                />
+              </ProCard>
+            </div>
           ) : (
-            <Alert
-              showIcon
-              type="info"
-              title="Select a platform service to inspect its raw binding catalog."
+            <GovernanceSelectionNotice
+              title="Select a platform service"
+              description="Load a service identity to inspect its raw binding catalog and attached policy targets."
             />
           )}
         </Col>

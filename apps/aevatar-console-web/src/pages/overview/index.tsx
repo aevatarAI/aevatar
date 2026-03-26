@@ -1,10 +1,4 @@
-import {
-  PageContainer,
-  ProCard,
-  ProDescriptions,
-  ProList,
-} from "@ant-design/pro-components";
-import type { ProDescriptionsItemProps } from "@ant-design/pro-components";
+import { PageContainer, ProCard } from "@ant-design/pro-components";
 import {
   Alert,
   Button,
@@ -26,16 +20,25 @@ import {
 } from "@/shared/navigation/runtimeRoutes";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import {
+  cardListActionStyle,
+  cardListHeaderStyle,
+  cardListItemStyle,
+  cardListMainStyle,
+  cardListStyle,
+  cardListUrlStyle,
   cardStackStyle,
+  embeddedPanelStyle,
   fillCardStyle,
   moduleCardProps,
-  scrollPanelStyle,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
-import type {
-  ConsoleProfileItem,
-  ObservabilityOverviewItem,
-} from "./useOverviewData";
+import type { ObservabilityOverviewItem } from "./useOverviewData";
 import { useOverviewData } from "./useOverviewData";
 
 type CapabilitySurfaceItem = {
@@ -57,46 +60,128 @@ type QuickActionItem = {
   primary?: boolean;
 };
 
-const capabilitySurfacesCardStyle = {
-  ...fillCardStyle,
-  height: 640,
+const overviewSurfaceGridStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 12,
+  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
 };
 
-const capabilitySurfacesScrollStyle = {
-  ...scrollPanelStyle,
-  maxHeight: 552,
-};
-
-const boundedOverviewCardStyle = {
-  ...fillCardStyle,
-  height: 520,
-} as const;
-
-const boundedOverviewCardBodyStyle = {
+const summarySectionStyle: React.CSSProperties = {
+  borderTop: "1px solid var(--ant-color-border-secondary)",
   display: "flex",
   flexDirection: "column",
-  minHeight: 0,
-  overflow: "hidden",
-} as const;
+  gap: 8,
+  paddingTop: 12,
+};
 
-const boundedOverviewCardViewportStyle = {
-  ...scrollPanelStyle,
-  flex: 1,
-  minHeight: 0,
-  maxHeight: "none",
-} as const;
+const quickActionSectionStyle: React.CSSProperties = {
+  ...embeddedPanelStyle,
+  background: "var(--ant-color-fill-quaternary)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
 
-const profileColumns: ProDescriptionsItemProps<ConsoleProfileItem>[] = [
-  {
-    title: "Preferred workflow",
-    dataIndex: "preferredWorkflow",
-    render: (_, row) => <Tag color="processing">{row.preferredWorkflow}</Tag>,
-  },
-  {
-    title: "Observability",
-    dataIndex: "observability",
-  },
-];
+const overviewSummaryMetricGridStyle: React.CSSProperties = {
+  ...summaryMetricGridStyle,
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+};
+
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+type SummaryMetricProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text>{value}</Typography.Text>
+  </div>
+);
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
+  </div>
+);
+
+function renderObservabilityTargetCards(
+  observabilityTargets: ObservabilityOverviewItem[],
+  preferredWorkflow: string,
+): React.ReactNode {
+  if (observabilityTargets.length === 0) {
+    return (
+      <Typography.Text type="secondary">
+        No observability targets configured.
+      </Typography.Text>
+    );
+  }
+
+  return (
+    <div style={cardListStyle}>
+      {observabilityTargets.map((record) => (
+        <div key={record.id} style={cardListItemStyle}>
+          <div style={cardListHeaderStyle}>
+            <div style={cardListMainStyle}>
+              <Space wrap size={[8, 8]}>
+                <Typography.Text strong>{record.label}</Typography.Text>
+                <Tag color={record.status === "configured" ? "success" : "default"}>
+                  {record.status}
+                </Tag>
+              </Space>
+              <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+                {record.description}
+              </Typography.Paragraph>
+            </div>
+          </div>
+
+          {record.homeUrl ? (
+            <Typography.Paragraph
+              copyable={{ text: record.homeUrl }}
+              ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
+              style={cardListUrlStyle}
+              type="secondary"
+            >
+              {record.homeUrl}
+            </Typography.Paragraph>
+          ) : (
+            <Typography.Text type="secondary">No URL configured.</Typography.Text>
+          )}
+
+          <div style={cardListActionStyle}>
+            <Button
+              type="link"
+              onClick={() =>
+                history.push(
+                  buildRuntimeObservabilityHref({
+                    workflow: preferredWorkflow,
+                  })
+                )
+              }
+            >
+              Open hub
+            </Button>
+            <Button
+              type="link"
+              disabled={record.status !== "configured"}
+              href={record.homeUrl || undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open
+            </Button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const OverviewPage: React.FC = () => {
   const {
@@ -358,14 +443,9 @@ const OverviewPage: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
         <Col xs={24} xl={16} style={stretchColumnStyle}>
-          <ProCard
-            title="Quick actions"
-            {...moduleCardProps}
-            style={boundedOverviewCardStyle}
-            bodyStyle={boundedOverviewCardBodyStyle}
-          >
-            <div style={boundedOverviewCardViewportStyle}>
-              <Space direction="vertical" style={{ width: "100%" }} size={16}>
+          <ProCard title="Quick actions" {...moduleCardProps} style={fillCardStyle}>
+            <div style={cardStackStyle}>
+              <div style={quickActionSectionStyle}>
                 <div>
                   <Typography.Text strong>Platform entry points</Typography.Text>
                   <Typography.Text
@@ -375,21 +455,21 @@ const OverviewPage: React.FC = () => {
                     Open runtime, scope, service, governance, and capability
                     surfaces.
                   </Typography.Text>
-                  <div style={{ marginTop: 12 }}>
-                    <Space wrap size={[8, 8]}>
-                      {platformQuickActions.map((item) => (
-                        <Button
-                          key={item.id}
-                          type={item.primary ? "primary" : "default"}
-                          onClick={item.onOpen}
-                        >
-                          {item.label}
-                        </Button>
-                      ))}
-                    </Space>
-                  </div>
                 </div>
+                <Space wrap size={[8, 8]}>
+                  {platformQuickActions.map((item) => (
+                    <Button
+                      key={item.id}
+                      type={item.primary ? "primary" : "default"}
+                      onClick={item.onOpen}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </Space>
+              </div>
 
+              <div style={quickActionSectionStyle}>
                 <div>
                   <Typography.Text strong>Local console tools</Typography.Text>
                   <Typography.Text
@@ -399,102 +479,142 @@ const OverviewPage: React.FC = () => {
                     Jump into browser-level preferences, local runtime
                     configuration, and external observability tools.
                   </Typography.Text>
-                  <div style={{ marginTop: 12 }}>
-                    <Space wrap size={[8, 8]}>
-                      {localQuickActions.map((item) => (
-                        <Button
-                          key={item.id}
-                          href={item.href}
-                          onClick={item.onOpen}
-                          target={item.target}
-                          rel={item.rel}
-                        >
-                          {item.label}
-                        </Button>
-                      ))}
-                    </Space>
-                  </div>
                 </div>
+                <Space wrap size={[8, 8]}>
+                  {localQuickActions.map((item) => (
+                    <Button
+                      key={item.id}
+                      href={item.href}
+                      onClick={item.onOpen}
+                      target={item.target}
+                      rel={item.rel}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </Space>
+              </div>
 
+              <div style={quickActionSectionStyle}>
                 <div>
                   <Typography.Text strong>
                     Human-in-the-loop workflows
                   </Typography.Text>
-                  <div style={{ marginTop: 12 }}>
-                    <Space wrap size={[8, 8]}>
-                      {humanFocusedWorkflows.length > 0 ? (
-                        humanFocusedWorkflows.map((item) => (
-                          <Button
-                            key={item.name}
-                            type="dashed"
-                            onClick={() =>
-                              history.push(
-                                buildRuntimeRunsHref({
-                                  workflow: item.name,
-                                })
-                              )
-                            }
-                          >
-                            {item.name}
-                          </Button>
-                        ))
-                      ) : (
-                        <Typography.Text type="secondary">
-                          No human-interaction workflows were discovered in the
-                          catalog.
-                        </Typography.Text>
-                      )}
-                    </Space>
-                  </div>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", marginTop: 4 }}
+                  >
+                    Jump straight into the workflows that currently expose
+                    human approval, human input, or wait-signal primitives.
+                  </Typography.Text>
                 </div>
-              </Space>
+                <div>
+                  <Space wrap size={[8, 8]}>
+                    {humanFocusedWorkflows.length > 0 ? (
+                      humanFocusedWorkflows.map((item) => (
+                        <Button
+                          key={item.name}
+                          type="dashed"
+                          onClick={() =>
+                            history.push(
+                              buildRuntimeRunsHref({
+                                workflow: item.name,
+                              })
+                            )
+                          }
+                        >
+                          {item.name}
+                        </Button>
+                      ))
+                    ) : (
+                      <Typography.Text type="secondary">
+                        No human-interaction workflows were discovered in the
+                        catalog.
+                      </Typography.Text>
+                    )}
+                  </Space>
+                </div>
+              </div>
             </div>
           </ProCard>
         </Col>
 
         <Col xs={24} xl={8} style={stretchColumnStyle}>
-          <ProCard
-            title="Console profile"
-            {...moduleCardProps}
-            style={boundedOverviewCardStyle}
-            bodyStyle={boundedOverviewCardBodyStyle}
-          >
-            <div style={boundedOverviewCardViewportStyle}>
-              <Space direction="vertical" style={{ width: "100%" }} size={16}>
-                <ProDescriptions<ConsoleProfileItem>
-                  column={1}
-                  dataSource={profileData}
-                  columns={profileColumns}
-                />
+          <ProCard title="Console profile" {...moduleCardProps} style={fillCardStyle}>
+            <div style={cardStackStyle}>
+              <div style={quickActionSectionStyle}>
+                <Space wrap size={[8, 8]}>
+                  <Tag color="processing">{profileData.preferredWorkflow}</Tag>
+                  <Tag>{profileData.observability}</Tag>
+                </Space>
 
+                <div style={summaryFieldGridStyle}>
+                  <SummaryField
+                    label="Preferred workflow"
+                    value={preferences.preferredWorkflow}
+                  />
+                  <SummaryField
+                    label="Observability"
+                    value={grafanaBaseUrl ? "Configured" : "Not configured"}
+                  />
+                  <SummaryField
+                    label="Library workflows"
+                    value={visibleCatalogItems.length}
+                  />
+                </div>
+
+                <Space wrap size={[8, 8]}>
+                  <Button onClick={() => history.push("/settings/console")}>
+                    Open console settings
+                  </Button>
+                  {grafanaBaseUrl ? (
+                    <Button
+                      href={grafanaBaseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open Grafana
+                    </Button>
+                  ) : null}
+                </Space>
+              </div>
+
+              <div style={quickActionSectionStyle}>
                 <div>
                   <Typography.Text strong>Live actor shortcuts</Typography.Text>
-                  <div style={{ marginTop: 12 }}>
-                    <Space wrap size={[8, 8]}>
-                      {liveActors.length > 0 ? (
-                        liveActors.map((agent) => (
-                          <Button
-                            key={agent.id}
-                            onClick={() =>
-                              history.push(
-                                buildRuntimeExplorerHref({
-                                  actorId: agent.id,
-                                })
-                              )
-                            }
-                          >
-                            {agent.id}
-                          </Button>
-                        ))
-                      ) : (
-                        <Typography.Text type="secondary">
-                          No live actors were returned by the backend.
-                        </Typography.Text>
-                      )}
-                    </Space>
-                  </div>
+                  <Typography.Text
+                    type="secondary"
+                    style={{ display: "block", marginTop: 4 }}
+                  >
+                    Open the explorer with a currently active actor already in
+                    focus.
+                  </Typography.Text>
                 </div>
-              </Space>
+                <div>
+                  <Space wrap size={[8, 8]}>
+                    {liveActors.length > 0 ? (
+                      liveActors.map((agent) => (
+                        <Button
+                          key={agent.id}
+                          onClick={() =>
+                            history.push(
+                              buildRuntimeExplorerHref({
+                                actorId: agent.id,
+                              })
+                            )
+                          }
+                        >
+                          {agent.id}
+                        </Button>
+                      ))
+                    ) : (
+                      <Typography.Text type="secondary">
+                        No live actors were returned by the backend.
+                      </Typography.Text>
+                    )}
+                  </Space>
+                </div>
+              </div>
             </div>
           </ProCard>
         </Col>
@@ -505,29 +625,31 @@ const OverviewPage: React.FC = () => {
           <ProCard
             title="Capability surfaces"
             {...moduleCardProps}
-            style={capabilitySurfacesCardStyle}
+            style={fillCardStyle}
           >
-            <div style={capabilitySurfacesScrollStyle}>
-              <Row gutter={[16, 16]}>
-                {capabilitySurfaceItems.map((item) => (
-                  <Col key={item.id} xs={24} md={12} style={stretchColumnStyle}>
-                    <ProCard style={fillCardStyle}>
-                      <div style={cardStackStyle}>
-                        <Space direction="vertical" size={4}>
-                          <Typography.Text strong>{item.title}</Typography.Text>
-                          <Tag color="processing">{item.summary}</Tag>
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {item.description}
-                        </Typography.Text>
-                        <Button type="primary" onClick={item.onOpen}>
-                          {item.actionLabel}
-                        </Button>
-                      </div>
-                    </ProCard>
-                  </Col>
-                ))}
-              </Row>
+            <div style={overviewSurfaceGridStyle}>
+              {capabilitySurfaceItems.map((item) => (
+                <div key={item.id} style={cardListItemStyle}>
+                  <div style={cardListHeaderStyle}>
+                    <div style={cardListMainStyle}>
+                      <Typography.Text strong>{item.title}</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {item.description}
+                      </Typography.Text>
+                    </div>
+                  </div>
+
+                  <Space wrap size={[8, 8]}>
+                    <Tag color="processing">{item.summary}</Tag>
+                  </Space>
+
+                  <div style={cardListActionStyle}>
+                    <Button type="primary" onClick={item.onOpen}>
+                      {item.actionLabel}
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
           </ProCard>
         </Col>
@@ -556,96 +678,66 @@ const OverviewPage: React.FC = () => {
                       ? formatDateTime(capabilitiesQuery.data.generatedAtUtc)
                       : "n/a"}
                   </Tag>
-                  <Tag>
-                    {capabilitiesQuery.data?.primitives.length ?? 0} primitives
-                  </Tag>
-                  <Tag>
-                    {capabilitiesQuery.data?.connectors.length ?? 0} connectors
-                  </Tag>
-                  <Tag>
-                    {capabilitiesQuery.data?.workflows.length ?? 0} workflows
-                  </Tag>
                 </Space>
-                <Row gutter={[12, 12]}>
-                  <Col xs={24} sm={8}>
-                    <ProCard size="small">
-                      <Statistic
-                        title="Primitives"
-                        value={capabilitiesQuery.data?.primitives.length ?? 0}
-                      />
-                    </ProCard>
-                  </Col>
-                  <Col xs={24} sm={8}>
-                    <ProCard size="small">
-                      <Statistic
-                        title="Connectors"
-                        value={capabilitiesQuery.data?.connectors.length ?? 0}
-                      />
-                    </ProCard>
-                  </Col>
-                  <Col xs={24} sm={8}>
-                    <ProCard size="small">
-                      <Statistic
-                        title="Workflows"
-                        value={capabilitiesQuery.data?.workflows.length ?? 0}
-                      />
-                    </ProCard>
-                  </Col>
-                </Row>
 
-                <div>
-                  <Typography.Text strong>Primitive categories</Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", marginTop: 8 }}
-                  >
-                    {capabilityPrimitiveCategorySummary.length > 0
-                      ? capabilityPrimitiveCategorySummary.join(" · ")
-                      : "No primitive categories were returned by the runtime capability digest."}
-                  </Typography.Text>
+                <div style={overviewSummaryMetricGridStyle}>
+                  <SummaryMetric
+                    label="Primitives"
+                    value={capabilitiesQuery.data?.primitives.length ?? 0}
+                  />
+                  <SummaryMetric
+                    label="Connectors"
+                    value={capabilitiesQuery.data?.connectors.length ?? 0}
+                  />
+                  <SummaryMetric
+                    label="Workflows"
+                    value={capabilitiesQuery.data?.workflows.length ?? 0}
+                  />
                 </div>
 
-                <div>
-                  <Typography.Text strong>
-                    Connector availability
-                  </Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", marginTop: 8 }}
-                  >
-                    {capabilityConnectorSummary}
-                  </Typography.Text>
+                <div style={summaryFieldGridStyle}>
+                  <SummaryField
+                    label="Primitive categories"
+                    value={
+                      capabilityPrimitiveCategorySummary.length > 0
+                        ? capabilityPrimitiveCategorySummary.join(" · ")
+                        : "No primitive categories returned."
+                    }
+                  />
+                  <SummaryField
+                    label="Connector availability"
+                    value={capabilityConnectorSummary}
+                  />
+                  <SummaryField
+                    label="Workflow source mix"
+                    value={
+                      capabilityWorkflowSourceSummary.length > 0
+                        ? capabilityWorkflowSourceSummary.join(" · ")
+                        : "No capability workflows were exposed."
+                    }
+                  />
                 </div>
 
-                <div>
-                  <Typography.Text strong>Workflow source mix</Typography.Text>
+                <div style={summarySectionStyle}>
                   <Typography.Text
                     type="secondary"
-                    style={{ display: "block", marginTop: 8 }}
                   >
-                    {capabilityWorkflowSourceSummary.length > 0
-                      ? capabilityWorkflowSourceSummary.join(" · ")
-                      : "No capability workflows were exposed by the backend."}
+                    Overview keeps this as a digest. Use Primitives and
+                    Workflows for the rest of the runtime operating context.
                   </Typography.Text>
+                  <Space wrap>
+                    <Button
+                      onClick={() => history.push(buildRuntimePrimitivesHref())}
+                    >
+                      Open Runtime Primitives
+                    </Button>
+                    <Button
+                      onClick={() => history.push(buildRuntimeWorkflowsHref())}
+                    >
+                      Open Runtime Workflows
+                    </Button>
+                  </Space>
                 </div>
-
-                <Typography.Text type="secondary">
-                  Overview keeps this as a digest. Use Primitives and
-                  Workflows for the rest of the runtime operating context.
-                </Typography.Text>
-
-                <Space wrap>
-                  <Button
-                    onClick={() => history.push(buildRuntimePrimitivesHref())}
-                  >
-                    Open Runtime Primitives
-                  </Button>
-                  <Button
-                    onClick={() => history.push(buildRuntimeWorkflowsHref())}
-                  >
-                    Open Runtime Workflows
-                  </Button>
-                </Space>
               </div>
             )}
           </ProCard>
@@ -659,74 +751,10 @@ const OverviewPage: React.FC = () => {
             {...moduleCardProps}
             style={fillCardStyle}
           >
-            <ProList<ObservabilityOverviewItem>
-              rowKey="id"
-              search={false}
-              split
-              dataSource={observabilityTargets}
-              locale={{
-                emptyText: (
-                  <Typography.Text type="secondary">
-                    No observability targets configured.
-                  </Typography.Text>
-                ),
-              }}
-              metas={{
-                title: {
-                  dataIndex: "label",
-                  render: (_, record) => (
-                    <Space wrap size={[8, 8]}>
-                      <Typography.Text strong>{record.label}</Typography.Text>
-                      <Tag
-                        color={
-                          record.status === "configured" ? "success" : "default"
-                        }
-                      >
-                        {record.status}
-                      </Tag>
-                    </Space>
-                  ),
-                },
-                description: {
-                  dataIndex: "description",
-                },
-                subTitle: {
-                  render: (_, record) =>
-                    record.homeUrl ? (
-                      <Tag>{record.homeUrl}</Tag>
-                    ) : (
-                      <Tag>No URL configured</Tag>
-                    ),
-                },
-                actions: {
-                  render: (_, record) => [
-                    <Button
-                      key={`${record.id}-observability`}
-                      type="link"
-                      onClick={() =>
-                        history.push(
-                          buildRuntimeObservabilityHref({
-                            workflow: preferences.preferredWorkflow,
-                          })
-                        )
-                      }
-                    >
-                      Open hub
-                    </Button>,
-                    <Button
-                      key={`${record.id}-external`}
-                      type="link"
-                      disabled={record.status !== "configured"}
-                      href={record.homeUrl || undefined}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open
-                    </Button>,
-                  ],
-                },
-              }}
-            />
+            {renderObservabilityTargetCards(
+              observabilityTargets,
+              preferences.preferredWorkflow,
+            )}
           </ProCard>
         </Col>
       </Row>

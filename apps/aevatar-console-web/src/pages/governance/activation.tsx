@@ -1,25 +1,31 @@
-import { PageContainer, ProCard, ProTable } from "@ant-design/pro-components";
-import { useQuery } from "@tanstack/react-query";
-import { history } from "@/shared/navigation/history";
-import { Alert, Col, Row, Space } from "antd";
-import React, { useMemo, useState } from "react";
-import { governanceApi } from "@/shared/api/governanceApi";
-import { servicesApi } from "@/shared/api/servicesApi";
+import { PageContainer, ProCard, ProTable } from '@ant-design/pro-components';
+import { useQuery } from '@tanstack/react-query';
+import { Col, Row } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { governanceApi } from '@/shared/api/governanceApi';
+import { servicesApi } from '@/shared/api/servicesApi';
+import { history } from '@/shared/navigation/history';
 import type {
   ServiceBindingSnapshot,
   ServiceEndpointExposureSnapshot,
   ServicePolicySnapshot,
-} from "@/shared/models/governance";
+} from '@/shared/models/governance';
 import {
+  cardStackStyle,
   compactTableCardProps,
   moduleCardProps,
-} from "@/shared/ui/proComponents";
+} from '@/shared/ui/proComponents';
 import {
   bindingColumns,
   endpointColumns,
   policyColumns,
-} from "./components/columns";
-import GovernanceQueryCard from "./components/GovernanceQueryCard";
+} from './components/columns';
+import GovernanceQueryCard from './components/GovernanceQueryCard';
+import {
+  GovernanceSelectionNotice,
+  GovernanceSummaryPanel,
+  type GovernanceSummaryMetric,
+} from './components/GovernanceResultPanels';
 import {
   buildGovernanceServiceOptions,
   buildGovernanceHref,
@@ -28,7 +34,7 @@ import {
   normalizeGovernanceQuery,
   readGovernanceDraft,
   type GovernanceDraft,
-} from "./components/governanceQuery";
+} from './components/governanceQuery';
 
 const initialDraft = readGovernanceDraft();
 
@@ -75,6 +81,37 @@ const GovernanceActivationPage: React.FC = () => {
   );
 
   const activationView = activationQuery.data;
+  const activationMetrics = useMemo<GovernanceSummaryMetric[]>(
+    () => [
+      {
+        label: 'Bindings',
+        value: String(activationView?.bindings.length ?? 0),
+      },
+      {
+        label: 'Policies',
+        value: String(activationView?.policies.length ?? 0),
+      },
+      {
+        label: 'Endpoints',
+        value: String(activationView?.endpoints.length ?? 0),
+      },
+      {
+        label: 'Missing policies',
+        value: String(activationView?.missingPolicyIds.length ?? 0),
+        tone:
+          (activationView?.missingPolicyIds.length ?? 0) > 0
+            ? 'warning'
+            : 'success',
+      },
+    ],
+    [activationView],
+  );
+
+  const activationSummaryDescription = activationQuery.isLoading
+    ? 'Assembling the revision-specific activation capability view for the selected platform service.'
+    : activationView && activationView.missingPolicyIds.length > 0
+      ? `Missing policies: ${activationView.missingPolicyIds.join(', ')}`
+      : 'No missing policy references were found for this revision.';
 
   return (
     <PageContainer
@@ -111,33 +148,36 @@ const GovernanceActivationPage: React.FC = () => {
         </Col>
         <Col xs={24}>
           {!activeDraft.serviceId.trim() || !activeDraft.revisionId.trim() ? (
-            <Alert
-              showIcon
-              type="info"
-              title="Select a platform service and revision to assemble the raw activation capability view."
+            <GovernanceSelectionNotice
+              title="Select a platform service and revision"
+              description="Load a service identity and revision to assemble the raw activation capability view."
             />
-          ) : activationView ? (
-            <Space direction="vertical" size={16} style={{ width: "100%" }}>
-              <Alert
-                showIcon
-                type={
-                  activationView.missingPolicyIds.length > 0
-                    ? "warning"
-                    : "success"
-                }
-                title={`Revision ${activationView.revisionId}`}
-                description={
-                  activationView.missingPolicyIds.length > 0
-                    ? `Missing policies: ${activationView.missingPolicyIds.join(
-                        ", "
-                      )}`
-                    : "No missing policy references."
-                }
+          ) : activationQuery.isLoading || activationView ? (
+            <div style={cardStackStyle}>
+              <GovernanceSummaryPanel
+                title="Activation capability"
+                description={activationSummaryDescription}
+                draft={activeDraft}
+                revisionId={activeDraft.revisionId}
+                metrics={activationMetrics}
+                status={{
+                  color: activationQuery.isLoading
+                    ? 'processing'
+                    : (activationView?.missingPolicyIds.length ?? 0) > 0
+                      ? 'warning'
+                      : 'success',
+                  label: activationQuery.isLoading
+                    ? 'Loading'
+                    : (activationView?.missingPolicyIds.length ?? 0) > 0
+                      ? 'Missing policies'
+                      : 'Ready',
+                }}
               />
               <ProCard title="Bindings" {...moduleCardProps}>
                 <ProTable<ServiceBindingSnapshot>
                   columns={bindingColumns}
-                  dataSource={activationView.bindings}
+                  dataSource={activationView?.bindings ?? []}
+                  loading={activationQuery.isLoading}
                   rowKey="bindingId"
                   search={false}
                   pagination={false}
@@ -148,7 +188,8 @@ const GovernanceActivationPage: React.FC = () => {
               <ProCard title="Policies" {...moduleCardProps}>
                 <ProTable<ServicePolicySnapshot>
                   columns={policyColumns}
-                  dataSource={activationView.policies}
+                  dataSource={activationView?.policies ?? []}
+                  loading={activationQuery.isLoading}
                   rowKey="policyId"
                   search={false}
                   pagination={false}
@@ -159,7 +200,8 @@ const GovernanceActivationPage: React.FC = () => {
               <ProCard title="Endpoints" {...moduleCardProps}>
                 <ProTable<ServiceEndpointExposureSnapshot>
                   columns={endpointColumns}
-                  dataSource={activationView.endpoints}
+                  dataSource={activationView?.endpoints ?? []}
+                  loading={activationQuery.isLoading}
                   rowKey="endpointId"
                   search={false}
                   pagination={false}
@@ -167,12 +209,11 @@ const GovernanceActivationPage: React.FC = () => {
                   toolBarRender={false}
                 />
               </ProCard>
-            </Space>
+            </div>
           ) : (
-            <Alert
-              showIcon
-              type="info"
-              title="Raw activation capability view is unavailable."
+            <GovernanceSelectionNotice
+              title="Raw activation capability view is unavailable"
+              description="The selected service revision did not return a composed activation snapshot."
             />
           )}
         </Col>
