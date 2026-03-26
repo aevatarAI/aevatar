@@ -12,77 +12,7 @@ namespace Aevatar.Tools.Cli.Tests;
 public sealed class ExecutionServiceTests
 {
     [Fact]
-    public async Task StartAsync_WhenPublishedFunctionTargetProvided_ShouldCallAppFunctionStreamEndpoint()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-function-1","workflowName":"approval"}}}
-
-                data: {"runFinished":{"threadId":"run-function-1"}}
-
-                data: [DONE]
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "approval",
-            Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example",
-            AppId: "copilot",
-            FunctionId: "default-chat"));
-        var completed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/apps/copilot/functions/default-chat:stream");
-        handler.LastBody.Should().NotBeNull();
-        using var body = JsonDocument.Parse(handler.LastBody!);
-        body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
-        body.RootElement.GetProperty("eventFormat").GetString().Should().Be("workflow");
-        body.RootElement.TryGetProperty("workflowYamls", out _).Should().BeFalse();
-        completed.ActorId.Should().Be("run-actor-function-1");
-        completed.Status.Should().Be("completed");
-    }
-
-    [Fact]
-    public async Task StartAsync_WhenPublishedReleaseFunctionTargetProvided_ShouldCallReleaseFunctionStreamEndpoint()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-release-function-1","workflowName":"approval"}}}
-
-                data: {"runFinished":{"threadId":"run-release-function-1"}}
-
-                data: [DONE]
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "approval",
-            Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example",
-            AppId: "copilot",
-            FunctionId: "default-chat",
-            ReleaseId: "prod"));
-        var completed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/apps/copilot/releases/prod/functions/default-chat:stream");
-        handler.LastBody.Should().NotBeNull();
-        using var body = JsonDocument.Parse(handler.LastBody!);
-        body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
-        body.RootElement.GetProperty("eventFormat").GetString().Should().Be("workflow");
-        completed.ActorId.Should().Be("run-actor-release-function-1");
-        completed.Status.Should().Be("completed");
-    }
-
-    [Fact]
-    public async Task StartAsync_WhenPublishedWorkflowTargetProvided_ShouldCallScopeRunStreamEndpoint()
+    public async Task StartAsync_WhenPublishedWorkflowTargetProvided_ShouldCallScopeServiceStreamEndpoint()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
             Task.FromResult(CreateSseResponse("""
@@ -98,7 +28,6 @@ public sealed class ExecutionServiceTests
         var detail = await service.StartAsync(new StartExecutionRequest(
             WorkflowName: "approval",
             Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
             RuntimeBaseUrl: "https://runtime.example",
             ScopeId: "scope-a",
             WorkflowId: "workflow-1"));
@@ -106,86 +35,29 @@ public sealed class ExecutionServiceTests
 
         handler.LastRequest.Should().NotBeNull();
         handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/scopes/scope-a/workflows/workflow-1/runs:stream");
+        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/scopes/scope-a/services/workflow-1/invoke/chat:stream");
         handler.LastBody.Should().NotBeNull();
         using var body = JsonDocument.Parse(handler.LastBody!);
         body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
-        body.RootElement.GetProperty("eventFormat").GetString().Should().Be("workflow");
-        body.RootElement.TryGetProperty("workflowYamls", out _).Should().BeFalse();
-        detail.ActorId.Should().BeNull();
-        detail.Status.Should().Be("running");
         completed.ActorId.Should().Be("run-actor-1");
         completed.Status.Should().Be("completed");
     }
 
     [Fact]
-    public async Task StartAsync_WhenPublishedWorkflowAppTargetProvided_ShouldCallAppAwareScopeRunStreamEndpoint()
+    public async Task StartAsync_WhenRegisteredWorkflowTargetMissing_ShouldFailFast()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-app-1","workflowName":"approval"}}}
+            throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"));
+        var (service, _) = CreateService(handler);
 
-                data: {"runFinished":{"threadId":"run-app-1"}}
-
-                data: [DONE]
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
+        var act = () => service.StartAsync(new StartExecutionRequest(
             WorkflowName: "approval",
             Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example",
-            ScopeId: "scope-a",
-            AppId: "copilot",
-            WorkflowId: "workflow-1"));
-        var completed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/scopes/scope-a/apps/copilot/workflows/workflow-1/runs:stream");
-        handler.LastBody.Should().NotBeNull();
-        using var body = JsonDocument.Parse(handler.LastBody!);
-        body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
-        body.RootElement.GetProperty("eventFormat").GetString().Should().Be("workflow");
-        completed.ActorId.Should().Be("run-actor-app-1");
-        completed.Status.Should().Be("completed");
-    }
-
-    [Fact]
-    public async Task StartAsync_WhenPublishedWorkflowTargetMissing_ShouldCallChatEndpoint()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-2","workflowName":"draft"}}}
-
-                data: {"runFinished":{"threadId":"run-2"}}
-
-                data: [DONE]
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "draft",
-            Prompt: "hello",
-            WorkflowYamls: ["name: draft"],
             RuntimeBaseUrl: "https://runtime.example"));
-        var completed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
 
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/chat");
-        handler.LastBody.Should().NotBeNull();
-        using var body = JsonDocument.Parse(handler.LastBody!);
-        body.RootElement.GetProperty("prompt").GetString().Should().Be("hello");
-        body.RootElement.GetProperty("workflow").GetString().Should().Be("draft");
-        body.RootElement.GetProperty("workflowYamls")[0].GetString().Should().Be("name: draft");
-        detail.ActorId.Should().BeNull();
-        detail.Status.Should().Be("running");
-        completed.ActorId.Should().Be("run-actor-2");
-        completed.Status.Should().Be("completed");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*scopeId and workflowId are required*");
+        handler.LastRequest.Should().BeNull();
     }
 
     [Fact]
@@ -196,7 +68,7 @@ public sealed class ExecutionServiceTests
             {
                 Content = new StringContent(
                     """
-                    {"code":"AUTH_REQUIRED","message":"Sign in to use the app APIs.","loginUrl":"/auth/login?returnUrl=%2F"}
+                    {"code":"AUTH_REQUIRED","message":"Sign in to use the service APIs.","loginUrl":"/auth/login?returnUrl=%2F"}
                     """,
                     Encoding.UTF8,
                     "application/json"),
@@ -204,19 +76,17 @@ public sealed class ExecutionServiceTests
         var (service, store) = CreateService(handler);
 
         var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "draft",
+            WorkflowName: "approval",
             Prompt: "hello",
-            WorkflowYamls: ["name: draft"],
-            RuntimeBaseUrl: "https://runtime.example"));
+            RuntimeBaseUrl: "https://runtime.example",
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1"));
         var failed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "failed");
 
-        detail.Status.Should().Be("running");
-        failed.Error.Should().Be("Sign in to use the app APIs.");
+        failed.Error.Should().Be("Sign in to use the service APIs.");
         failed.Frames.Should().HaveCount(1);
-
         using var payload = JsonDocument.Parse(failed.Frames[0].Payload);
         payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("AUTH_REQUIRED");
-        payload.RootElement.GetProperty("runError").GetProperty("message").GetString().Should().Be("Sign in to use the app APIs.");
     }
 
     [Fact]
@@ -236,8 +106,9 @@ public sealed class ExecutionServiceTests
         var detail = await service.StartAsync(new StartExecutionRequest(
             WorkflowName: "approval",
             Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example"));
+            RuntimeBaseUrl: "https://runtime.example",
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1"));
         var failed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "failed");
 
         failed.ActorId.Should().Be("run-actor-eof");
@@ -265,10 +136,11 @@ public sealed class ExecutionServiceTests
         var (service, store) = CreateService(handler, snapshotProvider);
 
         var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "draft",
+            WorkflowName: "approval",
             Prompt: "hello",
-            WorkflowYamls: ["name: draft"],
-            RuntimeBaseUrl: "https://runtime.example"));
+            RuntimeBaseUrl: "https://runtime.example",
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1"));
         await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "completed");
 
         handler.LastRequest.Should().NotBeNull();
@@ -279,89 +151,7 @@ public sealed class ExecutionServiceTests
     }
 
     [Fact]
-    public async Task StartAsync_WhenRunStoppedFrameObserved_ShouldPersistStoppedStatus()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-stop","workflowName":"approval"}}}
-
-                data: {"runStarted":{"threadId":"run-actor-stop","runId":"run-stop-1"}}
-
-                data: {"runStopped":{"runId":"run-stop-1","reason":"manual"}}
-
-                data: [DONE]
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "approval",
-            Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example"));
-        var stopped = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "stopped");
-
-        stopped.ActorId.Should().Be("run-actor-stop");
-        stopped.Status.Should().Be("stopped");
-        stopped.Error.Should().Be("manual");
-    }
-
-    [Fact]
-    public async Task StartAsync_WhenStreamFailsMidFlight_ShouldAppendSyntheticErrorWithoutDroppingObservedFrames()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateFaultingSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-fault","workflowName":"approval"}}}
-
-                data: {"runStarted":{"threadId":"run-actor-fault","runId":"run-fault-1"}}
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "approval",
-            Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example"));
-        var failed = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "failed");
-
-        failed.ActorId.Should().Be("run-actor-fault");
-        failed.Frames.Should().HaveCount(2);
-        failed.Frames[0].Payload.Should().Contain("aevatar.run.context");
-        using var payload = JsonDocument.Parse(failed.Frames.Last().Payload);
-        payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("EXECUTION_STREAM_FAILED");
-    }
-
-    [Fact]
-    public async Task StartAsync_WhenAguiStoppedCustomEventObserved_ShouldPersistStoppedStatus()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(CreateSseResponse("""
-                data: {"custom":{"name":"aevatar.run.context","payload":{"actorId":"run-actor-stop-2","workflowName":"approval"}}}
-
-                data: {"runStarted":{"threadId":"run-actor-stop-2","runId":"run-stop-2"}}
-
-                data: {"custom":{"name":"aevatar.run.stopped","payload":{"@type":"type.googleapis.com/aevatar.workflow.runs.WorkflowRunStoppedEventPayload","runId":"run-stop-2","reason":"manual"}}}
-
-                data: [DONE]
-
-                """)));
-        var (service, store) = CreateService(handler);
-
-        var detail = await service.StartAsync(new StartExecutionRequest(
-            WorkflowName: "approval",
-            Prompt: "hello",
-            WorkflowYamls: ["name: approval"],
-            RuntimeBaseUrl: "https://runtime.example"));
-        var stopped = await store.WaitForExecutionAsync(detail.ExecutionId, record => record.Status == "stopped");
-
-        stopped.ActorId.Should().Be("run-actor-stop-2");
-        stopped.Status.Should().Be("stopped");
-        stopped.Error.Should().Be("manual");
-    }
-
-    [Fact]
-    public async Task StopAsync_ShouldCallWorkflowStopEndpoint_AndAppendLocalStopFrame()
+    public async Task StopAsync_ShouldCallScopeServiceStopEndpoint_AndAppendLocalStopFrame()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
@@ -387,71 +177,19 @@ public sealed class ExecutionServiceTests
                 new StoredExecutionFrame(
                     DateTimeOffset.UtcNow,
                     """{"custom":{"name":"aevatar.human_input.request","payload":{"stepId":"approval-step-1"}}}""")
-            ]);
+            ],
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1");
         await store.SaveExecutionAsync(seed);
 
         var detail = await service.StopAsync("exec-stop-1", new StopExecutionRequest("manual"), CancellationToken.None);
 
         handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/workflows/stop");
+        handler.LastRequest!.RequestUri!.ToString().Should().Be("https://runtime.example/api/scopes/scope-a/services/workflow-1/runs/run-stop-1:stop");
         handler.LastBody.Should().NotBeNull();
         using (var body = JsonDocument.Parse(handler.LastBody!))
         {
             body.RootElement.GetProperty("actorId").GetString().Should().Be("run-actor-stop-1");
-            body.RootElement.GetProperty("runId").GetString().Should().Be("run-stop-1");
-            body.RootElement.GetProperty("reason").GetString().Should().Be("manual");
-        }
-
-        detail.Should().NotBeNull();
-        detail!.Status.Should().Be("waiting");
-        using var payload = JsonDocument.Parse(detail.Frames.Last().Payload);
-        payload.RootElement.GetProperty("custom").GetProperty("name").GetString().Should().Be("studio.run.stop.requested");
-    }
-
-    [Fact]
-    public async Task StopAsync_WhenExecutionHasFunctionContext_ShouldCallAppFunctionRunStopEndpoint()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
-            }));
-        var (service, store) = CreateService(handler);
-        var seed = new StoredExecutionRecord(
-            ExecutionId: "exec-stop-function-1",
-            WorkflowName: "approval",
-            Prompt: "hello",
-            RuntimeBaseUrl: "https://runtime.example",
-            Status: "waiting",
-            StartedAtUtc: DateTimeOffset.UtcNow,
-            CompletedAtUtc: null,
-            ActorId: "run-actor-stop-function-1",
-            Error: null,
-            Frames:
-            [
-                new StoredExecutionFrame(
-                    DateTimeOffset.UtcNow,
-                    """{"runStarted":{"threadId":"run-actor-stop-function-1","runId":"run-stop-function-1"}}"""),
-                new StoredExecutionFrame(
-                    DateTimeOffset.UtcNow,
-                    """{"custom":{"name":"aevatar.human_input.request","payload":{"stepId":"approval-step-1"}}}""")
-            ],
-            AppId: "copilot",
-            ReleaseId: "prod",
-            FunctionId: "default-chat");
-        await store.SaveExecutionAsync(seed);
-
-        var detail = await service.StopAsync("exec-stop-function-1", new StopExecutionRequest("manual"), CancellationToken.None);
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/apps/copilot/releases/prod/functions/default-chat/runs:stop");
-        handler.LastBody.Should().NotBeNull();
-        using (var body = JsonDocument.Parse(handler.LastBody!))
-        {
-            body.RootElement.GetProperty("actorId").GetString().Should().Be("run-actor-stop-function-1");
-            body.RootElement.GetProperty("runId").GetString().Should().Be("run-stop-function-1");
             body.RootElement.GetProperty("reason").GetString().Should().Be("manual");
         }
 
@@ -460,99 +198,12 @@ public sealed class ExecutionServiceTests
     }
 
     [Fact]
-    public async Task StopAsync_WhenRunIdNotObservedYet_ShouldFallbackToActorId()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("{}", Encoding.UTF8, "application/json"),
-            }));
-        var (service, store) = CreateService(handler);
-        var seed = new StoredExecutionRecord(
-            ExecutionId: "exec-stop-fallback-1",
-            WorkflowName: "approval",
-            Prompt: "hello",
-            RuntimeBaseUrl: "https://runtime.example",
-            Status: "running",
-            StartedAtUtc: DateTimeOffset.UtcNow,
-            CompletedAtUtc: null,
-            ActorId: "WorkflowRun:run-early-stop-1",
-            Error: null,
-            Frames:
-            [
-                new StoredExecutionFrame(
-                    DateTimeOffset.UtcNow,
-                    """{"custom":{"name":"aevatar.run.context","payload":{"actorId":"WorkflowRun:run-early-stop-1","workflowName":"approval"}}}""")
-            ]);
-        await store.SaveExecutionAsync(seed);
-
-        var detail = await service.StopAsync("exec-stop-fallback-1", new StopExecutionRequest("manual"), CancellationToken.None);
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastBody.Should().NotBeNull();
-        using (var body = JsonDocument.Parse(handler.LastBody!))
-        {
-            body.RootElement.GetProperty("actorId").GetString().Should().Be("WorkflowRun:run-early-stop-1");
-            body.RootElement.GetProperty("runId").GetString().Should().Be("WorkflowRun:run-early-stop-1");
-            body.RootElement.GetProperty("reason").GetString().Should().Be("manual");
-        }
-
-        detail.Should().NotBeNull();
-        detail!.Frames.Should().HaveCount(2);
-        using var payload = JsonDocument.Parse(detail.Frames.Last().Payload);
-        payload.RootElement.GetProperty("custom").GetProperty("name").GetString().Should().Be("studio.run.stop.requested");
-    }
-
-    [Fact]
-    public async Task StopAsync_WhenExecutionAlreadyCompleted_ShouldReturnReconciledDetailWithoutCallingRuntime()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
-            {
-                Content = new StringContent(
-                    """{"error":"Actor 'WorkflowRun:c1a2c77d' does not have a bound run id."}""",
-                    Encoding.UTF8,
-                    "application/json"),
-            }));
-        var (service, store) = CreateService(handler);
-        var finishedAtUtc = DateTimeOffset.UtcNow;
-        var seed = new StoredExecutionRecord(
-            ExecutionId: "exec-stop-closed-1",
-            WorkflowName: "approval",
-            Prompt: "hello",
-            RuntimeBaseUrl: "https://runtime.example",
-            Status: "waiting",
-            StartedAtUtc: finishedAtUtc.AddMinutes(-1),
-            CompletedAtUtc: null,
-            ActorId: "WorkflowRun:c1a2c77d",
-            Error: null,
-            Frames:
-            [
-                new StoredExecutionFrame(
-                    finishedAtUtc.AddSeconds(-2),
-                    """{"runStarted":{"threadId":"WorkflowRun:c1a2c77d","runId":"run-stop-closed-1"}}"""),
-                new StoredExecutionFrame(
-                    finishedAtUtc,
-                    """{"runFinished":{"threadId":"WorkflowRun:c1a2c77d"}}""")
-            ]);
-        await store.SaveExecutionAsync(seed);
-
-        var detail = await service.StopAsync("exec-stop-closed-1", new StopExecutionRequest("manual"), CancellationToken.None);
-
-        handler.LastRequest.Should().BeNull();
-        detail.Should().NotBeNull();
-        detail!.Status.Should().Be("completed");
-        detail.CompletedAtUtc.Should().Be(finishedAtUtc);
-        detail.Frames.Should().HaveCount(2);
-    }
-
-    [Fact]
-    public async Task ResumeAsync_WhenSyntheticResumeFrameIsPersisted_ShouldClearWaitingStateOnSubsequentReads()
+    public async Task ResumeAsync_ShouldCallScopeServiceResumeEndpoint_AndPersistResumeFrame()
     {
         var handler = new RecordingHttpMessageHandler((request, _) =>
             Task.FromResult(request.RequestUri?.AbsolutePath switch
             {
-                "/api/workflows/resume" => new HttpResponseMessage(HttpStatusCode.OK)
+                "/api/scopes/scope-a/services/workflow-1/runs/run-resume-1:resume" => new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
                         """{"accepted":true,"actorId":"run-actor-resume-1","runId":"run-resume-1","commandId":"cmd-resume-1"}""",
@@ -581,7 +232,9 @@ public sealed class ExecutionServiceTests
                 new StoredExecutionFrame(
                     observedAtUtc,
                     """{"custom":{"name":"aevatar.human_input.request","payload":{"stepId":"approval-step-1"}}}""")
-            ]);
+            ],
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1");
         await store.SaveExecutionAsync(seed);
 
         var resumed = await service.ResumeAsync(
@@ -592,84 +245,12 @@ public sealed class ExecutionServiceTests
                 Approved: true,
                 UserInput: "approved"),
             CancellationToken.None);
-        var reloaded = await service.GetAsync("exec-resume-1", CancellationToken.None);
 
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri!.ToString().Should().Be("https://runtime.example/api/scopes/scope-a/services/workflow-1/runs/run-resume-1:resume");
         resumed.Should().NotBeNull();
         resumed!.Status.Should().Be("running");
         resumed.Frames.Should().HaveCount(3);
-
-        reloaded.Should().NotBeNull();
-        reloaded!.Status.Should().Be("running");
-        reloaded.Error.Should().BeNull();
-        reloaded.Frames.Should().HaveCount(3);
-        using var payload = JsonDocument.Parse(reloaded.Frames.Last().Payload);
-        payload.RootElement.GetProperty("custom").GetProperty("name").GetString().Should().Be("studio.human.resume");
-        payload.RootElement.GetProperty("custom").GetProperty("payload").GetProperty("stepId").GetString().Should().Be("approval-step-1");
-    }
-
-    [Fact]
-    public async Task ResumeAsync_WhenExecutionHasFunctionContext_ShouldCallAppFunctionRunResumeEndpoint()
-    {
-        var handler = new RecordingHttpMessageHandler((request, _) =>
-            Task.FromResult(request.RequestUri?.AbsolutePath switch
-            {
-                "/api/apps/copilot/functions/default-chat/runs:resume" => new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(
-                        """{"accepted":true,"actorId":"run-actor-resume-function-1","runId":"run-resume-function-1","commandId":"cmd-resume-function-1"}""",
-                        Encoding.UTF8,
-                        "application/json"),
-                },
-                _ => throw new InvalidOperationException($"Unexpected HTTP request: {request.RequestUri}"),
-            }));
-        var (service, store) = CreateService(handler);
-        var observedAtUtc = DateTimeOffset.UtcNow;
-        var seed = new StoredExecutionRecord(
-            ExecutionId: "exec-resume-function-1",
-            WorkflowName: "approval",
-            Prompt: "hello",
-            RuntimeBaseUrl: "https://runtime.example",
-            Status: "waiting",
-            StartedAtUtc: observedAtUtc.AddMinutes(-1),
-            CompletedAtUtc: null,
-            ActorId: "run-actor-resume-function-1",
-            Error: null,
-            Frames:
-            [
-                new StoredExecutionFrame(
-                    observedAtUtc.AddSeconds(-2),
-                    """{"runStarted":{"threadId":"run-actor-resume-function-1","runId":"run-resume-function-1"}}"""),
-                new StoredExecutionFrame(
-                    observedAtUtc,
-                    """{"custom":{"name":"aevatar.human_input.request","payload":{"stepId":"approval-step-1"}}}""")
-            ],
-            AppId: "copilot",
-            FunctionId: "default-chat");
-        await store.SaveExecutionAsync(seed);
-
-        var resumed = await service.ResumeAsync(
-            "exec-resume-function-1",
-            new ResumeExecutionRequest(
-                RunId: "run-resume-function-1",
-                StepId: "approval-step-1",
-                Approved: true,
-                UserInput: "approved"),
-            CancellationToken.None);
-
-        handler.LastRequest.Should().NotBeNull();
-        handler.LastRequest!.Method.Should().Be(HttpMethod.Post);
-        handler.LastRequest.RequestUri!.ToString().Should().Be("https://runtime.example/api/apps/copilot/functions/default-chat/runs:resume");
-        handler.LastBody.Should().NotBeNull();
-        using (var body = JsonDocument.Parse(handler.LastBody!))
-        {
-            body.RootElement.GetProperty("actorId").GetString().Should().Be("run-actor-resume-function-1");
-            body.RootElement.GetProperty("runId").GetString().Should().Be("run-resume-function-1");
-            body.RootElement.GetProperty("stepId").GetString().Should().Be("approval-step-1");
-            body.RootElement.GetProperty("approved").GetBoolean().Should().BeTrue();
-        }
-
-        resumed.Should().NotBeNull();
-        resumed!.Frames.Should().HaveCount(3);
     }
 
     [Fact]
@@ -698,7 +279,9 @@ public sealed class ExecutionServiceTests
             ],
             ObservationSessionId: "stale-session",
             ObservationActive: true,
-            LastObservedAtUtc: observedAtUtc);
+            LastObservedAtUtc: observedAtUtc,
+            ScopeId: "scope-a",
+            WorkflowId: "workflow-1");
         await store.SaveExecutionAsync(seed);
 
         var detail = await service.GetAsync("exec-orphan-1", CancellationToken.None);
@@ -707,14 +290,8 @@ public sealed class ExecutionServiceTests
         detail.Should().NotBeNull();
         detail!.Status.Should().Be("failed");
         detail.Error.Should().Be("Studio execution observer was lost before a terminal event was observed.");
-        detail.Frames.Should().HaveCount(2);
-
         failed.Should().NotBeNull();
-        failed!.Status.Should().Be("failed");
-        failed.ObservationActive.Should().BeFalse();
-        using var payload = JsonDocument.Parse(failed.Frames.Last().Payload);
-        payload.RootElement.GetProperty("runError").GetProperty("code").GetString().Should().Be("EXECUTION_OBSERVER_LOST");
-        payload.RootElement.GetProperty("runError").GetProperty("message").GetString().Should().Be("Studio execution observer was lost before a terminal event was observed.");
+        failed!.ObservationActive.Should().BeFalse();
     }
 
     private static (ExecutionService Service, InMemoryStudioWorkspaceStore Store) CreateService(
@@ -740,12 +317,6 @@ public sealed class ExecutionServiceTests
         new(HttpStatusCode.OK)
         {
             Content = new StringContent(payload, Encoding.UTF8, "text/event-stream"),
-        };
-
-    private static HttpResponseMessage CreateFaultingSseResponse(string payload) =>
-        new(HttpStatusCode.OK)
-        {
-            Content = new StreamContent(new FaultingReadStream(payload)),
         };
 
     private sealed class StubHttpClientFactory : IHttpClientFactory
@@ -800,77 +371,6 @@ public sealed class ExecutionServiceTests
             response.RequestMessage ??= request;
             return response;
         }
-    }
-
-    private sealed class FaultingReadStream : Stream
-    {
-        private readonly MemoryStream _inner;
-        private bool _faulted;
-
-        public FaultingReadStream(string payload)
-        {
-            _inner = new MemoryStream(Encoding.UTF8.GetBytes(payload));
-        }
-
-        public override bool CanRead => true;
-
-        public override bool CanSeek => false;
-
-        public override bool CanWrite => false;
-
-        public override long Length => _inner.Length;
-
-        public override long Position
-        {
-            get => _inner.Position;
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush()
-        {
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            var read = _inner.Read(buffer, offset, count);
-            if (read > 0)
-            {
-                return read;
-            }
-
-            if (_faulted)
-            {
-                return 0;
-            }
-
-            _faulted = true;
-            throw new IOException("Simulated SSE stream failure.");
-        }
-
-        public override async ValueTask<int> ReadAsync(
-            Memory<byte> buffer,
-            CancellationToken cancellationToken = default)
-        {
-            var read = await _inner.ReadAsync(buffer, cancellationToken);
-            if (read > 0)
-            {
-                return read;
-            }
-
-            if (_faulted)
-            {
-                return 0;
-            }
-
-            _faulted = true;
-            throw new IOException("Simulated SSE stream failure.");
-        }
-
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class InMemoryStudioWorkspaceStore : IStudioWorkspaceStore

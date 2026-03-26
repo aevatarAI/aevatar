@@ -77,7 +77,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<WorkflowExecutionArtifactQueryPort>();
         services.TryAddSingleton<WorkflowExecutionMaterializationPort>();
         services.TryAddSingleton<WorkflowExecutionProjectionPort>();
-        services.TryAddSingleton<IWorkflowActorBindingReader, ProjectionWorkflowActorBindingReader>();
+        services.TryAddSingleton<ProjectionWorkflowActorBindingReader>();
+        services.TryAddSingleton<IWorkflowActorBindingReader>(sp =>
+            sp.GetRequiredService<ProjectionWorkflowActorBindingReader>());
+        services.TryAddSingleton<IWorkflowRunBindingReader>(sp =>
+            sp.GetRequiredService<ProjectionWorkflowActorBindingReader>());
         services.TryAddSingleton<IWorkflowExecutionMaterializationActivationPort>(sp =>
             sp.GetRequiredService<WorkflowExecutionMaterializationPort>());
         services.TryAddSingleton<IWorkflowExecutionProjectionPort>(sp =>

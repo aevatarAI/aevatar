@@ -44,6 +44,7 @@ public class ChatWorkflowCommandHandlerTests
             File.Exists(expectedPath).Should().BeTrue();
             File.ReadAllText(expectedPath, Encoding.UTF8).Should().Contain("name: generated_from_chat");
             client.LastRunRequest.Should().NotBeNull();
+            client.LastRunRequest!.ScopeId.Should().Be("default");
             client.LastRunRequest!.Workflow.Should().Be("auto_review");
             client.LastRunRequest.Metadata.Should().ContainKey("workflow.authoring.enabled");
             client.LastRunRequest.Metadata.Should().ContainKey("workflow.intent");

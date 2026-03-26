@@ -200,6 +200,7 @@ internal static class ChatCommandHandler
                 new ChatRunRequest
                 {
                     Prompt = prompt,
+                    ScopeId = "default",
                     Workflow = "auto_review",
                     Metadata = BuildWorkflowAuthoringMetadata(),
                 },

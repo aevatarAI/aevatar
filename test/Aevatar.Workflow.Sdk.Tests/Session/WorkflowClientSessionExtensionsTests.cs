@@ -32,7 +32,7 @@ data: {"type":"RUN_FINISHED","result":{"output":"ok"}}
         var events = new List<WorkflowEvent>();
 
         await foreach (var evt in client.StartRunStreamWithTrackingAsync(
-                           new ChatRunRequest { Prompt = "hello" },
+                           new ChatRunRequest { Prompt = "hello", ScopeId = "scope-a", Workflow = "approval" },
                            tracker,
                            CancellationToken.None))
         {

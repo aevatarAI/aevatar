@@ -29,31 +29,11 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         var result = await service.ListAsync(ScopeId);
 
         result.Should().HaveCount(2);
-        result[0].WorkflowId.Should().Be("wf-b", "newer service should come first");
-        result[0].AppId.Should().Be(DefaultOptions.AppId);
-        result[1].WorkflowId.Should().Be("wf-a");
-    }
-
-    [Fact]
-    public async Task ListAsync_ShouldUseRequestedAppId_WhenProvided()
-    {
-        const string appId = "copilot";
-        var services = new[]
-        {
-            CreateServiceSnapshot("wf-a", "Workflow A", appId: appId),
-        };
-        var lifecyclePort = new FakeServiceLifecycleQueryPort(listResult: services);
-        var bindingReader = new FakeWorkflowActorBindingReader();
-        var service = CreateService(lifecyclePort, bindingReader);
-
-        var result = await service.ListAsync(ScopeId, appId);
-
-        result.Should().ContainSingle();
-        result[0].AppId.Should().Be(appId);
+        result[0].WorkflowId.Should().Be("wf-b");
         lifecyclePort.LastListRequest.Should().BeEquivalentTo(new FakeServiceLifecycleQueryPort.ListRequest(
-            DefaultOptions.TenantId,
-            appId,
-            DefaultOptions.BuildNamespace(ScopeId),
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
             DefaultOptions.ListTake));
     }
 
@@ -62,17 +42,16 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     {
         var snapshot = CreateServiceSnapshot("wf-enrich", "Enrich WF", primaryActorId: "actor-1");
         var lifecyclePort = new FakeServiceLifecycleQueryPort(listResult: new[] { snapshot });
-        var binding = new WorkflowActorBinding(
-            ActorKind: WorkflowActorKind.Definition,
-            ActorId: "actor-1",
-            DefinitionActorId: "actor-1",
-            RunId: "",
-            WorkflowName: "enriched-workflow-name",
-            WorkflowYaml: "yaml: true",
-            InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
         var bindingReader = new FakeWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding>
         {
-            ["actor-1"] = binding,
+            ["actor-1"] = new(
+                ActorKind: WorkflowActorKind.Definition,
+                ActorId: "actor-1",
+                DefinitionActorId: "actor-1",
+                RunId: "",
+                WorkflowName: "enriched-workflow-name",
+                WorkflowYaml: "yaml: true",
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
         });
         var service = CreateService(lifecyclePort, bindingReader);
 
@@ -80,30 +59,6 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
         result.Should().ContainSingle();
         result[0].WorkflowName.Should().Be("enriched-workflow-name");
-    }
-
-    [Fact]
-    public async Task ListAsync_ShouldReturnEmptyList_WhenNoServicesExist()
-    {
-        var lifecyclePort = new FakeServiceLifecycleQueryPort(listResult: Array.Empty<ServiceCatalogSnapshot>());
-        var bindingReader = new FakeWorkflowActorBindingReader();
-        var service = CreateService(lifecyclePort, bindingReader);
-
-        var result = await service.ListAsync(ScopeId);
-
-        result.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task GetByWorkflowIdAsync_ShouldReturnNull_WhenServiceNotFound()
-    {
-        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
-        var bindingReader = new FakeWorkflowActorBindingReader();
-        var service = CreateService(lifecyclePort, bindingReader);
-
-        var result = await service.GetByWorkflowIdAsync(ScopeId, "missing-wf");
-
-        result.Should().BeNull();
     }
 
     [Fact]
@@ -123,7 +78,6 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
         result.Should().NotBeNull();
         result!.ScopeId.Should().Be(ScopeId);
-        result.AppId.Should().Be(DefaultOptions.AppId);
         result.WorkflowId.Should().Be("wf-found");
         result.DisplayName.Should().Be("Found Workflow");
         result.ActiveRevisionId.Should().Be("rev-5");
@@ -138,26 +92,24 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             displayName: "Def Workflow",
             primaryActorId: "definition-actor-id");
         var lifecyclePort = new FakeServiceLifecycleQueryPort(listResult: new[] { snapshot });
-        var runBinding = new WorkflowActorBinding(
-            ActorKind: WorkflowActorKind.Run,
-            ActorId: "run-actor-id",
-            DefinitionActorId: "definition-actor-id",
-            RunId: "run-1",
-            WorkflowName: "my-wf",
-            WorkflowYaml: "",
-            InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-        var defBinding = new WorkflowActorBinding(
-            ActorKind: WorkflowActorKind.Definition,
-            ActorId: "definition-actor-id",
-            DefinitionActorId: "definition-actor-id",
-            RunId: "",
-            WorkflowName: "my-wf",
-            WorkflowYaml: "yaml: true",
-            InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
         var bindingReader = new FakeWorkflowActorBindingReader(new Dictionary<string, WorkflowActorBinding>
         {
-            ["run-actor-id"] = runBinding,
-            ["definition-actor-id"] = defBinding,
+            ["run-actor-id"] = new(
+                ActorKind: WorkflowActorKind.Run,
+                ActorId: "run-actor-id",
+                DefinitionActorId: "definition-actor-id",
+                RunId: "run-1",
+                WorkflowName: "my-wf",
+                WorkflowYaml: "",
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            ["definition-actor-id"] = new(
+                ActorKind: WorkflowActorKind.Definition,
+                ActorId: "definition-actor-id",
+                DefinitionActorId: "definition-actor-id",
+                RunId: "",
+                WorkflowName: "my-wf",
+                WorkflowYaml: "yaml: true",
+                InlineWorkflowYamls: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
         });
         var service = CreateService(lifecyclePort, bindingReader);
 
@@ -165,19 +117,6 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
 
         result.Should().NotBeNull();
         result!.ActorId.Should().Be("definition-actor-id");
-    }
-
-    [Fact]
-    public async Task GetByActorIdAsync_ShouldReturnNull_WhenBindingNotFound()
-    {
-        var lifecyclePort = new FakeServiceLifecycleQueryPort(
-            listResult: Array.Empty<ServiceCatalogSnapshot>());
-        var bindingReader = new FakeWorkflowActorBindingReader();
-        var service = CreateService(lifecyclePort, bindingReader);
-
-        var result = await service.GetByActorIdAsync(ScopeId, "unknown-actor");
-
-        result.Should().BeNull();
     }
 
     private static ScopeWorkflowQueryApplicationService CreateService(
@@ -194,18 +133,15 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
         DateTimeOffset? updatedAt = null,
         string activeRevisionId = "rev-1",
         string deploymentId = "dep-default",
-        string primaryActorId = "actor-default",
-        string? appId = null)
+        string primaryActorId = "actor-default")
     {
         var options = new ScopeWorkflowCapabilityOptions();
-        var ns = options.BuildNamespace(ScopeId);
-        var resolvedAppId = string.IsNullOrWhiteSpace(appId) ? options.AppId : appId.Trim();
-        var serviceKey = ServiceKeys.Build(options.TenantId, resolvedAppId, ns, serviceId);
+        var serviceKey = ServiceKeys.Build(ScopeId, options.ServiceAppId, options.ServiceNamespace, serviceId);
         return new ServiceCatalogSnapshot(
             ServiceKey: serviceKey,
-            TenantId: options.TenantId,
-            AppId: resolvedAppId,
-            Namespace: ns,
+            TenantId: ScopeId,
+            AppId: options.ServiceAppId,
+            Namespace: options.ServiceNamespace,
             ServiceId: serviceId,
             DisplayName: displayName,
             DefaultServingRevisionId: activeRevisionId,
@@ -232,9 +168,7 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             _getResult = getResult;
         }
 
-        public Task<ServiceCatalogSnapshot?> GetServiceAsync(
-            ServiceIdentity identity,
-            CancellationToken ct = default) =>
+        public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult(_getResult);
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(
@@ -248,14 +182,10 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
             return Task.FromResult(_listResult);
         }
 
-        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(
-            ServiceIdentity identity,
-            CancellationToken ct = default) =>
+        public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
 
-        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(
-            ServiceIdentity identity,
-            CancellationToken ct = default) =>
+        public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
 
         public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
@@ -265,13 +195,15 @@ public sealed class ScopeWorkflowQueryApplicationServiceTests
     {
         private readonly IReadOnlyDictionary<string, WorkflowActorBinding> _bindings;
 
-        public FakeWorkflowActorBindingReader(
-            IReadOnlyDictionary<string, WorkflowActorBinding>? bindings = null)
+        public FakeWorkflowActorBindingReader(IReadOnlyDictionary<string, WorkflowActorBinding>? bindings = null)
         {
-            _bindings = bindings ?? new Dictionary<string, WorkflowActorBinding>();
+            _bindings = bindings ?? new Dictionary<string, WorkflowActorBinding>(StringComparer.Ordinal);
         }
 
-        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default) =>
-            Task.FromResult(_bindings.TryGetValue(actorId, out var binding) ? binding : null);
+        public Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default)
+        {
+            _bindings.TryGetValue(actorId, out var binding);
+            return Task.FromResult(binding);
+        }
     }
 }

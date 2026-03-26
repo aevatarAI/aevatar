@@ -50,6 +50,8 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
     {
         ArgumentNullException.ThrowIfNull(request);
         EnsureNotBlank(request.Prompt, nameof(request.Prompt));
+        EnsureNotBlank(request.ScopeId ?? string.Empty, nameof(request.ScopeId));
+        EnsureNotBlank(request.Workflow ?? string.Empty, nameof(request.Workflow));
 
         return _chatTransport.StreamAsync(_httpClient, request, _jsonOptions, cancellationToken);
     }
@@ -79,13 +81,22 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        EnsureNotBlank(request.ActorId, nameof(request.ActorId));
+        EnsureNotBlank(request.ScopeId, nameof(request.ScopeId));
+        EnsureNotBlank(request.ServiceId, nameof(request.ServiceId));
         EnsureNotBlank(request.RunId, nameof(request.RunId));
         EnsureNotBlank(request.StepId, nameof(request.StepId));
 
-        return await PostJsonAsync<WorkflowResumeRequest, WorkflowResumeResponse>(
-            "/api/workflows/resume",
-            request,
+        return await PostJsonAsync<object, WorkflowResumeResponse>(
+            $"/api/scopes/{Uri.EscapeDataString(request.ScopeId)}/services/{Uri.EscapeDataString(request.ServiceId)}/runs/{Uri.EscapeDataString(request.RunId)}:resume",
+            new
+            {
+                actorId = NormalizeOptional(request.ActorId),
+                stepId = request.StepId,
+                commandId = NormalizeOptional(request.CommandId),
+                approved = request.Approved,
+                userInput = NormalizeOptional(request.UserInput),
+                metadata = request.Metadata,
+            },
             cancellationToken);
     }
 
@@ -94,13 +105,21 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        EnsureNotBlank(request.ActorId, nameof(request.ActorId));
+        EnsureNotBlank(request.ScopeId, nameof(request.ScopeId));
+        EnsureNotBlank(request.ServiceId, nameof(request.ServiceId));
         EnsureNotBlank(request.RunId, nameof(request.RunId));
         EnsureNotBlank(request.SignalName, nameof(request.SignalName));
 
-        return await PostJsonAsync<WorkflowSignalRequest, WorkflowSignalResponse>(
-            "/api/workflows/signal",
-            request,
+        return await PostJsonAsync<object, WorkflowSignalResponse>(
+            $"/api/scopes/{Uri.EscapeDataString(request.ScopeId)}/services/{Uri.EscapeDataString(request.ServiceId)}/runs/{Uri.EscapeDataString(request.RunId)}:signal",
+            new
+            {
+                actorId = NormalizeOptional(request.ActorId),
+                signalName = request.SignalName,
+                stepId = NormalizeOptional(request.StepId),
+                commandId = NormalizeOptional(request.CommandId),
+                payload = NormalizeOptional(request.Payload),
+            },
             cancellationToken);
     }
 
@@ -370,5 +389,11 @@ public sealed class AevatarWorkflowClient : IAevatarWorkflowClient
     {
         if (string.IsNullOrWhiteSpace(value))
             throw AevatarWorkflowException.InvalidRequest($"Parameter '{fieldName}' is required.");
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 }

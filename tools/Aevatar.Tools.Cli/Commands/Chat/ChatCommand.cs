@@ -8,7 +8,7 @@ internal static class ChatCommand
 {
     public static Command Create()
     {
-        var command = new Command("chat", "Open app UI and send a chat prompt through /api/chat.");
+        var command = new Command("chat", "Open app UI and send a chat prompt through the registered workflow service API.");
         var messageArgument = new Argument<string?>("message", "Prompt text to send in the app UI.");
         var portOption = new Option<int>("--port", () => 6688, "App port for local UI and health check.");
         var urlOption = new Option<string?>("--url", "Override workflow API base URL for this invocation.");

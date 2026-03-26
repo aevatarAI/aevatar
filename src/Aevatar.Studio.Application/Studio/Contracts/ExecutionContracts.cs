@@ -3,14 +3,10 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 public sealed record StartExecutionRequest(
     string WorkflowName,
     string Prompt,
-    IReadOnlyList<string> WorkflowYamls,
     string? RuntimeBaseUrl = null,
     string? ScopeId = null,
-    string? AppId = null,
     string? WorkflowId = null,
-    string? EventFormat = null,
-    string? FunctionId = null,
-    string? ReleaseId = null);
+    string? EventFormat = null);
 
 public sealed record ResumeExecutionRequest(
     string RunId,

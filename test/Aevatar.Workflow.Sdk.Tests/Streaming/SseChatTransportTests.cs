@@ -35,7 +35,7 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         var events = new List<WorkflowEvent>();
         await foreach (var evt in transport.StreamAsync(
                            client,
-                           new ChatRunRequest { Prompt = "hello" },
+                           new ChatRunRequest { Prompt = "hello", ScopeId = "scope-a", Workflow = "approval" },
                            CreateJsonOptions(),
                            CancellationToken.None))
         {
@@ -71,7 +71,7 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         {
             await foreach (var _ in transport.StreamAsync(
                                client,
-                               new ChatRunRequest { Prompt = "hello", Workflow = "missing" },
+                               new ChatRunRequest { Prompt = "hello", ScopeId = "scope-a", Workflow = "missing" },
                                CreateJsonOptions(),
                                CancellationToken.None))
             {
@@ -102,7 +102,7 @@ data: {"type":"RUN_STARTED","threadId":"actor-1","source":"playground","extra":{
         var events = new List<WorkflowEvent>();
         await foreach (var evt in transport.StreamAsync(
                            client,
-                           new ChatRunRequest { Prompt = "hello" },
+                           new ChatRunRequest { Prompt = "hello", ScopeId = "scope-a", Workflow = "approval" },
                            CreateJsonOptions(),
                            CancellationToken.None))
         {

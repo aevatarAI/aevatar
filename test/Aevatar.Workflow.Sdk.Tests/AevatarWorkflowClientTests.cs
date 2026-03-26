@@ -30,7 +30,14 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
                 Content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream"),
             }));
 
-        var act = () => client.RunToCompletionAsync(new ChatRunRequest { Prompt = "hello" }, CancellationToken.None);
+        var act = () => client.RunToCompletionAsync(
+            new ChatRunRequest
+            {
+                Prompt = "hello",
+                ScopeId = "scope-a",
+                Workflow = "approval",
+            },
+            CancellationToken.None);
         var ex = await act.Should().ThrowAsync<AevatarWorkflowException>();
         ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.RunFailed);
         ex.Which.ErrorCode.Should().Be("EXECUTION_FAILED");
@@ -42,12 +49,11 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         var client = CreateClient(async (request, ct) =>
         {
             request.Method.Should().Be(HttpMethod.Post);
-            request.RequestUri?.AbsolutePath.Should().Be("/api/workflows/resume");
+            request.RequestUri?.AbsolutePath.Should().Be("/api/scopes/scope-a/services/approval/runs/run-1:resume");
 
             var body = await request.Content!.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(body);
             doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
-            doc.RootElement.GetProperty("runId").GetString().Should().Be("run-1");
             doc.RootElement.GetProperty("stepId").GetString().Should().Be("approval-1");
             doc.RootElement.GetProperty("metadata").GetProperty("source").GetString().Should().Be("sdk");
 
@@ -62,6 +68,8 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
 
         var result = await client.ResumeAsync(new WorkflowResumeRequest
         {
+            ScopeId = "scope-a",
+            ServiceId = "approval",
             ActorId = "actor-1",
             RunId = "run-1",
             StepId = "approval-1",
@@ -84,12 +92,11 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
         var client = CreateClient(async (request, ct) =>
         {
             request.Method.Should().Be(HttpMethod.Post);
-            request.RequestUri?.AbsolutePath.Should().Be("/api/workflows/signal");
+            request.RequestUri?.AbsolutePath.Should().Be("/api/scopes/scope-a/services/approval/runs/run-1:signal");
 
             var body = await request.Content!.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(body);
             doc.RootElement.GetProperty("actorId").GetString().Should().Be("actor-1");
-            doc.RootElement.GetProperty("runId").GetString().Should().Be("run-1");
             doc.RootElement.GetProperty("signalName").GetString().Should().Be("ops_window_open");
             doc.RootElement.GetProperty("stepId").GetString().Should().Be("wait-1");
 
@@ -104,6 +111,8 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
 
         var result = await client.SignalAsync(new WorkflowSignalRequest
         {
+            ScopeId = "scope-a",
+            ServiceId = "approval",
             ActorId = "actor-1",
             RunId = "run-1",
             SignalName = "ops_window_open",
@@ -127,7 +136,8 @@ data: {"type":"STATE_SNAPSHOT","snapshot":{"actorId":"actor-1","projectionComple
 
         var act = () => client.SignalAsync(new WorkflowSignalRequest
         {
-            ActorId = "actor-1",
+            ScopeId = "scope-a",
+            ServiceId = "approval",
             RunId = "",
             SignalName = "continue",
         });

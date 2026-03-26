@@ -48,6 +48,9 @@ public sealed class ExecutionService
 
     public async Task<ExecutionDetail> StartAsync(StartExecutionRequest request, CancellationToken cancellationToken = default)
     {
+        if (!ShouldUsePublishedWorkflowRun(request))
+            throw new InvalidOperationException("scopeId and workflowId are required. Executions must target a registered scope service.");
+
         var settings = await _store.GetSettingsAsync(cancellationToken);
         var runtimeBaseUrl = string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
             ? settings.RuntimeBaseUrl
@@ -69,9 +72,8 @@ public sealed class ExecutionService
             ObservationSessionId: _observationSessionId,
             ObservationActive: true,
             LastObservedAtUtc: startedAtUtc,
-            AppId: string.IsNullOrWhiteSpace(request.AppId) ? null : request.AppId.Trim(),
-            ReleaseId: string.IsNullOrWhiteSpace(request.ReleaseId) ? null : request.ReleaseId.Trim(),
-            FunctionId: string.IsNullOrWhiteSpace(request.FunctionId) ? null : request.FunctionId.Trim());
+            ScopeId: string.IsNullOrWhiteSpace(request.ScopeId) ? null : request.ScopeId.Trim(),
+            WorkflowId: string.IsNullOrWhiteSpace(request.WorkflowId) ? null : request.WorkflowId.Trim());
 
         await _store.SaveExecutionAsync(record, cancellationToken);
         var authSnapshot = _authSnapshotProvider == null
@@ -98,24 +100,18 @@ public sealed class ExecutionService
                 $"Execution is already in terminal status '{record.Status}' and cannot be resumed.");
         }
 
-        var actorId = record.ActorId?.Trim();
         var runId = request.RunId?.Trim();
         var stepId = request.StepId?.Trim();
-        if (string.IsNullOrWhiteSpace(actorId))
-        {
-            throw new InvalidOperationException("Execution is missing actorId and cannot be resumed.");
-        }
-
         if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(stepId))
         {
             throw new InvalidOperationException("runId and stepId are required to resume this execution.");
         }
 
-        using var httpRequest = BuildResumeExecutionRequest(record);
+        var actorId = record.ActorId?.Trim();
+        using var httpRequest = BuildResumeExecutionRequest(record, runId);
         httpRequest.Content = JsonContent.Create(new
         {
             actorId,
-            runId,
             stepId,
             approved = request.Approved,
             userInput = string.IsNullOrWhiteSpace(request.UserInput) ? null : request.UserInput.Trim(),
@@ -137,7 +133,7 @@ public sealed class ExecutionService
         }
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-        var nextActorId = TryExtractActorIdFromResumeResponse(responseBody) ?? actorId;
+        var nextActorId = TryExtractActorIdFromResumeResponse(responseBody) ?? actorId ?? string.Empty;
         var frames = record.Frames.ToList();
         frames.Add(new StoredExecutionFrame(
             DateTimeOffset.UtcNow,
@@ -177,32 +173,21 @@ public sealed class ExecutionService
         if (IsTerminalExecutionStatus(record.Status))
             return ToDetail(record);
 
-        var actorId = record.ActorId?.Trim();
-        if (string.IsNullOrWhiteSpace(actorId))
-        {
-            throw new InvalidOperationException("Execution is missing actorId and cannot be stopped.");
-        }
-
         var runId = TryExtractRunIdFromRecord(record);
-        if (string.IsNullOrWhiteSpace(runId))
-        {
-            runId = actorId;
-        }
-
         if (string.IsNullOrWhiteSpace(runId))
         {
             throw new InvalidOperationException("Execution is missing runId and cannot be stopped.");
         }
 
+        var actorId = record.ActorId?.Trim();
         var reason = string.IsNullOrWhiteSpace(request.Reason)
             ? "user requested stop"
             : request.Reason.Trim();
 
-        using var httpRequest = BuildStopExecutionRequest(record);
+        using var httpRequest = BuildStopExecutionRequest(record, runId);
         httpRequest.Content = JsonContent.Create(new
         {
             actorId,
-            runId,
             reason,
         });
         var authSnapshot = _authSnapshotProvider == null
@@ -228,7 +213,7 @@ public sealed class ExecutionService
         var frames = record.Frames.ToList();
         frames.Add(new StoredExecutionFrame(
             DateTimeOffset.UtcNow,
-            BuildStudioStopRequestedFrame(actorId, runId, reason)));
+            BuildStudioStopRequestedFrame(actorId ?? string.Empty, runId, reason)));
 
         var updatedRecord = record with
         {
@@ -506,7 +491,7 @@ public sealed class ExecutionService
         StartExecutionRequest request,
         StudioBackendRequestAuthSnapshot? authSnapshot)
     {
-        using var httpRequest = BuildStartExecutionRequest(record.RuntimeBaseUrl, request, record);
+        using var httpRequest = BuildStartExecutionRequest(record.RuntimeBaseUrl, request);
         ApplyAuthSnapshot(httpRequest, authSnapshot);
         var runtimeClient = _httpClientFactory.CreateClient(BackendClientName);
 
@@ -919,110 +904,60 @@ public sealed class ExecutionService
 
     private static HttpRequestMessage BuildStartExecutionRequest(
         string runtimeBaseUrl,
-        StartExecutionRequest request,
-        StoredExecutionRecord record)
+        StartExecutionRequest request)
     {
         var normalizedBaseUrl = runtimeBaseUrl.TrimEnd('/');
-        var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{normalizedBaseUrl}/api/chat");
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, normalizedBaseUrl);
         httpRequest.Headers.Accept.ParseAdd("text/event-stream");
-
-        if (ShouldUsePublishedFunctionRun(request))
-        {
-            var appId = request.AppId!.Trim();
-            var functionId = request.FunctionId!.Trim();
-            var releaseId = request.ReleaseId?.Trim();
-            var requestPath = string.IsNullOrWhiteSpace(releaseId)
-                ? $"{normalizedBaseUrl}/api/apps/{Uri.EscapeDataString(appId)}/functions/{Uri.EscapeDataString(functionId)}:stream"
-                : $"{normalizedBaseUrl}/api/apps/{Uri.EscapeDataString(appId)}/releases/{Uri.EscapeDataString(releaseId)}/functions/{Uri.EscapeDataString(functionId)}:stream";
-            httpRequest.RequestUri = new Uri(requestPath, UriKind.Absolute);
-            httpRequest.Content = JsonContent.Create(new
-            {
-                prompt = request.Prompt,
-                eventFormat = string.IsNullOrWhiteSpace(request.EventFormat) ? "workflow" : request.EventFormat.Trim(),
-            });
-            return httpRequest;
-        }
 
         if (ShouldUsePublishedWorkflowRun(request))
         {
             var scopeId = request.ScopeId!.Trim();
-            var appId = request.AppId?.Trim();
             var workflowId = request.WorkflowId!.Trim();
-            var requestPath = string.IsNullOrWhiteSpace(appId)
-                ? $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/workflows/{Uri.EscapeDataString(workflowId)}/runs:stream"
-                : $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/apps/{Uri.EscapeDataString(appId)}/workflows/{Uri.EscapeDataString(workflowId)}/runs:stream";
+            var requestPath = $"{normalizedBaseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(workflowId)}/invoke/chat:stream";
             httpRequest.RequestUri = new Uri(requestPath, UriKind.Absolute);
             httpRequest.Content = JsonContent.Create(new
             {
                 prompt = request.Prompt,
-                eventFormat = string.IsNullOrWhiteSpace(request.EventFormat) ? "workflow" : request.EventFormat.Trim(),
             });
             return httpRequest;
         }
 
-        httpRequest.Content = JsonContent.Create(new
-        {
-            prompt = request.Prompt,
-            workflow = record.WorkflowName,
-            workflowYamls = request.WorkflowYamls,
-        });
-        return httpRequest;
+        throw new InvalidOperationException("scopeId and workflowId are required. Executions must target a registered scope service.");
     }
-
-    private static bool ShouldUsePublishedFunctionRun(StartExecutionRequest request) =>
-        !string.IsNullOrWhiteSpace(request.AppId) &&
-        !string.IsNullOrWhiteSpace(request.FunctionId) &&
-        IsValidResourceIdFormat(request.AppId) &&
-        IsValidResourceIdFormat(request.FunctionId);
-
-    private static bool IsValidResourceIdFormat(string value)
-    {
-        var trimmed = value.Trim();
-        return !string.IsNullOrEmpty(trimmed) && _resourceIdFormatRegex.IsMatch(trimmed);
-    }
-
-    private static readonly System.Text.RegularExpressions.Regex _resourceIdFormatRegex =
-        new(@"^[a-zA-Z0-9_-]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static bool ShouldUsePublishedWorkflowRun(StartExecutionRequest request) =>
         !string.IsNullOrWhiteSpace(request.ScopeId) &&
         !string.IsNullOrWhiteSpace(request.WorkflowId);
 
     private static HttpRequestMessage BuildResumeExecutionRequest(
-        StoredExecutionRecord record)
+        StoredExecutionRecord record,
+        string runId)
     {
-        var baseUrl = record.RuntimeBaseUrl.TrimEnd('/');
-        if (!string.IsNullOrWhiteSpace(record.AppId) &&
-            !string.IsNullOrWhiteSpace(record.FunctionId))
-        {
-            var appId = Uri.EscapeDataString(record.AppId.Trim());
-            var functionId = Uri.EscapeDataString(record.FunctionId.Trim());
-            var releaseId = record.ReleaseId?.Trim();
-            var path = string.IsNullOrWhiteSpace(releaseId)
-                ? $"{baseUrl}/api/apps/{appId}/functions/{functionId}/runs:resume"
-                : $"{baseUrl}/api/apps/{appId}/releases/{Uri.EscapeDataString(releaseId)}/functions/{functionId}/runs:resume";
-            return new HttpRequestMessage(HttpMethod.Post, path);
-        }
-
-        return new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/workflows/resume");
+        return new HttpRequestMessage(HttpMethod.Post, BuildScopeServiceRunControlUri(record, runId, "resume"));
     }
 
-    private static HttpRequestMessage BuildStopExecutionRequest(StoredExecutionRecord record)
+    private static HttpRequestMessage BuildStopExecutionRequest(
+        StoredExecutionRecord record,
+        string runId)
+    {
+        return new HttpRequestMessage(HttpMethod.Post, BuildScopeServiceRunControlUri(record, runId, "stop"));
+    }
+
+    private static string BuildScopeServiceRunControlUri(
+        StoredExecutionRecord record,
+        string runId,
+        string action)
     {
         var baseUrl = record.RuntimeBaseUrl.TrimEnd('/');
-        if (!string.IsNullOrWhiteSpace(record.AppId) &&
-            !string.IsNullOrWhiteSpace(record.FunctionId))
+        var scopeId = record.ScopeId?.Trim();
+        var serviceId = record.WorkflowId?.Trim();
+        if (string.IsNullOrWhiteSpace(scopeId) || string.IsNullOrWhiteSpace(serviceId))
         {
-            var appId = Uri.EscapeDataString(record.AppId.Trim());
-            var functionId = Uri.EscapeDataString(record.FunctionId.Trim());
-            var releaseId = record.ReleaseId?.Trim();
-            var path = string.IsNullOrWhiteSpace(releaseId)
-                ? $"{baseUrl}/api/apps/{appId}/functions/{functionId}/runs:stop"
-                : $"{baseUrl}/api/apps/{appId}/releases/{Uri.EscapeDataString(releaseId)}/functions/{functionId}/runs:stop";
-            return new HttpRequestMessage(HttpMethod.Post, path);
+            throw new InvalidOperationException("Execution is missing scopeId or workflowId and cannot call service run control.");
         }
 
-        return new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/workflows/stop");
+        return $"{baseUrl}/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}/runs/{Uri.EscapeDataString(runId)}:{action}";
     }
 
     private static string BuildStudioResumeFrame(

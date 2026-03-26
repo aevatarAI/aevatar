@@ -34,15 +34,13 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
-        var resolvedAppId = ScopeWorkflowCapabilityConventions.ResolveAppId(_options, request.AppId);
         var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(request.WorkflowId);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
-        var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId, resolvedAppId);
+        var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
             _options,
             normalizedScopeId,
-            normalizedWorkflowId,
-            resolvedAppId);
+            normalizedWorkflowId);
         var desiredDisplayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(request.DisplayName, normalizedWorkflowId);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
 
@@ -112,10 +110,9 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         var expectedDeploymentId = $"{ServiceActorIds.Deployment(identity)}:{revisionId}";
         var expectedActorId = $"{definitionActorIdPrefix}:{expectedDeploymentId}";
         var workflowSummary =
-            await _scopeWorkflowQueryPort.GetByWorkflowIdAsync(normalizedScopeId, resolvedAppId, normalizedWorkflowId, ct) ??
+            await _scopeWorkflowQueryPort.GetByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct) ??
             new ScopeWorkflowSummary(
                 normalizedScopeId,
-                resolvedAppId,
                 normalizedWorkflowId,
                 desiredDisplayName,
                 ServiceKeys.Build(identity),

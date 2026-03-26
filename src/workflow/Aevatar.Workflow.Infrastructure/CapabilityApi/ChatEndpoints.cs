@@ -24,7 +24,6 @@ public static class WorkflowCapabilityEndpoints
     public static IEndpointRouteBuilder MapWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api").WithTags("Chat");
-        MapInteractionEndpoints(group);
         ChatQueryEndpoints.Map(group);
 
         return app;
@@ -32,32 +31,7 @@ public static class WorkflowCapabilityEndpoints
 
     public static IEndpointRouteBuilder MapWorkflowChatInteractionEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api").WithTags("Chat");
-        MapInteractionEndpoints(group);
-
         return app;
-    }
-
-    private static void MapInteractionEndpoints(RouteGroupBuilder group)
-    {
-        group.MapPost("/chat", HandleChat)
-            .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-
-        group.MapGet("/ws/chat", HandleChatWebSocket);
-        group.MapPost("/workflows/resume", HandleResume)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/workflows/signal", HandleSignal)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/workflows/stop", HandleStop)
-            .Produces(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
     }
 
     public static async Task HandleChat(
@@ -188,7 +162,7 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    internal static async Task<IResult> HandleResume(
+    public static async Task<IResult> HandleResume(
         WorkflowResumeInput input,
         [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
         CancellationToken ct = default)
@@ -247,7 +221,7 @@ public static class WorkflowCapabilityEndpoints
         }
     }
 
-    internal static async Task<IResult> HandleSignal(
+    public static async Task<IResult> HandleSignal(
         WorkflowSignalInput input,
         [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
         CancellationToken ct = default)

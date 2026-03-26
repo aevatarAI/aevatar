@@ -78,9 +78,8 @@ public sealed record StoredExecutionRecord(
     string? ObservationSessionId = null,
     bool ObservationActive = false,
     DateTimeOffset? LastObservedAtUtc = null,
-    string? AppId = null,
-    string? ReleaseId = null,
-    string? FunctionId = null);
+    string? ScopeId = null,
+    string? WorkflowId = null);
 
 public sealed record StoredExecutionFrame(
     DateTimeOffset ReceivedAtUtc,

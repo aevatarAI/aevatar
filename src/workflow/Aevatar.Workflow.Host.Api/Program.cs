@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Aevatar.Workflow.Host.Api — Agent-Actor Host HTTP 入口
 //
-// POST /api/chat   → 调用 workflow 应用层执行 chat run，SSE 返回 AGUI 事件
+// workflow 启动统一通过已注册 service 的 scope API 触发，当前宿主只保留 run control/query 能力
 // GET  /api/agents → 活跃 Agent 列表
 // GET  /api/workflows → 可用工作流列表
 //

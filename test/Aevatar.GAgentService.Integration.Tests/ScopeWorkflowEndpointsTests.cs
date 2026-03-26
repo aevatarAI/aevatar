@@ -151,47 +151,6 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
-    public async Task HandleAppWorkflowDetailAsync_ShouldResolveWorkflowWithinRequestedApp()
-    {
-        var http = CreateHttpContext();
-        var snapshot = new ServiceCatalogSnapshot(
-            "tenant-a:copilot:user:token:approval",
-            "tenant-a",
-            "copilot",
-            "user:user-1-token",
-            "approval",
-            "Approval",
-            "rev-1",
-            "rev-1",
-            "dep-1",
-            "definition-actor-1",
-            "active",
-            [],
-            [],
-            DateTimeOffset.UtcNow);
-        var queryPort = new FakeServiceLifecycleQueryPort();
-        queryPort.GetServiceResults.Enqueue(snapshot);
-
-        var result = await ScopeWorkflowEndpoints.HandleAppWorkflowDetailAsync(
-            http,
-            "user-1",
-            "copilot",
-            "approval",
-            BuildQueryPort(queryPort: queryPort),
-            new FakeWorkflowActorBindingReader(),
-            artifactStore: null,
-            CancellationToken.None);
-
-        await result.ExecuteAsync(http);
-        var body = await ReadBodyAsync(http.Response);
-
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        body.Should().Contain("\"appId\":\"copilot\"");
-        queryPort.LastGetIdentity.Should().NotBeNull();
-        queryPort.LastGetIdentity!.AppId.Should().Be("copilot");
-    }
-
-    [Fact]
     public async Task HandleListWorkflowsAsync_ShouldIncludeWorkflowSources_WhenRequested()
     {
         var http = CreateHttpContext();
@@ -239,51 +198,6 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         body.Should().Contain("\"workflowId\":\"approval\"");
         body.Should().Contain("\"source\":{\"workflowYaml\":\"name: approval\\nsteps: []\\n\"");
-    }
-
-    [Fact]
-    public async Task HandleAppWorkflowListAsync_ShouldUseRequestedAppId()
-    {
-        var http = CreateHttpContext();
-        var queryPort = new FakeServiceLifecycleQueryPort
-        {
-            ListServicesResult =
-            [
-                new ServiceCatalogSnapshot(
-                    "tenant-a:copilot:user:token:approval",
-                    "tenant-a",
-                    "copilot",
-                    "user:user-1-token",
-                    "approval",
-                    "Approval",
-                    "rev-1",
-                    "rev-1",
-                    "dep-1",
-                    "definition-actor-1",
-                    "active",
-                    [],
-                    [],
-                    DateTimeOffset.UtcNow),
-            ],
-        };
-
-        var result = await ScopeWorkflowEndpoints.HandleAppWorkflowListAsync(
-            http,
-            "user-1",
-            "copilot",
-            includeSource: false,
-            BuildQueryPort(queryPort: queryPort),
-            new FakeWorkflowActorBindingReader(),
-            artifactStore: null,
-            CancellationToken.None);
-
-        await result.ExecuteAsync(http);
-        var body = await ReadBodyAsync(http.Response);
-
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        body.Should().Contain("\"appId\":\"copilot\"");
-        queryPort.LastListRequest.Should().NotBeNull();
-        queryPort.LastListRequest!.AppId.Should().Be("copilot");
     }
 
     [Fact]
@@ -354,67 +268,6 @@ public sealed class ScopeWorkflowEndpointsTests
         interactionService.LastRequest.Metadata.Should().ContainKey("source").WhoseValue.Should().Be("user-api");
         interactionService.LastRequest.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
         interactionService.LastRequest.Metadata.Should().NotContainKey("scope_id");
-    }
-
-    [Fact]
-    public async Task HandleAppWorkflowByIdStreamAsync_ShouldResolveWorkflowWithinRequestedApp()
-    {
-        var snapshot = new ServiceCatalogSnapshot(
-            "tenant-a:copilot:user:token:approval",
-            "tenant-a",
-            "copilot",
-            "user:user-1-token",
-            "approval",
-            "Approval",
-            "rev-1",
-            "rev-1",
-            "dep-1",
-            "definition-actor-1",
-            "active",
-            [],
-            [],
-            DateTimeOffset.UtcNow);
-        var queryPort = new FakeServiceLifecycleQueryPort();
-        queryPort.GetServiceResults.Enqueue(snapshot);
-        var interactionService = new FakeCommandInteractionService
-        {
-            ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
-            {
-                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-1");
-                if (onAcceptedAsync != null)
-                    await onAcceptedAsync(receipt, ct);
-                await emitAsync(new WorkflowRunEventEnvelope
-                {
-                    TextMessageContent = new WorkflowTextMessageContentEventPayload
-                    {
-                        MessageId = "msg-1",
-                        Delta = "hello",
-                    },
-                }, ct);
-                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
-            },
-        };
-        var http = CreateHttpContext();
-
-        await ScopeWorkflowEndpoints.HandleAppWorkflowByIdStreamAsync(
-            http,
-            "user-1",
-            "copilot",
-            "approval",
-            new ScopeWorkflowEndpoints.RunScopeWorkflowByIdStreamHttpRequest("hello"),
-            BuildQueryPort(queryPort: queryPort),
-            interactionService,
-            CancellationToken.None);
-
-        var body = await ReadBodyAsync(http.Response);
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        body.Should().Contain("\"delta\": \"hello\"");
-        queryPort.LastGetIdentity.Should().NotBeNull();
-        queryPort.LastGetIdentity!.AppId.Should().Be("copilot");
-        interactionService.LastRequest.Should().NotBeNull();
-        interactionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
-        interactionService.LastRequest.ScopeId.Should().Be("user-1");
     }
 
     [Fact]
@@ -891,10 +744,9 @@ public sealed class ScopeWorkflowEndpointsTests
             queryService,
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
-                TenantId = "tenant-a",
-                AppId = "workflow-app",
-                NamespacePrefix = "user:",
-                DefinitionActorIdPrefix = "user-workflow",
+                ServiceAppId = "default",
+                ServiceNamespace = "default",
+                DefinitionActorIdPrefix = "scope-workflow",
             }));
     }
 
@@ -912,10 +764,9 @@ public sealed class ScopeWorkflowEndpointsTests
             bindingReader ?? new FakeWorkflowActorBindingReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
-                TenantId = "tenant-a",
-                AppId = "workflow-app",
-                NamespacePrefix = "user:",
-                DefinitionActorIdPrefix = "user-workflow",
+                ServiceAppId = "default",
+                ServiceNamespace = "default",
+                DefinitionActorIdPrefix = "scope-workflow",
             }));
     }
 

@@ -29,9 +29,25 @@ public sealed class SseChatTransport : IWorkflowChatTransport
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(jsonOptions);
 
-        using var requestMessage = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
+        var scopeId = request.ScopeId?.Trim();
+        var serviceId = request.Workflow?.Trim();
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw AevatarWorkflowException.InvalidRequest("Parameter 'ScopeId' is required.");
+        if (string.IsNullOrWhiteSpace(serviceId))
+            throw AevatarWorkflowException.InvalidRequest("Parameter 'Workflow' is required.");
+
+        using var requestMessage = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}/invoke/chat:stream")
         {
-            Content = JsonContent.Create(request, options: jsonOptions),
+            Content = JsonContent.Create(
+                new
+                {
+                    prompt = request.Prompt,
+                    sessionId = request.SessionId,
+                    headers = request.Metadata,
+                },
+                options: jsonOptions),
         };
         requestMessage.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
@@ -49,7 +65,7 @@ public sealed class SseChatTransport : IWorkflowChatTransport
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
-            throw AevatarWorkflowException.Transport("Failed to call /api/chat.", ex);
+            throw AevatarWorkflowException.Transport("Failed to call workflow service stream endpoint.", ex);
         }
 
         using (response)
@@ -70,7 +86,7 @@ public sealed class SseChatTransport : IWorkflowChatTransport
             }
             catch (Exception ex)
             {
-                throw AevatarWorkflowException.Transport("Failed to read /api/chat stream response.", ex);
+                throw AevatarWorkflowException.Transport("Failed to read workflow service stream response.", ex);
             }
 
             using var reader = new StreamReader(stream);

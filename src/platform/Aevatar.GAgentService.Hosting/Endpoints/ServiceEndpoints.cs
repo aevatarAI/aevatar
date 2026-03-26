@@ -27,6 +27,7 @@ public static partial class ServiceEndpoints
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
         group.MapGAgentServiceServingEndpoints();
         group.MapGAgentServiceGovernanceEndpoints();
+        app.MapScopeServiceEndpoints();
         app.MapScopeWorkflowCapabilityEndpoints();
         app.MapScopeScriptCapabilityEndpoints();
         return app;

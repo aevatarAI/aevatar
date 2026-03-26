@@ -7,12 +7,10 @@ public sealed record ScopeWorkflowUpsertRequest(
     string? WorkflowName = null,
     string? DisplayName = null,
     IReadOnlyDictionary<string, string>? InlineWorkflowYamls = null,
-    string? RevisionId = null,
-    string? AppId = null);
+    string? RevisionId = null);
 
 public sealed record ScopeWorkflowSummary(
     string ScopeId,
-    string AppId,
     string WorkflowId,
     string DisplayName,
     string ServiceKey,
@@ -31,7 +29,6 @@ public sealed record ScopeWorkflowSource(
 public sealed record ScopeWorkflowDetail(
     bool Available,
     string ScopeId,
-    string AppId,
     ScopeWorkflowSummary? Workflow,
     ScopeWorkflowSource? Source);
 
