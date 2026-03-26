@@ -27,6 +27,15 @@ public static class ScopeServiceEndpoints
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/scopes").WithTags("ScopeServices");
+        group.MapPost("/{scopeId}/draft-run", HandleDraftRunAsync);
+        group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync);
+        group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
+        group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync);
+        group.MapPost("/{scopeId}/invoke/chat:stream", HandleInvokeDefaultChatStreamAsync);
+        group.MapPost("/{scopeId}/invoke/{endpointId}", HandleInvokeDefaultAsync);
+        group.MapPost("/{scopeId}/runs/{runId}:resume", HandleResumeDefaultRunAsync);
+        group.MapPost("/{scopeId}/runs/{runId}:signal", HandleSignalDefaultRunAsync);
+        group.MapPost("/{scopeId}/runs/{runId}:stop", HandleStopDefaultRunAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream", HandleInvokeStreamAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
         group.MapPost("/{scopeId}/services/{serviceId}/runs/{runId}:resume", HandleResumeRunAsync);
@@ -38,6 +47,359 @@ public static class ScopeServiceEndpoints
         group.MapGet("/{scopeId}/services/{serviceId}/bindings", HandleGetBindingsAsync);
         return app;
     }
+
+    private static async Task HandleDraftRunAsync(
+        HttpContext http,
+        string scopeId,
+        ScopeDraftRunHttpRequest request,
+        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
+                throw new InvalidOperationException("workflowYamls is required.");
+
+            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
+            await WorkflowCapabilityEndpoints.HandleChat(
+                http,
+                new ChatInput
+                {
+                    Prompt = request.Prompt?.Trim() ?? string.Empty,
+                    WorkflowYamls = request.WorkflowYamls,
+                    SessionId = request.SessionId,
+                    ScopeId = scopeId,
+                    Metadata = scopedHeaders,
+                },
+                chatRunService,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status400BadRequest,
+                "INVALID_SCOPE_DRAFT_RUN_REQUEST",
+                ex.Message,
+                ct);
+        }
+    }
+
+    private static async Task<IResult> HandleUpsertBindingAsync(
+        HttpContext http,
+        string scopeId,
+        UpsertScopeBindingHttpRequest request,
+        [FromServices] IScopeBindingCommandPort commandPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var result = await commandPort.UpsertAsync(
+                new ScopeBindingUpsertRequest(
+                    scopeId,
+                    ParseScopeBindingImplementationKind(request.ImplementationKind),
+                    request.WorkflowYamls,
+                    request.Script == null
+                        ? null
+                        : new ScopeBindingScriptSpec(
+                            request.Script.ScriptId,
+                            request.Script.ScriptRevision),
+                    request.GAgent == null
+                        ? null
+                        : new ScopeBindingGAgentSpec(
+                            request.GAgent.ActorTypeName,
+                            request.GAgent.PreferredActorId,
+                            (request.GAgent.Endpoints ?? [])
+                            .Select(endpoint => new ScopeBindingGAgentEndpoint(
+                                endpoint.EndpointId,
+                                endpoint.DisplayName,
+                                ParseEndpointKind(endpoint.Kind),
+                                endpoint.RequestTypeUrl,
+                                endpoint.ResponseTypeUrl,
+                                endpoint.Description))
+                            .ToArray()),
+                    request.DisplayName,
+                    request.RevisionId),
+                ct);
+            return Results.Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_BINDING_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleGetBindingAsync(
+        HttpContext http,
+        string scopeId,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IServiceServingQueryPort servingQueryPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            return denied;
+
+        var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+        var identity = BuildScopeServiceIdentity(
+            options.Value,
+            normalizedScopeId,
+            ResolveDefaultScopeServiceId(options.Value));
+        var service = await lifecycleQueryPort.GetServiceAsync(identity, ct);
+        if (service == null)
+        {
+            return Results.Ok(new ScopeBindingStatusHttpResponse(
+                false,
+                normalizedScopeId,
+                identity.ServiceId,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                null,
+                []));
+        }
+
+        var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
+        var servingSet = await servingQueryPort.GetServiceServingSetAsync(identity, ct);
+        var servingTargetsByRevision = BuildServingTargetIndex(servingSet);
+        var revisionSnapshots = (revisions?.Revisions ?? [])
+            .Select(revision =>
+            {
+                servingTargetsByRevision.TryGetValue(revision.RevisionId, out var servingTarget);
+                return new ScopeBindingRevisionHttpResponse(
+                    revision.RevisionId,
+                    revision.ImplementationKind,
+                    revision.Status,
+                    revision.ArtifactHash,
+                    revision.FailureReason,
+                    string.Equals(service.DefaultServingRevisionId, revision.RevisionId, StringComparison.Ordinal),
+                    string.Equals(service.ActiveServingRevisionId, revision.RevisionId, StringComparison.Ordinal),
+                    servingTarget != null,
+                    servingTarget?.AllocationWeight ?? 0,
+                    servingTarget?.ServingState ?? string.Empty,
+                    servingTarget?.DeploymentId ?? string.Empty,
+                    servingTarget?.PrimaryActorId ?? string.Empty,
+                    revision.CreatedAt,
+                    revision.PreparedAt,
+                    revision.PublishedAt,
+                    revision.RetiredAt);
+            })
+            .OrderByDescending(x => x.IsDefaultServing)
+            .ThenByDescending(x => x.IsActiveServing)
+            .ThenByDescending(x => x.PublishedAt ?? x.CreatedAt ?? DateTimeOffset.MinValue)
+            .ToArray();
+
+        return Results.Ok(new ScopeBindingStatusHttpResponse(
+            true,
+            normalizedScopeId,
+            service.ServiceId,
+            service.DisplayName,
+            service.ServiceKey,
+            service.DefaultServingRevisionId,
+            service.ActiveServingRevisionId,
+            service.DeploymentId,
+            service.DeploymentStatus,
+            service.PrimaryActorId,
+            service.UpdatedAt,
+            revisionSnapshots));
+    }
+
+    private static async Task<IResult> HandleActivateBindingRevisionAsync(
+        HttpContext http,
+        string scopeId,
+        string revisionId,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IServiceCommandPort commandPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
+            var normalizedRevisionId = ScopeWorkflowCapabilityOptions.NormalizeRequired(revisionId, nameof(revisionId));
+            var identity = BuildScopeServiceIdentity(
+                options.Value,
+                normalizedScopeId,
+                ResolveDefaultScopeServiceId(options.Value));
+            var service = await lifecycleQueryPort.GetServiceAsync(identity, ct);
+            if (service == null)
+            {
+                return Results.NotFound(new
+                {
+                    code = "SCOPE_BINDING_NOT_FOUND",
+                    message = $"Scope '{normalizedScopeId}' has no active binding.",
+                });
+            }
+
+            var revisions = await lifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
+            var revision = revisions?.Revisions.FirstOrDefault(x =>
+                string.Equals(x.RevisionId, normalizedRevisionId, StringComparison.Ordinal));
+            if (revision == null)
+            {
+                return Results.NotFound(new
+                {
+                    code = "SCOPE_BINDING_REVISION_NOT_FOUND",
+                    message = $"Revision '{normalizedRevisionId}' was not found for scope '{normalizedScopeId}'.",
+                });
+            }
+
+            if (string.Equals(revision.Status, ServiceRevisionStatus.Retired.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.BadRequest(new
+                {
+                    code = "SCOPE_BINDING_REVISION_RETIRED",
+                    message = $"Revision '{normalizedRevisionId}' is retired and cannot be activated.",
+                });
+            }
+
+            await commandPort.SetDefaultServingRevisionAsync(new SetDefaultServingRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = normalizedRevisionId,
+            }, ct);
+            await commandPort.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
+            {
+                Identity = identity.Clone(),
+                RevisionId = normalizedRevisionId,
+            }, ct);
+
+            return Results.Ok(new ScopeBindingActivationHttpResponse(
+                normalizedScopeId,
+                identity.ServiceId,
+                service.DisplayName,
+                normalizedRevisionId));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_BINDING_ACTIVATION_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static Task HandleInvokeDefaultChatStreamAsync(
+        HttpContext http,
+        string scopeId,
+        StreamScopeServiceHttpRequest request,
+        [FromServices] ServiceInvocationResolutionService resolutionService,
+        [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
+        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleInvokeStreamAsync(
+            http,
+            scopeId,
+            ResolveDefaultScopeServiceId(options.Value),
+            "chat",
+            request,
+            resolutionService,
+            admissionAuthorizer,
+            chatRunService,
+            options,
+            ct);
+
+    private static Task<IResult> HandleInvokeDefaultAsync(
+        HttpContext http,
+        string scopeId,
+        string endpointId,
+        InvokeScopeServiceHttpRequest request,
+        [FromServices] IServiceInvocationPort invocationPort,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleInvokeAsync(
+            http,
+            scopeId,
+            ResolveDefaultScopeServiceId(options.Value),
+            endpointId,
+            request,
+            invocationPort,
+            options,
+            ct);
+
+    private static Task<IResult> HandleResumeDefaultRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        ResumeScopeServiceRunHttpRequest request,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> resumeService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleResumeRunAsync(
+            http,
+            scopeId,
+            ResolveDefaultScopeServiceId(options.Value),
+            runId,
+            request,
+            lifecycleQueryPort,
+            workflowRunBindingReader,
+            resumeService,
+            options,
+            ct);
+
+    private static Task<IResult> HandleSignalDefaultRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        SignalScopeServiceRunHttpRequest request,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> signalService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleSignalRunAsync(
+            http,
+            scopeId,
+            ResolveDefaultScopeServiceId(options.Value),
+            runId,
+            request,
+            lifecycleQueryPort,
+            workflowRunBindingReader,
+            signalService,
+            options,
+            ct);
+
+    private static Task<IResult> HandleStopDefaultRunAsync(
+        HttpContext http,
+        string scopeId,
+        string runId,
+        StopScopeServiceRunHttpRequest request,
+        [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
+        [FromServices] IWorkflowRunBindingReader workflowRunBindingReader,
+        [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
+        [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
+        CancellationToken ct) =>
+        HandleStopRunAsync(
+            http,
+            scopeId,
+            ResolveDefaultScopeServiceId(options.Value),
+            runId,
+            request,
+            lifecycleQueryPort,
+            workflowRunBindingReader,
+            stopService,
+            options,
+            ct);
 
     private static async Task HandleInvokeStreamAsync(
         HttpContext http,
@@ -446,6 +808,16 @@ public static class ScopeServiceEndpoints
         };
     }
 
+    private static ServiceEndpointKind ParseEndpointKind(string? rawValue)
+    {
+        return rawValue?.Trim().ToLowerInvariant() switch
+        {
+            "chat" => ServiceEndpointKind.Chat,
+            "command" or null or "" => ServiceEndpointKind.Command,
+            _ => throw new InvalidOperationException($"Unsupported endpoint kind '{rawValue}'."),
+        };
+    }
+
     private static ServiceInvocationRequest BuildStreamInvocationRequest(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,
@@ -544,6 +916,23 @@ public static class ScopeServiceEndpoints
         return definitionActorIds.Contains(binding.EffectiveDefinitionActorId);
     }
 
+    private static IReadOnlyDictionary<string, ServiceServingTargetSnapshot> BuildServingTargetIndex(
+        ServiceServingSetSnapshot? servingSet)
+    {
+        if (servingSet == null)
+            return new Dictionary<string, ServiceServingTargetSnapshot>(StringComparer.Ordinal);
+
+        return servingSet.Targets
+            .GroupBy(x => x.RevisionId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .OrderByDescending(x => x.AllocationWeight)
+                    .ThenByDescending(x => x.ServingState, StringComparer.Ordinal)
+                    .First(),
+                StringComparer.Ordinal);
+    }
+
     private static ServiceIdentity BuildScopeServiceIdentity(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,
@@ -556,6 +945,20 @@ public static class ScopeServiceEndpoints
             AppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceAppId, nameof(options.ServiceAppId)),
             Namespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceNamespace, nameof(options.ServiceNamespace)),
             ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(serviceId, nameof(serviceId)),
+        };
+    }
+
+    private static string ResolveDefaultScopeServiceId(ScopeWorkflowCapabilityOptions options) =>
+        ScopeWorkflowCapabilityOptions.NormalizeRequired(options.DefaultServiceId, nameof(options.DefaultServiceId));
+
+    private static ScopeBindingImplementationKind ParseScopeBindingImplementationKind(string? rawValue)
+    {
+        return rawValue?.Trim().ToLowerInvariant() switch
+        {
+            "workflow" => ScopeBindingImplementationKind.Workflow,
+            "script" => ScopeBindingImplementationKind.Script,
+            "gagent" => ScopeBindingImplementationKind.GAgent,
+            _ => throw new InvalidOperationException($"Unsupported implementationKind '{rawValue}'."),
         };
     }
 
@@ -588,6 +991,29 @@ public static class ScopeServiceEndpoints
         string? CorrelationId,
         string? PayloadTypeUrl,
         string? PayloadBase64);
+
+    public sealed record ScopeDraftRunHttpRequest(
+        string Prompt,
+        IReadOnlyList<string>? WorkflowYamls,
+        string? SessionId = null,
+        Dictionary<string, string>? Headers = null);
+
+    public sealed record UpsertScopeBindingHttpRequest(
+        string ImplementationKind,
+        IReadOnlyList<string>? WorkflowYamls,
+        ScopeBindingScriptHttpRequest? Script = null,
+        ScopeBindingGAgentHttpRequest? GAgent = null,
+        string? DisplayName = null,
+        string? RevisionId = null);
+
+    public sealed record ScopeBindingScriptHttpRequest(
+        string ScriptId,
+        string? ScriptRevision = null);
+
+    public sealed record ScopeBindingGAgentHttpRequest(
+        string ActorTypeName,
+        string? PreferredActorId,
+        IReadOnlyList<ServiceEndpointHttpRequest>? Endpoints);
 
     public sealed record StreamScopeServiceHttpRequest(
         string Prompt,
@@ -637,4 +1063,42 @@ public static class ScopeServiceEndpoints
     private sealed record ScopeServiceRunResolution(
         WorkflowActorBinding? Binding,
         IResult? Failure);
+
+    public sealed record ScopeBindingStatusHttpResponse(
+        bool Available,
+        string ScopeId,
+        string ServiceId,
+        string DisplayName,
+        string ServiceKey,
+        string DefaultServingRevisionId,
+        string ActiveServingRevisionId,
+        string DeploymentId,
+        string DeploymentStatus,
+        string PrimaryActorId,
+        DateTimeOffset? UpdatedAt,
+        IReadOnlyList<ScopeBindingRevisionHttpResponse> Revisions);
+
+    public sealed record ScopeBindingRevisionHttpResponse(
+        string RevisionId,
+        string ImplementationKind,
+        string Status,
+        string ArtifactHash,
+        string FailureReason,
+        bool IsDefaultServing,
+        bool IsActiveServing,
+        bool IsServingTarget,
+        int AllocationWeight,
+        string ServingState,
+        string DeploymentId,
+        string PrimaryActorId,
+        DateTimeOffset? CreatedAt,
+        DateTimeOffset? PreparedAt,
+        DateTimeOffset? PublishedAt,
+        DateTimeOffset? RetiredAt);
+
+    public sealed record ScopeBindingActivationHttpResponse(
+        string ScopeId,
+        string ServiceId,
+        string DisplayName,
+        string RevisionId);
 }

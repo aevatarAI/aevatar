@@ -82,6 +82,22 @@ internal static class ScopeWorkflowCapabilityConventions
         };
     }
 
+    public static ServiceIdentity BuildDefaultServiceIdentity(
+        ScopeWorkflowCapabilityOptions options,
+        string scopeId) =>
+        BuildServiceIdentity(
+            options,
+            scopeId,
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(options.DefaultServiceId, nameof(options.DefaultServiceId)));
+
+    public static string BuildDefaultDefinitionActorIdPrefix(
+        ScopeWorkflowCapabilityOptions options,
+        string scopeId) =>
+        BuildDefinitionActorIdPrefix(
+            options,
+            scopeId,
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(options.DefaultServiceId, nameof(options.DefaultServiceId)));
+
     public static string BuildDefinitionActorIdPrefix(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,

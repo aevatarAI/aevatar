@@ -107,4 +107,57 @@ describe('studioApi host-session requests', () => {
       'Bearer access-token',
     );
   });
+
+  it('binds a saved script to the default service using the scope binding endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        displayName: 'script-1',
+        revisionId: 'rev-1',
+        workflowName: 'script-1',
+        definitionActorIdPrefix: 'definition',
+        expectedActorId: 'definition-scope-1',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.bindScopeScript({
+      scopeId: 'scope-1',
+      displayName: 'script-1',
+      scriptId: 'script-1',
+      scriptRevision: 'rev-1',
+      revisionId: 'rev-1',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/binding');
+    expect(init?.method).toBe('PUT');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      implementationKind: 'script',
+      displayName: 'script-1',
+      scriptId: 'script-1',
+      scriptRevision: 'rev-1',
+      revisionId: 'rev-1',
+    });
+  });
 });

@@ -20,12 +20,12 @@ describe("runtimeRunsApi", () => {
     await expect(
       runtimeRunsApi.streamChat(
         "scope-1",
-        "service-1",
         {
           prompt: "Run it",
           workflowYamls: ["name: broken"],
         },
-        new AbortController().signal
+        new AbortController().signal,
+        { serviceId: "service-1" }
       )
     ).rejects.toThrow("invalid workflow yaml");
   });
@@ -44,12 +44,12 @@ describe("runtimeRunsApi", () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await expect(
-      runtimeRunsApi.resume("scope-1", "service-1", {
+      runtimeRunsApi.resume("scope-1", {
         actorId: "actor-1",
         runId: "run-1",
         stepId: "step-1",
         approved: true,
-      })
+      }, { serviceId: "service-1" })
     ).resolves.toEqual({
       accepted: true,
       actorId: "actor-1",
@@ -67,7 +67,30 @@ describe("runtimeRunsApi", () => {
 
     await runtimeRunsApi.streamChat(
       "scope-1",
-      "service-1",
+      {
+        prompt: "Run it",
+      },
+      new AbortController().signal,
+      { serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/services/service-1/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
+  it("routes scoped streamChat through the scope default service endpoint", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamChat(
+      "scope-1",
       {
         prompt: "Run it",
       },
@@ -75,7 +98,32 @@ describe("runtimeRunsApi", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/scopes/scope-1/services/service-1/invoke/chat:stream",
+      "/api/scopes/scope-1/invoke/chat:stream",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+  });
+
+  it("routes draft runs through the scope draft endpoint", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamDraftRun(
+      "scope-1",
+      {
+        prompt: "Run draft",
+        workflowYamls: ["name: draft"],
+        metadata: { source: "studio" },
+      },
+      new AbortController().signal
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/draft-run",
       expect.objectContaining({
         method: "POST",
       })

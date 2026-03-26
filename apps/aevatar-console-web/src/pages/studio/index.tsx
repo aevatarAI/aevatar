@@ -12,6 +12,7 @@ import {
   Space,
 } from 'antd';
 import React, {
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
@@ -34,6 +35,7 @@ import {
   type PlaygroundPromptHistoryEntry,
 } from '@/shared/playground/promptHistory';
 import { loadPlaygroundDraft } from '@/shared/playground/playgroundDraft';
+import { saveDraftRunPayload } from '@/shared/runs/draftRunSession';
 import {
   applyRoleInspectorDraft,
   applyStepInspectorDraft,
@@ -167,6 +169,43 @@ function hasValidationError(findings: StudioValidationFinding[]): boolean {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function readWorkflowCallTargets(
+  document: StudioWorkflowDocument | null | undefined,
+): string[] {
+  const steps = Array.isArray(document?.steps) ? document.steps : [];
+  const seen = new Set<string>();
+  const targets: string[] = [];
+
+  for (const step of steps) {
+    const normalizedType = trimOptional(
+      typeof step?.type === 'string'
+        ? step.type
+        : typeof step?.originalType === 'string'
+          ? step.originalType
+          : '',
+    );
+    if (normalizedType !== 'workflow_call') {
+      continue;
+    }
+
+    const parameters =
+      step?.parameters && typeof step.parameters === 'object'
+        ? (step.parameters as Record<string, unknown>)
+        : null;
+    const target = trimOptional(
+      typeof parameters?.workflow === 'string' ? parameters.workflow : '',
+    );
+    if (!target || seen.has(target)) {
+      continue;
+    }
+
+    seen.add(target);
+    targets.push(target);
+  }
+
+  return targets;
 }
 
 function parseStudioTab(value: string | null): StudioTab {
@@ -835,6 +874,10 @@ const StudioPage: React.FC = () => {
   const [runPrompt, setRunPrompt] = useState(initialState.prompt);
   const [runPending, setRunPending] = useState(false);
   const [runNotice, setRunNotice] = useState<DraftRunNotice | null>(null);
+  const [publishPending, setPublishPending] = useState(false);
+  const [publishNotice, setPublishNotice] = useState<StudioNotice | null>(null);
+  const [bindingActivationRevisionId, setBindingActivationRevisionId] =
+    useState('');
   const [workflowImportPending, setWorkflowImportPending] = useState(false);
   const [workflowImportNotice, setWorkflowImportNotice] =
     useState<StudioNotice | null>(null);
@@ -983,6 +1026,10 @@ const StudioPage: React.FC = () => {
     enabled: studioHostReady,
     queryFn: () => studioApi.getAppContext(),
   });
+  const resolvedStudioScopeId =
+    trimOptional(appContextQuery.data?.scopeId) ||
+    trimOptional(authSessionQuery.data?.scopeId) ||
+    '';
   const workspaceSettingsQuery = useQuery({
     queryKey: ['studio-workspace-settings'],
     enabled: studioHostReady,
@@ -1032,6 +1079,11 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-execution', selectedExecutionId],
     enabled: studioHostReady && Boolean(selectedExecutionId),
     queryFn: () => studioApi.getExecution(selectedExecutionId),
+  });
+  const scopeBindingQuery = useQuery({
+    queryKey: ['studio-scope-binding', resolvedStudioScopeId],
+    enabled: studioHostReady && Boolean(resolvedStudioScopeId),
+    queryFn: () => studioApi.getScopeBinding(resolvedStudioScopeId),
   });
   const matchingWorkspaceWorkflow = useMemo(
     () =>
@@ -1395,10 +1447,98 @@ const StudioPage: React.FC = () => {
   const canRunWorkflow =
     Boolean(draftYaml.trim()) &&
     Boolean(activeWorkflowName.trim()) &&
+    Boolean(resolvedStudioScopeId) &&
     Boolean(runPrompt.trim()) &&
     !runPending &&
     !parseYamlQuery.isLoading &&
     !hasValidationError(activeWorkflowFindings);
+  const canPublishWorkflow =
+    Boolean(draftYaml.trim()) &&
+    Boolean(activeWorkflowName.trim()) &&
+    Boolean(resolvedStudioScopeId) &&
+    !publishPending &&
+    !parseYamlQuery.isLoading &&
+    !hasValidationError(activeWorkflowFindings);
+  const buildWorkflowYamlBundle = useCallback(async (): Promise<string[]> => {
+    const rootYaml = draftYaml.trim();
+    if (!rootYaml) {
+      throw new Error('Workflow YAML is required.');
+    }
+
+    const workspaceWorkflows = workflowsQuery.data ?? [];
+    const availableWorkflowNames = workspaceWorkflows.map((item) => item.name);
+    const workflowIdsByName = new Map(
+      workspaceWorkflows.map((item) => [item.name, item.workflowId]),
+    );
+    const bundle: string[] = [];
+    const seen = new Set<string>();
+    const queue: Array<{
+      workflowName: string;
+      yaml: string;
+      document: StudioWorkflowDocument | null | undefined;
+    }> = [
+      {
+        workflowName: activeWorkflowName.trim() || draftWorkflowName.trim(),
+        yaml: rootYaml,
+        document: activeWorkflowDocument,
+      },
+    ];
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      const normalizedWorkflowName = trimOptional(current.workflowName);
+      if (normalizedWorkflowName && seen.has(normalizedWorkflowName)) {
+        continue;
+      }
+
+      if (normalizedWorkflowName) {
+        seen.add(normalizedWorkflowName);
+      }
+      bundle.push(current.yaml);
+
+      for (const targetWorkflow of readWorkflowCallTargets(current.document)) {
+        if (seen.has(targetWorkflow)) {
+          continue;
+        }
+
+        const workflowId = workflowIdsByName.get(targetWorkflow);
+        if (!workflowId) {
+          throw new Error(
+            `workflow_call references '${targetWorkflow}', but Studio could not resolve it from the workspace.`,
+          );
+        }
+
+        const workflowFile = await studioApi.getWorkflow(workflowId);
+        const childDocument =
+          workflowFile.document ??
+          (
+            await studioApi.parseYaml({
+              yaml: workflowFile.yaml,
+              availableWorkflowNames,
+            })
+          ).document ??
+          null;
+
+        queue.push({
+          workflowName: trimOptional(workflowFile.name) || targetWorkflow,
+          yaml: workflowFile.yaml,
+          document: childDocument,
+        });
+      }
+    }
+
+    return bundle;
+  }, [
+    activeWorkflowDocument,
+    activeWorkflowName,
+    draftWorkflowName,
+    draftYaml,
+    workflowsQuery.data,
+  ]);
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
     [promptHistory],
@@ -1775,10 +1915,11 @@ const StudioPage: React.FC = () => {
   const handleStartExecution = async () => {
     const workflowName = activeWorkflowName.trim();
     const prompt = runPrompt.trim();
+    const scopeId = resolvedStudioScopeId;
     if (!workflowName) {
       setRunNotice({
         type: 'error',
-        message: 'Workflow name is required before starting a Studio execution.',
+        message: 'Workflow name is required before starting a draft run.',
       });
       return;
     }
@@ -1786,7 +1927,7 @@ const StudioPage: React.FC = () => {
     if (!draftYaml.trim()) {
       setRunNotice({
         type: 'error',
-        message: 'Workflow YAML is required before starting a Studio execution.',
+        message: 'Workflow YAML is required before starting a draft run.',
       });
       return;
     }
@@ -1794,7 +1935,7 @@ const StudioPage: React.FC = () => {
     if (!prompt) {
       setRunNotice({
         type: 'error',
-        message: 'Execution prompt is required before starting a Studio execution.',
+        message: 'Execution prompt is required before starting a draft run.',
       });
       return;
     }
@@ -1802,7 +1943,15 @@ const StudioPage: React.FC = () => {
     if (hasValidationError(activeWorkflowFindings)) {
       setRunNotice({
         type: 'error',
-        message: 'Resolve Studio YAML validation errors before starting a Studio execution.',
+        message: 'Resolve Studio YAML validation errors before starting a draft run.',
+      });
+      return;
+    }
+
+    if (!scopeId) {
+      setRunNotice({
+        type: 'error',
+        message: 'Resolve the current scope before starting a draft run.',
       });
       return;
     }
@@ -1811,54 +1960,139 @@ const StudioPage: React.FC = () => {
     setRunNotice(null);
 
     try {
-      const execution = await studioApi.startExecution({
+      const workflowYamls = await buildWorkflowYamlBundle();
+      const draftKey = saveDraftRunPayload({
         workflowName,
-        prompt,
-        workflowYamls: [draftYaml],
-        runtimeBaseUrl: workspaceSettingsQuery.data?.runtimeBaseUrl,
+        workflowYamls,
       });
-
-      queryClient.setQueryData(
-        ['studio-execution', execution.executionId],
-        execution,
-      );
-      queryClient.setQueryData(
-        ['studio-executions'],
-        (current: StudioExecutionSummary[] | undefined) => {
-          const next = [
-            toExecutionSummary(execution),
-            ...(current ?? []).filter(
-              (item) => item.executionId !== execution.executionId,
-            ),
-          ];
-
-          return next;
-        },
-      );
-
-      setSelectedExecutionId(execution.executionId);
-      setWorkspacePage('studio');
-      setStudioView('execution');
       setPromptHistory(
         savePlaygroundPromptHistoryEntry({
           prompt,
           workflowName,
         }),
       );
-      setRunNotice({
-        type: 'success',
-        message: `Started Studio execution for ${execution.workflowName}.`,
-      });
+      history.push(
+        buildRuntimeRunsHref({
+          scopeId,
+          workflow: workflowName,
+          prompt,
+          draftKey,
+        }),
+      );
     } catch (error) {
       setRunNotice({
         type: 'error',
         message:
           error instanceof Error
             ? error.message
-            : 'Failed to start Studio execution.',
+            : 'Failed to open the draft run console.',
       });
     } finally {
       setRunPending(false);
+    }
+  };
+
+  const handlePublishWorkflow = async () => {
+    const workflowName = activeWorkflowName.trim();
+    const scopeId = resolvedStudioScopeId;
+    if (!workflowName) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Workflow name is required before binding the current scope.',
+      });
+      return;
+    }
+
+    if (!draftYaml.trim()) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Workflow YAML is required before binding the current scope.',
+      });
+      return;
+    }
+
+    if (hasValidationError(activeWorkflowFindings)) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve Studio YAML validation errors before binding the current scope.',
+      });
+      return;
+    }
+
+    if (!scopeId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope before binding the current workflow.',
+      });
+      return;
+    }
+
+    setPublishPending(true);
+    setPublishNotice(null);
+
+    try {
+      const workflowYamls = await buildWorkflowYamlBundle();
+      const result = await studioApi.bindScopeWorkflow({
+        scopeId,
+        displayName: workflowName,
+        workflowYamls,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+      setPublishNotice({
+        type: 'success',
+        message: `Bound scope ${result.scopeId} to workflow ${result.workflowName} on revision ${result.revisionId}.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to bind the current workflow to the scope.',
+      });
+    } finally {
+      setPublishPending(false);
+    }
+  };
+
+  const handleActivateBindingRevision = async (revisionId: string) => {
+    const scopeId = resolvedStudioScopeId;
+    const normalizedRevisionId = revisionId.trim();
+    if (!scopeId || !normalizedRevisionId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope and revision before activating a binding.',
+      });
+      return;
+    }
+
+    setBindingActivationRevisionId(normalizedRevisionId);
+    setPublishNotice(null);
+
+    try {
+      const result = await studioApi.activateScopeBindingRevision({
+        scopeId,
+        revisionId: normalizedRevisionId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+      setPublishNotice({
+        type: 'success',
+        message: `Scope ${result.scopeId} is now serving revision ${result.revisionId}.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to activate the selected binding revision.',
+      });
+    } finally {
+      setBindingActivationRevisionId('');
     }
   };
 
@@ -3637,6 +3871,14 @@ const StudioPage: React.FC = () => {
           runPending={runPending}
           canRunWorkflow={canRunWorkflow}
           runNotice={runNotice}
+          resolvedScopeId={resolvedStudioScopeId || undefined}
+          publishPending={publishPending}
+          canPublishWorkflow={canPublishWorkflow}
+          publishNotice={publishNotice}
+          scopeBinding={scopeBindingQuery.data}
+          scopeBindingLoading={scopeBindingQuery.isLoading}
+          scopeBindingError={scopeBindingQuery.isError ? scopeBindingQuery.error : null}
+          bindingActivationRevisionId={bindingActivationRevisionId}
           onSwitchStudioView={setStudioView}
           onExportDraft={() => void handleExportDraft()}
           onSelectGraphNode={(nodeId) => {
@@ -3690,6 +3932,10 @@ const StudioPage: React.FC = () => {
           onWorkflowImportChange={handleWorkflowImport}
           onResetDraft={resetDraftFromSource}
           onSaveDraft={() => void handleSaveDraft()}
+          onPublishWorkflow={() => void handlePublishWorkflow()}
+          onActivateBindingRevision={(revisionId) =>
+            void handleActivateBindingRevision(revisionId)
+          }
           onInspectPublishedWorkflow={() =>
             history.push(
               buildRuntimeWorkflowsHref({
@@ -3700,7 +3946,9 @@ const StudioPage: React.FC = () => {
           onRunInConsole={() =>
             history.push(
               buildRuntimeRunsHref({
-                workflow: templateWorkflow,
+                scopeId: resolvedStudioScopeId || undefined,
+                workflow: activeWorkflowName || templateWorkflow || undefined,
+                prompt: runPrompt || undefined,
               }),
             )
           }

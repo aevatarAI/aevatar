@@ -50,10 +50,35 @@ function encodeSegment(value: string): string {
   return encodeURIComponent(value.trim());
 }
 
+function buildScopePath(scopeId: string): string {
+  return `/api/scopes/${encodeSegment(scopeId)}`;
+}
+
 function buildScopedServicePath(scopeId: string, serviceId: string): string {
   return `/api/scopes/${encodeSegment(scopeId)}/services/${encodeSegment(
     serviceId
   )}`;
+}
+
+function buildInvokeChatStreamPath(
+  scopeId: string,
+  serviceId?: string
+): string {
+  return serviceId?.trim()
+    ? `${buildScopedServicePath(scopeId, serviceId)}/invoke/chat:stream`
+    : `${buildScopePath(scopeId)}/invoke/chat:stream`;
+}
+
+function buildRunControlPath(
+  scopeId: string,
+  runId: string,
+  action: "resume" | "signal" | "stop",
+  serviceId?: string
+): string {
+  const encodedRunId = encodeSegment(runId);
+  return serviceId?.trim()
+    ? `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodedRunId}:${action}`
+    : `${buildScopePath(scopeId)}/runs/${encodedRunId}:${action}`;
 }
 
 export type WorkflowStopRequest = {
@@ -75,31 +100,33 @@ export type WorkflowStopResponse = {
 export const runtimeRunsApi = {
   async streamChat(
     scopeId: string,
-    serviceId: string,
     request: ChatRunRequest,
-    signal: AbortSignal
+    signal: AbortSignal,
+    options?: {
+      serviceId?: string;
+    }
   ): Promise<Response> {
     const response = await authFetch(
-      `${buildScopedServicePath(scopeId, serviceId)}/invoke/chat:stream`,
+      buildInvokeChatStreamPath(scopeId, options?.serviceId),
       {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(
-        compactObject({
-          prompt: request.prompt.trim(),
-          workflow: trimOptional(request.workflow),
-          agentId: trimOptional(request.agentId),
-          workflowYamls:
-            request.workflowYamls && request.workflowYamls.length > 0
-              ? request.workflowYamls
-              : undefined,
-          metadata: request.metadata,
-        })
-      ),
-      signal,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(
+          compactObject({
+            prompt: request.prompt.trim(),
+            workflow: trimOptional(request.workflow),
+            agentId: trimOptional(request.agentId),
+            workflowYamls:
+              request.workflowYamls && request.workflowYamls.length > 0
+                ? request.workflowYamls
+                : undefined,
+            metadata: request.metadata,
+          })
+        ),
+        signal,
       }
     );
 
@@ -110,15 +137,46 @@ export const runtimeRunsApi = {
     return response;
   },
 
+  async streamDraftRun(
+    scopeId: string,
+    request: ChatRunRequest,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const response = await authFetch(`${buildScopePath(scopeId)}/draft-run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify(
+        compactObject({
+          prompt: request.prompt.trim(),
+          workflowYamls:
+            request.workflowYamls && request.workflowYamls.length > 0
+              ? request.workflowYamls
+              : undefined,
+          headers: request.metadata,
+        })
+      ),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+
+    return response;
+  },
+
   resume(
     scopeId: string,
-    serviceId: string,
-    request: WorkflowResumeRequest
+    request: WorkflowResumeRequest,
+    options?: {
+      serviceId?: string;
+    }
   ): Promise<WorkflowResumeResponse> {
     return requestJson(
-      `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodeSegment(
-        request.runId
-      )}:resume`,
+      buildRunControlPath(scopeId, request.runId, "resume", options?.serviceId),
       decodeWorkflowResumeResponseBody,
       {
         method: "POST",
@@ -140,13 +198,13 @@ export const runtimeRunsApi = {
 
   signal(
     scopeId: string,
-    serviceId: string,
-    request: WorkflowSignalRequest
+    request: WorkflowSignalRequest,
+    options?: {
+      serviceId?: string;
+    }
   ): Promise<WorkflowSignalResponse> {
     return requestJson(
-      `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodeSegment(
-        request.runId
-      )}:signal`,
+      buildRunControlPath(scopeId, request.runId, "signal", options?.serviceId),
       decodeWorkflowSignalResponseBody,
       {
         method: "POST",
@@ -167,13 +225,13 @@ export const runtimeRunsApi = {
 
   async stop(
     scopeId: string,
-    serviceId: string,
-    request: WorkflowStopRequest
+    request: WorkflowStopRequest,
+    options?: {
+      serviceId?: string;
+    }
   ): Promise<WorkflowStopResponse> {
     const response = await authFetch(
-      `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodeSegment(
-        request.runId
-      )}:stop`,
+      buildRunControlPath(scopeId, request.runId, "stop", options?.serviceId),
       {
         method: "POST",
         headers: JSON_HEADERS,

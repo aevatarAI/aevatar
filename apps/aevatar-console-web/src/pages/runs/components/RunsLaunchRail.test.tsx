@@ -37,6 +37,7 @@ describe("RunsLaunchRail", () => {
         selectedTransport="sse"
         selectedWorkflowDetailsPrimitives={[]}
         streaming={false}
+        submitPathLabel="/api/scopes/{scopeId}/invoke/chat:stream"
         transportOptions={[{ label: "Service SSE stream", value: "sse" }]}
         visiblePresets={visiblePresets}
         workflowCatalogLoading={false}

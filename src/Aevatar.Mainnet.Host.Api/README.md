@@ -2,6 +2,9 @@
 
 `Aevatar.Mainnet.Host.Api` 是主网宿主。
 
+本地直接执行 `dotnet run --project src/Aevatar.Mainnet.Host.Api` 时，默认监听 `http://127.0.0.1:5080`。
+如果显式传入 `ASPNETCORE_URLS` 或 `--urls`，宿主仍然优先使用外部配置。
+
 ## 默认能力装配
 
 - `builder.AddAevatarDefaultHost(...)`
@@ -85,31 +88,39 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 
 ## 端点
 
-`Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。workflow authoring、user workflow publish/run、resume/signal 都应接到 mainnet，不再额外依赖独立的 workflow host。
+`Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。当前用户面 contract 已经收敛为 `scope-first`，默认认为一个 `scope` 对应一个对外 service binding；内核仍保留 `service` 级别接口，作为未来扩展到多 service 的基础。
 
-- `POST /api/chat`
-- `GET /api/ws/chat`
-- `GET /api/agents`
-- `GET /api/workflows`
-- `GET /api/actors/{actorId}`
-- `GET /api/actors/{actorId}/timeline`
+当前推荐使用的 scope-first 入口：
+
+- `POST /api/scopes/{scopeId}/draft-run`
+- `PUT /api/scopes/{scopeId}/binding`
+- `POST /api/scopes/{scopeId}/invoke/chat:stream`
+- `POST /api/scopes/{scopeId}/runs/{runId}:resume`
+- `POST /api/scopes/{scopeId}/runs/{runId}:signal`
+- `POST /api/scopes/{scopeId}/runs/{runId}:stop`
+
+`draft-run` 与 `binding` 使用 `workflowYamls` 作为 workflow bundle：
+
+- `workflowYamls[0]` 是主 workflow
+- `workflowYamls[1..]` 是 sub workflow
+- `workflow_call` 默认在这组 YAML 内解析
+
+内部与扩展面仍保留 service-level 入口：
+
+- `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:signal`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:stop`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/bindings`
+- `PUT /api/scopes/{scopeId}/services/{serviceId}/bindings/{bindingId}`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/bindings`
+
+scope workflow 的 catalog/read 面目前仍然保留：
+
 - `GET /api/scopes/{scopeId}/workflows`
 - `GET /api/scopes/{scopeId}/workflows/{workflowId}`
 - `PUT /api/scopes/{scopeId}/workflows/{workflowId}`
-- `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
-- `GET /api/scopes/{scopeId}/apps/{appId}/workflows`
-- `GET /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}`
-- `PUT /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}`
-- `POST /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}/runs:stream`
-- `POST /api/scopes/{scopeId}/workflow-runs:stream`（兼容旧 actorId 调用）
-- `POST /api/scopes/{scopeId}/apps/{appId}/workflow-runs:stream`（app-aware actorId 调用）
 
-`/api/scopes/{scopeId}/workflows/{workflowId}/runs:stream` 支持请求体字段 `eventFormat`：
-
-- `workflow`：返回现有 workflow frame SSE。
-- `agui`：返回 AGUI 原始事件 SSE，供 app 前端展示 workflow execution 过程。
-
-说明：
-
-- 不带 `appId` 的旧路径继续表示该 `scope` 下的默认 workflow app。
-- 带 `appId` 的新路径可显式区分同一 `scope` 下的多个 workflow app。
+旧的 `/api/chat`、`/api/ws/chat`、`/api/workflows/resume|signal|stop` 不再是 `aevatar app` 的正式运行时 contract。

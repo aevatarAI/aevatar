@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
+import { studioApi } from '@/shared/studio/api';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
   cleanupTestQueryClients,
@@ -23,6 +24,12 @@ jest.mock('@/shared/studio/scriptsApi', () => ({
   },
 }));
 
+jest.mock('@/shared/studio/api', () => ({
+  studioApi: {
+    bindScopeScript: jest.fn(),
+  },
+}));
+
 const mockedScriptsApi = scriptsApi as {
   validateDraft: jest.Mock;
   listScripts: jest.Mock;
@@ -35,6 +42,10 @@ const mockedScriptsApi = scriptsApi as {
   runDraftScript: jest.Mock;
   proposeEvolution: jest.Mock;
   generateScript: jest.Mock;
+};
+
+const mockedStudioApi = studioApi as {
+  bindScopeScript: jest.Mock;
 };
 
 const appContext = {
@@ -162,6 +173,14 @@ describe('ScriptsWorkbenchPage', () => {
       text: 'using System;',
       scriptPackage: null,
       currentFilePath: 'Behavior.cs',
+    });
+    mockedStudioApi.bindScopeScript.mockResolvedValue({
+      scopeId: 'scope-1',
+      displayName: 'script-1',
+      revisionId: 'rev-1',
+      workflowName: 'script-1',
+      definitionActorIdPrefix: 'definition',
+      expectedActorId: 'definition-scope-1',
     });
   });
 
@@ -347,6 +366,38 @@ describe('ScriptsWorkbenchPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Cancelled AI generation.')).toBeTruthy();
+    });
+  });
+
+  it('binds the saved script to the default service for the current scope', async () => {
+    renderPage({
+      mode: 'embedded',
+      scopeId: 'scope-1',
+    });
+
+    await screen.findByLabelText('Script ID');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.saveScript).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bind scope' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Bind saved script')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bind' }));
+
+    await waitFor(() => {
+      expect(mockedStudioApi.bindScopeScript).toHaveBeenCalledWith({
+        scopeId: 'scope-1',
+        displayName: 'script-1',
+        scriptId: 'script-1',
+        scriptRevision: 'rev-1',
+        revisionId: 'rev-1',
+      });
     });
   });
 });

@@ -191,16 +191,15 @@ flowchart LR
 
 ## 7. 调用模型
 
-这个方向下，正式调用面统一成 service 级别，而不是 app/function 级别。
+这个方向下，内核仍然统一成 service 级别，但当前用户面先收敛成 scope 级别默认 service，而不是 app/function 级别。
 
 AI 需要理解的最小调用协议：
 
 ```text
 1. 我是谁：scope_id
-2. 我要调用哪个用户 service：service_id
-3. 我要调用哪个 endpoint：endpoint_id
-4. 我调用哪个版本：revision_id（可选默认，但正式运维应显式）
-5. 请求 payload 是什么 typed event
+2. 我要调用哪个 endpoint：endpoint_id（当前默认是 chat）
+3. 我调用哪个版本：revision_id（当前默认 serving，可逐步显式化）
+4. 请求 payload 是什么 typed event
 ```
 
 正式调用主链：
@@ -208,7 +207,7 @@ AI 需要理解的最小调用协议：
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
-  A["POST /scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"] --> B["Resolve Service"]
+  A["POST /scopes/{scopeId}/invoke/chat:stream"] --> B["Resolve Default Service Binding"]
   B --> C["Resolve Revision"]
   C --> D["Map Request -> Typed Event"]
   D --> E["Dispatch Event to GAgent"]
@@ -223,17 +222,41 @@ flowchart LR
 当前实现我们已经按这个方向收敛到下面这套入口：
 
 - 一个 `NyxID` 账号只对应一个 `scope`
-- 一个 `scope` 下对外的用户 app 语义直接对应一个 `service`
-- workflow 启动主入口走：
-  - `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream`
-- 非流式 service 调用走：
+- 一个 `scope` 当前只对应一个默认对外 service binding，但内核仍保留 `service` 模型以支持后续扩展到多 service
+- test run 入口走：
+  - `POST /api/scopes/{scopeId}/draft-run`
+- binding / publish 入口走：
+  - `PUT /api/scopes/{scopeId}/binding`
+  - `GET /api/scopes/{scopeId}/binding`
+  - `POST /api/scopes/{scopeId}/binding/revisions/{revisionId}:activate`
+- 正式 workflow 启动主入口走：
+  - `POST /api/scopes/{scopeId}/invoke/chat:stream`
+- workflow run control 统一提升到 scope 层默认 service：
+  - `POST /api/scopes/{scopeId}/runs/{runId}:resume`
+  - `POST /api/scopes/{scopeId}/runs/{runId}:signal`
+  - `POST /api/scopes/{scopeId}/runs/{runId}:stop`
+- 内部与扩展面仍保留 service-level contract：
   - `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}`
+  - `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream`
+  - `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume`
+  - `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:signal`
+  - `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:stop`
+- `workflowYamls` 的约定是：
+  - 第一个 YAML 是主 workflow
+  - 后续 YAML 都是 sub workflow
+  - `workflow_call` 默认在这组 YAML 内解析
 - workflow / script / static gagent 的执行本质仍然是把 typed event 投递给目标 `GAgent`
 
-同时我们不再保留匿名 `POST /api/chat`、`GET /api/ws/chat` 作为正式运行时入口。
+同时我们不再保留下面这些旧入口作为正式运行时 contract：
 
-- workflow、script、static gagent 不再是三个对外入口协议
-- 它们只是三种 event-dispatch implementation
+- `POST /api/chat`
+- `GET /api/ws/chat`
+- `POST /api/workflows/resume`
+- `POST /api/workflows/signal`
+- `POST /api/workflows/stop`
+- `POST /api/scopes/{scopeId}/workflow-runs/stop`
+
+workflow、script、static gagent 不再是三个对外入口协议，它们只是三种 event-dispatch implementation。
 
 ## 8. 版本管理如何简化
 

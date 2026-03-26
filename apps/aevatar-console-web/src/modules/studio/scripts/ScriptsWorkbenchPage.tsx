@@ -44,6 +44,7 @@ import {
   getStudioHostModeTooltip,
 } from '@/shared/studio/scriptHostCapabilities';
 import { formatScriptDateTime, isScopeDetailDirty } from '@/shared/studio/scriptUtils';
+import { studioApi } from '@/shared/studio/api';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import type {
   ScriptCatalogSnapshot,
@@ -670,6 +671,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const [runInputDraft, setRunInputDraft] = React.useState('');
   const [promotionModalOpen, setPromotionModalOpen] = React.useState(false);
   const [promotionReasonDraft, setPromotionReasonDraft] = React.useState('');
+  const [bindModalOpen, setBindModalOpen] = React.useState(false);
+  const [bindDisplayNameDraft, setBindDisplayNameDraft] = React.useState('');
   const [askAiOpen, setAskAiOpen] = React.useState(false);
   const [askAiPrompt, setAskAiPrompt] = React.useState('');
   const [askAiReasoning, setAskAiReasoning] = React.useState('');
@@ -691,6 +694,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const [savePending, setSavePending] = React.useState(false);
   const [runPending, setRunPending] = React.useState(false);
   const [promotionPending, setPromotionPending] = React.useState(false);
+  const [bindPending, setBindPending] = React.useState(false);
   const [askAiPending, setAskAiPending] = React.useState(false);
   const [workspaceSection, setWorkspaceSection] =
     React.useState<WorkspaceSection>('library');
@@ -718,6 +722,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const scopeBacked =
     appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
   const isEmbeddedMode = appContext.mode === 'embedded';
+  const resolvedScopeId = appContext.scopeId?.trim() || '';
   const draftRunUnavailableMessage = getEmbeddedOnlyUnavailableMessage('draft-run');
   const askAiUnavailableMessage = getEmbeddedOnlyUnavailableMessage('ask-ai');
   const headerHostLabel = formatStudioHostModeLabel(appContext.mode);
@@ -1543,6 +1548,64 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
   }, [onSelectScriptId, openWorkspaceSection, refreshScopeScripts, scopeBacked, selectedDraft, updateSelectedDraft]);
 
+  const handleOpenBindScope = React.useCallback(() => {
+    const scopeScript = selectedDraft?.scopeDetail?.script;
+    if (!scopeScript) {
+      return;
+    }
+
+    setBindDisplayNameDraft(scopeScript.scriptId || selectedDraft.scriptId);
+    setBindModalOpen(true);
+  }, [selectedDraft]);
+
+  const handleBindScope = React.useCallback(async () => {
+    const scopeScript = selectedDraft?.scopeDetail?.script;
+    if (!scopeScript || !resolvedScopeId) {
+      return;
+    }
+
+    const scriptId = normalizeStudioId(scopeScript.scriptId || selectedDraft.scriptId, 'script');
+    const scriptRevision = normalizeStudioId(
+      scopeScript.activeRevision || selectedDraft.revision,
+      'rev',
+    );
+
+    setBindPending(true);
+    setNotice(null);
+    try {
+      await studioApi.bindScopeScript({
+        scopeId: resolvedScopeId,
+        displayName: trimOptional(bindDisplayNameDraft) || scriptId,
+        scriptId,
+        scriptRevision,
+        revisionId: scriptRevision,
+      });
+
+      setBindModalOpen(false);
+      await refreshScopeScripts();
+      setActiveResultTab('save');
+      openWorkspaceSection('activity');
+      setNotice({
+        type: 'success',
+        message: `Bound ${scriptId} to the default service for scope ${resolvedScopeId}.`,
+      });
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Failed to bind the saved script.',
+      });
+    } finally {
+      setBindPending(false);
+    }
+  }, [
+    bindDisplayNameDraft,
+    openWorkspaceSection,
+    refreshScopeScripts,
+    resolvedScopeId,
+    selectedDraft,
+  ]);
+
   React.useEffect(() => {
     saveShortcutActionRef.current = () => {
       void handleSave();
@@ -2048,6 +2111,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       !promotionPending &&
       (selectedDraft.scopeDetail?.script?.activeRevision || selectedDraft.baseRevision),
   );
+  const scopeBindingScript = selectedDraft?.scopeDetail?.script || null;
+  const canBindScope = Boolean(
+    selectedDraft && scopeBacked && scopeBindingScript && !bindPending,
+  );
   const scopeSelectionId = selectedDraft?.scopeDetail?.script?.scriptId || '';
   const hasScopeChanges = isScopeDetailDirty(selectedDraft);
   const hasUnsavedScopeChanges = React.useMemo(
@@ -2079,7 +2146,6 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       visibleProblems[0]?.message ||
       'Clean';
   const headerRevisionLabel = selectedDraft?.revision || 'draft revision';
-  const resolvedScopeId = appContext.scopeId?.trim() || '';
   const headerScopeLabel = scopeBacked
     ? `Scope ${compactHeaderValue(resolvedScopeId)}`
     : 'Local draft';
@@ -2246,6 +2312,27 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   >
                     <SaveOutlined />
                     <span>{savePending ? 'Saving' : 'Save'}</span>
+                  </button>
+                </span>
+              </Tooltip>
+              <Tooltip
+                title={
+                  canBindScope
+                    ? 'Bind the saved script to the default service for this scope.'
+                    : 'Save the current script into the scope before binding it.'
+                }
+                placement="bottom"
+              >
+                <span className="console-scripts-tooltip-anchor">
+                  <button
+                    type="button"
+                    className="console-scripts-solid-action console-scripts-header-text-action"
+                    onClick={handleOpenBindScope}
+                    disabled={!canBindScope}
+                    aria-label="Bind scope"
+                  >
+                    <SafetyCertificateOutlined />
+                    <span>Bind</span>
                   </button>
                 </span>
               </Tooltip>
@@ -2808,6 +2895,53 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             onChange={(event) => setPromotionReasonDraft(event.target.value)}
             style={{ marginTop: 16 }}
           />
+        </ScriptsStudioModal>
+
+        <ScriptsStudioModal
+          open={bindModalOpen}
+          eyebrow="Scope"
+          title="Bind saved script"
+          onClose={() => setBindModalOpen(false)}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => setBindModalOpen(false)}
+                className="console-scripts-ghost-action"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleBindScope()}
+                className="console-scripts-solid-action"
+                disabled={bindPending}
+              >
+                {bindPending ? 'Binding' : 'Bind'}
+              </button>
+            </>
+          }
+        >
+          <div className="console-scripts-detail-copy">
+            Bind the saved scope script to the default service for this scope.
+            The existing workflow flow is unchanged.
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <div className="console-scripts-eyebrow">Script</div>
+            <div className="console-scripts-detail-copy">
+              {scopeBindingScript?.scriptId || selectedDraft?.scriptId || '-'} ·{' '}
+              {scopeBindingScript?.activeRevision || selectedDraft?.revision || '-'}
+            </div>
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <div className="console-scripts-eyebrow">Display name</div>
+            <Input
+              value={bindDisplayNameDraft}
+              onChange={(event) => setBindDisplayNameDraft(event.target.value)}
+              placeholder="Script display name"
+              style={{ marginTop: 8 }}
+            />
+          </div>
         </ScriptsStudioModal>
 
         <ScriptsStudioModal

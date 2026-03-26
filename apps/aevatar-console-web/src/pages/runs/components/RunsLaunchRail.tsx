@@ -19,12 +19,14 @@ type RunsLaunchRailProps = {
   actorId?: string;
   catalogSearch: string;
   composerFormRef: React.RefObject<ProFormInstance<RunFormValues> | undefined>;
+  draftMode?: boolean;
   initialFormValues: RunFormValues;
   recentRunRows: RecentRunTableRow[];
   selectedTransport: RunTransport;
   selectedWorkflowDetailsPrimitives: string[];
   selectedWorkflowRecord?: SelectedWorkflowRecord;
   streaming: boolean;
+  submitPathLabel: string;
   transportOptions: Array<{ label: string; value: RunTransport }>;
   visiblePresets: RunPreset[];
   workflowCatalogLoading: boolean;
@@ -311,12 +313,14 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   actorId,
   catalogSearch,
   composerFormRef,
+  draftMode = false,
   initialFormValues,
   recentRunRows,
   selectedTransport,
   selectedWorkflowDetailsPrimitives,
   selectedWorkflowRecord,
   streaming,
+  submitPathLabel,
   transportOptions,
   visiblePresets,
   workflowCatalogLoading,
@@ -357,7 +361,11 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
           <div style={quickMetricStyle}>
             <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
             <Typography.Text style={quickMetricValueStyle}>
-              {actorId ? "Continue actor" : "New run"}
+              {draftMode
+                ? "Draft run"
+                : actorId
+                  ? "Continue actor"
+                  : "New run"}
             </Typography.Text>
           </div>
           <div style={quickMetricStyle}>
@@ -452,6 +460,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                       name="workflow"
                       label="Workflow"
                       placeholder="Select a workflow"
+                      disabled={draftMode}
                       options={workflowOptions}
                       fieldProps={{
                         allowClear: true,
@@ -484,19 +493,19 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     />
                     <ProFormText
                       name="serviceId"
-                      label="Service ID"
-                      placeholder="Registered workflow service id"
-                      rules={[
-                        {
-                          required: true,
-                          message: "Service ID is required.",
-                        },
-                      ]}
+                      label={draftMode ? "Service ID" : "Service ID (optional)"}
+                      placeholder={
+                        draftMode
+                          ? "Draft runs resolve directly from the YAML bundle."
+                          : "Leave empty to use the scope default service."
+                      }
+                      disabled={draftMode}
                     />
                     <ProFormText
                       name="actorId"
                       label="Existing actorId"
                       placeholder="Workflow:..."
+                      disabled={draftMode}
                     />
                   </ProForm>
                 </div>
@@ -525,7 +534,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
         <Alert
           showIcon
           type="info"
-          title="Runs will stream over /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
+          title={`Runs will stream over ${submitPathLabel}`}
         />
       </div>
     </div>

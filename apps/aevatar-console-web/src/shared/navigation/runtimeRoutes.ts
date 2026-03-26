@@ -46,6 +46,10 @@ export function buildRuntimePrimitivesHref(options?: {
 
 export function buildRuntimeRunsHref(options?: {
   workflow?: string;
+  prompt?: string;
+  scopeId?: string;
+  serviceId?: string;
+  draftKey?: string;
 }): string {
   return buildHref(runtimePaths.runs, options);
 }

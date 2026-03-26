@@ -5,8 +5,14 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
+using Microsoft.AspNetCore.Hosting;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (string.IsNullOrWhiteSpace(builder.Configuration[WebHostDefaults.ServerUrlsKey]))
+{
+    builder.WebHost.UseUrls("http://127.0.0.1:5080");
+}
 
 builder.AddAevatarDefaultHost(
     configureHost: options =>

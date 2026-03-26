@@ -4,12 +4,20 @@ import type {
   StudioConnectorCatalog,
   StudioConnectorCatalogImportResult,
   StudioConnectorDraftResponse,
+  StudioScopeBindingActivationResult,
+  StudioScopeBindingRevision,
+  StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
   StudioParseYamlResult,
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
   StudioRoleDraftResponse,
+  StudioScopeScriptBindingActivationResult,
+  StudioScopeScriptBindingInput,
+  StudioScopeBindingResult,
+  StudioScopeScriptBindingResult,
+  StudioScopeScriptBindingStatus,
   StudioRuntimeTestResult,
   StudioSaveSettingsInput,
   StudioSaveWorkflowInput,
@@ -22,6 +30,14 @@ import type {
   StudioWorkspaceSettings,
 } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
+import {
+  expectArray,
+  expectRecord,
+  readBoolean,
+  readNullableString,
+  readNumber,
+  readString,
+} from "@/shared/api/http/decoders";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
 
@@ -247,6 +263,159 @@ function normalizeAssistantFrame(
   return null;
 }
 
+function decodeStudioScopeBindingRevision(
+  value: unknown,
+  label = "StudioScopeBindingRevision"
+): StudioScopeBindingRevision {
+  const record = expectRecord(value, label);
+  return {
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      `${label}.revisionId`
+    ),
+    implementationKind: readString(
+      record,
+      ["implementationKind", "ImplementationKind"],
+      `${label}.implementationKind`
+    ),
+    status: readString(record, ["status", "Status"], `${label}.status`),
+    artifactHash: readString(
+      record,
+      ["artifactHash", "ArtifactHash"],
+      `${label}.artifactHash`
+    ),
+    failureReason: readString(
+      record,
+      ["failureReason", "FailureReason"],
+      `${label}.failureReason`
+    ),
+    isDefaultServing: readBoolean(
+      record,
+      ["isDefaultServing", "IsDefaultServing"],
+      `${label}.isDefaultServing`
+    ),
+    isActiveServing: readBoolean(
+      record,
+      ["isActiveServing", "IsActiveServing"],
+      `${label}.isActiveServing`
+    ),
+    isServingTarget: readBoolean(
+      record,
+      ["isServingTarget", "IsServingTarget"],
+      `${label}.isServingTarget`
+    ),
+    allocationWeight: readNumber(
+      record,
+      ["allocationWeight", "AllocationWeight"],
+      `${label}.allocationWeight`
+    ),
+    servingState: readString(
+      record,
+      ["servingState", "ServingState"],
+      `${label}.servingState`
+    ),
+    deploymentId: readString(
+      record,
+      ["deploymentId", "DeploymentId"],
+      `${label}.deploymentId`
+    ),
+    primaryActorId: readString(
+      record,
+      ["primaryActorId", "PrimaryActorId"],
+      `${label}.primaryActorId`
+    ),
+    createdAt: readNullableString(
+      record,
+      ["createdAt", "CreatedAt"],
+      `${label}.createdAt`
+    ),
+    preparedAt: readNullableString(
+      record,
+      ["preparedAt", "PreparedAt"],
+      `${label}.preparedAt`
+    ),
+    publishedAt: readNullableString(
+      record,
+      ["publishedAt", "PublishedAt"],
+      `${label}.publishedAt`
+    ),
+    retiredAt: readNullableString(
+      record,
+      ["retiredAt", "RetiredAt"],
+      `${label}.retiredAt`
+    ),
+  };
+}
+
+function decodeStudioScopeBindingStatus(
+  value: unknown
+): StudioScopeBindingStatus {
+  const record = expectRecord(value, "StudioScopeBindingStatus");
+  return {
+    available: readBoolean(
+      record,
+      ["available", "Available"],
+      "StudioScopeBindingStatus.available"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioScopeBindingStatus.scopeId"
+    ),
+    serviceId: readString(
+      record,
+      ["serviceId", "ServiceId"],
+      "StudioScopeBindingStatus.serviceId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioScopeBindingStatus.displayName"
+    ),
+    serviceKey: readString(
+      record,
+      ["serviceKey", "ServiceKey"],
+      "StudioScopeBindingStatus.serviceKey"
+    ),
+    defaultServingRevisionId: readString(
+      record,
+      ["defaultServingRevisionId", "DefaultServingRevisionId"],
+      "StudioScopeBindingStatus.defaultServingRevisionId"
+    ),
+    activeServingRevisionId: readString(
+      record,
+      ["activeServingRevisionId", "ActiveServingRevisionId"],
+      "StudioScopeBindingStatus.activeServingRevisionId"
+    ),
+    deploymentId: readString(
+      record,
+      ["deploymentId", "DeploymentId"],
+      "StudioScopeBindingStatus.deploymentId"
+    ),
+    deploymentStatus: readString(
+      record,
+      ["deploymentStatus", "DeploymentStatus"],
+      "StudioScopeBindingStatus.deploymentStatus"
+    ),
+    primaryActorId: readString(
+      record,
+      ["primaryActorId", "PrimaryActorId"],
+      "StudioScopeBindingStatus.primaryActorId"
+    ),
+    updatedAt: readNullableString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioScopeBindingStatus.updatedAt"
+    ),
+    revisions: expectArray(
+      record.revisions ?? record.Revisions,
+      "StudioScopeBindingStatus.revisions",
+      decodeStudioScopeBindingRevision
+    ),
+  };
+}
+
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
     return requestJson("/api/app/context");
@@ -350,6 +519,103 @@ export const studioApi = {
         })
       ),
     });
+  },
+
+  bindScopeWorkflow(input: {
+    scopeId: string;
+    displayName?: string | null;
+    workflowYamls: string[];
+    revisionId?: string | null;
+  }): Promise<StudioScopeBindingResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "workflow",
+            displayName: trimOptional(input.displayName),
+            workflowYamls:
+              input.workflowYamls.length > 0 ? input.workflowYamls : undefined,
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindScopeScript(
+    input: StudioScopeScriptBindingInput
+  ): Promise<StudioScopeScriptBindingResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "script",
+            displayName: trimOptional(input.displayName),
+            scriptId: input.scriptId.trim(),
+            scriptRevision: input.scriptRevision.trim(),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  getScopeBinding(scopeId: string): Promise<StudioScopeBindingStatus> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
+      decodeStudioScopeBindingStatus
+    );
+  },
+
+  getScopeScriptBinding(
+    scopeId: string
+  ): Promise<StudioScopeScriptBindingStatus> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
+      decodeStudioScopeBindingStatus
+    );
+  },
+
+  activateScopeBindingRevision(input: {
+    scopeId: string;
+    revisionId: string;
+  }): Promise<StudioScopeBindingActivationResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        input.scopeId.trim()
+      )}/binding/revisions/${encodeURIComponent(
+        input.revisionId.trim()
+      )}:activate`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      }
+    );
+  },
+
+  activateScopeScriptBindingRevision(input: {
+    scopeId: string;
+    revisionId: string;
+  }): Promise<StudioScopeScriptBindingActivationResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        input.scopeId.trim()
+      )}/binding/revisions/${encodeURIComponent(
+        input.revisionId.trim()
+      )}:activate`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      }
+    );
   },
 
   stopExecution(

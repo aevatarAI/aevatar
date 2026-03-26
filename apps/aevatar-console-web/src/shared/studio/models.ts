@@ -153,6 +153,69 @@ export interface StudioStartExecutionInput {
   readonly eventFormat?: string | null;
 }
 
+export interface StudioScopeBindingResult {
+  readonly scopeId: string;
+  readonly displayName: string;
+  readonly revisionId: string;
+  readonly workflowName: string;
+  readonly definitionActorIdPrefix: string;
+  readonly expectedActorId: string;
+}
+
+export interface StudioScopeBindingRevision {
+  readonly revisionId: string;
+  readonly implementationKind: string;
+  readonly status: string;
+  readonly artifactHash: string;
+  readonly failureReason: string;
+  readonly isDefaultServing: boolean;
+  readonly isActiveServing: boolean;
+  readonly isServingTarget: boolean;
+  readonly allocationWeight: number;
+  readonly servingState: string;
+  readonly deploymentId: string;
+  readonly primaryActorId: string;
+  readonly createdAt: string | null;
+  readonly preparedAt: string | null;
+  readonly publishedAt: string | null;
+  readonly retiredAt: string | null;
+}
+
+export interface StudioScopeBindingStatus {
+  readonly available: boolean;
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly displayName: string;
+  readonly serviceKey: string;
+  readonly defaultServingRevisionId: string;
+  readonly activeServingRevisionId: string;
+  readonly deploymentId: string;
+  readonly deploymentStatus: string;
+  readonly primaryActorId: string;
+  readonly updatedAt: string | null;
+  readonly revisions: readonly StudioScopeBindingRevision[];
+}
+
+export interface StudioScopeBindingActivationResult {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly displayName: string;
+  readonly revisionId: string;
+}
+
+export interface StudioScopeScriptBindingInput {
+  readonly scopeId: string;
+  readonly displayName?: string | null;
+  readonly scriptId: string;
+  readonly scriptRevision: string;
+  readonly revisionId?: string | null;
+}
+
+export type StudioScopeScriptBindingResult = StudioScopeBindingResult;
+export type StudioScopeScriptBindingStatus = StudioScopeBindingStatus;
+export type StudioScopeScriptBindingActivationResult =
+  StudioScopeBindingActivationResult;
+
 export interface StudioHttpConnectorDefinition {
   readonly baseUrl: string;
   readonly allowedMethods: string[];

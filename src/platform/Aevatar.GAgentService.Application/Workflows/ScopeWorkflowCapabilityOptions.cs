@@ -11,6 +11,8 @@ public sealed class ScopeWorkflowCapabilityOptions
 
     public string ServiceNamespace { get; set; } = "default";
 
+    public string DefaultServiceId { get; set; } = "default";
+
     public string DefinitionActorIdPrefix { get; set; } = "scope-workflow";
 
     public int ListTake { get; set; } = 200;

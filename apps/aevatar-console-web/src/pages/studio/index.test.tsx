@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
+import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import StudioPage from "./index";
@@ -419,6 +420,78 @@ jest.mock("@/shared/studio/api", () => ({
         ],
       })
     ),
+    bindScopeWorkflow: jest.fn(async (input: {
+      scopeId: string;
+      displayName?: string;
+      workflowYamls: string[];
+    }) => ({
+      scopeId: input.scopeId,
+      displayName: input.displayName || "workspace-demo",
+      revisionId: "rev-2",
+      workflowName: input.displayName || "workspace-demo",
+      definitionActorIdPrefix: "scope-workflow:scope-1:default",
+      expectedActorId: "scope-workflow:scope-1:default:dep-1",
+    })),
+    getScopeBinding: jest.fn(async () => ({
+      available: true,
+      scopeId: "scope-1",
+      serviceId: "default",
+      displayName: "workspace-demo",
+      serviceKey: "scope-1:default:default:default",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "dep-2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-default",
+      updatedAt: "2026-03-26T08:00:00Z",
+      revisions: [
+        {
+          revisionId: "rev-2",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-2",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "dep-2",
+          primaryActorId: "actor-default",
+          createdAt: "2026-03-26T07:00:00Z",
+          preparedAt: "2026-03-26T07:01:00Z",
+          publishedAt: "2026-03-26T07:02:00Z",
+          retiredAt: null,
+        },
+        {
+          revisionId: "rev-1",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-1",
+          failureReason: "",
+          isDefaultServing: false,
+          isActiveServing: false,
+          isServingTarget: false,
+          allocationWeight: 0,
+          servingState: "",
+          deploymentId: "",
+          primaryActorId: "",
+          createdAt: "2026-03-25T07:00:00Z",
+          preparedAt: "2026-03-25T07:01:00Z",
+          publishedAt: "2026-03-25T07:02:00Z",
+          retiredAt: null,
+        },
+      ],
+    })),
+    activateScopeBindingRevision: jest.fn(async (input: {
+      scopeId: string;
+      revisionId: string;
+    }) => ({
+      scopeId: input.scopeId,
+      serviceId: "default",
+      displayName: "workspace-demo",
+      revisionId: input.revisionId,
+    })),
     stopExecution: jest.fn(async (executionId: string) => ({
       executionId,
       workflowName: "workspace-demo",
@@ -871,6 +944,35 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           },
           "Run"
         ),
+        React.createElement(
+          "button",
+          {
+            key: "publish",
+            type: "button",
+            onClick: () => props.onPublishWorkflow?.(),
+          },
+          "Bind scope"
+        ),
+        React.createElement(
+          "button",
+          {
+            key: "open-runs",
+            type: "button",
+            onClick: () => props.onRunInConsole?.(),
+          },
+          "Open runs"
+        ),
+        props.scopeBinding?.available
+          ? React.createElement(
+              "button",
+              {
+                key: "activate-rev-1",
+                type: "button",
+                onClick: () => props.onActivateBindingRevision?.("rev-1"),
+              },
+              "Activate rev-1"
+            )
+          : null,
         runOpen
           ? React.createElement("div", { key: "run-dialog" }, [
               React.createElement("textarea", {
@@ -1424,7 +1526,12 @@ describe("StudioPage", () => {
     ).toHaveValue("Review the current draft carefully.");
   });
 
-  it("starts a Studio execution from the active draft", async () => {
+  it("opens runtime runs in draft mode from the active draft", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
     fireEvent.click(await screen.findByRole("button", { name: "Run" }));
@@ -1436,17 +1543,62 @@ describe("StudioPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Run" }).at(-1)!);
 
     await waitFor(() => {
-      expect(studioApi.startExecution).toHaveBeenCalledWith(
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
+      "scope-1"
+    );
+    expect(new URLSearchParams(window.location.search).get("prompt")).toBe(
+      "Run the active draft from Studio."
+    );
+
+    const draftKey = new URLSearchParams(window.location.search).get("draftKey");
+    expect(draftKey).toBeTruthy();
+    expect(loadDraftRunPayload(draftKey)).toEqual(
+      expect.objectContaining({
+        workflowName: "workspace-demo",
+        workflowYamls: [expect.stringContaining("name: workspace-demo")],
+      })
+    );
+  });
+
+  it("binds the active workflow to the resolved scope", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Bind scope" }));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
         expect.objectContaining({
-          workflowName: "workspace-demo",
-          prompt: "Run the active draft from Studio.",
+          scopeId: "scope-1",
+          displayName: "workspace-demo",
           workflowYamls: [expect.stringContaining("name: workspace-demo")],
-          runtimeBaseUrl: "http://127.0.0.1:5100",
         })
       );
     });
+  });
 
-    expect(await screen.findByText("Logs")).toBeTruthy();
+  it("activates a historical scope binding revision from Studio", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Activate rev-1" }));
+
+    await waitFor(() => {
+      expect(studioApi.activateScopeBindingRevision).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        revisionId: "rev-1",
+      });
+    });
   });
 
   it("stops the selected Studio execution from the execution view", async () => {

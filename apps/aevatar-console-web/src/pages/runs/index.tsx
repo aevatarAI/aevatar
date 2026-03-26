@@ -118,6 +118,7 @@ import {
   workbenchMessageListStyle,
   workbenchOverviewGridStyle,
 } from "./runWorkbenchConfig";
+import { loadDraftRunPayload as loadQueuedDraftRunPayload } from "@/shared/runs/draftRunSession";
 
 const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
   alignItems: "center",
@@ -153,6 +154,17 @@ const RunsPage: React.FC = () => {
     () => readInitialRunFormValues(preferences.preferredWorkflow),
     [preferences.preferredWorkflow]
   );
+  const draftRunKey = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    return new URLSearchParams(window.location.search).get("draftKey") ?? "";
+  }, []);
+  const draftRunPayload = useMemo(
+    () => loadQueuedDraftRunPayload(draftRunKey),
+    [draftRunKey]
+  );
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
     undefined
   );
@@ -165,7 +177,9 @@ const RunsPage: React.FC = () => {
   );
   const [catalogSearch, setCatalogSearch] = useState("");
   const [selectedWorkflowName, setSelectedWorkflowName] = useState(
-    initialFormValues.workflow ?? preferences.preferredWorkflow
+    draftRunPayload?.workflowName ??
+      initialFormValues.workflow ??
+      preferences.preferredWorkflow
   );
   const [recentRuns, setRecentRuns] = useState<RecentRunEntry[]>(() =>
     loadRecentRuns()
@@ -233,8 +247,8 @@ const RunsPage: React.FC = () => {
     ) => {
       const normalizedScopeId = scopeId.trim();
       const normalizedServiceId = serviceId.trim();
-      if (!normalizedScopeId || !normalizedServiceId) {
-        throw new Error("Scope ID and Service ID are required.");
+      if (!normalizedScopeId) {
+        throw new Error("Scope ID is required.");
       }
 
       abortRun();
@@ -250,12 +264,23 @@ const RunsPage: React.FC = () => {
         const controller = new AbortController();
         stopActiveRunRef.current = () => controller.abort();
 
-        const response = await runtimeRunsApi.streamChat(
-          normalizedScopeId,
-          normalizedServiceId,
-          request,
-          controller.signal
-        );
+        const response = draftRunPayload
+          ? await runtimeRunsApi.streamDraftRun(
+              normalizedScopeId,
+              {
+                ...request,
+                workflowYamls: draftRunPayload.workflowYamls,
+              },
+              controller.signal
+            )
+          : await runtimeRunsApi.streamChat(
+              normalizedScopeId,
+              request,
+              controller.signal,
+              {
+                serviceId: normalizedServiceId || undefined,
+              }
+            );
         for await (const event of parseSSEStream(response, {
           signal: controller.signal,
         })) {
@@ -277,7 +302,7 @@ const RunsPage: React.FC = () => {
         setStreaming(false);
       }
     },
-    [abortRun, dispatch, reportTransportError, reset]
+    [abortRun, dispatch, draftRunPayload, reportTransportError, reset]
   );
 
   const resolveRunScopeId = useCallback(() => {
@@ -326,20 +351,24 @@ const RunsPage: React.FC = () => {
     resume: (request: WorkflowResumeRequest) => {
       const scopeId = resolveRunScopeId();
       const serviceId = resolveRunServiceId();
-      if (!scopeId || !serviceId) {
-        throw new Error("Scope ID and Service ID are required to resume a run.");
+      if (!scopeId) {
+        throw new Error("Scope ID is required to resume a run.");
       }
 
-      return runtimeRunsApi.resume(scopeId, serviceId, request);
+      return runtimeRunsApi.resume(scopeId, request, {
+        serviceId: serviceId || undefined,
+      });
     },
     signal: (request: WorkflowSignalRequest) => {
       const scopeId = resolveRunScopeId();
       const serviceId = resolveRunServiceId();
-      if (!scopeId || !serviceId) {
-        throw new Error("Scope ID and Service ID are required to signal a run.");
+      if (!scopeId) {
+        throw new Error("Scope ID is required to signal a run.");
       }
 
-      return runtimeRunsApi.signal(scopeId, serviceId, request);
+      return runtimeRunsApi.signal(scopeId, request, {
+        serviceId: serviceId || undefined,
+      });
     },
   });
 
@@ -465,7 +494,18 @@ const RunsPage: React.FC = () => {
     SelectedWorkflowRecord | undefined
   >(() => {
     if (!selectedWorkflowDetails) {
-      return undefined;
+      if (!draftRunPayload) {
+        return undefined;
+      }
+
+      return {
+        workflowName: draftRunPayload.workflowName,
+        groupLabel: "Studio",
+        sourceLabel: "Draft bundle",
+        llmStatus: "success",
+        description:
+          "Executing the current Studio draft bundle through the scope draft-run endpoint.",
+      };
     }
 
     return {
@@ -477,7 +517,7 @@ const RunsPage: React.FC = () => {
         : "success",
       description: selectedWorkflowDetails.description,
     };
-  }, [selectedWorkflowDetails]);
+  }, [draftRunPayload, selectedWorkflowDetails]);
 
   const visiblePresets = useMemo(() => {
     const available = new Set(
@@ -800,13 +840,15 @@ const RunsPage: React.FC = () => {
     const runId = session.runId?.trim() ?? "";
     const currentActorId = actorId?.trim() ?? "";
 
-    if (scopeId && serviceId && runId) {
+    if (scopeId && runId) {
       try {
-        await runtimeRunsApi.stop(scopeId, serviceId, {
+        await runtimeRunsApi.stop(scopeId, {
           actorId: currentActorId || undefined,
           runId,
           commandId: commandId || undefined,
           reason: "aborted from runtime console",
+        }, {
+          serviceId: serviceId || undefined,
         });
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -824,6 +866,12 @@ const RunsPage: React.FC = () => {
     resolveRunServiceId,
     session.runId,
   ]);
+
+  const submitPathLabel = draftRunPayload
+    ? "/api/scopes/{scopeId}/draft-run"
+    : (activeServiceId.trim() || initialFormValues.serviceId?.trim())
+      ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
+      : "/api/scopes/{scopeId}/invoke/chat:stream";
 
   const messageConsoleView = (
     <div style={workbenchConsoleSurfaceStyle}>
@@ -994,7 +1042,7 @@ const RunsPage: React.FC = () => {
                 >
                   Drive scoped workflow services over{" "}
                   <Typography.Text code>
-                    /api/scopes/{"{scopeId}"}/services/{"{serviceId}"}/invoke/chat:stream
+                    {submitPathLabel}
                   </Typography.Text>
                   , monitor the live event stream, and jump into adjacent
                   runtime surfaces directly from the runtime console.
@@ -1075,6 +1123,7 @@ const RunsPage: React.FC = () => {
               actorId={actorId ?? undefined}
               catalogSearch={catalogSearch}
               composerFormRef={composerFormRef}
+              draftMode={Boolean(draftRunPayload)}
               initialFormValues={initialFormValues}
               recentRunRows={recentRunRows}
               selectedTransport={selectedTransport}
@@ -1083,6 +1132,7 @@ const RunsPage: React.FC = () => {
               }
               selectedWorkflowRecord={selectedWorkflowRecord}
               streaming={streaming}
+              submitPathLabel={submitPathLabel}
               transportOptions={[
                 { label: "Service SSE stream", value: "sse" },
               ]}
@@ -1109,17 +1159,22 @@ const RunsPage: React.FC = () => {
               onUsePreset={(record) => {
                 composerFormRef.current?.setFieldsValue({
                   prompt: record.prompt,
-                  workflow: record.workflow,
+                  workflow: draftRunPayload?.workflowName ?? record.workflow,
                   scopeId:
                     composerFormRef.current?.getFieldValue("scopeId") ??
                     initialFormValues.scopeId,
-                  serviceId:
+                  serviceId: draftRunPayload
+                    ? undefined
+                    : (
                     composerFormRef.current?.getFieldValue("serviceId") ??
-                    initialFormValues.serviceId,
+                    initialFormValues.serviceId
+                  ),
                   actorId: undefined,
                   transport: selectedTransport,
                 });
-                setSelectedWorkflowName(record.workflow);
+                setSelectedWorkflowName(
+                  draftRunPayload?.workflowName ?? record.workflow
+                );
                 setCatalogSearch("");
               }}
             />
