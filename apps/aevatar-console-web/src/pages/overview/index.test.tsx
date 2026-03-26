@@ -33,16 +33,16 @@ describe("OverviewPage", () => {
 
     expect(container.textContent).toContain("Overview");
     expect(container.textContent).toContain(
-      "Overview of runtime workflows, scope assets, services, governance, actors, and observability."
+      "Overview of runtime workflows, scope assets, raw platform services, platform governance, actors, and observability."
     );
     expect(container.textContent).toContain("Quick actions");
     expect(container.textContent).toContain("Platform entry points");
     expect(container.textContent).toContain("Local console tools");
     expect(container.textContent).toContain("Capability surfaces");
-    expect(container.textContent).toContain("Service runtime");
-    expect(container.textContent).toContain("Governance");
-    expect(container.textContent).toContain("Open runtime explorer");
-    expect(container.textContent).toContain("Open runtime settings");
+    expect(container.textContent).toContain("Platform services");
+    expect(container.textContent).toContain("Platform governance");
+    expect(container.textContent).toContain("Open Runtime Explorer");
+    expect(container.textContent).toContain("Open Runtime Observability");
     expect(container.textContent).not.toContain("Open Studio");
     await waitFor(() => {
       expect(runtimeCatalogApi.listWorkflowNames).toHaveBeenCalled();

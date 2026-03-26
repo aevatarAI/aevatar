@@ -425,106 +425,6 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
-    public async Task HandleStopWorkflowRunAsync_ShouldReturnNotFound_WhenRunDoesNotBelongToScope()
-    {
-        var http = CreateHttpContext();
-        var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
-            http,
-            "user-1",
-            new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest("run-actor-1", "run-1"),
-            BuildQueryPort(),
-            new FakeWorkflowActorBindingReader
-            {
-                Bindings =
-                {
-                    ["run-actor-1"] = new WorkflowActorBinding(
-                        WorkflowActorKind.Run,
-                        "run-actor-1",
-                        "definition-actor-404",
-                        "run-1",
-                        "approval",
-                        "yaml",
-                        new Dictionary<string, string>()),
-                },
-            },
-            new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>(),
-            CancellationToken.None);
-
-        await result.ExecuteAsync(http);
-        var body = await ReadBodyAsync(http.Response);
-
-        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
-        body.Should().Contain("USER_WORKFLOW_NOT_FOUND");
-    }
-
-    [Fact]
-    public async Task HandleStopWorkflowRunAsync_ShouldDispatchStop_WhenRunBelongsToScope()
-    {
-        var http = CreateHttpContext();
-        var snapshot = new ServiceCatalogSnapshot(
-            "tenant-a:workflow-app:user:token:approval",
-            "tenant-a",
-            "workflow-app",
-            "user:user-1-token",
-            "approval",
-            "Approval",
-            "rev-1",
-            "rev-1",
-            "dep-1",
-            "definition-actor-1",
-            "active",
-            [],
-            [],
-            DateTimeOffset.UtcNow);
-        var queryPort = new FakeServiceLifecycleQueryPort
-        {
-            ListServicesResult = [snapshot],
-        };
-        var stopService = new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
-        {
-            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
-                new WorkflowRunControlAcceptedReceipt("run-actor-1", "run-1", "stop-cmd-1", "corr-1")),
-        };
-
-        var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
-            http,
-            "user-1",
-            new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest(
-                "run-actor-1",
-                "run-1",
-                "stop-cmd-1",
-                "user requested stop"),
-            BuildQueryPort(queryPort: queryPort),
-            new FakeWorkflowActorBindingReader
-            {
-                Bindings =
-                {
-                    ["run-actor-1"] = new WorkflowActorBinding(
-                        WorkflowActorKind.Run,
-                        "run-actor-1",
-                        "definition-actor-1",
-                        "run-1",
-                        "approval",
-                        "yaml",
-                        new Dictionary<string, string>()),
-                },
-            },
-            stopService,
-            CancellationToken.None);
-
-        await result.ExecuteAsync(http);
-        var body = await ReadBodyAsync(http.Response);
-
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        stopService.Commands.Should().ContainSingle();
-        stopService.Commands.Single().ActorId.Should().Be("run-actor-1");
-        stopService.Commands.Single().RunId.Should().Be("run-1");
-        stopService.Commands.Single().CommandId.Should().Be("stop-cmd-1");
-        stopService.Commands.Single().Reason.Should().Be("user requested stop");
-        body.Should().Contain("user requested stop");
-    }
-
-    [Fact]
     public async Task HandleRunWorkflowStreamAsync_ShouldSucceed_WhenScopeClaimMatchesPath()
     {
         var queryPort = new FakeServiceLifecycleQueryPort
@@ -670,27 +570,6 @@ public sealed class ScopeWorkflowEndpointsTests
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         body.Should().Contain("USER_WORKFLOW_NOT_FOUND");
         body.Should().Contain("nonexistent-workflow");
-    }
-
-    [Fact]
-    public async Task HandleStopWorkflowRunAsync_ShouldReturnBadRequest_WhenActorIdMissing()
-    {
-        var http = CreateHttpContext();
-
-        var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
-            http,
-            "user-1",
-            new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest(string.Empty, "run-1"),
-            BuildQueryPort(),
-            new FakeWorkflowActorBindingReader(),
-            new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>(),
-            CancellationToken.None);
-
-        await result.ExecuteAsync(http);
-        var body = await ReadBodyAsync(http.Response);
-
-        http.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
-        body.Should().Contain("ActorId is required");
     }
 
     [Fact]

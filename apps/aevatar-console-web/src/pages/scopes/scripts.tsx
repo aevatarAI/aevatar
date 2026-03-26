@@ -1,11 +1,9 @@
 import type {
   ProColumns,
-  ProDescriptionsItemProps,
 } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
@@ -14,15 +12,21 @@ import { Alert, Button, Col, Drawer, Row, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { studioApi } from "@/shared/studio/api";
+import { buildStudioRoute } from "@/shared/studio/navigation";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type {
   ScopeScriptCatalog,
-  ScopeScriptDetail,
   ScopeScriptSummary,
 } from "@/shared/models/scopes";
 import {
   compactTableCardProps,
+  drawerBodyStyle,
+  drawerScrollStyle,
+  embeddedPanelStyle,
   moduleCardProps,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
 } from "@/shared/ui/proComponents";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
@@ -34,28 +38,21 @@ import {
   type ScopeQueryDraft,
 } from "./components/scopeQuery";
 
-const scriptDetailColumns: ProDescriptionsItemProps<ScopeScriptDetail>[] = [
-  {
-    title: "Revision",
-    render: (_, record) => record.script?.activeRevision || "n/a",
-  },
-  {
-    title: "Definition actor",
-    render: (_, record) => (
-      <Typography.Text copyable>
-        {record.script?.definitionActorId || "n/a"}
-      </Typography.Text>
-    ),
-  },
-  {
-    title: "Catalog actor",
-    render: (_, record) => (
-      <Typography.Text copyable>
-        {record.script?.catalogActorId || "n/a"}
-      </Typography.Text>
-    ),
-  },
-];
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    {typeof value === "string" || typeof value === "number" ? (
+      <Typography.Text>{value}</Typography.Text>
+    ) : (
+      value
+    )}
+  </div>
+);
 
 const initialDraft = readScopeQueryDraft();
 const initialScriptId =
@@ -186,6 +183,20 @@ const ScopeScriptsPage: React.FC = () => {
           >
             Inspect
           </Button>,
+          <Button
+            key={`studio-${record.scriptId}`}
+            type="link"
+            onClick={() =>
+              history.push(
+                buildStudioRoute({
+                  tab: "scripts",
+                  scriptId: record.scriptId,
+                })
+              )
+            }
+          >
+            Open In Studio
+          </Button>,
         ],
       },
     ],
@@ -195,7 +206,7 @@ const ScopeScriptsPage: React.FC = () => {
   return (
     <PageContainer
       title="Scope Scripts"
-      content="Inspect script catalog state and source material for a single scope."
+      content="Inspect script catalog state and source material for a single scope. tenantId and appId stay platform-managed and hidden behind this view."
       onBack={() => history.push(buildScopeHref("/scopes", activeDraft))}
     >
       <Row gutter={[16, 16]}>
@@ -263,27 +274,63 @@ const ScopeScriptsPage: React.FC = () => {
         title={selectedScriptId ? `Script ${selectedScriptId}` : "Script"}
         size={760}
         onClose={() => setSelectedScriptId("")}
+        styles={{ body: drawerBodyStyle }}
       >
         {scriptDetailQuery.data ? (
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <ProDescriptions<ScopeScriptDetail>
-              column={1}
-              dataSource={scriptDetailQuery.data}
-              columns={scriptDetailColumns}
-            />
-            <ProCard title="Catalog state" {...moduleCardProps}>
-              {scriptCatalogQuery.data ? (
-                <ScopeScriptCatalogSummary catalog={scriptCatalogQuery.data} />
-              ) : (
-                <Typography.Text type="secondary">
-                  Catalog snapshot unavailable.
-                </Typography.Text>
-              )}
-            </ProCard>
-            <ProCard title="Source text" {...moduleCardProps}>
-              {renderMultilineText(scriptDetailQuery.data.source?.sourceText)}
-            </ProCard>
-          </Space>
+          <div style={drawerScrollStyle}>
+            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+              <div style={embeddedPanelStyle}>
+                <div style={summaryFieldGridStyle}>
+                  <SummaryField
+                    label="Revision"
+                    value={scriptDetailQuery.data.script?.activeRevision || "n/a"}
+                  />
+                  <SummaryField
+                    label="Definition actor"
+                    value={
+                      <Typography.Text copyable>
+                        {scriptDetailQuery.data.script?.definitionActorId ||
+                          "n/a"}
+                      </Typography.Text>
+                    }
+                  />
+                  <SummaryField
+                    label="Catalog actor"
+                    value={
+                      <Typography.Text copyable>
+                        {scriptDetailQuery.data.script?.catalogActorId || "n/a"}
+                      </Typography.Text>
+                    }
+                  />
+                </div>
+              </div>
+              <ProCard title="Catalog state" {...moduleCardProps}>
+                {scriptCatalogQuery.data ? (
+                  <ScopeScriptCatalogSummary catalog={scriptCatalogQuery.data} />
+                ) : (
+                  <Typography.Text type="secondary">
+                    Catalog snapshot unavailable.
+                  </Typography.Text>
+                )}
+              </ProCard>
+              <ProCard title="Source text" {...moduleCardProps}>
+                {renderMultilineText(scriptDetailQuery.data.source?.sourceText)}
+              </ProCard>
+              <Button
+                type="primary"
+                onClick={() =>
+                  history.push(
+                    buildStudioRoute({
+                      tab: "scripts",
+                      scriptId: selectedScriptId,
+                    })
+                  )
+                }
+              >
+                Open In Studio
+              </Button>
+            </Space>
+          </div>
         ) : (
           <Alert
             showIcon
@@ -299,20 +346,24 @@ const ScopeScriptsPage: React.FC = () => {
 const ScopeScriptCatalogSummary: React.FC<{ catalog: ScopeScriptCatalog }> = ({
   catalog,
 }) => (
-  <Space direction="vertical" size={4}>
-    <Typography.Text>
-      Active revision: {catalog.activeRevision || "n/a"}
-    </Typography.Text>
-    <Typography.Text>
-      Previous revision: {catalog.previousRevision || "n/a"}
-    </Typography.Text>
-    <Typography.Text>
-      History: {catalog.revisionHistory.join(", ") || "n/a"}
-    </Typography.Text>
-    <Typography.Text>
-      Last proposal: {catalog.lastProposalId || "n/a"}
-    </Typography.Text>
-  </Space>
+  <div style={summaryFieldGridStyle}>
+    <SummaryField
+      label="Active revision"
+      value={catalog.activeRevision || "n/a"}
+    />
+    <SummaryField
+      label="Previous revision"
+      value={catalog.previousRevision || "n/a"}
+    />
+    <SummaryField
+      label="History"
+      value={catalog.revisionHistory.join(", ") || "n/a"}
+    />
+    <SummaryField
+      label="Last proposal"
+      value={catalog.lastProposalId || "n/a"}
+    />
+  </div>
 );
 
 export default ScopeScriptsPage;

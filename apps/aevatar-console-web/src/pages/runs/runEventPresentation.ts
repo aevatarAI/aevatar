@@ -32,14 +32,28 @@ export type EventFilterValues = {
 };
 
 export type RunEventRow = {
+  agentId: string;
   key: string;
+  stepId: string;
+  stepType: string;
   timestamp: string;
+  timelineKey: string;
+  timelineLabel: string;
   eventType: string;
   eventCategory: RunEventCategory;
   eventStatus: RunEventStatus;
   description: string;
   payloadPreview: string;
   payloadText: string;
+};
+
+export type RunTimelineGroup = {
+  eventCount: number;
+  items: RunEventRow[];
+  key: string;
+  latestTimestamp: string;
+  label: string;
+  status: RunEventStatus;
 };
 
 const PAYLOAD_PREVIEW_LIMIT = 180;
@@ -105,6 +119,209 @@ function getEventDisplayType(event: AGUIEvent): string {
 
   const custom = parseCustomEvent(event);
   return `CUSTOM · ${custom.name}`;
+}
+
+function readOptionalEventString(event: AGUIEvent, key: string): string {
+  const candidate = (event as unknown as Record<string, unknown>)[key];
+  return typeof candidate === 'string' ? candidate : '';
+}
+
+function mergeTimelineStatus(
+  current: RunEventStatus,
+  incoming: RunEventStatus,
+): RunEventStatus {
+  if (current === 'error' || incoming === 'error') {
+    return 'error';
+  }
+
+  if (current === 'processing' || incoming === 'processing') {
+    return 'processing';
+  }
+
+  if (current === 'success' || incoming === 'success') {
+    return 'success';
+  }
+
+  return 'default';
+}
+
+function buildTimelineContext(event: AGUIEvent): {
+  agentId: string;
+  stepId: string;
+  stepType: string;
+  timelineKey: string;
+  timelineLabel: string;
+} {
+  const defaultAgentId = readOptionalEventString(event, 'threadId');
+  const defaultStepId = readOptionalEventString(event, 'stepId');
+  const defaultStepType = readOptionalEventString(event, 'stepType');
+
+  if (event.type === AGUIEventType.HUMAN_INPUT_REQUEST) {
+    const approval = isHumanApprovalSuspension(event.suspensionType);
+    return {
+      agentId: readOptionalEventString(event, 'agentId') || defaultAgentId,
+      stepId: event.stepId || '',
+      stepType: event.suspensionType || '',
+      timelineKey: event.stepId ? `step:${event.stepId}` : 'interaction:human',
+      timelineLabel: event.stepId
+        ? `Interaction · ${event.stepId}`
+        : approval
+          ? 'Human approval'
+          : 'Human input',
+    };
+  }
+
+  if (event.type === AGUIEventType.HUMAN_INPUT_RESPONSE) {
+    return {
+      agentId: readOptionalEventString(event, 'agentId') || defaultAgentId,
+      stepId: event.stepId || '',
+      stepType: defaultStepType,
+      timelineKey: event.stepId ? `step:${event.stepId}` : 'interaction:human',
+      timelineLabel: event.stepId
+        ? `Interaction · ${event.stepId}`
+        : 'Human input',
+    };
+  }
+
+  if (event.type === AGUIEventType.CUSTOM) {
+    const custom = parseCustomEvent(event);
+
+    if (custom.name === CustomEventName.RunContext) {
+      const data = parseRunContextData(custom.data);
+      return {
+        agentId: data?.actorId ?? defaultAgentId,
+        stepId: '',
+        stepType: '',
+        timelineKey: 'run:context',
+        timelineLabel: 'Run context',
+      };
+    }
+
+    if (custom.name === CustomEventName.StepRequest) {
+      const data = parseStepRequestData(custom.data);
+      const stepId = data?.stepId ?? '';
+      const stepType = data?.stepType ?? '';
+      return {
+        agentId: data?.targetRole ?? defaultAgentId,
+        stepId,
+        stepType,
+        timelineKey: stepId ? `step:${stepId}` : 'step:request',
+        timelineLabel: stepId
+          ? `Step · ${stepId}`
+          : stepType
+            ? `Step request · ${stepType}`
+            : 'Step request',
+      };
+    }
+
+    if (custom.name === CustomEventName.StepCompleted) {
+      const data = parseStepCompletedData(custom.data);
+      const stepId = data?.stepId ?? '';
+      return {
+        agentId: defaultAgentId,
+        stepId,
+        stepType: '',
+        timelineKey: stepId ? `step:${stepId}` : 'step:completed',
+        timelineLabel: stepId ? `Step · ${stepId}` : 'Step completed',
+      };
+    }
+
+    if (custom.name === CustomEventName.HumanInputRequest) {
+      const data = parseHumanInputRequestData(custom.data);
+      const stepId = data?.stepId ?? '';
+      const approval = isHumanApprovalSuspension(data?.suspensionType);
+      return {
+        agentId: defaultAgentId,
+        stepId,
+        stepType: data?.suspensionType ?? '',
+        timelineKey: stepId ? `step:${stepId}` : 'interaction:human',
+        timelineLabel: stepId
+          ? `Interaction · ${stepId}`
+          : approval
+            ? 'Human approval'
+            : 'Human input',
+      };
+    }
+
+    if (custom.name === CustomEventName.WaitingSignal) {
+      const data = parseWaitingSignalData(custom.data);
+      const stepId = data?.stepId ?? '';
+      return {
+        agentId: defaultAgentId,
+        stepId,
+        stepType: '',
+        timelineKey: stepId ? `step:${stepId}` : 'interaction:signal',
+        timelineLabel: stepId
+          ? `Waiting signal · ${stepId}`
+          : 'Waiting signal',
+      };
+    }
+
+    return {
+      agentId: defaultAgentId,
+      stepId: '',
+      stepType: '',
+      timelineKey: `custom:${custom.name}`,
+      timelineLabel: custom.name,
+    };
+  }
+
+  if (defaultStepId) {
+    return {
+      agentId: readOptionalEventString(event, 'agentId') || defaultAgentId,
+      stepId: defaultStepId,
+      stepType: defaultStepType,
+      timelineKey: `step:${defaultStepId}`,
+      timelineLabel: `Step · ${defaultStepId}`,
+    };
+  }
+
+  if (event.type === AGUIEventType.RUN_STARTED || event.type === AGUIEventType.RUN_FINISHED) {
+    return {
+      agentId: defaultAgentId,
+      stepId: '',
+      stepType: '',
+      timelineKey: 'run:lifecycle',
+      timelineLabel: 'Run lifecycle',
+    };
+  }
+
+  if (
+    event.type === AGUIEventType.TEXT_MESSAGE_START ||
+    event.type === AGUIEventType.TEXT_MESSAGE_CONTENT ||
+    event.type === AGUIEventType.TEXT_MESSAGE_END
+  ) {
+    const role = readOptionalEventString(event, 'role');
+    return {
+      agentId: role || defaultAgentId,
+      stepId: '',
+      stepType: '',
+      timelineKey: role ? `message:${role}` : 'message:stream',
+      timelineLabel: role ? `Message · ${role}` : 'Message stream',
+    };
+  }
+
+  if (
+    event.type === AGUIEventType.TOOL_CALL_START ||
+    event.type === AGUIEventType.TOOL_CALL_END
+  ) {
+    const toolName = readOptionalEventString(event, 'toolName');
+    return {
+      agentId: defaultAgentId,
+      stepId: '',
+      stepType: '',
+      timelineKey: toolName ? `tool:${toolName}` : 'tool:call',
+      timelineLabel: toolName ? `Tool · ${toolName}` : 'Tool call',
+    };
+  }
+
+  return {
+    agentId: readOptionalEventString(event, 'agentId') || defaultAgentId,
+    stepId: '',
+    stepType: defaultStepType,
+    timelineKey: `category:${deriveEventCategory(event)}`,
+    timelineLabel: deriveEventCategory(event),
+  };
 }
 
 export function describeEvent(event: AGUIEvent): string {
@@ -251,10 +468,16 @@ export function deriveEventCategory(event: AGUIEvent): RunEventCategory {
 
 export function buildEventRow(event: AGUIEvent, index: number): RunEventRow {
   const payloadText = normalizePayloadText(event);
+  const timelineContext = buildTimelineContext(event);
 
   return {
+    agentId: timelineContext.agentId,
     key: `${event.type}-${event.timestamp ?? 'na'}-${index}`,
+    stepId: timelineContext.stepId,
+    stepType: timelineContext.stepType,
     timestamp: formatTimestamp(event.timestamp),
+    timelineKey: timelineContext.timelineKey,
+    timelineLabel: timelineContext.timelineLabel,
     eventType: getEventDisplayType(event),
     eventCategory: deriveEventCategory(event),
     eventStatus: deriveEventStatus(event),
@@ -293,13 +516,42 @@ export function filterEventRows(
     }
 
     return [
+      row.agentId,
       row.eventType,
       row.eventCategory,
       row.description,
       row.payloadPreview,
+      row.stepId,
+      row.stepType,
+      row.timelineLabel,
     ]
       .join(' ')
       .toLowerCase()
       .includes(query);
   });
+}
+
+export function buildTimelineGroups(rows: RunEventRow[]): RunTimelineGroup[] {
+  const groups: RunTimelineGroup[] = [];
+
+  for (const row of rows) {
+    const current = groups[groups.length - 1];
+    if (current && current.key === row.timelineKey) {
+      current.items.push(row);
+      current.eventCount += 1;
+      current.status = mergeTimelineStatus(current.status, row.eventStatus);
+      continue;
+    }
+
+    groups.push({
+      eventCount: 1,
+      items: [row],
+      key: row.timelineKey,
+      latestTimestamp: row.timestamp,
+      label: row.timelineLabel,
+      status: row.eventStatus,
+    });
+  }
+
+  return groups;
 }

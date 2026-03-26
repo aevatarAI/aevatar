@@ -1,9 +1,14 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { history } from '@/shared/navigation/history';
+import {
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from '@/shared/navigation/runtimeRoutes';
 import type { Node } from '@xyflow/react';
 import {
   Button,
+  Modal,
   Space,
 } from 'antd';
 import React, {
@@ -13,6 +18,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { ensureActiveAuthSession } from '@/shared/auth/client';
+import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { sanitizeReturnTo } from '@/shared/auth/session';
 import {
   CONSOLE_PREFERENCES_UPDATED_EVENT,
   loadConsolePreferences,
@@ -67,11 +75,14 @@ import type {
   StudioWorkflowDirectory,
   StudioWorkspaceSettings,
 } from '@/shared/studio/models';
+import { embeddedPanelStyle } from '@/shared/ui/proComponents';
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioInspectorPane from './components/StudioInspectorPane';
 import StudioShell, {
+  type StudioShellNavItem,
   type StudioWorkspacePage,
 } from './components/StudioShell';
+import ScriptsWorkbenchPage from '@/modules/studio/scripts/ScriptsWorkbenchPage';
 import {
   type StudioCatalogDraftMeta,
   type StudioConnectorCatalogItem,
@@ -91,6 +102,7 @@ import {
 
 type StudioRouteState = {
   workflowId: string;
+  scriptId: string;
   templateWorkflow: string;
   tab: StudioTab;
   draftMode: '' | 'new';
@@ -144,6 +156,8 @@ type StudioAppearancePreferences = {
 };
 
 let studioLocalKeyCounter = 0;
+const STUDIO_AUTO_RELOGIN_ATTEMPT_KEY =
+  'aevatar-console:studio:auto-relogin:';
 
 function hasValidationError(findings: StudioValidationFinding[]): boolean {
   return findings.some((item) =>
@@ -158,6 +172,7 @@ function trimOptional(value: string | null | undefined): string {
 function parseStudioTab(value: string | null): StudioTab {
   switch (value) {
     case 'studio':
+    case 'scripts':
     case 'executions':
     case 'roles':
     case 'connectors':
@@ -194,6 +209,69 @@ function createStudioLocalKey(prefix: string): string {
 
   studioLocalKeyCounter += 1;
   return `${prefix}_${Date.now().toString(36)}_${studioLocalKeyCounter.toString(36)}`;
+}
+
+function buildStudioLoginRoute(returnTo: string): string {
+  const params = new URLSearchParams({
+    redirect: sanitizeReturnTo(returnTo),
+  });
+  return `/login?${params.toString()}`;
+}
+
+function getCurrentStudioReturnTo(): string {
+  if (typeof window === 'undefined') {
+    return '/studio';
+  }
+
+  return sanitizeReturnTo(
+    `${window.location.pathname}${window.location.search}${window.location.hash}`,
+  );
+}
+
+function getStudioAutoReloginStorageKey(returnTo: string): string {
+  return `${STUDIO_AUTO_RELOGIN_ATTEMPT_KEY}${returnTo}`;
+}
+
+function hasStudioAutoReloginAttempt(returnTo: string): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    return (
+      window.sessionStorage.getItem(getStudioAutoReloginStorageKey(returnTo)) ===
+      '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function markStudioAutoReloginAttempt(returnTo: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      getStudioAutoReloginStorageKey(returnTo),
+      '1',
+    );
+  } catch {
+    // Ignore sessionStorage failures and continue with best-effort auth recovery.
+  }
+}
+
+function clearStudioAutoReloginAttempt(returnTo: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(getStudioAutoReloginStorageKey(returnTo));
+  } catch {
+    // Ignore sessionStorage failures and continue with best-effort auth recovery.
+  }
 }
 
 function splitCatalogLines(value: string): string[] {
@@ -385,55 +463,6 @@ function createUniqueConnectorName(
   }
 
   return candidate;
-}
-
-function normalizeConnector(
-  connector: StudioConnectorCatalogItem | StudioConnectorDraftItem,
-  key = 'key' in connector ? connector.key : createStudioLocalKey('connector'),
-): StudioConnectorCatalogItem {
-  const type = (connector.type || 'http') as StudioConnectorType;
-  const defaults = createEmptyConnectorDraft(type, connector.name || '');
-
-  return {
-    key,
-    name: connector.name || defaults.name,
-    type,
-    enabled: connector.enabled !== false,
-    timeoutMs: String(connector.timeoutMs || defaults.timeoutMs),
-    retry: String(connector.retry || defaults.retry),
-    http: {
-      baseUrl: connector.http?.baseUrl ?? defaults.http.baseUrl,
-      allowedMethods: [...(connector.http?.allowedMethods ?? defaults.http.allowedMethods)],
-      allowedPaths: [...(connector.http?.allowedPaths ?? defaults.http.allowedPaths)],
-      allowedInputKeys: [
-        ...(connector.http?.allowedInputKeys ?? defaults.http.allowedInputKeys),
-      ],
-      defaultHeaders: { ...(connector.http?.defaultHeaders ?? defaults.http.defaultHeaders) },
-    },
-    cli: {
-      command: connector.cli?.command ?? defaults.cli.command,
-      fixedArguments: [...(connector.cli?.fixedArguments ?? defaults.cli.fixedArguments)],
-      allowedOperations: [
-        ...(connector.cli?.allowedOperations ?? defaults.cli.allowedOperations),
-      ],
-      allowedInputKeys: [
-        ...(connector.cli?.allowedInputKeys ?? defaults.cli.allowedInputKeys),
-      ],
-      workingDirectory: connector.cli?.workingDirectory ?? defaults.cli.workingDirectory,
-      environment: { ...(connector.cli?.environment ?? defaults.cli.environment) },
-    },
-    mcp: {
-      serverName: connector.mcp?.serverName ?? defaults.mcp.serverName,
-      command: connector.mcp?.command ?? defaults.mcp.command,
-      arguments: [...(connector.mcp?.arguments ?? defaults.mcp.arguments)],
-      environment: { ...(connector.mcp?.environment ?? defaults.mcp.environment) },
-      defaultTool: connector.mcp?.defaultTool ?? defaults.mcp.defaultTool,
-      allowedTools: [...(connector.mcp?.allowedTools ?? defaults.mcp.allowedTools)],
-      allowedInputKeys: [
-        ...(connector.mcp?.allowedInputKeys ?? defaults.mcp.allowedInputKeys),
-      ],
-    },
-  };
 }
 
 function hasConnectorDraftContent(
@@ -669,6 +698,7 @@ function readInitialStudioRouteState(): StudioRouteState {
   if (typeof window === 'undefined') {
     return {
       workflowId: '',
+      scriptId: '',
       templateWorkflow: '',
       tab: 'workflows',
       draftMode: '',
@@ -682,6 +712,7 @@ function readInitialStudioRouteState(): StudioRouteState {
   const params = new URLSearchParams(window.location.search);
   return {
     workflowId: trimOptional(params.get('workflow')),
+    scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
     tab: parseStudioTab(params.get('tab')),
     draftMode: parseDraftMode(params.get('draft')),
@@ -694,6 +725,8 @@ function readInitialStudioRouteState(): StudioRouteState {
 
 function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage {
   switch (state.tab) {
+    case 'scripts':
+      return 'scripts';
     case 'roles':
     case 'connectors':
     case 'settings':
@@ -762,6 +795,7 @@ function readValidationSummary(
 
 const StudioPage: React.FC = () => {
   const initialState = useMemo(() => readInitialStudioRouteState(), []);
+  const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
     readInitialWorkspacePage(initialState),
@@ -777,6 +811,7 @@ const StudioPage: React.FC = () => {
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
     initialState.workflowId,
   );
+  const [selectedScriptId, setSelectedScriptId] = useState(initialState.scriptId);
   const [selectedExecutionId, setSelectedExecutionId] = useState(
     initialState.executionId,
   );
@@ -859,16 +894,21 @@ const StudioPage: React.FC = () => {
   const [promptHistory, setPromptHistory] = useState<
     PlaygroundPromptHistoryEntry[]
   >(() => loadPlaygroundPromptHistory());
+  const [scriptsHasUnsavedChanges, setScriptsHasUnsavedChanges] = useState(false);
+  const [pendingWorkspacePage, setPendingWorkspacePage] =
+    useState<StudioWorkspacePage | null>(null);
   const legacyPlaygroundDraft = useMemo(() => loadPlaygroundDraft(), []);
   const workflowImportInputRef = useRef<HTMLInputElement | null>(null);
   const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
   const roleImportInputRef = useRef<HTMLInputElement | null>(null);
   const executionLogsWindowRef = useRef<Window | null>(null);
   const [logsDetached, setLogsDetached] = useState(false);
+  const [authRecoveryPending, setAuthRecoveryPending] = useState(false);
   const authSessionQuery = useQuery({
     queryKey: ['studio-auth-session'],
     queryFn: () => studioApi.getAuthSession(),
   });
+  const refetchAuthSession = authSessionQuery.refetch;
   const studioHostAccessResolved =
     !authSessionQuery.isLoading && !authSessionQuery.isError;
   const studioHostAuthenticated =
@@ -876,6 +916,67 @@ const StudioPage: React.FC = () => {
     Boolean(authSessionQuery.data?.authenticated);
   const studioHostReady =
     studioHostAccessResolved && studioHostAuthenticated;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (authSessionQuery.isLoading || authSessionQuery.isError) {
+      return;
+    }
+
+    const returnTo = getCurrentStudioReturnTo();
+    if (!authSessionQuery.data?.enabled || authSessionQuery.data.authenticated) {
+      clearStudioAutoReloginAttempt(returnTo);
+      setAuthRecoveryPending(false);
+      return;
+    }
+
+    if (!nyxIdConfig.enabled || hasStudioAutoReloginAttempt(returnTo)) {
+      setAuthRecoveryPending(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAuthRecoveryPending(true);
+
+    void (async () => {
+      await ensureActiveAuthSession(nyxIdConfig);
+      if (cancelled) {
+        return;
+      }
+
+      const refreshedAuth = await refetchAuthSession();
+      if (cancelled) {
+        return;
+      }
+
+      if (
+        refreshedAuth.data?.enabled === false ||
+        Boolean(refreshedAuth.data?.authenticated)
+      ) {
+        clearStudioAutoReloginAttempt(returnTo);
+        setAuthRecoveryPending(false);
+        return;
+      }
+
+      markStudioAutoReloginAttempt(returnTo);
+      setAuthRecoveryPending(false);
+      history.replace(buildStudioLoginRoute(returnTo));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authSessionQuery.data?.authenticated,
+    authSessionQuery.data?.enabled,
+    authSessionQuery.isError,
+    authSessionQuery.isLoading,
+    nyxIdConfig,
+    refetchAuthSession,
+  ]);
 
   const appContextQuery = useQuery({
     queryKey: ['studio-app-context'],
@@ -1181,6 +1282,12 @@ const StudioPage: React.FC = () => {
       url.searchParams.delete('workflow');
     }
 
+    if (selectedScriptId) {
+      url.searchParams.set('script', selectedScriptId);
+    } else {
+      url.searchParams.delete('script');
+    }
+
     if (!selectedWorkflowId && templateWorkflow) {
       url.searchParams.set('template', templateWorkflow);
     } else {
@@ -1204,7 +1311,9 @@ const StudioPage: React.FC = () => {
       url.searchParams.delete('legacy');
     }
 
-    if (workspacePage === 'roles') {
+    if (workspacePage === 'scripts') {
+      url.searchParams.set('tab', 'scripts');
+    } else if (workspacePage === 'roles') {
       url.searchParams.set('tab', 'roles');
     } else if (workspacePage === 'connectors') {
       url.searchParams.set('tab', 'connectors');
@@ -1240,6 +1349,7 @@ const StudioPage: React.FC = () => {
     legacySource,
     logsPopoutMode,
     selectedExecutionId,
+    selectedScriptId,
     selectedWorkflowId,
     studioView,
     templateWorkflow,
@@ -3251,42 +3361,67 @@ const StudioPage: React.FC = () => {
     }
   };
 
-  const navItems = [
+  const navItems: StudioShellNavItem[] = [
     {
-      key: 'workflows' as const,
+      key: 'workflows',
       label: 'Workflows',
       description: 'Browse workspace workflows and start new drafts.',
       count: workflowsQuery.data?.length ?? 0,
     },
     {
-      key: 'studio' as const,
+      key: 'studio',
       label: 'Studio',
       description: 'Edit the active draft and inspect execution runs.',
       count: executionsQuery.data?.length ?? 0,
     },
     {
-      key: 'roles' as const,
+      key: 'roles',
       label: 'Roles',
       description: 'Edit, import, and save workflow role definitions.',
       count: rolesQuery.data?.roles.length ?? 0,
     },
     {
-      key: 'connectors' as const,
+      key: 'connectors',
       label: 'Connectors',
       description: 'Edit, import, and save Studio connectors.',
       count: connectorsQuery.data?.connectors.length ?? 0,
     },
     {
-      key: 'settings' as const,
+      key: 'settings',
       label: 'Config',
       description: 'Manage runtime, workflow sources, and provider config.',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
   ];
+  if (appContextQuery.data?.features.scripts) {
+    navItems.splice(2, 0, {
+      key: 'scripts',
+      label: 'Scripts',
+      description: 'Author, validate, run, and promote scope-aware scripts.',
+    });
+  }
+
+  const applyWorkspacePageSelection = React.useCallback(
+    (page: StudioWorkspacePage) => {
+      setWorkspacePage(page);
+      if (page === 'studio' && studioView !== 'execution') {
+        setStudioView('editor');
+      }
+      if (page === 'scripts') {
+        setSelectedWorkflowId('');
+        setTemplateWorkflow('');
+        setDraftMode('');
+        setLegacySource('');
+      }
+    },
+    [studioView],
+  );
 
   const pageTitle =
     workspacePage === 'workflows'
       ? 'Workflows'
+      : workspacePage === 'scripts'
+        ? 'Scripts Studio'
       : workspacePage === 'studio'
         ? studioView === 'execution'
           ? 'Studio execution view'
@@ -3316,11 +3451,17 @@ const StudioPage: React.FC = () => {
           Workflow library
         </Button>
       </Space>
+    ) : workspacePage === 'scripts' ? (
+      <Space wrap size={[8, 8]}>
+        <Button onClick={() => setWorkspacePage('workflows')}>
+          Workflow library
+        </Button>
+      </Space>
     ) : undefined;
 
   const workspaceAlerts = (
     <StudioWorkspaceAlerts
-      authSession={authSessionQuery.data}
+      authSession={authRecoveryPending ? null : authSessionQuery.data}
       templateWorkflow={templateWorkflow}
       draftMode={draftMode}
       legacySource={legacySource}
@@ -3551,11 +3692,17 @@ const StudioPage: React.FC = () => {
           onSaveDraft={() => void handleSaveDraft()}
           onInspectPublishedWorkflow={() =>
             history.push(
-              `/workflows?workflow=${encodeURIComponent(templateWorkflow)}`,
+              buildRuntimeWorkflowsHref({
+                workflow: templateWorkflow,
+              }),
             )
           }
           onRunInConsole={() =>
-            history.push(`/runs?workflow=${encodeURIComponent(templateWorkflow)}`)
+            history.push(
+              buildRuntimeRunsHref({
+                workflow: templateWorkflow,
+              }),
+            )
           }
           onAskAiPromptChange={(value) => {
             setAskAiPrompt(value);
@@ -3572,6 +3719,37 @@ const StudioPage: React.FC = () => {
             setStudioView('execution');
           }}
         />
+      )
+    ) : workspacePage === 'scripts' ? (
+      appContextQuery.data?.features.scripts ? (
+        <ScriptsWorkbenchPage
+          appContext={appContextQuery.data}
+          initialScriptId={selectedScriptId}
+          onUnsavedChangesChange={setScriptsHasUnsavedChanges}
+          onSelectScriptId={setSelectedScriptId}
+        />
+      ) : (
+        <div
+          style={{
+            ...embeddedPanelStyle,
+            background: 'rgba(255, 251, 230, 0.96)',
+            borderColor: 'rgba(250, 173, 20, 0.28)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <strong>Scripts Studio is unavailable in the current host.</strong>
+            <span style={{ color: 'var(--ant-color-text-secondary)' }}>
+              The current Studio host does not expose the Scripts capability for
+              this session.
+            </span>
+          </div>
+        </div>
       )
     ) : workspacePage === 'roles' ? (
       <StudioRolesPage
@@ -3727,7 +3905,7 @@ const StudioPage: React.FC = () => {
       <StudioBootstrapGate
         appContextLoading={appContextQuery.isLoading}
         appContextError={appContextQuery.isError ? appContextQuery.error : null}
-        authLoading={authSessionQuery.isLoading}
+        authLoading={authSessionQuery.isLoading || authRecoveryPending}
         authError={authSessionQuery.isError ? authSessionQuery.error : null}
         workspaceLoading={workspaceSettingsQuery.isLoading}
         workspaceError={
@@ -3741,23 +3919,49 @@ const StudioPage: React.FC = () => {
             alerts={workspaceAlerts}
             currentPage={workspacePage}
             navItems={navItems}
-            onSelectPage={(page) => {
-              setWorkspacePage(page);
-              if (page === 'studio' && studioView !== 'execution') {
-                setStudioView('editor');
+            onSelectPage={(page: StudioWorkspacePage) => {
+              if (
+                workspacePage === 'scripts' &&
+                page !== 'scripts' &&
+                scriptsHasUnsavedChanges
+              ) {
+                setPendingWorkspacePage(page);
+                return;
               }
+
+              applyWorkspacePageSelection(page);
             }}
             pageTitle={pageTitle}
             pageToolbar={pageToolbar}
             showPageHeader={
               workspacePage !== 'roles' &&
               workspacePage !== 'connectors' &&
-              workspacePage !== 'studio'
+              workspacePage !== 'studio' &&
+              workspacePage !== 'scripts'
             }
           >
             {currentPageContent}
           </StudioShell>
         )}
+        <Modal
+          open={Boolean(pendingWorkspacePage)}
+          title="Leave Scripts Studio?"
+          okText="Leave page"
+          cancelText="Continue editing"
+          onOk={() => {
+            if (pendingWorkspacePage) {
+              applyWorkspacePageSelection(pendingWorkspacePage);
+            }
+            setPendingWorkspacePage(null);
+          }}
+          onCancel={() => setPendingWorkspacePage(null)}
+        >
+          <div style={{ color: '#4b5563', lineHeight: 1.7 }}>
+            The current script changes have not been saved to Scope yet. Your
+            local draft will still be kept in this browser, but these changes
+            will not be visible in Scope until you save them.
+          </div>
+        </Modal>
       </StudioBootstrapGate>
     </PageContainer>
   );

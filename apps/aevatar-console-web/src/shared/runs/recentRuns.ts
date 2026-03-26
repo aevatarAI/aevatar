@@ -1,6 +1,8 @@
 export interface RecentRunEntry {
   id: string;
   recordedAt: string;
+  scopeId: string;
+  serviceId: string;
   workflowName: string;
   prompt: string;
   actorId: string;
@@ -22,6 +24,8 @@ function sanitizeEntry(value: Partial<RecentRunEntry>): RecentRunEntry | null {
   return {
     id,
     recordedAt: value.recordedAt?.trim() || new Date().toISOString(),
+    scopeId: value.scopeId?.trim() || "",
+    serviceId: value.serviceId?.trim() || "",
     workflowName: value.workflowName?.trim() || 'unknown',
     prompt: value.prompt?.trim() || '',
     actorId: value.actorId?.trim() || '',

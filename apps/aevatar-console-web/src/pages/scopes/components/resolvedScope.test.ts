@@ -18,9 +18,14 @@ describe("resolvedScope", () => {
       scopeResolved: true,
       scopeSource: "config:Cli:App:ScopeId",
       workflowStorageMode: "scope",
+      scriptStorageMode: "scope",
       features: {
         publishedWorkflows: true,
         scripts: true,
+      },
+      scriptContract: {
+        inputType: "type.googleapis.com/example.Command",
+        readModelFields: ["input", "output"],
       },
     };
 
@@ -43,9 +48,14 @@ describe("resolvedScope", () => {
       scopeResolved: true,
       scopeSource: "config:Cli:App:ScopeId",
       workflowStorageMode: "scope",
+      scriptStorageMode: "scope",
       features: {
         publishedWorkflows: true,
         scripts: true,
+      },
+      scriptContract: {
+        inputType: "type.googleapis.com/example.Command",
+        readModelFields: ["input", "output"],
       },
     };
 
@@ -68,9 +78,14 @@ describe("resolvedScope", () => {
       scopeResolved: false,
       scopeSource: "",
       workflowStorageMode: "workspace",
+      scriptStorageMode: "draft",
       features: {
         publishedWorkflows: true,
         scripts: true,
+      },
+      scriptContract: {
+        inputType: "type.googleapis.com/example.Command",
+        readModelFields: ["input", "output"],
       },
     };
 

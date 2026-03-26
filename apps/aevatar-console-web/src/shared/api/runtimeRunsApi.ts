@@ -46,12 +46,42 @@ async function readError(response: Response): Promise<string> {
   }
 }
 
+function encodeSegment(value: string): string {
+  return encodeURIComponent(value.trim());
+}
+
+function buildScopedServicePath(scopeId: string, serviceId: string): string {
+  return `/api/scopes/${encodeSegment(scopeId)}/services/${encodeSegment(
+    serviceId
+  )}`;
+}
+
+export type WorkflowStopRequest = {
+  actorId?: string;
+  runId: string;
+  commandId?: string;
+  reason?: string;
+};
+
+export type WorkflowStopResponse = {
+  accepted: boolean;
+  actorId?: string;
+  runId?: string;
+  commandId?: string;
+  correlationId?: string;
+  reason?: string;
+};
+
 export const runtimeRunsApi = {
   async streamChat(
+    scopeId: string,
+    serviceId: string,
     request: ChatRunRequest,
     signal: AbortSignal
   ): Promise<Response> {
-    const response = await authFetch("/api/chat", {
+    const response = await authFetch(
+      `${buildScopedServicePath(scopeId, serviceId)}/invoke/chat:stream`,
+      {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -70,7 +100,8 @@ export const runtimeRunsApi = {
         })
       ),
       signal,
-    });
+      }
+    );
 
     if (!response.ok) {
       throw new Error(await readError(response));
@@ -79,9 +110,15 @@ export const runtimeRunsApi = {
     return response;
   },
 
-  resume(request: WorkflowResumeRequest): Promise<WorkflowResumeResponse> {
+  resume(
+    scopeId: string,
+    serviceId: string,
+    request: WorkflowResumeRequest
+  ): Promise<WorkflowResumeResponse> {
     return requestJson(
-      "/api/workflows/resume",
+      `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodeSegment(
+        request.runId
+      )}:resume`,
       decodeWorkflowResumeResponseBody,
       {
         method: "POST",
@@ -101,9 +138,15 @@ export const runtimeRunsApi = {
     );
   },
 
-  signal(request: WorkflowSignalRequest): Promise<WorkflowSignalResponse> {
+  signal(
+    scopeId: string,
+    serviceId: string,
+    request: WorkflowSignalRequest
+  ): Promise<WorkflowSignalResponse> {
     return requestJson(
-      "/api/workflows/signal",
+      `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodeSegment(
+        request.runId
+      )}:signal`,
       decodeWorkflowSignalResponseBody,
       {
         method: "POST",
@@ -120,5 +163,35 @@ export const runtimeRunsApi = {
         ),
       }
     );
+  },
+
+  async stop(
+    scopeId: string,
+    serviceId: string,
+    request: WorkflowStopRequest
+  ): Promise<WorkflowStopResponse> {
+    const response = await authFetch(
+      `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodeSegment(
+        request.runId
+      )}:stop`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            actorId: trimOptional(request.actorId),
+            runId: request.runId,
+            commandId: trimOptional(request.commandId),
+            reason: trimOptional(request.reason),
+          })
+        ),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+
+    return (await response.json()) as WorkflowStopResponse;
   },
 };

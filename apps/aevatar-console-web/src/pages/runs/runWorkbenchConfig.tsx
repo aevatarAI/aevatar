@@ -5,6 +5,7 @@ import type {
 } from "@ant-design/pro-components";
 import { Button, Space, Tag, Typography } from "antd";
 import React from "react";
+import { loadStoredAuthSession } from "@/shared/auth/session";
 import type { RecentRunEntry } from "@/shared/runs/recentRuns";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { RunTransport } from "./runEventPresentation";
@@ -12,6 +13,8 @@ import type { RunTransport } from "./runEventPresentation";
 export type RunFormValues = {
   prompt: string;
   workflow?: string;
+  scopeId?: string;
+  serviceId?: string;
   actorId?: string;
   transport: RunTransport;
 };
@@ -43,6 +46,14 @@ export type RunFocusStatus =
   | "wait_signal"
   | "finished"
   | "error";
+
+export type RunFocusRecord = {
+  status: RunFocusStatus;
+  label: string;
+  alertType: "info" | "success" | "warning" | "error";
+  title: string;
+  description: string;
+};
 
 export type RecentRunRow = RecentRunEntry & {
   key: string;
@@ -92,13 +103,18 @@ export type HumanInputRecord = {
   timeoutSeconds: number;
 };
 
-export type ConsoleViewKey = "dual" | "messages" | "events";
+export type ConsoleViewKey = "timeline" | "messages" | "events";
 
 export const composerRailMinWidth = 320;
 export const composerRailDefaultWidth = 360;
 export const composerRailMaxWidth = 560;
 export const composerRailKeyboardStep = 24;
 export const monitorWorkbenchMinWidth = 520;
+export const composerRailCompactWidth = 320;
+export const composerRailComfortWidth = 336;
+
+const composerRailCompactBreakpoint = 1120;
+const composerRailComfortBreakpoint = 1360;
 
 export const builtInPresets: RunPreset[] = [
   {
@@ -149,8 +165,8 @@ export const runStatusValueEnum = {
 } as const;
 
 const transportValueEnum = {
-  sse: { text: "SSE", status: "Processing" },
-  ws: { text: "WebSocket", status: "Success" },
+  sse: { text: "Service SSE", status: "Processing" },
+  ws: { text: "Legacy WebSocket", status: "Default" },
 } as const;
 
 const runFocusValueEnum = {
@@ -451,11 +467,11 @@ export const workbenchConsoleViewportStyle = {
   minHeight: 0,
 } as const;
 
-export const workbenchConsoleTabPanelStyle = {
+export const workbenchTraceTabPanelStyle = {
   display: "flex",
   flexDirection: "column",
-  height: "calc((100vh - 64px) * 0.3 - 120px)",
-  minHeight: 180,
+  flex: 1,
+  minHeight: 0,
 } as const;
 
 export const workbenchConsoleSurfaceStyle = {
@@ -591,13 +607,32 @@ export function clampComposerWidth(
   return Math.min(Math.max(requestedWidth, composerRailMinWidth), maxWidth);
 }
 
+export function resolveResponsiveComposerWidth(
+  requestedWidth: number,
+  containerWidth: number
+): number {
+  const clampedWidth = clampComposerWidth(requestedWidth, containerWidth);
+  const responsiveCap =
+    containerWidth <= composerRailCompactBreakpoint
+      ? composerRailCompactWidth
+      : containerWidth <= composerRailComfortBreakpoint
+      ? composerRailComfortWidth
+      : composerRailMaxWidth;
+
+  return Math.min(clampedWidth, responsiveCap);
+}
+
 export function readInitialRunFormValues(
   preferredWorkflow: string
 ): RunFormValues {
+  const defaultScopeId = loadStoredAuthSession()?.user.sub;
+
   if (typeof window === "undefined") {
     return {
       prompt: "",
       workflow: preferredWorkflow,
+      scopeId: defaultScopeId,
+      serviceId: undefined,
       actorId: undefined,
       transport: "sse",
     };
@@ -607,7 +642,9 @@ export function readInitialRunFormValues(
   return {
     prompt: params.get("prompt") ?? "",
     workflow: trimOptional(params.get("workflow")) ?? preferredWorkflow,
+    scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
+    serviceId: trimOptional(params.get("serviceId")),
     actorId: trimOptional(params.get("actorId")),
-    transport: trimOptional(params.get("transport")) === "ws" ? "ws" : "sse",
+    transport: "sse",
   };
 }

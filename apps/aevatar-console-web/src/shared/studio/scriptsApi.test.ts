@@ -1,0 +1,62 @@
+import { scriptsApi } from './scriptsApi';
+import { persistAuthSession } from '@/shared/auth/session';
+
+describe('scriptsApi host-session requests', () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+    window.localStorage.clear();
+  });
+
+  it('injects a bearer token for protected Studio script endpoints', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === 'content-type' ? 'application/json' : null,
+      },
+      json: async () => ({
+        scriptId: 'demo',
+        validationSucceeded: true,
+        findings: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await scriptsApi.validateDraft({
+      scriptId: 'demo',
+      scriptRevision: 'draft-1',
+      source: 'public class Demo {}',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/app/scripts/validate');
+    expect(init?.credentials).toBe('same-origin');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+  });
+});

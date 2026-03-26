@@ -59,26 +59,25 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
 }));
 
 describe("RunsPage", () => {
-  it("renders the runtime run console banner and navigation actions", async () => {
+  it("renders the runtime run console header and navigation actions", async () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
     expect(container.textContent).toContain("Runtime run console");
-    expect(container.textContent).toContain(
-      "Drive runtime workflows over /api/chat or /api/ws/chat, monitor the live event stream, and jump into adjacent runtime surfaces directly from the runtime console."
+    expect(
+      screen.getByRole("button", { name: "Open runtime console guide" })
     );
     expect(
-      screen.getByRole("button", { name: "Open workflow catalog" })
+      screen.getByRole("button", { name: "Open Runtime Workflows" })
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Open runtime explorer" })
+      screen.getByRole("button", { name: "Open Runtime Explorer" })
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Open observability hub" })
     ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Open runtime settings" })
-    ).toBeTruthy();
-    expect(container.textContent).toContain("Composer");
-    expect(container.textContent).toContain("Metric HUD");
+    expect(screen.getByRole("button", { name: "Inspector" })).toBeTruthy();
+    expect(container.textContent).toContain("Launch rail");
+    expect(container.textContent).toContain("Run trace");
+    expect(container.textContent).toContain("Inspector");
   });
 });

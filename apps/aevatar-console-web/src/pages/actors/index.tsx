@@ -1,12 +1,7 @@
-import type {
-  ProColumns,
-  ProDescriptionsItemProps,
-  ProFormInstance,
-} from "@ant-design/pro-components";
+import type { ProColumns, ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProForm,
   ProFormCheckbox,
   ProFormDigit,
@@ -17,6 +12,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import {
+  buildRuntimeObservabilityHref,
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import {
   Alert,
   Button,
   Col,
@@ -26,6 +26,7 @@ import {
   Space,
   Statistic,
   Tag,
+  Tabs,
   Typography,
 } from "antd";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -44,11 +45,20 @@ import {
   loadConsolePreferences,
 } from "@/shared/preferences/consolePreferences";
 import {
+  codeBlockStyle,
   cardStackStyle,
+  drawerBodyStyle,
+  drawerScrollStyle,
   compactTableCardProps,
   embeddedPanelStyle,
   fillCardStyle,
   moduleCardProps,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
 import {
@@ -60,6 +70,8 @@ import {
 } from "./actorPresentation";
 
 type ActorGraphViewMode = "enriched" | "subgraph" | "edges";
+type ActorWorkspaceView = "timeline" | "graph";
+type ActorInspectorMode = "snapshot" | "timeline" | "graph";
 
 type ActorPageState = {
   actorId: string;
@@ -100,6 +112,23 @@ type GraphControlValues = {
   graphViewMode: ActorGraphViewMode;
 };
 
+type SummaryFieldProps = {
+  copyable?: boolean;
+  label: string;
+  value: React.ReactNode;
+};
+
+type SummaryMetricProps = {
+  label: string;
+  tone?: "default" | "info" | "success" | "warning" | "error";
+  value: React.ReactNode;
+};
+
+type SectionHeaderProps = {
+  description?: React.ReactNode;
+  title: string;
+};
+
 const defaultTimelineFilters: ActorTimelineFilters = {
   stages: [],
   eventTypes: [],
@@ -114,12 +143,6 @@ const graphViewOptions: Array<{ label: string; value: ActorGraphViewMode }> = [
   { label: "Edges only", value: "edges" },
 ];
 
-const executionValueEnum = {
-  success: { text: "Healthy", status: "Success" },
-  error: { text: "Error", status: "Error" },
-  default: { text: "Unknown", status: "Default" },
-} as const;
-
 const timelineStatusValueEnum = {
   processing: { text: "Processing", status: "Processing" },
   success: { text: "Completed", status: "Success" },
@@ -132,6 +155,109 @@ const graphViewLabels: Record<ActorGraphViewMode, string> = {
   subgraph: "Subgraph",
   edges: "Edges only",
 };
+
+const workspaceCardBodyStyle = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+} as const;
+
+const workspacePanelStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 16,
+  minHeight: 0,
+};
+
+const graphCanvasShellStyle: React.CSSProperties = {
+  border: "1px solid var(--ant-color-border-secondary)",
+  borderRadius: 12,
+  overflow: "hidden",
+};
+
+const sectionHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+};
+
+const sectionDividerStyle: React.CSSProperties = {
+  borderTop: "1px solid var(--ant-color-border-secondary)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  paddingTop: 12,
+};
+
+const executionTagColorMap: Record<
+  ActorSnapshotRecord["executionStatus"],
+  string
+> = {
+  success: "success",
+  error: "error",
+  default: "default",
+};
+
+const summaryMetricToneMap: Record<
+  NonNullable<SummaryMetricProps["tone"]>,
+  { color: string }
+> = {
+  default: { color: "var(--ant-color-text)" },
+  error: { color: "var(--ant-color-error)" },
+  info: { color: "var(--ant-color-primary)" },
+  success: { color: "var(--ant-color-success)" },
+  warning: { color: "var(--ant-color-warning)" },
+};
+
+const SummaryField: React.FC<SummaryFieldProps> = ({
+  copyable,
+  label,
+  value,
+}) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    {copyable && typeof value === "string" && value && value !== "n/a" ? (
+      <Typography.Text copyable>{value}</Typography.Text>
+    ) : (
+      <Typography.Text>{value}</Typography.Text>
+    )}
+  </div>
+);
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({
+  label,
+  tone = "default",
+  value,
+}) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text
+      style={{
+        ...summaryMetricValueStyle,
+        color: summaryMetricToneMap[tone].color,
+      }}
+    >
+      {value}
+    </Typography.Text>
+  </div>
+);
+
+const SectionHeader: React.FC<SectionHeaderProps> = ({
+  description,
+  title,
+}) => (
+  <div style={sectionHeaderStyle}>
+    <Typography.Text strong>{title}</Typography.Text>
+    {description ? (
+      <Typography.Paragraph
+        style={{ margin: 0 }}
+        type="secondary"
+      >
+        {description}
+      </Typography.Paragraph>
+    ) : null}
+  </div>
+);
 
 function renderPropertyList(properties: Record<string, string>) {
   const entries = Object.entries(properties);
@@ -150,67 +276,6 @@ function renderPropertyList(properties: Record<string, string>) {
     </Space>
   );
 }
-
-const snapshotColumns: ProDescriptionsItemProps<ActorSnapshotRecord>[] = [
-  {
-    title: "ActorId",
-    dataIndex: "actorId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.actorId}</Typography.Text>
-    ),
-  },
-  {
-    title: "Workflow",
-    dataIndex: "workflowName",
-  },
-  {
-    title: "Execution",
-    dataIndex: "executionStatus",
-    valueType: "status" as any,
-    valueEnum: executionValueEnum,
-  },
-  {
-    title: "Completion",
-    dataIndex: "completionRate",
-    valueType: "percent",
-  },
-  {
-    title: "State version",
-    dataIndex: "stateVersion",
-    valueType: "digit",
-  },
-  {
-    title: "Role replies",
-    dataIndex: "roleReplyCount",
-    valueType: "digit",
-  },
-  {
-    title: "Last command",
-    dataIndex: "lastCommandId",
-    render: (_, record) =>
-      record.lastCommandId ? (
-        <Typography.Text copyable>{record.lastCommandId}</Typography.Text>
-      ) : (
-        "n/a"
-      ),
-  },
-  {
-    title: "Last updated",
-    dataIndex: "lastUpdatedAt",
-    valueType: "dateTime",
-    render: (_, record) => formatDateTime(record.lastUpdatedAt),
-  },
-  {
-    title: "Last output",
-    dataIndex: "lastOutput",
-    render: (_, record) => record.lastOutput || "n/a",
-  },
-  {
-    title: "Last error",
-    dataIndex: "lastError",
-    render: (_, record) => record.lastError || "n/a",
-  },
-];
 
 const timelineColumns: ProColumns<ActorTimelineRow>[] = [
   {
@@ -271,138 +336,6 @@ const timelineColumns: ProColumns<ActorTimelineRow>[] = [
             record.dataSummary
           }`
         : "n/a",
-  },
-];
-
-const graphSummaryColumns: ProDescriptionsItemProps<ActorGraphSummaryRecord>[] =
-  [
-    {
-      title: "View",
-      dataIndex: "mode",
-      render: (_, record) => graphViewLabels[record.mode],
-    },
-    {
-      title: "Direction",
-      dataIndex: "direction",
-    },
-    {
-      title: "Depth",
-      dataIndex: "depth",
-      valueType: "digit",
-    },
-    {
-      title: "Take",
-      dataIndex: "take",
-      valueType: "digit",
-    },
-    {
-      title: "Edge types",
-      dataIndex: "edgeTypes",
-    },
-    {
-      title: "Root node",
-      dataIndex: "rootNodeId",
-      render: (_, record) => (
-        <Typography.Text copyable>{record.rootNodeId}</Typography.Text>
-      ),
-    },
-    {
-      title: "Nodes",
-      dataIndex: "nodeCount",
-      valueType: "digit",
-    },
-    {
-      title: "Edges",
-      dataIndex: "edgeCount",
-      valueType: "digit",
-    },
-  ];
-
-const nodeDetailColumns: ProDescriptionsItemProps<ActorNodeDetailRecord>[] = [
-  {
-    title: "NodeId",
-    dataIndex: "nodeId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.nodeId}</Typography.Text>
-    ),
-  },
-  {
-    title: "Primary label",
-    dataIndex: "primaryLabel",
-  },
-  {
-    title: "Node type",
-    dataIndex: "nodeType",
-  },
-  {
-    title: "Role",
-    dataIndex: ["properties", "role"],
-    render: (_, record) => record.properties.role || "n/a",
-  },
-  {
-    title: "Updated at",
-    dataIndex: "updatedAt",
-    render: (_, record) => formatDateTime(record.updatedAt),
-  },
-  {
-    title: "Root node",
-    dataIndex: "isRoot",
-    render: (_, record) => (record.isRoot ? "Yes" : "No"),
-  },
-  {
-    title: "Property count",
-    dataIndex: "propertyCount",
-    valueType: "digit",
-  },
-  {
-    title: "Properties",
-    dataIndex: "properties",
-    span: 2,
-    render: (_, record) => renderPropertyList(record.properties),
-  },
-];
-
-const edgeDetailColumns: ProDescriptionsItemProps<ActorEdgeDetailRecord>[] = [
-  {
-    title: "EdgeId",
-    dataIndex: "edgeId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.edgeId}</Typography.Text>
-    ),
-  },
-  {
-    title: "Type",
-    dataIndex: "edgeType",
-  },
-  {
-    title: "From",
-    dataIndex: "fromNodeId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.fromNodeId}</Typography.Text>
-    ),
-  },
-  {
-    title: "To",
-    dataIndex: "toNodeId",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.toNodeId}</Typography.Text>
-    ),
-  },
-  {
-    title: "Updated at",
-    dataIndex: "updatedAt",
-    render: (_, record) => formatDateTime(record.updatedAt),
-  },
-  {
-    title: "Property count",
-    dataIndex: "propertyCount",
-    valueType: "digit",
-  },
-  {
-    title: "Properties",
-    dataIndex: "properties",
-    span: 2,
-    render: (_, record) => renderPropertyList(record.properties),
   },
 ];
 
@@ -502,9 +435,14 @@ const ActorsPage: React.FC = () => {
   const [filters, setFilters] = useState<ActorPageState>(initialState);
   const [graphViewMode, setGraphViewMode] =
     useState<ActorGraphViewMode>(initialGraphViewMode);
+  const [workspaceView, setWorkspaceView] =
+    useState<ActorWorkspaceView>("timeline");
   const [timelineFilters, setTimelineFilters] = useState<ActorTimelineFilters>(
     defaultTimelineFilters
   );
+  const [isInspectorDrawerOpen, setIsInspectorDrawerOpen] = useState(false);
+  const [inspectorMode, setInspectorMode] =
+    useState<ActorInspectorMode>("snapshot");
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [selectedTimelineKey, setSelectedTimelineKey] = useState<string>("");
@@ -610,8 +548,8 @@ const ActorsPage: React.FC = () => {
   );
 
   const selectedTimelineRecord = useMemo<ActorTimelineRow | undefined>(
-    () => timelineRows.find((row) => row.key === selectedTimelineKey),
-    [selectedTimelineKey, timelineRows]
+    () => filteredTimelineRows.find((row) => row.key === selectedTimelineKey),
+    [filteredTimelineRows, selectedTimelineKey]
   );
 
   const timelineStageOptions = useMemo(
@@ -665,13 +603,6 @@ const ActorsPage: React.FC = () => {
     graphSubgraphQuery.data,
     graphViewMode,
   ]);
-
-  const currentGraphLoading =
-    graphViewMode === "subgraph"
-      ? graphSubgraphQuery.isLoading
-      : graphViewMode === "edges"
-      ? graphEdgesQuery.isLoading
-      : graphEnrichedQuery.isLoading;
 
   const currentGraphError =
     graphViewMode === "subgraph"
@@ -775,6 +706,25 @@ const ActorsPage: React.FC = () => {
     };
   }, [currentGraph, selectedEdgeId]);
 
+  const handleOpenInspector = () => {
+    if (workspaceView === "timeline" && selectedTimelineRecord) {
+      setInspectorMode("timeline");
+    } else if (workspaceView === "graph") {
+      setInspectorMode("graph");
+    } else {
+      setInspectorMode("snapshot");
+    }
+
+    setIsInspectorDrawerOpen(true);
+  };
+
+  const inspectorTitle =
+    inspectorMode === "timeline"
+      ? "Inspector · timeline detail"
+      : inspectorMode === "graph"
+      ? "Inspector · graph detail"
+      : "Inspector";
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -801,7 +751,12 @@ const ActorsPage: React.FC = () => {
   useEffect(() => {
     timelineFormRef.current?.setFieldsValue(defaultTimelineFilters);
     setTimelineFilters(defaultTimelineFilters);
+    setWorkspaceView("timeline");
+    setSelectedNodeId("");
+    setSelectedEdgeId("");
     setSelectedTimelineKey("");
+    setIsInspectorDrawerOpen(false);
+    setInspectorMode("snapshot");
   }, [filters.actorId]);
 
   useEffect(() => {
@@ -809,10 +764,10 @@ const ActorsPage: React.FC = () => {
       return;
     }
 
-    if (!timelineRows.some((row) => row.key === selectedTimelineKey)) {
+    if (!filteredTimelineRows.some((row) => row.key === selectedTimelineKey)) {
       setSelectedTimelineKey("");
     }
-  }, [selectedTimelineKey, timelineRows]);
+  }, [filteredTimelineRows, selectedTimelineKey]);
 
   useEffect(() => {
     if (!currentGraph) {
@@ -821,16 +776,26 @@ const ActorsPage: React.FC = () => {
       return;
     }
 
-    if (!currentGraph.nodes.some((node) => node.nodeId === selectedNodeId)) {
-      setSelectedNodeId(
-        currentGraph.rootNodeId || currentGraph.nodes[0]?.nodeId || ""
-      );
+    if (
+      selectedNodeId &&
+      !currentGraph.nodes.some((node) => node.nodeId === selectedNodeId)
+    ) {
+      setSelectedNodeId("");
     }
 
-    if (!currentGraph.edges.some((edge) => edge.edgeId === selectedEdgeId)) {
+    if (
+      selectedEdgeId &&
+      !currentGraph.edges.some((edge) => edge.edgeId === selectedEdgeId)
+    ) {
       setSelectedEdgeId("");
     }
   }, [currentGraph, selectedEdgeId, selectedNodeId]);
+
+  useEffect(() => {
+    if (inspectorMode === "timeline" && !selectedTimelineRecord) {
+      setInspectorMode("snapshot");
+    }
+  }, [inspectorMode, selectedTimelineRecord]);
 
   return (
     <PageContainer
@@ -842,16 +807,18 @@ const ActorsPage: React.FC = () => {
         {...moduleCardProps}
         extra={
           <Space wrap>
-            <Button onClick={() => history.push("/runs")}>Open runs</Button>
-            <Button onClick={() => history.push("/workflows")}>
-              Open workflows
+            <Button onClick={() => history.push(buildRuntimeRunsHref())}>
+              Open Runtime Runs
+            </Button>
+            <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
+              Open Runtime Workflows
             </Button>
             <Button
               onClick={() =>
                 history.push(
-                  `/observability?actorId=${encodeURIComponent(
-                    filters.actorId
-                  )}`
+                  buildRuntimeObservabilityHref({
+                    actorId: filters.actorId,
+                  })
                 )
               }
             >
@@ -892,6 +859,7 @@ const ActorsPage: React.FC = () => {
                     });
                     setFilters(initialState);
                     setGraphViewMode(initialGraphViewMode);
+                    setWorkspaceView("timeline");
                     setTimelineFilters(defaultTimelineFilters);
                   }}
                 >
@@ -1009,394 +977,686 @@ const ActorsPage: React.FC = () => {
             </Row>
           ) : null}
 
-          <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
-            <Col xs={24} xl={8} style={stretchColumnStyle}>
-              <ProCard
-                title="Snapshot"
-                {...moduleCardProps}
-                style={fillCardStyle}
-                loading={snapshotQuery.isLoading}
-              >
-                {snapshotQuery.isError ? (
-                  <Alert
-                    showIcon
-                    type="error"
-                    title="Failed to load actor"
-                    description={String(snapshotQuery.error)}
-                  />
-                ) : (
-                  <ProDescriptions<ActorSnapshotRecord>
-                    column={1}
-                    dataSource={snapshotRecord}
-                    columns={snapshotColumns}
-                    emptyText={
+          <ProCard
+            title="Actor workspace"
+            style={{ marginTop: 16 }}
+            {...moduleCardProps}
+            bodyStyle={workspaceCardBodyStyle}
+            extra={
+              <Space wrap size={[8, 8]}>
+                {snapshotRecord ? (
+                  <>
+                    <Tag color={executionTagColorMap[snapshotRecord.executionStatus]}>
+                      {snapshotRecord.executionStatus === "success"
+                        ? "Healthy"
+                        : snapshotRecord.executionStatus === "error"
+                        ? "Error"
+                        : "Unknown"}
+                    </Tag>
+                    {snapshotRecord.workflowName ? (
+                      <Tag>{snapshotRecord.workflowName}</Tag>
+                    ) : null}
+                  </>
+                ) : null}
+                <Button onClick={handleOpenInspector}>Inspector</Button>
+              </Space>
+            }
+          >
+            <div style={workspacePanelStyle}>
+              <Tabs
+                activeKey={workspaceView}
+                items={[
+                  {
+                    key: "timeline",
+                    label: `Timeline (${filteredTimelineRows.length})`,
+                    children: (
+                      <div style={workspacePanelStyle}>
+                        <ProForm<ActorTimelineFilters>
+                          formRef={timelineFormRef}
+                          layout="vertical"
+                          initialValues={defaultTimelineFilters}
+                          submitter={false}
+                          onValuesChange={(_, values) => {
+                            setTimelineFilters({
+                              stages: values.stages ?? [],
+                              eventTypes: values.eventTypes ?? [],
+                              stepTypes: values.stepTypes ?? [],
+                              query: values.query ?? "",
+                              errorsOnly: Boolean(values.errorsOnly),
+                            });
+                          }}
+                        >
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} md={12} xl={8}>
+                              <ProFormText
+                                name="query"
+                                label="Search"
+                                placeholder="Search message, event type, step or payload"
+                              />
+                            </Col>
+                            <Col xs={24} md={12} xl={5}>
+                              <ProFormSelect<string[]>
+                                name="stages"
+                                label="Stages"
+                                options={timelineStageOptions}
+                                fieldProps={{
+                                  mode: "multiple",
+                                  allowClear: true,
+                                  placeholder: "All stages",
+                                }}
+                              />
+                            </Col>
+                            <Col xs={24} md={12} xl={5}>
+                              <ProFormSelect<string[]>
+                                name="eventTypes"
+                                label="Event types"
+                                options={timelineEventTypeOptions}
+                                fieldProps={{
+                                  mode: "multiple",
+                                  allowClear: true,
+                                  placeholder: "All event types",
+                                }}
+                              />
+                            </Col>
+                            <Col xs={24} md={12} xl={4}>
+                              <ProFormSelect<string[]>
+                                name="stepTypes"
+                                label="Step types"
+                                options={timelineStepTypeOptions}
+                                fieldProps={{
+                                  mode: "multiple",
+                                  allowClear: true,
+                                  placeholder: "All step types",
+                                }}
+                              />
+                            </Col>
+                            <Col xs={24} md={12} xl={2}>
+                              <ProFormCheckbox
+                                name="errorsOnly"
+                                label=" "
+                                tooltip="Only show error rows"
+                              >
+                                Errors only
+                              </ProFormCheckbox>
+                            </Col>
+                          </Row>
+                        </ProForm>
+
+                        {timelineQuery.isError ? (
+                          <Alert
+                            showIcon
+                            type="error"
+                            title="Failed to load timeline"
+                            description={String(timelineQuery.error)}
+                          />
+                        ) : null}
+
+                        <ProTable<ActorTimelineRow>
+                          rowKey="key"
+                          search={false}
+                          options={false}
+                          columns={timelineColumns}
+                          dataSource={filteredTimelineRows}
+                          loading={timelineQuery.isLoading}
+                          pagination={{ pageSize: 8, showSizeChanger: false }}
+                          cardProps={compactTableCardProps}
+                          scroll={{ x: 1460, y: 540 }}
+                          onRow={(record) => ({
+                            onClick: () => {
+                              setWorkspaceView("timeline");
+                              setSelectedTimelineKey(record.key);
+                              setInspectorMode("timeline");
+                              setIsInspectorDrawerOpen(true);
+                            },
+                          })}
+                          rowClassName={(record) =>
+                            record.key === selectedTimelineKey
+                              ? "ant-table-row-selected"
+                              : ""
+                          }
+                          locale={{
+                            emptyText: (
+                              <Empty
+                                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                description="No timeline rows match the current filters."
+                              />
+                            ),
+                          }}
+                        />
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "graph",
+                    label: `Graph (${currentGraph?.nodes.length ?? 0})`,
+                    children: (
+                      <div style={workspacePanelStyle}>
+                        <div style={embeddedPanelStyle}>
+                          <Space
+                            direction="vertical"
+                            size={12}
+                            style={{ width: "100%" }}
+                          >
+                            <SectionHeader
+                              title="Graph controls"
+                              description="Choose the topology slice you want to inspect, then click nodes or edges to open the inspector."
+                            />
+                            <ProForm<GraphControlValues>
+                              formRef={graphControlFormRef}
+                              layout="vertical"
+                              initialValues={{ graphViewMode }}
+                              submitter={false}
+                              onValuesChange={(_, values) => {
+                                if (values.graphViewMode) {
+                                  setGraphViewMode(values.graphViewMode);
+                                }
+                              }}
+                            >
+                              <ProFormSelect<ActorGraphViewMode>
+                                name="graphViewMode"
+                                label="Graph view"
+                                options={graphViewOptions}
+                              />
+                            </ProForm>
+
+                            {graphSummary ? (
+                              <>
+                                <div style={summaryMetricGridStyle}>
+                                  <SummaryMetric
+                                    label="Nodes"
+                                    value={graphSummary.nodeCount}
+                                  />
+                                  <SummaryMetric
+                                    label="Edges"
+                                    value={graphSummary.edgeCount}
+                                  />
+                                </div>
+                                <div style={summaryFieldGridStyle}>
+                                  <SummaryField
+                                    label="View"
+                                    value={graphViewLabels[graphSummary.mode]}
+                                  />
+                                  <SummaryField
+                                    label="Direction"
+                                    value={graphSummary.direction}
+                                  />
+                                  <SummaryField
+                                    label="Depth"
+                                    value={graphSummary.depth}
+                                  />
+                                  <SummaryField
+                                    label="Take"
+                                    value={graphSummary.take}
+                                  />
+                                  <SummaryField
+                                    label="Root node"
+                                    value={graphSummary.rootNodeId}
+                                    copyable
+                                  />
+                                  <SummaryField
+                                    label="Edge types"
+                                    value={graphSummary.edgeTypes}
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <Typography.Text type="secondary">
+                                No graph summary is available yet for this actor.
+                              </Typography.Text>
+                            )}
+                          </Space>
+                        </div>
+
+                        {currentGraphError ? (
+                          <Alert
+                            showIcon
+                            type="error"
+                            title="Failed to load graph topology"
+                            description={String(currentGraphError)}
+                          />
+                        ) : currentGraph && currentGraph.nodes.length > 0 ? (
+                          <div style={graphCanvasShellStyle}>
+                            <GraphCanvas
+                              nodes={graphElements.nodes}
+                              edges={graphElements.edges}
+                              selectedNodeId={selectedNodeId}
+                              selectedEdgeId={selectedEdgeId}
+                              onNodeSelect={(nodeId) => {
+                                setWorkspaceView("graph");
+                                setSelectedNodeId(nodeId);
+                                setSelectedEdgeId("");
+                                setInspectorMode("graph");
+                                setIsInspectorDrawerOpen(true);
+                              }}
+                              onEdgeSelect={(edgeId) => {
+                                setWorkspaceView("graph");
+                                setSelectedEdgeId(edgeId);
+                                setSelectedNodeId("");
+                                setInspectorMode("graph");
+                                setIsInspectorDrawerOpen(true);
+                              }}
+                              height={620}
+                            />
+                          </div>
+                        ) : (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description="No graph topology returned for this actor."
+                          />
+                        )}
+                      </div>
+                    ),
+                  },
+                ]}
+                onChange={(key) => setWorkspaceView(key as ActorWorkspaceView)}
+              />
+            </div>
+          </ProCard>
+
+          <Drawer
+            destroyOnHidden
+            open={isInspectorDrawerOpen}
+            styles={{ body: drawerBodyStyle }}
+            title={inspectorTitle}
+            size={520}
+            onClose={() => setIsInspectorDrawerOpen(false)}
+          >
+            <div style={drawerScrollStyle}>
+              <div style={cardStackStyle}>
+                <div style={embeddedPanelStyle}>
+                  <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                    <SectionHeader
+                      title="Actor digest"
+                      description="Current actor status and the latest runtime facts exposed by the backend."
+                    />
+
+                    {snapshotQuery.isError ? (
+                      <Alert
+                        showIcon
+                        type="error"
+                        title="Failed to load actor"
+                        description={String(snapshotQuery.error)}
+                      />
+                    ) : snapshotRecord ? (
+                      <>
+                        <Space wrap size={[6, 6]}>
+                          <Tag
+                            color={
+                              executionTagColorMap[snapshotRecord.executionStatus]
+                            }
+                          >
+                            {snapshotRecord.executionStatus === "success"
+                              ? "Healthy"
+                              : snapshotRecord.executionStatus === "error"
+                              ? "Error"
+                              : "Unknown"}
+                          </Tag>
+                          {snapshotRecord.workflowName ? (
+                            <Tag>{snapshotRecord.workflowName}</Tag>
+                          ) : null}
+                        </Space>
+
+                        <div style={summaryMetricGridStyle}>
+                          <SummaryMetric
+                            label="Completion"
+                            tone={
+                              snapshotRecord.executionStatus === "success"
+                                ? "success"
+                                : snapshotRecord.executionStatus === "error"
+                                ? "error"
+                                : "default"
+                            }
+                            value={`${snapshotRecord.completedSteps}/${snapshotRecord.totalSteps}`}
+                          />
+                          <SummaryMetric
+                            label="Role replies"
+                            value={snapshotRecord.roleReplyCount}
+                          />
+                          <SummaryMetric
+                            label="State version"
+                            value={snapshotRecord.stateVersion}
+                          />
+                          <SummaryMetric
+                            label="Updated"
+                            value={formatDateTime(snapshotRecord.lastUpdatedAt)}
+                          />
+                        </div>
+
+                        <div style={summaryFieldGridStyle}>
+                          <SummaryField
+                            label="ActorId"
+                            value={snapshotRecord.actorId}
+                            copyable
+                          />
+                          <SummaryField
+                            label="Workflow"
+                            value={snapshotRecord.workflowName || "n/a"}
+                          />
+                          <SummaryField
+                            label="Last command"
+                            value={snapshotRecord.lastCommandId || "n/a"}
+                            copyable
+                          />
+                        </div>
+
+                        <div style={sectionDividerStyle}>
+                          <div>
+                            <Typography.Text style={summaryFieldLabelStyle}>
+                              Last output
+                            </Typography.Text>
+                            <Typography.Paragraph
+                              ellipsis={{
+                                rows: 3,
+                                expandable: true,
+                                symbol: "more",
+                              }}
+                              style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
+                            >
+                              {snapshotRecord.lastOutput || "No output recorded."}
+                            </Typography.Paragraph>
+                          </div>
+
+                          {snapshotRecord.lastError ? (
+                            <div>
+                              <Typography.Text style={summaryFieldLabelStyle}>
+                                Last error
+                              </Typography.Text>
+                              <Typography.Paragraph
+                                style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
+                                type="danger"
+                              >
+                                {snapshotRecord.lastError}
+                              </Typography.Paragraph>
+                            </div>
+                          ) : null}
+                        </div>
+                      </>
+                    ) : (
                       <Empty
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                         description="No actor snapshot available."
                       />
-                    }
-                  />
-                )}
-              </ProCard>
-            </Col>
+                    )}
+                  </Space>
+                </div>
 
-            <Col xs={24} xl={16} style={stretchColumnStyle}>
-              <ProCard
-                title="Timeline"
-                {...moduleCardProps}
-                style={fillCardStyle}
-              >
-                <div style={cardStackStyle}>
-                  <ProForm<ActorTimelineFilters>
-                    formRef={timelineFormRef}
-                    layout="vertical"
-                    initialValues={defaultTimelineFilters}
-                    submitter={false}
-                    onValuesChange={(_, values) => {
-                      setTimelineFilters({
-                        stages: values.stages ?? [],
-                        eventTypes: values.eventTypes ?? [],
-                        stepTypes: values.stepTypes ?? [],
-                        query: values.query ?? "",
-                        errorsOnly: Boolean(values.errorsOnly),
-                      });
-                    }}
-                  >
-                    <Row gutter={[16, 16]}>
-                      <Col xs={24} md={12} xl={8}>
-                        <ProFormText
-                          name="query"
-                          label="Search"
-                          placeholder="Search message, event type, step or payload"
-                        />
-                      </Col>
-                      <Col xs={24} md={12} xl={5}>
-                        <ProFormSelect<string[]>
-                          name="stages"
-                          label="Stages"
-                          options={timelineStageOptions}
-                          fieldProps={{
-                            mode: "multiple",
-                            allowClear: true,
-                            placeholder: "All stages",
-                          }}
-                        />
-                      </Col>
-                      <Col xs={24} md={12} xl={5}>
-                        <ProFormSelect<string[]>
-                          name="eventTypes"
-                          label="Event types"
-                          options={timelineEventTypeOptions}
-                          fieldProps={{
-                            mode: "multiple",
-                            allowClear: true,
-                            placeholder: "All event types",
-                          }}
-                        />
-                      </Col>
-                      <Col xs={24} md={12} xl={4}>
-                        <ProFormSelect<string[]>
-                          name="stepTypes"
-                          label="Step types"
-                          options={timelineStepTypeOptions}
-                          fieldProps={{
-                            mode: "multiple",
-                            allowClear: true,
-                            placeholder: "All step types",
-                          }}
-                        />
-                      </Col>
-                      <Col xs={24} md={12} xl={2}>
-                        <ProFormCheckbox
-                          name="errorsOnly"
-                          label=" "
-                          tooltip="Only show error rows"
-                        >
-                          Errors only
-                        </ProFormCheckbox>
-                      </Col>
-                    </Row>
-                  </ProForm>
+                {inspectorMode === "timeline" ? (
+                  <div style={embeddedPanelStyle}>
+                    <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                      <SectionHeader
+                        title="Timeline detail"
+                        description="The currently selected execution event from the timeline."
+                      />
 
-                  {timelineQuery.isError ? (
-                    <Alert
-                      showIcon
-                      type="error"
-                      title="Failed to load timeline"
-                      description={String(timelineQuery.error)}
-                    />
-                  ) : null}
+                      {selectedTimelineRecord ? (
+                        <>
+                          <Space wrap size={[6, 6]}>
+                            <Tag
+                              color={
+                                selectedTimelineRecord.timelineStatus === "error"
+                                  ? "error"
+                                  : selectedTimelineRecord.timelineStatus ===
+                                    "success"
+                                  ? "success"
+                                  : selectedTimelineRecord.timelineStatus ===
+                                    "processing"
+                                  ? "processing"
+                                  : "default"
+                              }
+                            >
+                              {selectedTimelineRecord.timelineStatus}
+                            </Tag>
+                            <Tag>{selectedTimelineRecord.stage || "n/a"}</Tag>
+                            {selectedTimelineRecord.eventType ? (
+                              <Tag>{selectedTimelineRecord.eventType}</Tag>
+                            ) : null}
+                          </Space>
 
-                  <ProTable<ActorTimelineRow>
-                    rowKey="key"
-                    search={false}
-                    options={false}
-                    columns={timelineColumns}
-                    dataSource={filteredTimelineRows}
-                    loading={timelineQuery.isLoading}
-                    pagination={{ pageSize: 8, showSizeChanger: false }}
-                    cardProps={compactTableCardProps}
-                    scroll={{ x: 1460, y: 460 }}
-                    onRow={(record) => ({
-                      onClick: () => setSelectedTimelineKey(record.key),
-                    })}
-                    rowClassName={(record) =>
-                      record.key === selectedTimelineKey
-                        ? "ant-table-row-selected"
-                        : ""
-                    }
-                    locale={{
-                      emptyText: (
+                          <div style={summaryFieldGridStyle}>
+                            <SummaryField
+                              label="Timestamp"
+                              value={formatDateTime(selectedTimelineRecord.timestamp)}
+                            />
+                            <SummaryField
+                              label="Actor"
+                              value={selectedTimelineRecord.agentId || "n/a"}
+                            />
+                            <SummaryField
+                              label="Step"
+                              value={selectedTimelineRecord.stepId || "n/a"}
+                            />
+                            <SummaryField
+                              label="Step type"
+                              value={selectedTimelineRecord.stepType || "n/a"}
+                            />
+                          </div>
+
+                          <div style={sectionDividerStyle}>
+                            <div>
+                              <Typography.Text style={summaryFieldLabelStyle}>
+                                Message
+                              </Typography.Text>
+                              <Typography.Paragraph
+                                style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}
+                              >
+                                {selectedTimelineRecord.message || "No message recorded."}
+                              </Typography.Paragraph>
+                            </div>
+
+                            <div>
+                              <Typography.Text style={summaryFieldLabelStyle}>
+                                Structured data
+                              </Typography.Text>
+                              <div style={{ marginTop: 8 }}>
+                                {selectedTimelineRecord.dataCount > 0 ? (
+                                  renderPropertyList(selectedTimelineRecord.data)
+                                ) : (
+                                  <Typography.Text type="secondary">
+                                    No structured data was attached to this timeline
+                                    entry.
+                                  </Typography.Text>
+                                )}
+                              </div>
+                            </div>
+
+                            {selectedTimelineRecord.dataCount > 0 ? (
+                              <div>
+                                <Typography.Text style={summaryFieldLabelStyle}>
+                                  Raw JSON
+                                </Typography.Text>
+                                <pre style={codeBlockStyle}>
+                                  {JSON.stringify(
+                                    selectedTimelineRecord.data,
+                                    null,
+                                    2
+                                  )}
+                                </pre>
+                              </div>
+                            ) : null}
+                          </div>
+                        </>
+                      ) : (
                         <Empty
                           image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          description="No timeline rows match the current filters."
+                          description="Select a timeline row to inspect its details."
                         />
-                      ),
-                    }}
-                  />
-                  <Drawer
-                    title="Timeline detail"
-                    size={560}
-                    open={Boolean(selectedTimelineRecord)}
-                    onClose={() => setSelectedTimelineKey("")}
-                    destroyOnHidden
-                  >
-                    {selectedTimelineRecord ? (
-                      <Space
-                        direction="vertical"
-                        size={16}
-                        style={{ width: "100%" }}
-                      >
-                        <ProDescriptions<ActorTimelineRow>
-                          column={1}
-                          dataSource={selectedTimelineRecord}
-                          columns={[
-                            {
-                              title: "Timestamp",
-                              dataIndex: "timestamp",
-                              render: (_, record) =>
-                                formatDateTime(record.timestamp),
-                            },
-                            {
-                              title: "Stage",
-                              dataIndex: "stage",
-                              render: (_, record) => record.stage || "n/a",
-                            },
-                            {
-                              title: "Event type",
-                              dataIndex: "eventType",
-                              render: (_, record) => record.eventType || "n/a",
-                            },
-                            {
-                              title: "Message",
-                              dataIndex: "message",
-                              render: (_, record) => record.message || "n/a",
-                            },
-                            {
-                              title: "Step",
-                              dataIndex: "stepId",
-                              render: (_, record) => record.stepId || "n/a",
-                            },
-                            {
-                              title: "Step type",
-                              dataIndex: "stepType",
-                              render: (_, record) => record.stepType || "n/a",
-                            },
-                            {
-                              title: "Actor",
-                              dataIndex: "agentId",
-                              render: (_, record) => record.agentId || "n/a",
-                            },
-                          ]}
-                        />
-
-                        <div>
-                          <Typography.Text strong>
-                            Structured data
-                          </Typography.Text>
-                          <div style={{ marginTop: 12 }}>
-                            {selectedTimelineRecord.dataCount > 0 ? (
-                              <Space
-                                direction="vertical"
-                                size={8}
-                                style={{ width: "100%" }}
-                              >
-                                {Object.entries(
-                                  selectedTimelineRecord.data
-                                ).map(([key, value]) => (
-                                  <Typography.Text key={key}>
-                                    <Typography.Text type="secondary">
-                                      {key}
-                                    </Typography.Text>
-                                    : {value || "n/a"}
-                                  </Typography.Text>
-                                ))}
-                              </Space>
-                            ) : (
-                              <Typography.Text type="secondary">
-                                No structured data was attached to this timeline
-                                entry.
-                              </Typography.Text>
-                            )}
-                          </div>
-                        </div>
-
-                        {selectedTimelineRecord.dataCount > 0 ? (
-                          <div>
-                            <Typography.Text strong>Raw JSON</Typography.Text>
-                            <pre
-                              style={{
-                                marginTop: 12,
-                                whiteSpace: "pre-wrap",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              {JSON.stringify(
-                                selectedTimelineRecord.data,
-                                null,
-                                2
-                              )}
-                            </pre>
-                          </div>
-                        ) : null}
-                      </Space>
-                    ) : null}
-                  </Drawer>
-                </div>
-              </ProCard>
-            </Col>
-          </Row>
-
-          <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
-            <Col xs={24} lg={8} style={stretchColumnStyle}>
-              <ProCard
-                title="Graph controls"
-                {...moduleCardProps}
-                style={fillCardStyle}
-              >
-                <div style={cardStackStyle}>
-                  <ProForm<GraphControlValues>
-                    formRef={graphControlFormRef}
-                    layout="vertical"
-                    initialValues={{ graphViewMode }}
-                    submitter={false}
-                    onValuesChange={(_, values) => {
-                      if (values.graphViewMode) {
-                        setGraphViewMode(values.graphViewMode);
-                      }
-                    }}
-                  >
-                    <ProFormSelect<ActorGraphViewMode>
-                      name="graphViewMode"
-                      label="Graph view"
-                      options={graphViewOptions}
-                    />
-                  </ProForm>
-
-                  {graphSummary ? (
-                    <ProDescriptions<ActorGraphSummaryRecord>
-                      column={1}
-                      dataSource={graphSummary}
-                      columns={graphSummaryColumns}
-                    />
-                  ) : (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="No graph summary available yet."
-                    />
-                  )}
-                </div>
-              </ProCard>
-            </Col>
-
-            <Col xs={24} lg={16} style={stretchColumnStyle}>
-              <ProCard
-                title="Selection details"
-                {...moduleCardProps}
-                style={fillCardStyle}
-                loading={currentGraphLoading}
-              >
-                {currentGraphError ? (
-                  <Alert
-                    showIcon
-                    type="error"
-                    title="Failed to load graph view"
-                    description={String(currentGraphError)}
-                  />
-                ) : selectedNodeRecord || selectedEdgeRecord ? (
-                  <div style={cardStackStyle}>
-                    {selectedNodeRecord ? (
-                      <div style={embeddedPanelStyle}>
-                        <Space wrap style={{ marginBottom: 12 }}>
-                          <Tag color="processing">Node</Tag>
-                          <Typography.Text strong>
-                            {selectedNodeRecord.primaryLabel}
-                          </Typography.Text>
-                        </Space>
-                        <ProDescriptions<ActorNodeDetailRecord>
-                          column={2}
-                          dataSource={selectedNodeRecord}
-                          columns={nodeDetailColumns}
-                        />
-                      </div>
-                    ) : null}
-
-                    {selectedEdgeRecord ? (
-                      <div style={embeddedPanelStyle}>
-                        <Space wrap style={{ marginBottom: 12 }}>
-                          <Tag color="purple">Edge</Tag>
-                          <Typography.Text strong>
-                            {selectedEdgeRecord.edgeType}
-                          </Typography.Text>
-                        </Space>
-                        <ProDescriptions<ActorEdgeDetailRecord>
-                          column={2}
-                          dataSource={selectedEdgeRecord}
-                          columns={edgeDetailColumns}
-                        />
-                      </div>
-                    ) : null}
+                      )}
+                    </Space>
                   </div>
-                ) : (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="Select a node or edge from the graph to inspect its details."
-                  />
-                )}
-              </ProCard>
-            </Col>
-          </Row>
+                ) : null}
 
-          <ProCard
-            title="Runtime graph explorer"
-            style={{ marginTop: 16 }}
-            {...moduleCardProps}
-            loading={currentGraphLoading}
-          >
-            {currentGraphError ? (
-              <Alert
-                showIcon
-                type="error"
-                title="Failed to load graph topology"
-                description={String(currentGraphError)}
-              />
-            ) : currentGraph && currentGraph.nodes.length > 0 ? (
-              <GraphCanvas
-                nodes={graphElements.nodes}
-                edges={graphElements.edges}
-                selectedNodeId={selectedNodeId}
-                selectedEdgeId={selectedEdgeId}
-                onNodeSelect={(nodeId) => setSelectedNodeId(nodeId)}
-                onEdgeSelect={(edgeId) => setSelectedEdgeId(edgeId)}
-                height={560}
-              />
-            ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="No graph topology returned for this actor."
-              />
-            )}
-          </ProCard>
+                {inspectorMode === "graph" ? (
+                  <>
+                    <div style={embeddedPanelStyle}>
+                      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                        <SectionHeader
+                          title="Graph summary"
+                          description="Current topology slice for the selected actor."
+                        />
+
+                        {currentGraphError ? (
+                          <Alert
+                            showIcon
+                            type="error"
+                            title="Failed to load graph view"
+                            description={String(currentGraphError)}
+                          />
+                        ) : graphSummary ? (
+                          <>
+                            <div style={summaryMetricGridStyle}>
+                              <SummaryMetric
+                                label="Nodes"
+                                value={graphSummary.nodeCount}
+                              />
+                              <SummaryMetric
+                                label="Edges"
+                                value={graphSummary.edgeCount}
+                              />
+                            </div>
+                            <div style={summaryFieldGridStyle}>
+                              <SummaryField
+                                label="View"
+                                value={graphViewLabels[graphSummary.mode]}
+                              />
+                              <SummaryField
+                                label="Direction"
+                                value={graphSummary.direction}
+                              />
+                              <SummaryField
+                                label="Depth"
+                                value={graphSummary.depth}
+                              />
+                              <SummaryField
+                                label="Take"
+                                value={graphSummary.take}
+                              />
+                              <SummaryField
+                                label="Root node"
+                                value={graphSummary.rootNodeId}
+                                copyable
+                              />
+                              <SummaryField
+                                label="Edge types"
+                                value={graphSummary.edgeTypes}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description="No graph summary available yet."
+                          />
+                        )}
+                      </Space>
+                    </div>
+
+                    <div style={embeddedPanelStyle}>
+                      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                        <SectionHeader
+                          title="Selection detail"
+                          description="Node or edge details from the runtime graph."
+                        />
+
+                        {selectedNodeRecord ? (
+                          <>
+                            <Space wrap size={[6, 6]}>
+                              <Tag color="processing">Node</Tag>
+                              <Tag>{selectedNodeRecord.nodeType || "n/a"}</Tag>
+                              {selectedNodeRecord.isRoot ? <Tag>Root</Tag> : null}
+                            </Space>
+
+                            <div style={summaryFieldGridStyle}>
+                              <SummaryField
+                                label="NodeId"
+                                value={selectedNodeRecord.nodeId}
+                                copyable
+                              />
+                              <SummaryField
+                                label="Primary label"
+                                value={selectedNodeRecord.primaryLabel}
+                              />
+                              <SummaryField
+                                label="Role"
+                                value={selectedNodeRecord.properties.role || "n/a"}
+                              />
+                              <SummaryField
+                                label="Updated"
+                                value={formatDateTime(selectedNodeRecord.updatedAt)}
+                              />
+                              <SummaryField
+                                label="Property count"
+                                value={selectedNodeRecord.propertyCount}
+                              />
+                            </div>
+
+                            <div style={sectionDividerStyle}>
+                              <div>
+                                <Typography.Text style={summaryFieldLabelStyle}>
+                                  Properties
+                                </Typography.Text>
+                                <div style={{ marginTop: 8 }}>
+                                  {renderPropertyList(selectedNodeRecord.properties)}
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        ) : selectedEdgeRecord ? (
+                          <>
+                            <Space wrap size={[6, 6]}>
+                              <Tag color="purple">Edge</Tag>
+                              <Tag>{selectedEdgeRecord.edgeType || "n/a"}</Tag>
+                            </Space>
+
+                            <div style={summaryFieldGridStyle}>
+                              <SummaryField
+                                label="EdgeId"
+                                value={selectedEdgeRecord.edgeId}
+                                copyable
+                              />
+                              <SummaryField
+                                label="From"
+                                value={selectedEdgeRecord.fromNodeId}
+                                copyable
+                              />
+                              <SummaryField
+                                label="To"
+                                value={selectedEdgeRecord.toNodeId}
+                                copyable
+                              />
+                              <SummaryField
+                                label="Updated"
+                                value={formatDateTime(selectedEdgeRecord.updatedAt)}
+                              />
+                              <SummaryField
+                                label="Property count"
+                                value={selectedEdgeRecord.propertyCount}
+                              />
+                            </div>
+
+                            <div style={sectionDividerStyle}>
+                              <div>
+                                <Typography.Text style={summaryFieldLabelStyle}>
+                                  Properties
+                                </Typography.Text>
+                                <div style={{ marginTop: 8 }}>
+                                  {renderPropertyList(selectedEdgeRecord.properties)}
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description="Select a node or edge from the graph to inspect its details."
+                          />
+                        )}
+                      </Space>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </Drawer>
         </>
       ) : null}
     </PageContainer>

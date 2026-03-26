@@ -1,16 +1,15 @@
 import type {
   ProColumns,
-  ProDescriptionsItemProps,
 } from '@ant-design/pro-components';
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProTable,
 } from '@ant-design/pro-components';
 import { useQuery } from '@tanstack/react-query';
 import { history } from '@/shared/navigation/history';
-import { Button, Col, Row, Space, Statistic, Typography } from 'antd';
+import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
+import { Button, Col, Row, Space, Typography } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { servicesApi } from '@/shared/api/servicesApi';
 import { formatDateTime } from '@/shared/datetime/dateTime';
@@ -19,10 +18,16 @@ import type {
   ServiceIdentityQuery,
 } from '@/shared/models/services';
 import {
+  cardStackStyle,
   compactTableCardProps,
+  embeddedPanelStyle,
   fillCardStyle,
   moduleCardProps,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
   stretchColumnStyle,
+  summaryFieldLabelStyle,
 } from '@/shared/ui/proComponents';
 import ServiceQueryCard from './components/ServiceQueryCard';
 import {
@@ -40,29 +45,17 @@ type ServiceCatalogSummaryRecord = {
   policies: number;
 };
 
-const summaryColumns: ProDescriptionsItemProps<ServiceCatalogSummaryRecord>[] =
-  [
-    {
-      title: 'Services',
-      dataIndex: 'services',
-      valueType: 'digit',
-    },
-    {
-      title: 'Active deployments',
-      dataIndex: 'activeDeployments',
-      valueType: 'digit',
-    },
-    {
-      title: 'Endpoints',
-      dataIndex: 'endpoints',
-      valueType: 'digit',
-    },
-    {
-      title: 'Policies',
-      dataIndex: 'policies',
-      valueType: 'digit',
-    },
-  ];
+type SummaryMetricProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
+  </div>
+);
 
 const initialDraft = readServiceQueryDraft();
 
@@ -156,7 +149,7 @@ const ServicesPage: React.FC = () => {
               )
             }
           >
-            Governance
+            Platform governance
           </Button>,
         ],
       },
@@ -184,8 +177,8 @@ const ServicesPage: React.FC = () => {
 
   return (
     <PageContainer
-      title="Services"
-      content="Browse the service catalog, then open a dedicated detail page for revisions, deployments, serving, rollout, and traffic."
+      title="Platform Services"
+      content="Browse the raw platform service catalog keyed by tenantId, appId, and namespace. End-user workflow and script flows should stay on Scopes."
     >
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24}>
@@ -201,36 +194,43 @@ const ServicesPage: React.FC = () => {
           />
         </Col>
 
-        <Col xs={24} md={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic title="Services" value={summaryRecord.services} />
-          </ProCard>
-        </Col>
-        <Col xs={24} md={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic
-              title="Active deployments"
-              value={summaryRecord.activeDeployments}
-            />
-          </ProCard>
-        </Col>
-        <Col xs={24} md={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic title="Endpoints" value={summaryRecord.endpoints} />
-          </ProCard>
+        <Col xs={24}>
+          <div
+            style={{
+              ...embeddedPanelStyle,
+              background: 'var(--ant-color-fill-quaternary)',
+            }}
+          >
+            <Typography.Text strong>Scope-first frontend</Typography.Text>
+            <Typography.Paragraph
+              style={{ margin: '8px 0 0' }}
+              type="secondary"
+            >
+              Use Scopes for normal user-facing workflow assets. This page
+              exposes raw GAgentService service identities for platform
+              diagnostics and operator workflows.
+            </Typography.Paragraph>
+          </div>
         </Col>
 
         <Col xs={24} xl={10} style={stretchColumnStyle}>
           <ProCard
             {...moduleCardProps}
             style={fillCardStyle}
-            title="Catalog summary"
+            title="Catalog digest"
           >
-            <ProDescriptions<ServiceCatalogSummaryRecord>
-              column={2}
-              columns={summaryColumns}
-              dataSource={summaryRecord}
-            />
+            <div style={summaryMetricGridStyle}>
+              <SummaryMetric label="Services" value={summaryRecord.services} />
+              <SummaryMetric
+                label="Active deployments"
+                value={summaryRecord.activeDeployments}
+              />
+              <SummaryMetric
+                label="Endpoints"
+                value={summaryRecord.endpoints}
+              />
+              <SummaryMetric label="Policies" value={summaryRecord.policies} />
+            </div>
           </ProCard>
         </Col>
         <Col xs={24} xl={14} style={stretchColumnStyle}>
@@ -239,17 +239,23 @@ const ServicesPage: React.FC = () => {
             style={fillCardStyle}
             title="Related views"
           >
-            <Space wrap>
-              <Button onClick={() => history.push('/governance')}>
-                Open governance hub
-              </Button>
-              <Button onClick={() => history.push('/scopes')}>
-                Open scopes
-              </Button>
-              <Button onClick={() => history.push('/runs')}>
-                Open runtime runs
-              </Button>
-            </Space>
+            <div style={cardStackStyle}>
+              <Typography.Paragraph style={{ marginBottom: 0 }} type="secondary">
+                Jump to the scope-first catalog, platform governance, or the
+                runtime console without leaving the current operator context.
+              </Typography.Paragraph>
+              <Space wrap>
+                <Button onClick={() => history.push('/scopes')}>
+                  Open scopes
+                </Button>
+                <Button onClick={() => history.push('/governance')}>
+                  Open platform governance
+                </Button>
+                <Button onClick={() => history.push(buildRuntimeRunsHref())}>
+                  Open Runtime Runs
+                </Button>
+              </Space>
+            </div>
           </ProCard>
         </Col>
 

@@ -52,7 +52,18 @@ describe('studioApi host-session requests', () => {
     );
   });
 
-  it('loads template workflows from the Studio host instead of console auth APIs', async () => {
+  it('loads template workflows from the Studio host using bearer auth', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -92,6 +103,8 @@ describe('studioApi host-session requests', () => {
     ];
     expect(input).toBe('/api/workflows/published-demo');
     expect(init?.credentials).toBe('same-origin');
-    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
   });
 });
