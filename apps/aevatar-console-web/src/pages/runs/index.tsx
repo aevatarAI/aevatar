@@ -23,7 +23,6 @@ import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import {
   buildRuntimeExplorerHref,
-  buildRuntimeObservabilityHref,
   buildRuntimeWorkflowsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import {
@@ -53,7 +52,6 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
-import { loadConsolePreferences } from "@/shared/preferences/consolePreferences";
 import {
   clearRecentRuns,
   loadRecentRuns,
@@ -96,6 +94,7 @@ import {
   composerRailDefaultWidth,
   composerRailKeyboardStep,
   type ConsoleViewKey,
+  defaultRunRouteName,
   formatElapsedDuration,
   humanInputColumns,
   type HumanInputRecord,
@@ -155,12 +154,8 @@ const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
 };
 
 const RunsPage: React.FC = () => {
-  const preferences = useMemo(() => loadConsolePreferences(), []);
   const [messageApi, messageContextHolder] = message.useMessage();
-  const urlInitialFormValues = useMemo(
-    () => readInitialRunFormValues(preferences.preferredWorkflow),
-    [preferences.preferredWorkflow]
-  );
+  const urlInitialFormValues = useMemo(() => readInitialRunFormValues(), []);
   const draftRunKey = useMemo(() => {
     if (typeof window === "undefined") {
       return "";
@@ -222,7 +217,7 @@ const RunsPage: React.FC = () => {
     scopeDraftPayload?.bundleName ??
       (endpointInvocationDraftPayload ? "" : undefined) ??
       initialFormValues.routeName ??
-      preferences.preferredWorkflow
+      defaultRunRouteName
   );
   const [recentRuns, setRecentRuns] = useState<RecentRunEntry[]>(() =>
     loadRecentRuns()
@@ -1318,20 +1313,6 @@ const RunsPage: React.FC = () => {
               }
             >
               Open Runtime Explorer
-            </Button>
-            <Button
-              onClick={() =>
-                history.push(
-                  buildRuntimeObservabilityHref({
-                    workflow: routeName || undefined,
-                    actorId: actorId ?? undefined,
-                    commandId: commandId || undefined,
-                    runId: session.runId ?? undefined,
-                  })
-                )
-              }
-            >
-              Open observability hub
             </Button>
           </div>
         </div>

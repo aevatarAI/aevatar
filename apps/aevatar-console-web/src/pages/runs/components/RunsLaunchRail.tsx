@@ -515,7 +515,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         extra={
                           draftMode
                             ? "Draft runs execute the bundled Studio draft."
-                            : "Preview a catalog chat route for route notes and observability shortcuts. Bound scope chat runs always follow the current scope binding."
+                            : "Preview a catalog chat route for route notes and runtime shortcuts. Bound scope chat runs always follow the current scope binding."
                         }
                         disabled={draftMode}
                         options={routeOptions}

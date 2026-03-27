@@ -48,6 +48,7 @@ import {
   summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
+import { describeError } from "@/shared/ui/errorText";
 
 type PrimitiveLibraryRow = WorkflowPrimitiveDescriptor & {
   key: string;
@@ -369,7 +370,7 @@ const PrimitivesPage: React.FC = () => {
                 showIcon
                 type="error"
                 title="Failed to load primitive library"
-                description={String(primitivesQuery.error)}
+                description={describeError(primitivesQuery.error)}
               />
             ) : !selectedPrimitive ? (
               <Empty

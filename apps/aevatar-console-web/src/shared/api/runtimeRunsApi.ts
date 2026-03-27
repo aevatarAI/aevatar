@@ -11,6 +11,7 @@ import {
   decodeWorkflowSignalResponseBody,
 } from "./runtimeDecoders";
 import { requestJson } from "./http/client";
+import { readResponseError } from "./http/error";
 import {
   encodeAppScriptCommandBase64,
   encodeStringValueBase64,
@@ -34,24 +35,6 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
-}
-
-async function readError(response: Response): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return `HTTP ${response.status}`;
-  }
-
-  try {
-    const payload = JSON.parse(text) as {
-      message?: string;
-      error?: string;
-      code?: string;
-    };
-    return payload.message || payload.error || payload.code || text;
-  } catch {
-    return text;
-  }
 }
 
 function encodeSegment(value: string): string {
@@ -198,7 +181,7 @@ export const runtimeRunsApi = {
     );
 
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     return response;
@@ -229,7 +212,7 @@ export const runtimeRunsApi = {
     });
 
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     return response;
@@ -358,7 +341,7 @@ export const runtimeRunsApi = {
     );
 
     if (!response.ok) {
-      throw new Error(await readError(response));
+      throw new Error(await readResponseError(response));
     }
 
     return (await response.json()) as WorkflowStopResponse;

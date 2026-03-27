@@ -37,6 +37,63 @@ describe("runtimeRunsApi", () => {
     ).rejects.toThrow("invalid workflow yaml");
   });
 
+  it("collapses HTML error pages for streaming runtime responses", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: "Bad Gateway",
+      text: async () => `<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <title>runtime gateway | 502: Bad gateway</title>
+  </head>
+  <body>
+    <h1>Bad gateway</h1>
+  </body>
+</html>`,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      runtimeRunsApi.streamChat(
+        "scope-1",
+        {
+          prompt: "Run it",
+        },
+        new AbortController().signal
+      )
+    ).rejects.toThrow("HTTP 502 Bad Gateway");
+  });
+
+  it("collapses HTML error pages for JSON runtime requests", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: "Bad Gateway",
+      text: async () => `<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <title>runtime gateway | 502: Bad gateway</title>
+  </head>
+  <body>
+    <h1>Bad gateway</h1>
+  </body>
+</html>`,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      runtimeRunsApi.resume("scope-1", {
+        actorId: "actor-1",
+        runId: "run-1",
+        stepId: "step-1",
+        approved: true,
+      })
+    ).rejects.toThrow("HTTP 502 Bad Gateway");
+  });
+
   it("decodes resume responses from the runtime boundary", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

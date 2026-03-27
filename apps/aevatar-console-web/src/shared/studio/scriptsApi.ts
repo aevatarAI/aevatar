@@ -1,4 +1,5 @@
 import { authFetch } from '@/shared/auth/fetch';
+import { readResponseError } from '@/shared/api/http/error';
 import type {
   DraftRunResult,
   GeneratedScriptResult,
@@ -44,31 +45,13 @@ function isJsonContentType(contentType: string | null): boolean {
   return value.includes('application/json') || value.includes('+json');
 }
 
-async function readError(response: Response): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return `HTTP ${response.status}`;
-  }
-
-  try {
-    const payload = JSON.parse(text) as {
-      code?: string;
-      error?: string;
-      message?: string;
-    };
-    return payload.message || payload.error || payload.code || text;
-  } catch {
-    return text;
-  }
-}
-
 async function requestJson<T>(
   input: string,
   init?: RequestInit,
 ): Promise<T> {
   const response = await scriptsFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -159,7 +142,7 @@ async function streamSse(
   });
 
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (!response.body) {

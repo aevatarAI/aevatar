@@ -61,7 +61,7 @@ describe("RunsLaunchRail", () => {
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Preview a catalog chat route for route notes and observability shortcuts. Bound scope chat runs always follow the current scope binding."
+        "Preview a catalog chat route for route notes and runtime shortcuts. Bound scope chat runs always follow the current scope binding."
       )
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Presets (1)" }));

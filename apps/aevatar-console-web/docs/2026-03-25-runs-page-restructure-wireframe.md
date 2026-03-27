@@ -32,7 +32,7 @@
 ```text
 +-----------------------------------------------------------------------------------------------------------+
 | Runtime Run Console                                                                                       |
-| Start run | Open workflows | Open actor | Open observability                                              |
+| Start run | Open workflows | Open actor | Open settings                                                   |
 +-----------------------------------------------------------------------------------------------------------+
 | STATUS STRIP                                                                                              |
 | [Running] [RunId: xxx] [Elapsed: 02:14] [Workflow: human_input_manual_triage] [WS] [Pending Interaction] |

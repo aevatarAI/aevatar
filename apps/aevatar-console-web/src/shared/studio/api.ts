@@ -44,6 +44,7 @@ import {
   readNumber,
   readString,
 } from "@/shared/api/http/decoders";
+import { readResponseError } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
 
@@ -80,28 +81,10 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
-async function readError(response: Response): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return `HTTP ${response.status}`;
-  }
-
-  try {
-    const payload = JSON.parse(text) as {
-      message?: string;
-      error?: string;
-      code?: string;
-    };
-    return payload.message || payload.error || payload.code || text;
-  } catch {
-    return text;
-  }
-}
-
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -118,7 +101,7 @@ async function requestDecodedJson<T>(
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -144,7 +127,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -174,7 +157,7 @@ async function streamSse(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (!response.body) {
