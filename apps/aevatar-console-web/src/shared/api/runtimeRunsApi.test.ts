@@ -76,17 +76,26 @@ describe("runtimeRunsApi", () => {
       "scope-1",
       {
         prompt: "Run it",
+        workflow: "direct",
+        agentId: "actor-1",
+        workflowYamls: ["name: direct"],
+        metadata: { source: "runs" },
       },
       new AbortController().signal,
       { serviceId: "service-1" }
     );
 
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/scopes/scope-1/services/service-1/invoke/chat:stream",
       expect.objectContaining({
         method: "POST",
       })
     );
+    expect(JSON.parse(String(init.body))).toEqual({
+      prompt: "Run it",
+      headers: { source: "runs" },
+    });
   });
 
   it("routes scoped streamChat through the scope default service endpoint", async () => {
@@ -100,16 +109,22 @@ describe("runtimeRunsApi", () => {
       "scope-1",
       {
         prompt: "Run it",
+        metadata: { source: "runs" },
       },
       new AbortController().signal
     );
 
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/scopes/scope-1/invoke/chat:stream",
       expect.objectContaining({
         method: "POST",
       })
     );
+    expect(JSON.parse(String(init.body))).toEqual({
+      prompt: "Run it",
+      headers: { source: "runs" },
+    });
   });
 
   it("routes draft runs through the scope draft endpoint", async () => {

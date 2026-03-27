@@ -16,7 +16,6 @@ type RunsStatusStripProps = {
   statusTone: "success" | "processing" | "error" | "default";
   transport: RunTransport;
   endpointId: string;
-  workflowName: string;
 };
 
 const stripStyle: React.CSSProperties = {
@@ -88,7 +87,6 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
   statusTone,
   transport,
   endpointId,
-  workflowName,
 }) => {
   const transportLabel =
     endpointId && endpointId !== "chat" ? "INVOKE" : transport.toUpperCase();

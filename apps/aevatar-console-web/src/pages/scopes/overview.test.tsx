@@ -122,6 +122,7 @@ describe('ScopeOverviewPage', () => {
   it('activates a historical revision from the overview page', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
+    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
     fireEvent.click(await screen.findByRole('button', { name: 'Activate rev-1' }));
 
     await waitFor(() => {

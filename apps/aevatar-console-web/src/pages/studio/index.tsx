@@ -36,8 +36,8 @@ import {
 } from '@/shared/playground/promptHistory';
 import { loadPlaygroundDraft } from '@/shared/playground/playgroundDraft';
 import {
-  saveDraftRunPayload,
-  saveServiceInvocationDraftPayload,
+  saveEndpointInvocationDraftPayload,
+  saveScopeDraftRunPayload,
 } from '@/shared/runs/draftRunSession';
 import {
   getStringValueTypeUrl,
@@ -179,6 +179,33 @@ function hasValidationError(findings: StudioValidationFinding[]): boolean {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function describeScopeBindingTarget(result: {
+  readonly displayName?: string;
+  readonly serviceId?: string;
+  readonly targetKind?: string;
+  readonly targetName?: string;
+}): string {
+  const targetName =
+    trimOptional(result.targetName) ||
+    trimOptional(result.displayName) ||
+    trimOptional(result.serviceId);
+
+  if (!targetName) {
+    return 'the default binding';
+  }
+
+  switch (trimOptional(result.targetKind).toLowerCase()) {
+    case 'workflow':
+      return `workflow ${targetName}`;
+    case 'script':
+      return `script ${targetName}`;
+    case 'gagent':
+      return `GAgent ${targetName}`;
+    default:
+      return targetName;
+  }
 }
 
 function hasWorkflowGraphContent(
@@ -2037,9 +2064,9 @@ const StudioPage: React.FC = () => {
 
     try {
       const workflowYamls = await buildWorkflowYamlBundle();
-      const draftKey = saveDraftRunPayload({
-        workflowName,
-        workflowYamls,
+      const draftKey = saveScopeDraftRunPayload({
+        bundleName: workflowName,
+        bundleYamls: workflowYamls,
       });
       setPromptHistory(
         savePlaygroundPromptHistoryEntry({
@@ -2050,7 +2077,7 @@ const StudioPage: React.FC = () => {
       history.push(
         buildRuntimeRunsHref({
           scopeId,
-          workflow: workflowName,
+          route: workflowName,
           prompt,
           draftKey,
         }),
@@ -2118,7 +2145,7 @@ const StudioPage: React.FC = () => {
       });
       setPublishNotice({
         type: 'success',
-        message: `Bound scope ${result.scopeId} to workflow ${result.workflowName} on revision ${result.revisionId}.`,
+        message: `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} on revision ${result.revisionId}.`,
       });
     } catch (error) {
       setPublishNotice({
@@ -2214,7 +2241,7 @@ const StudioPage: React.FC = () => {
       });
 
       if (options?.openRuns) {
-        const draftKey = saveServiceInvocationDraftPayload({
+        const draftKey = saveEndpointInvocationDraftPayload({
           endpointId,
           prompt: input.prompt?.trim() || '',
           payloadTypeUrl,
@@ -2237,8 +2264,8 @@ const StudioPage: React.FC = () => {
       setPublishNotice({
         type: 'success',
         message: options?.openRuns
-          ? `Bound scope ${result.scopeId} to GAgent ${actorTypeName} and opened Runs for ${endpointId}.`
-          : `Bound scope ${result.scopeId} to GAgent ${actorTypeName} on revision ${result.revisionId}.`,
+          ? `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} and opened Runs for endpoint ${endpointId}.`
+          : `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} on revision ${result.revisionId}.`,
       });
     } catch (error) {
       setPublishNotice({
@@ -4148,7 +4175,7 @@ const StudioPage: React.FC = () => {
             history.push(
               buildRuntimeRunsHref({
                 scopeId: resolvedStudioScopeId || undefined,
-                workflow: activeWorkflowName || templateWorkflow || undefined,
+                route: activeWorkflowName || templateWorkflow || undefined,
                 prompt: runPrompt || undefined,
               }),
             )

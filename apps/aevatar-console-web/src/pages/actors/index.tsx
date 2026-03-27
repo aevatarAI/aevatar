@@ -44,6 +44,7 @@ import {
   type ActorGraphDirection,
   loadConsolePreferences,
 } from "@/shared/preferences/consolePreferences";
+import { loadRecentRuns } from "@/shared/runs/recentRuns";
 import {
   codeBlockStyle,
   cardStackStyle,
@@ -447,6 +448,40 @@ const ActorsPage: React.FC = () => {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string>("");
   const [selectedTimelineKey, setSelectedTimelineKey] = useState<string>("");
 
+  const recentActorRuns = useMemo(() => {
+    const seenActorIds = new Set<string>();
+    return loadRecentRuns().filter((entry) => {
+      const actorId = entry.actorId.trim();
+      if (!actorId || seenActorIds.has(actorId)) {
+        return false;
+      }
+
+      seenActorIds.add(actorId);
+      return true;
+    });
+  }, []);
+
+  const loadActorIntoExplorer = (actorId: string) => {
+    const nextActorId = actorId.trim();
+    const currentValues = formRef.current?.getFieldsValue?.() ?? filters;
+    const nextFilters: ActorPageState = {
+      actorId: nextActorId,
+      timelineTake: Number(currentValues.timelineTake ?? filters.timelineTake),
+      graphDepth: Number(currentValues.graphDepth ?? filters.graphDepth),
+      graphTake: Number(currentValues.graphTake ?? filters.graphTake),
+      graphDirection: currentValues.graphDirection ?? filters.graphDirection,
+      edgeTypes: Array.isArray(currentValues.edgeTypes)
+        ? currentValues.edgeTypes
+        : filters.edgeTypes,
+    };
+
+    formRef.current?.setFieldsValue({
+      ...currentValues,
+      actorId: nextActorId,
+    });
+    setFilters(nextFilters);
+  };
+
   const snapshotQuery = useQuery({
     queryKey: ["actor-snapshot", filters.actorId],
     enabled: Boolean(filters.actorId),
@@ -827,6 +862,33 @@ const ActorsPage: React.FC = () => {
           </Space>
         }
       >
+        {recentActorRuns.length ? (
+          <div style={{ marginBottom: 16 }}>
+            <SectionHeader
+              title="Recent runs"
+              description="Reuse a recently observed runtime actor without copying it by hand."
+            />
+            <Space wrap style={{ marginTop: 12 }}>
+              {recentActorRuns.map((entry) => (
+                <Button
+                  key={entry.id}
+                  onClick={() => loadActorIntoExplorer(entry.actorId)}
+                  title={entry.actorId}
+                >
+                  {`${entry.workflowName} · ${entry.actorId}`}
+                </Button>
+              ))}
+            </Space>
+          </div>
+        ) : (
+          <Alert
+            style={{ marginBottom: 16 }}
+            type="info"
+            showIcon
+            title="No recent runs yet"
+            description="Run a workflow once, or open Runtime Runs, and the latest actorIds will appear here for one-click lookup."
+          />
+        )}
         <ProForm<ActorPageState>
           formRef={formRef}
           layout="vertical"
@@ -941,7 +1003,7 @@ const ActorsPage: React.FC = () => {
         <ProCard style={{ marginTop: 16 }} {...moduleCardProps}>
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Provide a runtime actorId to load actor data."
+            description="Provide a runtime actorId, or choose one from Recent runs, to load actor data."
           />
         </ProCard>
       ) : null}

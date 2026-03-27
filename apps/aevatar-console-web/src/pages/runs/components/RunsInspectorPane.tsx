@@ -18,10 +18,11 @@ import type {
   HumanInputRecord,
   RunFocusRecord,
   RunSummaryRecord,
-  SelectedWorkflowRecord,
+  SelectedRouteRecord,
   WaitingSignalRecord,
 } from "../runWorkbenchConfig";
 import {
+  formatRunRouteLabel,
   workbenchCardStyle,
   workbenchCardBodyStyle,
   workbenchScrollableBodyStyle,
@@ -36,8 +37,8 @@ type RunsInspectorPaneProps = {
   runFocus: RunFocusRecord;
   runSummaryRecord: RunSummaryRecord;
   selectedTraceItem?: RunEventRow;
-  selectedWorkflowPrimitives: string[];
-  selectedWorkflowRecord?: SelectedWorkflowRecord;
+  selectedRoutePrimitives: string[];
+  selectedRouteRecord?: SelectedRouteRecord;
   showInteractionAction?: boolean;
   variant?: "card" | "plain";
   waitingSignalRecord?: WaitingSignalRecord;
@@ -261,8 +262,8 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
   runFocus,
   runSummaryRecord,
   selectedTraceItem,
-  selectedWorkflowPrimitives,
-  selectedWorkflowRecord,
+  selectedRoutePrimitives,
+  selectedRouteRecord,
   showInteractionAction = true,
   variant = "card",
   waitingSignalRecord,
@@ -294,8 +295,11 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
           </div>
           <div style={summaryMetricGridStyle}>
             <SummaryMetric
-              label="Workflow"
-              value={runSummaryRecord.workflowName || "n/a"}
+              label="Route"
+              value={formatRunRouteLabel(
+                runSummaryRecord.routeName,
+                runSummaryRecord.endpointId,
+              )}
             />
             <SummaryMetric
               label="Transport"
@@ -446,7 +450,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            description="Operator interactions, workflow profile, and the latest actor-owned state."
+            description="Operator interactions, route profile, and the latest actor-owned state."
             title="Runtime sidecars"
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -465,21 +469,21 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
             </div>
 
             <div style={sectionDividerStyle}>
-              <SectionHeader title="Workflow snapshot" />
-              {selectedWorkflowRecord ? (
+              <SectionHeader title="Route snapshot" />
+              {selectedRouteRecord ? (
                 <>
                   <Space wrap size={[6, 6]}>
-                    <Tag color="processing">{selectedWorkflowRecord.workflowName}</Tag>
-                    <Tag>{selectedWorkflowRecord.groupLabel}</Tag>
-                    <Tag>{selectedWorkflowRecord.sourceLabel}</Tag>
+                    <Tag color="processing">{selectedRouteRecord.routeName}</Tag>
+                    <Tag>{selectedRouteRecord.groupLabel}</Tag>
+                    <Tag>{selectedRouteRecord.sourceLabel}</Tag>
                     <Tag
                       color={
-                        selectedWorkflowRecord.llmStatus === "processing"
+                        selectedRouteRecord.llmStatus === "processing"
                           ? "blue"
                           : "success"
                       }
                     >
-                      {selectedWorkflowRecord.llmStatus === "processing"
+                      {selectedRouteRecord.llmStatus === "processing"
                         ? "LLM required"
                         : "LLM optional"}
                     </Tag>
@@ -489,14 +493,14 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
                     style={{ marginBottom: 0 }}
                     type="secondary"
                   >
-                    {selectedWorkflowRecord.description || "No description provided."}
+                    {selectedRouteRecord.description || "No description provided."}
                   </Typography.Paragraph>
-                  <div>{renderPrimitiveTags(selectedWorkflowPrimitives)}</div>
+                  <div>{renderPrimitiveTags(selectedRoutePrimitives)}</div>
                 </>
               ) : (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="Select a workflow to inspect its snapshot."
+                  description="Select a route preview to inspect its snapshot."
                 />
               )}
             </div>

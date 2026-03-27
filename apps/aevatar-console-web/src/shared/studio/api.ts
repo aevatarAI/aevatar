@@ -5,7 +5,9 @@ import type {
   StudioConnectorCatalogImportResult,
   StudioConnectorDraftResponse,
   StudioScopeBindingActivationResult,
+  StudioScopeBindingImplementationKind,
   StudioScopeBindingRevision,
+  StudioScopeBindingTargetKind,
   StudioScopeGAgentBindingInput,
   StudioScopeBindingStatus,
   StudioExecutionDetail,
@@ -31,10 +33,12 @@ import type {
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
 } from "./models";
+import { normalizeStudioScopeBindingImplementationKind } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import {
   expectArray,
   expectRecord,
+  normalizeEnumValue,
   readBoolean,
   readNullableString,
   readNumber,
@@ -270,17 +274,17 @@ function decodeStudioScopeBindingRevision(
   label = "StudioScopeBindingRevision"
 ): StudioScopeBindingRevision {
   const record = expectRecord(value, label);
+  const implementationKind = readScopeBindingImplementationKind(record, [
+    "implementationKind",
+    "ImplementationKind",
+  ]);
   return {
     revisionId: readString(
       record,
       ["revisionId", "RevisionId"],
       `${label}.revisionId`
     ),
-    implementationKind: readString(
-      record,
-      ["implementationKind", "ImplementationKind"],
-      `${label}.implementationKind`
-    ),
+    implementationKind,
     status: readString(record, ["status", "Status"], `${label}.status`),
     artifactHash: readString(
       record,
@@ -347,6 +351,207 @@ function decodeStudioScopeBindingRevision(
       ["retiredAt", "RetiredAt"],
       `${label}.retiredAt`
     ),
+  };
+}
+
+function readOptionalString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const rawValue = record[key];
+    if (typeof rawValue !== "string") {
+      continue;
+    }
+
+    const normalized = rawValue.trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+}
+
+function readOptionalScalar(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | number | undefined {
+  for (const key of keys) {
+    const rawValue = record[key];
+    if (
+      typeof rawValue === "string" ||
+      (typeof rawValue === "number" && !Number.isNaN(rawValue))
+    ) {
+      return rawValue;
+    }
+  }
+
+  return undefined;
+}
+
+function readScopeBindingImplementationKind(
+  record: Record<string, unknown>,
+  keys: string[],
+  fallback?: string | number
+): StudioScopeBindingImplementationKind {
+  const rawValue = readOptionalScalar(record, keys) ?? fallback;
+  if (rawValue === undefined) {
+    return "unknown";
+  }
+
+  return normalizeStudioScopeBindingImplementationKind(
+    normalizeEnumValue(rawValue, "implementationKind", {
+      "0": "unknown",
+      "1": "workflow",
+      "2": "script",
+      "3": "gagent",
+      workflow: "workflow",
+      scripting: "script",
+      script: "script",
+      gagent: "gagent",
+      unspecified: "unknown",
+    })
+  );
+}
+
+function decodeStudioScopeBindingResult(
+  value: unknown
+): StudioScopeBindingResult {
+  const record = expectRecord(value, "StudioScopeBindingResult");
+  const displayName =
+    readOptionalString(record, ["displayName", "DisplayName"]) || "";
+  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const workflowRecord =
+    record.workflow && typeof record.workflow === "object"
+      ? expectRecord(record.workflow, "StudioScopeBindingResult.workflow")
+      : null;
+  const scriptRecord =
+    record.script && typeof record.script === "object"
+      ? expectRecord(record.script, "StudioScopeBindingResult.script")
+      : null;
+  const gAgentRecord =
+    (record.gAgent ?? record.gagent) &&
+    typeof (record.gAgent ?? record.gagent) === "object"
+      ? expectRecord(
+          record.gAgent ?? record.gagent,
+          "StudioScopeBindingResult.gAgent"
+        )
+      : null;
+
+  const workflowName =
+    workflowRecord == null
+      ? readOptionalString(record, ["workflowName", "WorkflowName"])
+      : readOptionalString(workflowRecord, ["workflowName", "WorkflowName"]) ||
+        readOptionalString(record, ["workflowName", "WorkflowName"]);
+  const definitionActorIdPrefix =
+    workflowRecord == null
+      ? readOptionalString(record, [
+          "definitionActorIdPrefix",
+          "DefinitionActorIdPrefix",
+        ])
+      : readOptionalString(workflowRecord, [
+          "definitionActorIdPrefix",
+          "DefinitionActorIdPrefix",
+        ]) ||
+        readOptionalString(record, [
+          "definitionActorIdPrefix",
+          "DefinitionActorIdPrefix",
+        ]);
+  const implementationKind = readScopeBindingImplementationKind(
+    record,
+    ["implementationKind", "ImplementationKind"],
+    scriptRecord
+      ? "script"
+      : gAgentRecord
+        ? "gagent"
+        : workflowRecord || workflowName
+          ? "workflow"
+          : "unknown"
+  );
+  const targetKind: StudioScopeBindingTargetKind = implementationKind;
+  const targetName =
+    (targetKind === "workflow"
+      ? workflowName
+      : targetKind === "script"
+        ? readOptionalString(scriptRecord ?? {}, ["scriptId", "ScriptId"])
+        : targetKind === "gagent"
+          ? readOptionalString(gAgentRecord ?? {}, [
+              "preferredActorId",
+              "PreferredActorId",
+            ]) ||
+            readOptionalString(gAgentRecord ?? {}, [
+              "actorTypeName",
+              "ActorTypeName",
+            ])
+          : undefined) ||
+    displayName ||
+    serviceId ||
+    readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioScopeBindingResult.revisionId"
+    );
+
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioScopeBindingResult.scopeId"
+    ),
+    serviceId,
+    displayName,
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioScopeBindingResult.revisionId"
+    ),
+    implementationKind,
+    targetKind,
+    targetName,
+    workflowName,
+    definitionActorIdPrefix,
+    expectedActorId: readOptionalString(record, [
+      "expectedActorId",
+      "ExpectedActorId",
+    ]),
+    workflow:
+      targetKind === "workflow" && (workflowName || definitionActorIdPrefix)
+        ? {
+            workflowName: workflowName || displayName || targetName,
+            definitionActorIdPrefix: definitionActorIdPrefix || "",
+          }
+        : null,
+    script: scriptRecord
+      ? {
+          scriptId:
+            readOptionalString(scriptRecord, ["scriptId", "ScriptId"]) || "",
+          scriptRevision:
+            readOptionalString(scriptRecord, [
+              "scriptRevision",
+              "ScriptRevision",
+            ]) || "",
+          definitionActorId:
+            readOptionalString(scriptRecord, [
+              "definitionActorId",
+              "DefinitionActorId",
+            ]) || "",
+        }
+      : null,
+    gAgent: gAgentRecord
+      ? {
+          actorTypeName:
+            readOptionalString(gAgentRecord, [
+              "actorTypeName",
+              "ActorTypeName",
+            ]) || "",
+          preferredActorId:
+            readOptionalString(gAgentRecord, [
+              "preferredActorId",
+              "PreferredActorId",
+            ]) || "",
+        }
+      : null,
   };
 }
 
@@ -529,8 +734,9 @@ export const studioApi = {
     workflowYamls: string[];
     revisionId?: string | null;
   }): Promise<StudioScopeBindingResult> {
-    return requestJson(
+    return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -550,8 +756,9 @@ export const studioApi = {
   bindScopeScript(
     input: StudioScopeScriptBindingInput
   ): Promise<StudioScopeScriptBindingResult> {
-    return requestJson(
+    return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
       {
         method: "PUT",
         headers: JSON_HEADERS,
@@ -573,8 +780,9 @@ export const studioApi = {
   bindScopeGAgent(
     input: StudioScopeGAgentBindingInput
   ): Promise<StudioScopeGAgentBindingResult> {
-    return requestJson(
+    return requestDecodedJson(
       `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
       {
         method: "PUT",
         headers: JSON_HEADERS,

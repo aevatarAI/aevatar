@@ -1938,6 +1938,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const [copiedExecutionLogIndex, setCopiedExecutionLogIndex] =
     React.useState<number | null>(null);
   const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = React.useState(false);
+  const [copiedExecutionActorId, setCopiedExecutionActorId] =
+    React.useState<string | null>(null);
   const [executionActionInput, setExecutionActionInput] = React.useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] =
     React.useState('');
@@ -2019,6 +2021,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     : currentWorkflowExecutions.length > 0
       ? `${currentWorkflowExecutions.length} runs`
       : 'No runs';
+  const selectedExecutionActorId = selectedExecutionDetail?.actorId || null;
   const activeExecutionLog =
     executionTrace && Number.isInteger(activeExecutionLogIndex)
       ? executionTrace.logs[activeExecutionLogIndex as number] || null
@@ -2087,6 +2090,20 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     if (copied) {
       showExecutionLogCopyFeedback('all');
     }
+  };
+
+  const handleCopyExecutionActorId = async (actorId: string) => {
+    const copied = await copyText(actorId);
+    if (!copied) {
+      return;
+    }
+
+    setCopiedExecutionActorId(actorId);
+    window.setTimeout(() => {
+      setCopiedExecutionActorId((current) =>
+        current === actorId ? null : current,
+      );
+    }, 1600);
   };
 
   const handleExecutionInteraction = async (
@@ -2288,6 +2305,17 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                         execution.completedAtUtc,
                       )}
                     </div>
+                    {execution.actorId ? (
+                      <div className="execution-run-card-actor">
+                        <div className="execution-run-card-actor-label">Actor ID</div>
+                        <code
+                          className="execution-run-card-actor-value"
+                          title={execution.actorId}
+                        >
+                          {execution.actorId}
+                        </code>
+                      </div>
+                    ) : null}
                   </button>
                 ))
               )}
@@ -2295,6 +2323,36 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             <div className="execution-log-stream">
               <div className="execution-log-list">
+                {selectedExecutionActorId ? (
+                  <div className="execution-run-identity">
+                    <div className="execution-run-identity-head">
+                      <div className="execution-run-identity-label">Actor ID</div>
+                      <button
+                        type="button"
+                        className={`panel-icon-button execution-logs-copy-action ${copiedExecutionActorId === selectedExecutionActorId ? 'active' : ''}`}
+                        title="Copy Actor ID."
+                        aria-label="Copy Actor ID."
+                        onClick={() =>
+                          void handleCopyExecutionActorId(
+                            selectedExecutionActorId,
+                          )
+                        }
+                      >
+                        {copiedExecutionActorId === selectedExecutionActorId ? (
+                          <CheckOutlined />
+                        ) : (
+                          <CopyOutlined />
+                        )}
+                      </button>
+                    </div>
+                    <code
+                      className="execution-run-identity-value"
+                      title={selectedExecutionActorId}
+                    >
+                      {selectedExecutionActorId}
+                    </code>
+                  </div>
+                ) : null}
                 {executionTrace?.logs?.length ? (
                   executionTrace.logs.map((log, index) => (
                     <button
