@@ -21,6 +21,7 @@ import type {
   StudioScopeBindingRevision,
   StudioScopeBindingStatus,
 } from '@/shared/studio/models';
+import { formatStudioScopeBindingImplementationKind } from '@/shared/studio/models';
 import {
   cardStackStyle,
   compactTableCardProps,
@@ -93,6 +94,12 @@ function findActiveRevision(
     binding.revisions[0] ??
     null
   );
+}
+
+function describeRevisionState(
+  revision: StudioScopeBindingRevision | null | undefined,
+): string {
+  return revision?.servingState || revision?.status || 'n/a';
 }
 
 const initialDraft = readScopeQueryDraft();
@@ -386,7 +393,7 @@ const ScopeOverviewPage: React.FC = () => {
                   <div style={summaryMetricGridStyle}>
                     <SummaryMetric label="Scope" value={activeDraft.scopeId} />
                     <SummaryMetric
-                      label="Binding"
+                      label="Default binding"
                       value={
                         binding?.available
                           ? binding.displayName || binding.serviceId
@@ -395,7 +402,13 @@ const ScopeOverviewPage: React.FC = () => {
                     />
                     <SummaryMetric
                       label="Implementation"
-                      value={activeRevision?.implementationKind || 'n/a'}
+                      value={
+                        activeRevision
+                          ? formatStudioScopeBindingImplementationKind(
+                              activeRevision.implementationKind,
+                            )
+                          : 'n/a'
+                      }
                     />
                     <SummaryMetric
                       label="Workflow assets"
@@ -456,7 +469,7 @@ const ScopeOverviewPage: React.FC = () => {
                 {binding?.available ? (
                   <div style={summaryFieldGridStyle}>
                     <SummaryField label="Display name" value={binding.displayName} />
-                    <SummaryField label="Service ID" value={binding.serviceId} />
+                    <SummaryField label="Default service" value={binding.serviceId} />
                     <SummaryField
                       label="Active revision"
                       value={binding.activeServingRevisionId || 'n/a'}
@@ -488,8 +501,8 @@ const ScopeOverviewPage: React.FC = () => {
                       value={formatDateTime(binding.updatedAt)}
                     />
                     <SummaryField
-                      label="Selected revision"
-                      value={selectedRevision?.revisionId || 'n/a'}
+                      label="Revision state"
+                      value={describeRevisionState(selectedRevision)}
                     />
                   </div>
                 ) : (
@@ -539,7 +552,11 @@ const ScopeOverviewPage: React.FC = () => {
                                 {revision.isActiveServing ? 'active' : 'inactive'}
                               </Tag>
                               {revision.isDefaultServing ? <Tag>default</Tag> : null}
-                              <Tag>{revision.implementationKind || 'unknown'}</Tag>
+                              <Tag>
+                                {formatStudioScopeBindingImplementationKind(
+                                  revision.implementationKind,
+                                )}
+                              </Tag>
                             </Space>
                             <Button
                               size="small"

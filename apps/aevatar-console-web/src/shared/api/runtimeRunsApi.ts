@@ -175,6 +175,9 @@ export const runtimeRunsApi = {
       serviceId?: string;
     }
   ): Promise<Response> {
+    const sessionId = trimOptional(
+      (request as ChatRunRequest & { sessionId?: string }).sessionId
+    );
     const response = await authFetch(
       buildInvokeChatStreamPath(scopeId, options?.serviceId),
       {
@@ -186,13 +189,8 @@ export const runtimeRunsApi = {
         body: JSON.stringify(
           compactObject({
             prompt: request.prompt.trim(),
-            workflow: trimOptional(request.workflow),
-            agentId: trimOptional(request.agentId),
-            workflowYamls:
-              request.workflowYamls && request.workflowYamls.length > 0
-                ? request.workflowYamls
-                : undefined,
-            metadata: request.metadata,
+            sessionId,
+            headers: request.metadata,
           })
         ),
         signal,

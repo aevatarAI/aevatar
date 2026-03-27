@@ -12,9 +12,9 @@ import type { RunTransport } from "./runEventPresentation";
 
 export type RunFormValues = {
   prompt: string;
-  workflow?: string;
+  routeName?: string;
   scopeId?: string;
-  serviceId?: string;
+  serviceOverrideId?: string;
   endpointId?: string;
   payloadTypeUrl?: string;
   payloadBase64?: string;
@@ -34,7 +34,7 @@ export type SignalFormValues = {
 export type RunPreset = {
   key: string;
   title: string;
-  workflow: string;
+  routeName: string;
   prompt: string;
   description: string;
   tags: string[];
@@ -71,7 +71,7 @@ export type RecentRunTableRow = RecentRunRow & {
 export type RunSummaryRecord = {
   status: RunStatus;
   transport: RunTransport;
-  workflowName: string;
+  routeName: string;
   endpointId: string;
   actorId: string;
   commandId: string;
@@ -84,8 +84,8 @@ export type RunSummaryRecord = {
   activeSteps: string[];
 };
 
-export type SelectedWorkflowRecord = {
-  workflowName: string;
+export type SelectedRouteRecord = {
+  routeName: string;
   groupLabel: string;
   sourceLabel: string;
   llmStatus: "processing" | "success";
@@ -124,26 +124,26 @@ export const builtInPresets: RunPreset[] = [
   {
     key: "direct",
     title: "Direct chat",
-    workflow: "direct",
+    routeName: "direct",
     prompt:
-      "Summarize what this workflow can do and produce a concise execution result.",
+      "Summarize what this chat bundle can do and produce a concise execution result.",
     description:
-      "Baseline direct workflow for quick validation of the chat stream.",
+      "Baseline direct chat bundle for quick validation of the chat stream.",
     tags: ["baseline", "llm"],
   },
   {
     key: "human-input",
     title: "Human input triage",
-    workflow: "human_input_manual_triage",
+    routeName: "human_input_manual_triage",
     prompt:
-      "A production incident needs manual classification before the workflow can continue.",
+      "A production incident needs manual classification before the run can continue.",
     description: "Use this to verify human input prompts and resume flow.",
     tags: ["human_input", "resume"],
   },
   {
     key: "human-approval",
     title: "Human approval gate",
-    workflow: "human_approval_release_gate",
+    routeName: "human_approval_release_gate",
     prompt:
       "Prepare a release summary that requires explicit human approval before rollout.",
     description: "Use this to verify approval flow and moderation checkpoints.",
@@ -152,7 +152,7 @@ export const builtInPresets: RunPreset[] = [
   {
     key: "wait-signal",
     title: "Wait signal",
-    workflow: "wait_signal_manual_success",
+    routeName: "wait_signal_manual_success",
     prompt: "Wait for an external readiness signal before completing the run.",
     description:
       "Use this to verify waiting_signal and manual signal delivery.",
@@ -196,12 +196,10 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
     render: (_, record) => record.endpointId || "chat",
   },
   {
-    title: "Target",
-    dataIndex: "workflowName",
+    title: "Route",
+    dataIndex: "routeName",
     render: (_, record) =>
-      record.endpointId === "chat"
-        ? record.workflowName || "chat"
-        : record.endpointId || record.workflowName || "n/a",
+      formatRunRouteLabel(record.routeName, record.endpointId),
   },
   {
     title: "Actor",
@@ -292,13 +290,13 @@ export const humanInputColumns: ProDescriptionsItemProps<HumanInputRecord>[] = [
   },
 ];
 
-export const workflowDescriptionColumns: ProDescriptionsItemProps<SelectedWorkflowRecord>[] =
+export const routeDescriptionColumns: ProDescriptionsItemProps<SelectedRouteRecord>[] =
   [
     {
-      title: "Target",
-      dataIndex: "workflowName",
+      title: "Route",
+      dataIndex: "routeName",
       render: (_, record) => (
-        <Tag color="processing">{record.workflowName}</Tag>
+        <Tag color="processing">{record.routeName}</Tag>
       ),
     },
     {
@@ -535,13 +533,10 @@ export const workbenchEventRowStyle = {
 
 export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
   {
-    title: "Target",
-    dataIndex: "workflowName",
+    title: "Route",
+    dataIndex: "routeName",
     ellipsis: true,
-    render: (_, record) =>
-      record.endpointId === "chat"
-        ? record.workflowName || "chat"
-        : record.endpointId || record.workflowName || "n/a",
+    render: (_, record) => formatRunRouteLabel(record.routeName, record.endpointId),
   },
   {
     title: "Endpoint",
@@ -600,6 +595,23 @@ export function trimOptional(value?: string | null): string | undefined {
   return normalized ? normalized : undefined;
 }
 
+export function formatRunRouteLabel(
+  routeName?: string | null,
+  endpointId?: string | null,
+): string {
+  const normalizedRouteName = trimOptional(routeName);
+  const normalizedEndpointId = trimOptional(endpointId) ?? "chat";
+
+  if (normalizedEndpointId === "chat") {
+    return normalizedRouteName || "chat";
+  }
+
+  return normalizedRouteName &&
+    normalizedRouteName !== normalizedEndpointId
+    ? `${normalizedEndpointId} · ${normalizedRouteName}`
+    : normalizedEndpointId;
+}
+
 export function formatElapsedDuration(totalMilliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(totalMilliseconds / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -652,9 +664,9 @@ export function readInitialRunFormValues(
   if (typeof window === "undefined") {
     return {
       prompt: "",
-      workflow: preferredWorkflow,
+      routeName: preferredWorkflow,
       scopeId: defaultScopeId,
-      serviceId: undefined,
+      serviceOverrideId: undefined,
       endpointId: "chat",
       payloadTypeUrl: undefined,
       payloadBase64: undefined,
@@ -666,9 +678,14 @@ export function readInitialRunFormValues(
   const params = new URLSearchParams(window.location.search);
   return {
     prompt: params.get("prompt") ?? "",
-    workflow: trimOptional(params.get("workflow")) ?? preferredWorkflow,
+    routeName:
+      trimOptional(params.get("route")) ??
+      trimOptional(params.get("workflow")) ??
+      preferredWorkflow,
     scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
-    serviceId: trimOptional(params.get("serviceId")),
+    serviceOverrideId:
+      trimOptional(params.get("serviceOverrideId")) ??
+      trimOptional(params.get("serviceId")),
     endpointId: trimOptional(params.get("endpointId")) ?? "chat",
     payloadTypeUrl: trimOptional(params.get("payloadTypeUrl")),
     payloadBase64: trimOptional(params.get("payloadBase64")),

@@ -19,6 +19,7 @@ import type {
   ScopeScriptSummary,
 } from "@/shared/models/scopes";
 import type { StudioScopeBindingRevision } from "@/shared/studio/models";
+import { formatStudioScopeBindingImplementationKind } from "@/shared/studio/models";
 import {
   cardStackStyle,
   compactTableCardProps,
@@ -75,6 +76,12 @@ function findActiveRevision(
     revisions[0] ??
     null
   );
+}
+
+function describeRevisionState(
+  revision: StudioScopeBindingRevision | null | undefined,
+): string {
+  return revision?.servingState || revision?.status || "n/a";
 }
 
 const ScopeScriptsPage: React.FC = () => {
@@ -307,7 +314,7 @@ const ScopeScriptsPage: React.FC = () => {
                   value={bindingQuery.data.displayName || "n/a"}
                 />
                 <SummaryField
-                  label="Service ID"
+                  label="Default service"
                   value={bindingQuery.data.serviceId || "n/a"}
                 />
                 <SummaryField
@@ -320,7 +327,17 @@ const ScopeScriptsPage: React.FC = () => {
                 />
                 <SummaryField
                   label="Implementation"
-                  value={activeBindingRevision?.implementationKind || "n/a"}
+                  value={
+                    activeBindingRevision
+                      ? formatStudioScopeBindingImplementationKind(
+                          activeBindingRevision.implementationKind,
+                        )
+                      : "n/a"
+                  }
+                />
+                <SummaryField
+                  label="Revision state"
+                  value={describeRevisionState(activeBindingRevision)}
                 />
                 <SummaryField
                   label="Deployment"
@@ -390,7 +407,11 @@ const ScopeScriptsPage: React.FC = () => {
                           {revision.isActiveServing ? "active" : "inactive"}
                         </Tag>
                         {revision.isDefaultServing ? <Tag>default</Tag> : null}
-                        <Tag>{revision.implementationKind || "unknown"}</Tag>
+                        <Tag>
+                          {formatStudioScopeBindingImplementationKind(
+                            revision.implementationKind,
+                          )}
+                        </Tag>
                       </Space>
                       <Button
                         size="small"

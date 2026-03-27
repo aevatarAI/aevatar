@@ -16,12 +16,15 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
+  Button,
   Dropdown,
   Input,
+  Space,
   Tooltip,
 } from 'antd';
 import type { MenuProps } from 'antd';
 import React from 'react';
+import { history } from '@/shared/navigation/history';
 import type { StudioAppContext } from '@/shared/studio/models';
 import {
   addPackageFile,
@@ -127,6 +130,11 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 type NoticeState = {
   type: 'success' | 'info' | 'warning' | 'error';
   message: string;
+  description?: string;
+  actions?: Array<{
+    label: string;
+    href: string;
+  }>;
 };
 
 type FloatingDragState = {
@@ -235,6 +243,26 @@ function createDraftKey(prefix: string): string {
 
 function createRevisionSeed(): string {
   return `draft-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;
+}
+
+function buildScopePageHref(
+  path: string,
+  scopeId: string,
+  query: Record<string, string | undefined> = {},
+): string {
+  const params = new URLSearchParams();
+  params.set('scopeId', scopeId);
+
+  for (const [key, value] of Object.entries(query)) {
+    const normalized = String(value || '').trim();
+    if (!normalized) {
+      continue;
+    }
+
+    params.set(key, normalized);
+  }
+
+  return `${path}?${params.toString()}`;
 }
 
 function normalizeStudioId(value: string, fallbackPrefix: string): string {
@@ -1592,7 +1620,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setBindPending(true);
     setNotice(null);
     try {
-      await studioApi.bindScopeScript({
+      const result = await studioApi.bindScopeScript({
         scopeId: resolvedScopeId,
         displayName: bindDisplayNameDraft.trim() || scriptId,
         scriptId,
@@ -1606,7 +1634,21 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `Bound ${scriptId} to the default service for scope ${resolvedScopeId}.`,
+        message: `Updated scope ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
+        description:
+          'Review the active binding, revision rollout, and saved script assets from the scope views.',
+        actions: [
+          {
+            label: 'Open Scope Scripts',
+            href: buildScopePageHref('/scopes/scripts', resolvedScopeId, {
+              scriptId,
+            }),
+          },
+          {
+            label: 'Open Scope Overview',
+            href: buildScopePageHref('/scopes/overview', resolvedScopeId),
+          },
+        ],
       });
     } catch (error) {
       setNotice({
@@ -2264,6 +2306,26 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             showIcon
             type={notice.type}
             title={notice.message}
+            description={
+              notice.description || notice.actions?.length ? (
+                <Space direction="vertical" size={12}>
+                  {notice.description ? <span>{notice.description}</span> : null}
+                  {notice.actions?.length ? (
+                    <Space wrap size={[8, 8]}>
+                      {notice.actions.map((action) => (
+                        <Button
+                          key={action.href}
+                          size="small"
+                          onClick={() => history.push(action.href)}
+                        >
+                          {action.label}
+                        </Button>
+                      ))}
+                    </Space>
+                  ) : null}
+                </Space>
+              ) : undefined
+            }
             closable
             onClose={() => setNotice(null)}
           />
@@ -2944,7 +3006,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         >
           <div className="console-scripts-detail-copy">
             Bind the saved scope script to the default service for this scope.
-            The existing workflow flow is unchanged.
+            Existing workflow authoring stays available alongside this flow.
           </div>
           <div style={{ marginTop: 16 }}>
             <div className="console-scripts-eyebrow">Script</div>

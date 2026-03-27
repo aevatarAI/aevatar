@@ -199,10 +199,9 @@ describe('ScriptsWorkbenchPage', () => {
     mockedStudioApi.bindScopeScript.mockResolvedValue({
       scopeId: 'scope-1',
       displayName: 'script-1',
+      targetKind: 'script',
+      targetName: 'script-1',
       revisionId: 'rev-1',
-      workflowName: 'script-1',
-      definitionActorIdPrefix: 'definition',
-      expectedActorId: 'definition-scope-1',
     });
   });
 
@@ -418,6 +417,18 @@ describe('ScriptsWorkbenchPage', () => {
         revisionId: 'script-1-rev-1',
       });
     });
+
+    expect(
+      await screen.findByText(
+        'Review the active binding, revision rollout, and saved script assets from the scope views.',
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Scope Scripts' }));
+
+    expect(mockedHistory.push).toHaveBeenCalledWith(
+      '/scopes/scripts?scopeId=scope-1&scriptId=script-1',
+    );
   });
 
   it('runs the current script draft without rebinding the scope service', async () => {

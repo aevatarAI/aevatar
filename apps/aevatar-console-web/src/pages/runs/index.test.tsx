@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { saveServiceInvocationDraftPayload } from "@/shared/runs/draftRunSession";
+import { saveEndpointInvocationDraftPayload } from "@/shared/runs/draftRunSession";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
@@ -96,12 +96,12 @@ describe("RunsPage", () => {
   it("renders the runtime run console header and navigation actions", async () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
-    expect(container.textContent).toContain("Runtime service endpoint console");
+    expect(container.textContent).toContain("Runtime endpoint console");
     expect(
       screen.getByRole("button", { name: "Open runtime console guide" })
     );
     expect(
-      screen.getByRole("button", { name: "Open Runtime Workflows" })
+      screen.getByRole("button", { name: "Open Runtime Catalog" })
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Open Runtime Explorer" })
@@ -116,7 +116,7 @@ describe("RunsPage", () => {
   });
 
   it("uses the generic invoke path for prepared service invocation drafts", async () => {
-    const draftKey = saveServiceInvocationDraftPayload({
+    const draftKey = saveEndpointInvocationDraftPayload({
       endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
       prompt: "script payload",
       payloadTypeUrl: "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",

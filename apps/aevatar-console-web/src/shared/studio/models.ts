@@ -153,15 +153,71 @@ export interface StudioStartExecutionInput {
   readonly eventFormat?: string | null;
 }
 
+export type StudioScopeBindingImplementationKind =
+  | 'workflow'
+  | 'script'
+  | 'gagent'
+  | 'unknown';
+
+export type StudioScopeBindingTargetKind =
+  StudioScopeBindingImplementationKind;
+
+export function normalizeStudioScopeBindingImplementationKind(
+  value: string | number | null | undefined,
+): StudioScopeBindingImplementationKind {
+  if (typeof value === 'number') {
+    switch (value) {
+      case 1:
+        return 'workflow';
+      case 2:
+        return 'script';
+      case 3:
+        return 'gagent';
+      default:
+        return 'unknown';
+    }
+  }
+
+  const normalized = String(value || '').trim().toLowerCase();
+  switch (normalized) {
+    case 'workflow':
+      return 'workflow';
+    case 'script':
+    case 'scripting':
+      return 'script';
+    case 'gagent':
+      return 'gagent';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioScopeBindingImplementationKind(
+  value: StudioScopeBindingImplementationKind | string | null | undefined,
+): string {
+  switch (normalizeStudioScopeBindingImplementationKind(value)) {
+    case 'workflow':
+      return 'Workflow';
+    case 'script':
+      return 'Script';
+    case 'gagent':
+      return 'GAgent';
+    default:
+      return 'Unknown';
+  }
+}
+
 export interface StudioScopeBindingResult {
   readonly scopeId: string;
   readonly serviceId?: string;
   readonly displayName: string;
   readonly revisionId: string;
-  readonly implementationKind?: string;
-  readonly workflowName: string;
-  readonly definitionActorIdPrefix: string;
-  readonly expectedActorId: string;
+  readonly implementationKind?: StudioScopeBindingImplementationKind;
+  readonly targetKind: StudioScopeBindingTargetKind;
+  readonly targetName: string;
+  readonly workflowName?: string;
+  readonly definitionActorIdPrefix?: string;
+  readonly expectedActorId?: string;
   readonly workflow?: {
     readonly workflowName: string;
     readonly definitionActorIdPrefix: string;
@@ -179,7 +235,7 @@ export interface StudioScopeBindingResult {
 
 export interface StudioScopeBindingRevision {
   readonly revisionId: string;
-  readonly implementationKind: string;
+  readonly implementationKind: StudioScopeBindingImplementationKind;
   readonly status: string;
   readonly artifactHash: string;
   readonly failureReason: string;

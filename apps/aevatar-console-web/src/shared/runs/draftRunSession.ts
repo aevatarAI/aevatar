@@ -1,23 +1,23 @@
-export type WorkflowDraftRunPayload = {
-  kind: "workflow";
-  workflowName: string;
-  workflowYamls: string[];
+export type ScopeDraftRunPayload = {
+  kind: "scope_draft";
+  bundleName: string;
+  bundleYamls: string[];
   createdAt: string;
 };
 
-export type ServiceInvocationDraftPayload = {
-  kind: "service_invocation";
+export type EndpointInvocationDraftPayload = {
+  kind: "endpoint_invocation";
   endpointId: string;
   prompt: string;
   payloadTypeUrl: string;
   payloadBase64?: string;
-  serviceId?: string;
+  serviceOverrideId?: string;
   createdAt: string;
 };
 
 export type DraftRunPayload =
-  | WorkflowDraftRunPayload
-  | ServiceInvocationDraftPayload;
+  | ScopeDraftRunPayload
+  | EndpointInvocationDraftPayload;
 
 const STORAGE_PREFIX = "aevatar-console-draft-run:";
 
@@ -34,19 +34,19 @@ function createDraftRunKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-export function saveDraftRunPayload(payload: {
-  workflowName: string;
-  workflowYamls: string[];
+export function saveScopeDraftRunPayload(payload: {
+  bundleName: string;
+  bundleYamls: string[];
 }): string {
   if (typeof window === "undefined") {
     return "";
   }
 
   const key = createDraftRunKey();
-  const normalizedPayload: WorkflowDraftRunPayload = {
-    kind: "workflow",
-    workflowName: payload.workflowName.trim(),
-    workflowYamls: payload.workflowYamls
+  const normalizedPayload: ScopeDraftRunPayload = {
+    kind: "scope_draft",
+    bundleName: payload.bundleName.trim(),
+    bundleYamls: payload.bundleYamls
       .map((item) => item.trim())
       .filter((item) => item.length > 0),
     createdAt: new Date().toISOString(),
@@ -58,12 +58,12 @@ export function saveDraftRunPayload(payload: {
   return key;
 }
 
-export function saveServiceInvocationDraftPayload(payload: {
+export function saveEndpointInvocationDraftPayload(payload: {
   endpointId: string;
   prompt: string;
   payloadTypeUrl: string;
   payloadBase64?: string;
-  serviceId?: string;
+  serviceOverrideId?: string;
 }): string {
   if (typeof window === "undefined") {
     return "";
@@ -77,14 +77,14 @@ export function saveServiceInvocationDraftPayload(payload: {
   }
 
   const key = createDraftRunKey();
-  const normalizedPayload: ServiceInvocationDraftPayload = {
-      kind: "service_invocation",
-      endpointId,
-      prompt: payload.prompt.trim(),
-      payloadTypeUrl,
-      payloadBase64: payloadBase64 || undefined,
-      serviceId: payload.serviceId?.trim() || undefined,
-      createdAt: new Date().toISOString(),
+  const normalizedPayload: EndpointInvocationDraftPayload = {
+    kind: "endpoint_invocation",
+    endpointId,
+    prompt: payload.prompt.trim(),
+    payloadTypeUrl,
+    payloadBase64: payloadBase64 || undefined,
+    serviceOverrideId: payload.serviceOverrideId?.trim() || undefined,
+    createdAt: new Date().toISOString(),
   };
   window.sessionStorage.setItem(
     buildStorageKey(key),
@@ -93,19 +93,21 @@ export function saveServiceInvocationDraftPayload(payload: {
   return key;
 }
 
-export function isWorkflowDraftRunPayload(
+export function isScopeDraftRunPayload(
   payload: DraftRunPayload | null | undefined
-): payload is WorkflowDraftRunPayload {
-  return payload?.kind === "workflow";
+): payload is ScopeDraftRunPayload {
+  return payload?.kind === "scope_draft";
 }
 
-export function isServiceInvocationDraftPayload(
+export function isEndpointInvocationDraftPayload(
   payload: DraftRunPayload | null | undefined
-): payload is ServiceInvocationDraftPayload {
-  return payload?.kind === "service_invocation";
+): payload is EndpointInvocationDraftPayload {
+  return payload?.kind === "endpoint_invocation";
 }
 
-export function loadDraftRunPayload(key: string | null | undefined): DraftRunPayload | null {
+export function loadDraftRunPayload(
+  key: string | null | undefined
+): DraftRunPayload | null {
   const normalizedKey = key?.trim();
   if (!normalizedKey || typeof window === "undefined") {
     return null;
@@ -117,9 +119,18 @@ export function loadDraftRunPayload(key: string | null | undefined): DraftRunPay
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<DraftRunPayload>;
-    if (parsed.kind === "service_invocation") {
-      const servicePayload = parsed as Partial<ServiceInvocationDraftPayload>;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parsedKind =
+      typeof parsed.kind === "string" ? parsed.kind : undefined;
+    if (
+      parsedKind === "endpoint_invocation" ||
+      parsedKind === "service_invocation"
+    ) {
+      const servicePayload = parsed as Partial<
+        EndpointInvocationDraftPayload & {
+          serviceId?: string;
+        }
+      >;
       const endpointId = servicePayload.endpointId?.trim();
       const payloadTypeUrl = servicePayload.payloadTypeUrl?.trim();
       const payloadBase64 = servicePayload.payloadBase64?.trim();
@@ -128,31 +139,45 @@ export function loadDraftRunPayload(key: string | null | undefined): DraftRunPay
       }
 
       return {
-        kind: "service_invocation",
+        kind: "endpoint_invocation",
         endpointId,
         prompt: servicePayload.prompt?.trim() || "",
         payloadTypeUrl,
         payloadBase64: payloadBase64 || undefined,
-        serviceId: servicePayload.serviceId?.trim() || undefined,
+        serviceOverrideId:
+          servicePayload.serviceOverrideId?.trim() ||
+          servicePayload.serviceId?.trim() ||
+          undefined,
         createdAt: servicePayload.createdAt?.trim() || "",
       };
     }
 
-    const workflowPayload = parsed as Partial<WorkflowDraftRunPayload>;
-    const workflowName = workflowPayload.workflowName?.trim();
-    const workflowYamls = Array.isArray(workflowPayload.workflowYamls)
+    const workflowPayload = parsed as Partial<
+      ScopeDraftRunPayload & {
+        workflowName?: string;
+        workflowYamls?: unknown[];
+      }
+    >;
+    const bundleName =
+      workflowPayload.bundleName?.trim() ||
+      workflowPayload.workflowName?.trim();
+    const bundleYamls = Array.isArray(workflowPayload.bundleYamls)
+      ? workflowPayload.bundleYamls
+          .map((item: unknown) => String(item ?? "").trim())
+          .filter((item: string) => item.length > 0)
+      : Array.isArray(workflowPayload.workflowYamls)
       ? workflowPayload.workflowYamls
           .map((item: unknown) => String(item ?? "").trim())
           .filter((item: string) => item.length > 0)
       : [];
-    if (!workflowName || workflowYamls.length === 0) {
+    if (!bundleName || bundleYamls.length === 0) {
       return null;
     }
 
     return {
-      kind: "workflow",
-      workflowName,
-      workflowYamls,
+      kind: "scope_draft",
+      bundleName,
+      bundleYamls,
       createdAt: workflowPayload.createdAt?.trim() || "",
     };
   } catch {
@@ -168,3 +193,33 @@ export function deleteDraftRunPayload(key: string | null | undefined): void {
 
   window.sessionStorage.removeItem(buildStorageKey(normalizedKey));
 }
+
+export type WorkflowDraftRunPayload = ScopeDraftRunPayload;
+export type ServiceInvocationDraftPayload = EndpointInvocationDraftPayload;
+
+export const saveDraftRunPayload = (payload: {
+  workflowName: string;
+  workflowYamls: string[];
+}): string =>
+  saveScopeDraftRunPayload({
+    bundleName: payload.workflowName,
+    bundleYamls: payload.workflowYamls,
+  });
+
+export const saveServiceInvocationDraftPayload = (payload: {
+  endpointId: string;
+  prompt: string;
+  payloadTypeUrl: string;
+  payloadBase64?: string;
+  serviceId?: string;
+}): string =>
+  saveEndpointInvocationDraftPayload({
+    endpointId: payload.endpointId,
+    prompt: payload.prompt,
+    payloadTypeUrl: payload.payloadTypeUrl,
+    payloadBase64: payload.payloadBase64,
+    serviceOverrideId: payload.serviceId,
+  });
+
+export const isWorkflowDraftRunPayload = isScopeDraftRunPayload;
+export const isServiceInvocationDraftPayload = isEndpointInvocationDraftPayload;
