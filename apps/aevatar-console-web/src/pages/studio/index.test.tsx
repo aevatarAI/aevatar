@@ -479,6 +479,8 @@ jest.mock("@/shared/studio/api", () => ({
     }) => ({
       scopeId: input.scopeId,
       displayName: input.displayName || "workspace-demo",
+      targetKind: "workflow",
+      targetName: input.displayName || "workspace-demo",
       revisionId: "rev-2",
       workflowName: input.displayName || "workspace-demo",
       definitionActorIdPrefix: "scope-workflow:scope-1:default",
@@ -500,6 +502,8 @@ jest.mock("@/shared/studio/api", () => ({
     }) => ({
       scopeId: input.scopeId,
       displayName: input.displayName || "orders-gagent",
+      targetKind: "gagent",
+      targetName: input.preferredActorId || input.displayName || "orders-gagent",
       revisionId: "rev-gagent-1",
       expectedActorId: "scope-gagent:scope-1:default:dep-1",
     })),
@@ -1751,8 +1755,9 @@ describe("StudioPage", () => {
     expect(draftKey).toBeTruthy();
     expect(loadDraftRunPayload(draftKey)).toEqual(
       expect.objectContaining({
-        workflowName: "workspace-demo",
-        workflowYamls: [expect.stringContaining("name: workspace-demo")],
+        kind: "scope_draft",
+        bundleName: "workspace-demo",
+        bundleYamls: [expect.stringContaining("name: workspace-demo")],
       })
     );
   });
@@ -1825,7 +1830,7 @@ describe("StudioPage", () => {
     expect(draftKey).toBeTruthy();
     expect(loadDraftRunPayload(draftKey)).toEqual(
       expect.objectContaining({
-        kind: "service_invocation",
+        kind: "endpoint_invocation",
         endpointId: "run",
         prompt: "Run the orders gagent",
         payloadTypeUrl: "type.googleapis.com/google.protobuf.StringValue",

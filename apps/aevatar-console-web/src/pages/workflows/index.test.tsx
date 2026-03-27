@@ -171,7 +171,7 @@ describe('WorkflowsPage', () => {
       );
     });
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Graph' }));
+    fireEvent.click(await screen.findByRole('tab', { name: /Graph/i }));
     fireEvent.click(
       await screen.findByRole('button', { name: 'Open graph fullscreen' }),
     );
