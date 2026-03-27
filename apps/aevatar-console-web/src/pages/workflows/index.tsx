@@ -17,7 +17,7 @@ import {
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
+import { buildStudioRoute } from "@/shared/studio/navigation";
 import {
   Alert,
   Button,
@@ -717,7 +717,7 @@ const WorkflowStepSplitPanel: React.FC<WorkflowStepSplitPanelProps> = ({
               >
                 Focus in graph
               </Button>
-              <Button onClick={onRunWorkflow}>Run workflow</Button>
+              <Button onClick={onRunWorkflow}>Open in Studio</Button>
               {activeStep.targetRole ? (
                 <Button onClick={() => onInspectRole(activeStep.targetRole)}>
                   Inspect target role
@@ -932,7 +932,7 @@ function createWorkflowColumns(
               onRun(record.name);
             }}
           >
-            Run
+            Open in Studio
           </Button>
         </Space>
       ),
@@ -1067,14 +1067,27 @@ const WorkflowsPage: React.FC = () => {
     window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   }, [activeDetailTab, selectedWorkflow]);
 
+  const openStudioDraft = useCallback((workflowName: string) => {
+    const normalizedWorkflowName = workflowName.trim();
+    if (!normalizedWorkflowName) {
+      return;
+    }
+
+    history.push(
+      buildStudioRoute({
+        template: normalizedWorkflowName,
+        tab: "studio",
+      })
+    );
+  }, []);
+
   const workflowColumns = useMemo(
     () =>
       createWorkflowColumns(
         (workflowName) => setSelectedWorkflow(workflowName),
-        (workflowName) =>
-          history.push(buildRuntimeRunsHref({ workflow: workflowName }))
+        (workflowName) => openStudioDraft(workflowName)
       ),
-    []
+    [openStudioDraft]
   );
 
   const stepRows = useMemo<WorkflowStepRow[]>(
@@ -1082,13 +1095,13 @@ const WorkflowsPage: React.FC = () => {
     [detailQuery.data?.definition.steps]
   );
 
-  const openRunsPage = useCallback(() => {
+  const openStudioWorkflow = useCallback(() => {
     if (!selectedWorkflow) {
       return;
     }
 
-    history.push(buildRuntimeRunsHref({ workflow: selectedWorkflow }));
-  }, [selectedWorkflow]);
+    openStudioDraft(selectedWorkflow);
+  }, [openStudioDraft, selectedWorkflow]);
 
   const workflowSummary = useMemo<WorkflowSummaryRecord | undefined>(() => {
     if (!detailQuery.data) {
@@ -1701,15 +1714,9 @@ const WorkflowsPage: React.FC = () => {
                   <div style={workflowDetailActionGroupStyle}>
                     <Button
                       type="primary"
-                      onClick={() =>
-                        history.push(
-                          buildRuntimeRunsHref({
-                            workflow: detailQuery.data.catalog.name,
-                          })
-                        )
-                      }
+                      onClick={() => openStudioDraft(detailQuery.data.catalog.name)}
                     >
-                      Run workflow
+                      Open in Studio
                     </Button>
                     <Button onClick={() => history.push("/scopes/workflows")}>
                       Open scope workflows
@@ -1805,7 +1812,7 @@ const WorkflowsPage: React.FC = () => {
                         children: (
                           <WorkflowStepSplitPanel
                             onInspectRole={handleInspectRoleFromStep}
-                            onRunWorkflow={openRunsPage}
+                            onRunWorkflow={openStudioWorkflow}
                             onSelectStep={handleSelectStep}
                             selectedStepId={selectedStepId}
                             steps={stepRows}

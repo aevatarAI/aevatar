@@ -72,6 +72,9 @@ import {
 import { studioApi } from '@/shared/studio/api';
 import type { StudioTab } from '@/shared/studio/navigation';
 import type {
+  WorkflowCatalogDefinition,
+} from '@/shared/models/runtime/catalog';
+import type {
   StudioConnectorDefinition,
   StudioExecutionDetail,
   StudioExecutionSummary,
@@ -203,6 +206,43 @@ function describeScopeBindingTarget(result: {
     default:
       return targetName;
   }
+}
+
+function hasWorkflowGraphContent(
+  document: StudioWorkflowDocument | null | undefined,
+): boolean {
+  const roleCount = Array.isArray(document?.roles) ? document.roles.length : 0;
+  const stepCount = Array.isArray(document?.steps) ? document.steps.length : 0;
+  return roleCount > 0 || stepCount > 0;
+}
+
+function buildTemplateWorkflowDocument(
+  definition: WorkflowCatalogDefinition | null | undefined,
+): StudioWorkflowDocument | null {
+  if (!definition) {
+    return null;
+  }
+
+  return {
+    name: trimOptional(definition.name) || undefined,
+    description: trimOptional(definition.description) || undefined,
+    roles: definition.roles.map((role) => ({
+      id: trimOptional(role.id) || undefined,
+      name: trimOptional(role.name) || undefined,
+      systemPrompt: trimOptional(role.systemPrompt) || undefined,
+      provider: trimOptional(role.provider) || undefined,
+      model: trimOptional(role.model) || undefined,
+      connectors: role.connectors.filter((connector) => connector.trim().length > 0),
+    })),
+    steps: definition.steps.map((step) => ({
+      id: trimOptional(step.id) || undefined,
+      type: trimOptional(step.type) || undefined,
+      targetRole: trimOptional(step.targetRole) || undefined,
+      parameters: step.parameters,
+      next: trimOptional(step.next) || null,
+      branches: step.branches,
+    })),
+  };
 }
 
 function readWorkflowCallTargets(
@@ -1454,8 +1494,36 @@ const StudioPage: React.FC = () => {
     activeWorkflowFile?.document?.description ||
     activeTemplate?.catalog.description ||
     '';
-  const activeWorkflowDocument =
-    parseYamlQuery.data?.document || activeWorkflowFile?.document || null;
+  const parsedWorkflowDocument = parseYamlQuery.data?.document ?? null;
+  const templateWorkflowDocument = useMemo(
+    () => buildTemplateWorkflowDocument(activeTemplate?.definition),
+    [activeTemplate?.definition],
+  );
+  const useTemplateWorkflowFallback =
+    Boolean(templateWorkflow) &&
+    trimOptional(draftYaml) === trimOptional(sourceYaml) &&
+    !hasWorkflowGraphContent(parsedWorkflowDocument) &&
+    hasWorkflowGraphContent(templateWorkflowDocument);
+  const activeWorkflowDocument = useMemo(() => {
+    if (useTemplateWorkflowFallback) {
+      return templateWorkflowDocument;
+    }
+
+    if (parsedWorkflowDocument) {
+      return parsedWorkflowDocument;
+    }
+
+    if (activeWorkflowFile?.document) {
+      return activeWorkflowFile.document;
+    }
+
+    return templateWorkflowDocument;
+  }, [
+    activeWorkflowFile?.document,
+    parsedWorkflowDocument,
+    templateWorkflowDocument,
+    useTemplateWorkflowFallback,
+  ]);
   const activeWorkflowFindings = parseYamlQuery.data?.findings ?? [];
   const workflowGraph = useMemo(
     () => buildStudioGraphElements(activeWorkflowDocument, draftWorkflowLayout),

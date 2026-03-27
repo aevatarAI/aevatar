@@ -288,15 +288,67 @@ jest.mock("@/shared/studio/api", () => ({
         name: "published-demo",
         description: "Published demo workflow",
       },
-      yaml: "name: published-demo\ndescription: Published demo workflow\nsteps: []\n",
+      yaml: [
+        "name: published-demo",
+        "description: Published demo workflow",
+        "roles:",
+        "  - id: reviewer",
+        "    name: Reviewer",
+        "steps:",
+        "  - id: step_prepare",
+        "    type: llm_call",
+        "    targetRole: reviewer",
+        "    next: step_finish",
+        "  - id: step_finish",
+        "    type: emit",
+        "    targetRole: reviewer",
+        "",
+      ].join("\n"),
       definition: {
         name: "published-demo",
         description: "Published demo workflow",
         closedWorldMode: false,
-        roles: [],
-        steps: [],
+        roles: [
+          {
+            id: "reviewer",
+            name: "Reviewer",
+            systemPrompt: "Review the published flow.",
+            provider: "tornado",
+            model: "gpt-review",
+            temperature: 0.1,
+            maxTokens: 512,
+            maxToolRounds: 2,
+            maxHistoryMessages: 6,
+            streamBufferCapacity: 4,
+            eventModules: [],
+            eventRoutes: "",
+            connectors: [],
+          },
+        ],
+        steps: [
+          {
+            id: "step_prepare",
+            type: "llm_call",
+            targetRole: "reviewer",
+            parameters: {
+              prompt: "{{prompt}}",
+            },
+            next: "step_finish",
+            branches: {},
+            children: [],
+          },
+          {
+            id: "step_finish",
+            type: "emit",
+            targetRole: "reviewer",
+            parameters: {},
+            next: "",
+            branches: {},
+            children: [],
+          },
+        ],
       },
-      edges: [],
+      edges: [{ from: "step_prepare", to: "step_finish", label: "next" }],
     })),
     getWorkflow: jest.fn(async () => mockWorkflowFile),
     saveWorkflow: jest.fn(
@@ -827,6 +879,16 @@ jest.mock("./components/StudioWorkbenchSections", () => {
     React.createElement("div", null, [
       React.createElement("h2", { key: "title" }, "Workflows"),
       React.createElement("div", { key: "draft" }, "Current draft"),
+      React.createElement(
+        "button",
+        {
+          key: "open-editor",
+          type: "button",
+          disabled: !props.activeWorkflowSourceKey,
+          onClick: () => props.onOpenCurrentDraft?.(),
+        },
+        "Open editor"
+      ),
       React.createElement("input", {
         key: "search",
         placeholder: "Search workflows",
@@ -878,6 +940,14 @@ jest.mock("./components/StudioWorkbenchSections", () => {
       [
         React.createElement("div", { key: "title" }, title),
         React.createElement("div", { key: "graph-title" }, "Workflow graph"),
+        React.createElement(
+          "div",
+          {
+            key: "graph-count",
+            "data-testid": "workflow-graph-node-count",
+          },
+          String(props.workflowGraph?.nodes?.length ?? 0)
+        ),
         renderNoticeTitle(
           "save-notice",
           props.saveNotice,
@@ -1575,6 +1645,21 @@ describe("StudioPage", () => {
 
     expect(await screen.findByTestId("studio-run-prompt-state")).toHaveTextContent(
       "Continue this workflow in Studio"
+    );
+  });
+
+  it("shows the published template graph after opening the Studio editor", async () => {
+    renderStudioPage("/studio?template=published-demo&tab=workflows");
+
+    await waitFor(() => {
+      expect(studioApi.getTemplateWorkflow).toHaveBeenCalledWith(
+        "published-demo"
+      );
+    });
+
+    expect(await screen.findByText("Published template draft")).toBeTruthy();
+    expect(await screen.findByTestId("workflow-graph-node-count")).toHaveTextContent(
+      "2"
     );
   });
 
