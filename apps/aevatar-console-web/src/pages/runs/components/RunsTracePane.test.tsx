@@ -21,7 +21,11 @@ describe("RunsTracePane", () => {
       flex: "1",
       minHeight: "0",
     });
-    expect(container.querySelector(".ant-tabs-content-holder")).toHaveStyle({
+    const contentNode =
+      container.querySelector(".ant-tabs-content") ??
+      container.querySelector(".ant-tabs-content-holder");
+    expect(contentNode).not.toBeNull();
+    expect(contentNode).toHaveStyle({
       flex: "1",
       minHeight: "0",
       overflow: "hidden",
