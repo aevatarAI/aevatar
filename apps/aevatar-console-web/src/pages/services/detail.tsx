@@ -289,6 +289,8 @@ const ServiceDetailPage: React.FC = () => {
             history.push(
               `/governance/bindings?tenantId=${encodeURIComponent(
                 query.tenantId ?? ""
+              )}&appId=${encodeURIComponent(
+                query.appId ?? ""
               )}&namespace=${encodeURIComponent(
                 query.namespace ?? ""
               )}&serviceId=${encodeURIComponent(serviceId)}`

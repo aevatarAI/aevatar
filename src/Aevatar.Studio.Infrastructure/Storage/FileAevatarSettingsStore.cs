@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Configuration;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Studio.Infrastructure.Storage;
 
@@ -31,8 +33,9 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
         cancellationToken.ThrowIfCancellationRequested();
 
         var all = LoadSecrets();
+        var nyxIdGatewayEndpoint = TryResolveNyxIdGatewayEndpointFromConfigJson();
         var providers = ExtractProviderNames(all)
-            .Select(name => ResolveProvider(all, name))
+            .Select(name => ResolveProvider(all, name, nyxIdGatewayEndpoint))
             .OrderBy(provider => provider.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(provider => provider.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -49,7 +52,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
                     profile.Category,
                     profile.Description,
                     profile.Recommended,
-                    profile.DefaultEndpoint,
+                    ResolveDefaultEndpoint(profile, nyxIdGatewayEndpoint),
                     profile.DefaultModel))
                 .ToList(),
             providers));
@@ -103,7 +106,10 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
         return await GetAsync(cancellationToken);
     }
 
-    private StoredLlmProvider ResolveProvider(IReadOnlyDictionary<string, string> all, string providerName)
+    private StoredLlmProvider ResolveProvider(
+        IReadOnlyDictionary<string, string> all,
+        string providerName,
+        string? nyxIdGatewayEndpoint)
     {
         var providerType = GetValue(all, GetProviderKey(providerName, "ProviderType"));
         if (string.IsNullOrWhiteSpace(providerType))
@@ -117,7 +123,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
         var endpoint = GetValue(all, GetProviderKey(providerName, "Endpoint"));
         if (string.IsNullOrWhiteSpace(endpoint))
         {
-            endpoint = profile.DefaultEndpoint;
+            endpoint = ResolveDefaultEndpoint(profile, nyxIdGatewayEndpoint);
         }
 
         var model = GetValue(all, GetProviderKey(providerName, "Model"));
@@ -138,6 +144,44 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             endpoint,
             apiKey,
             !string.IsNullOrWhiteSpace(apiKey));
+    }
+
+    private static string ResolveDefaultEndpoint(ProviderProfile profile, string? nyxIdGatewayEndpoint)
+    {
+        if (string.Equals(profile.Id, "nyxid", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(nyxIdGatewayEndpoint))
+        {
+            return nyxIdGatewayEndpoint;
+        }
+
+        return profile.DefaultEndpoint;
+    }
+
+    private static string? TryResolveNyxIdGatewayEndpointFromConfigJson()
+    {
+        var authority = new ConfigurationBuilder()
+            .AddJsonFile(AevatarPaths.ConfigJson, optional: true, reloadOnChange: false)
+            .Build()["Cli:App:NyxId:Authority"];
+
+        return NormalizeNyxIdGatewayEndpoint(authority);
+    }
+
+    private static string? NormalizeNyxIdGatewayEndpoint(string? authority)
+    {
+        var trimmed = authority?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed) ||
+            !Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        var absolute = uri.ToString().TrimEnd('/');
+        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
+        {
+            return absolute;
+        }
+
+        return $"{absolute}/api/v1/llm/gateway/v1";
     }
 
     private Dictionary<string, string> LoadSecrets()
@@ -606,6 +650,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             new("alibaba", "Alibaba (Qwen)", "regional", "Qwen via DashScope", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
             new("moonshot", "Moonshot AI", "regional", "Kimi series", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
             new("zhipu", "Zhipu AI", "regional", "GLM-4 series", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+            new("nyxid", "NyxID Gateway", "identity", "Use LLM providers connected in NyxID through its OpenAI-compatible gateway", string.Empty, "gpt-4o-mini"),
             new("ollama", "Ollama", "local", "Local models", "http://localhost:11434/v1", "llama3.2"),
             new("lmstudio", "LM Studio", "local", "Local OpenAI-compatible server", "http://localhost:1234/v1", string.Empty),
         ];

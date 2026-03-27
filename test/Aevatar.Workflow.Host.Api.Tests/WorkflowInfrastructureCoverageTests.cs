@@ -194,6 +194,32 @@ public sealed class WorkflowInfrastructureCoverageTests
 
         options.DuplicatePolicy.Should().Be(WorkflowDefinitionDuplicatePolicy.Override);
         options.WorkflowDirectories.Should().Contain(AevatarPaths.RepoRootWorkflows);
+        options.WorkflowDirectories.Should().NotContain(
+            Path.Combine(AevatarPaths.RepoRoot, "demos", "Aevatar.Demos.Workflow", "workflows"));
+    }
+
+    [Fact]
+    public void AddWorkflowCapabilityServices_ShouldNotLoadDemoWorkflowDirectoryIntoGenericHost()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var configuration = new ConfigurationBuilder().Build();
+
+        services.AddWorkflowCapability(configuration);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<IWorkflowDefinitionCatalog>();
+        var loader = provider.GetRequiredService<WorkflowDefinitionFileLoader>();
+        var options = provider.GetRequiredService<IOptions<WorkflowDefinitionFileSourceOptions>>().Value;
+
+        loader.LoadInto(
+            registry,
+            options.WorkflowDirectories,
+            NullLogger.Instance,
+            options.DuplicatePolicy);
+
+        registry.GetYaml("simple_qa").Should().NotBeNull();
+        registry.GetYaml("demo_template").Should().BeNull();
     }
 
     [Fact]

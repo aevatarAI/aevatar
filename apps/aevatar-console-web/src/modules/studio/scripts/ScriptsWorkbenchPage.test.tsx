@@ -174,7 +174,7 @@ describe('ScriptsWorkbenchPage', () => {
       runId: 'run-1',
       sourceHash: 'hash-1',
       commandTypeUrl: 'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
-      readModelUrl: '/api/scripts/runtimes/runtime-1/readmodel',
+      readModelUrl: '/api/app/scripts/runtimes/runtime-1/readmodel',
     });
     mockedScriptsApi.proposeEvolution.mockResolvedValue({
       accepted: true,

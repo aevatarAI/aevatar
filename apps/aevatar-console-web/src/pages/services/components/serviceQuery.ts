@@ -2,6 +2,7 @@ import type { ServiceIdentityQuery } from '@/shared/models/services';
 
 export type ServiceQueryDraft = {
   tenantId: string;
+  appId: string;
   namespace: string;
   take: number;
 };
@@ -17,6 +18,7 @@ export function trimServiceQuery(
 ): ServiceIdentityQuery {
   return {
     tenantId: draft.tenantId.trim(),
+    appId: draft.appId.trim(),
     namespace: draft.namespace.trim(),
     take: draft.take,
   };
@@ -30,6 +32,7 @@ export function readServiceQueryDraft(
 
   return {
     tenantId: readString(params.get('tenantId')),
+    appId: readString(params.get('appId')),
     namespace: readString(params.get('namespace')),
     take:
       Number.isFinite(parsedTake) && parsedTake > 0 ? parsedTake : defaultTake,
@@ -43,6 +46,9 @@ function buildServiceSearchParams(
 
   if (query.tenantId?.trim()) {
     params.set('tenantId', query.tenantId.trim());
+  }
+  if (query.appId?.trim()) {
+    params.set('appId', query.appId.trim());
   }
   if (query.namespace?.trim()) {
     params.set('namespace', query.namespace.trim());

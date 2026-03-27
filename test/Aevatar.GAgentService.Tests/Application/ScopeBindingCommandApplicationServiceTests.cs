@@ -6,6 +6,9 @@ using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
@@ -30,10 +33,12 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
         var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
         var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
@@ -65,6 +70,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             Namespace = DefaultOptions.ServiceNamespace,
             ServiceId = DefaultOptions.DefaultServiceId,
         });
+        governanceCommandPort.CreateEndpointCatalogCommand.Should().NotBeNull();
+        governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
+        governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
+        governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Internal);
     }
 
     [Fact]
@@ -95,6 +104,41 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         revisionCommand.Spec.WorkflowSpec.InlineWorkflowYamls.Should().ContainKey("sub_a");
         revisionCommand.Spec.WorkflowSpec.InlineWorkflowYamls.Should().ContainKey("sub_b");
         revisionCommand.Spec.WorkflowSpec.InlineWorkflowYamls.Should().NotContainKey("root_flow");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldIgnoreConfiguredServiceIdentityOverrides()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            scopeScriptQueryPort,
+            scriptDefinitionSnapshotPort,
+            actorPort,
+            new ScopeWorkflowCapabilityOptions
+            {
+                DefaultServiceId = DefaultOptions.DefaultServiceId,
+                ServiceAppId = "custom-app",
+                ServiceNamespace = "custom-namespace",
+            });
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
+        createCommand.Spec.Identity.Namespace.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceNamespace);
     }
 
     [Fact]
@@ -529,10 +573,28 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ],
             ["policy-a", "policy-b"],
             DateTimeOffset.UtcNow));
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort
+        {
+            EndpointCatalog = new ServiceEndpointCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceEndpointExposureSnapshot(
+                        "chat",
+                        "chat",
+                        ServiceEndpointKind.Chat,
+                        "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                        "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                        "Workflow chat endpoint.",
+                        ServiceEndpointExposureKind.Public,
+                        ["invoke-policy"]),
+                ],
+                DateTimeOffset.UtcNow),
+        };
         var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
         var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
         var actorPort = new FakeWorkflowRunActorPort();
-        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
         await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
@@ -544,6 +606,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         var updateCommand = commandPort.Calls[0].Command.Should().BeOfType<UpdateServiceDefinitionCommand>().Subject;
         updateCommand.Spec.PolicyIds.Should().Equal("policy-a", "policy-b");
+        governanceCommandPort.UpdateEndpointCatalogCommand.Should().NotBeNull();
+        governanceCommandPort.UpdateEndpointCatalogCommand!.Spec.Endpoints.Should().ContainSingle();
+        governanceCommandPort.UpdateEndpointCatalogCommand.Spec.Endpoints[0].ExposureKind.Should().Be(ServiceEndpointExposureKind.Public);
+        governanceCommandPort.UpdateEndpointCatalogCommand.Spec.Endpoints[0].PolicyIds.Should().Equal("invoke-policy");
     }
 
     [Fact]
@@ -733,13 +799,51 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         FakeScopeScriptQueryPort scopeScriptQueryPort,
         FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         FakeWorkflowRunActorPort actorPort) =>
-        new(
+        CreateService(
             commandPort,
             lifecyclePort,
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            scopeScriptQueryPort,
+            scriptDefinitionSnapshotPort,
+            actorPort);
+
+    private static ScopeBindingCommandApplicationService CreateService(
+        RecordingServiceCommandPort commandPort,
+        FakeServiceLifecycleQueryPort lifecyclePort,
+        RecordingServiceGovernanceCommandPort governanceCommandPort,
+        FakeServiceGovernanceQueryPort governanceQueryPort,
+        FakeScopeScriptQueryPort scopeScriptQueryPort,
+        FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
+        FakeWorkflowRunActorPort actorPort) =>
+        CreateService(
+            commandPort,
+            lifecyclePort,
+            governanceCommandPort,
+            governanceQueryPort,
             scopeScriptQueryPort,
             scriptDefinitionSnapshotPort,
             actorPort,
-            Options.Create(DefaultOptions));
+            DefaultOptions);
+
+    private static ScopeBindingCommandApplicationService CreateService(
+        RecordingServiceCommandPort commandPort,
+        FakeServiceLifecycleQueryPort lifecyclePort,
+        RecordingServiceGovernanceCommandPort governanceCommandPort,
+        FakeServiceGovernanceQueryPort governanceQueryPort,
+        FakeScopeScriptQueryPort scopeScriptQueryPort,
+        FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
+        FakeWorkflowRunActorPort actorPort,
+        ScopeWorkflowCapabilityOptions options) =>
+        new(
+            commandPort,
+            lifecyclePort,
+            governanceCommandPort,
+            governanceQueryPort,
+            scopeScriptQueryPort,
+            scriptDefinitionSnapshotPort,
+            actorPort,
+            Options.Create(options));
 
     private static ScriptDefinitionSnapshot CreateScriptDefinitionSnapshot(
         string scriptId,
@@ -942,6 +1046,60 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
+    }
+
+    private sealed class RecordingServiceGovernanceCommandPort : IServiceGovernanceCommandPort
+    {
+        private static readonly ServiceCommandAcceptedReceipt DefaultReceipt =
+            new("governance-actor", "cmd-governance", "correlation-governance");
+
+        public CreateServiceEndpointCatalogCommand? CreateEndpointCatalogCommand { get; private set; }
+
+        public UpdateServiceEndpointCatalogCommand? UpdateEndpointCatalogCommand { get; private set; }
+
+        public Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(CreateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateBindingAsync(UpdateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetireBindingAsync(RetireServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreateEndpointCatalogAsync(CreateServiceEndpointCatalogCommand command, CancellationToken ct = default)
+        {
+            CreateEndpointCatalogCommand = command;
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateEndpointCatalogAsync(UpdateServiceEndpointCatalogCommand command, CancellationToken ct = default)
+        {
+            UpdateEndpointCatalogCommand = command;
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> CreatePolicyAsync(CreateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdatePolicyAsync(UpdateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetirePolicyAsync(RetireServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+    }
+
+    private sealed class FakeServiceGovernanceQueryPort : IServiceGovernanceQueryPort
+    {
+        public ServiceEndpointCatalogSnapshot? EndpointCatalog { get; set; }
+
+        public Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceBindingCatalogSnapshot?>(null);
+
+        public Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(EndpointCatalog);
+
+        public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
     }
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort

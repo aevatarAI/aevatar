@@ -474,6 +474,40 @@ public sealed class ServiceServingRolloutGAgentTests
     }
 
     [Fact]
+    public async Task ServiceServingSetManager_ShouldAcceptResolvedServingTargetsWithoutResolverLookup()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var agent = CreateServingSetAgent(new InMemoryEventStore(), ServiceActorIds.ServingSet(identity));
+        await agent.ActivateAsync();
+
+        await agent.HandleReplaceResolvedAsync(new ReplaceResolvedServiceServingTargetsCommand
+        {
+            Identity = identity.Clone(),
+            Reason = "deployment activation",
+            Targets =
+            {
+                new ServiceServingTargetSpec
+                {
+                    DeploymentId = "dep-1",
+                    RevisionId = "rev-1",
+                    PrimaryActorId = "actor-1",
+                    AllocationWeight = 100,
+                    ServingState = ServiceServingState.Active,
+                    EnabledEndpointIds = { "chat" },
+                },
+            },
+        });
+
+        agent.State.Generation.Should().Be(1);
+        agent.State.Targets.Should().ContainSingle();
+        agent.State.Targets[0].DeploymentId.Should().Be("dep-1");
+        agent.State.Targets[0].RevisionId.Should().Be("rev-1");
+        agent.State.Targets[0].PrimaryActorId.Should().Be("actor-1");
+        agent.State.Targets[0].AllocationWeight.Should().Be(100);
+        agent.State.Targets[0].EnabledEndpointIds.Should().Equal("chat");
+    }
+
+    [Fact]
     public async Task ServiceServingSetManager_ShouldRejectMissingResolutionFacts()
     {
         var identity = GAgentServiceTestKit.CreateIdentity();

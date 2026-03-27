@@ -85,4 +85,34 @@ describe('recentRuns', () => {
       }),
     ]);
   });
+
+  it('persists observed events for recent-run replay', () => {
+    saveRecentRun({
+      id: 'cmd-observed',
+      endpointId: 'chat',
+      routeName: 'direct',
+      scopeId: 'scope-1',
+      status: 'finished',
+      observedEvents: [
+        {
+          type: 'RUN_STARTED',
+          runId: 'run-1',
+          threadId: 'thread-1',
+          timestamp: Date.now(),
+        } as any,
+      ],
+    });
+
+    expect(loadRecentRuns()).toEqual([
+      expect.objectContaining({
+        id: 'cmd-observed',
+        observedEvents: [
+          expect.objectContaining({
+            type: 'RUN_STARTED',
+            runId: 'run-1',
+          }),
+        ],
+      }),
+    ]);
+  });
 });

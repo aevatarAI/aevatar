@@ -6,10 +6,26 @@ namespace Aevatar.GAgentService.Application.Workflows;
 public sealed class ScopeWorkflowCapabilityOptions
 {
     public const string SectionName = "ScopeWorkflowServices";
+    public const string FixedServiceAppId = "default";
+    public const string FixedServiceNamespace = "default";
 
-    public string ServiceAppId { get; set; } = "default";
+    // Keep the setter for configuration binding/object initializers, but pin the runtime identity.
+    public string ServiceAppId
+    {
+        get => FixedServiceAppId;
+        set
+        {
+        }
+    }
 
-    public string ServiceNamespace { get; set; } = "default";
+    // Keep the setter for configuration binding/object initializers, but pin the runtime identity.
+    public string ServiceNamespace
+    {
+        get => FixedServiceNamespace;
+        set
+        {
+        }
+    }
 
     public string DefaultServiceId { get; set; } = "default";
 

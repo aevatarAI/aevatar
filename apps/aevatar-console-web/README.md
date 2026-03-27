@@ -59,7 +59,7 @@ pnpm tsc
 
 `aevatar-console-web` depends on two local backend services during development:
 
-- `Workflow Host API` on `http://127.0.0.1:5080`
+- `Mainnet Host API` on `http://127.0.0.1:5080`
 - `Studio sidecar` on `http://127.0.0.1:6690`
 
 The dedicated local configuration tool is still available when you need to edit
@@ -72,7 +72,7 @@ Start the required services in separate terminals:
 
 ```bash
 env ASPNETCORE_URLS=http://127.0.0.1:5080 \
-  dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
+  dotnet run --project src/Aevatar.Mainnet.Host.Api
 
 env Cli__App__NyxId__Enabled=true Cli__App__ScopeId=aevatar \
   dotnet run --project tools/Aevatar.Tools.Cli -- app --no-browser --port 6690 --api-base http://127.0.0.1:5080
@@ -85,7 +85,7 @@ pnpm dev
 
 Current proxy split during local development:
 
-- `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities` -> `Workflow Host API`
+- `/api/chat`, `/api/workflows/*`, `/api/actors/*`, `/api/runs/*`, `/api/primitives`, `/api/capabilities`, `/api/scopes/*` -> `Mainnet Host API`
 - `/api/app/*`, `/api/auth/*`, `/api/workspace/*`, `/api/editor/*`, `/api/executions/*`, `/api/roles/*`, `/api/connectors/*`, `/api/settings/*` -> `Studio sidecar`
 
 ## Current scope
@@ -99,4 +99,4 @@ Current proxy split during local development:
 - `Observability`
 - `Settings`
 
-The shell currently combines direct workflow host APIs with the Studio sidecar APIs and keeps the default Ant Design Pro layout and theme.
+If Studio shows `Failed to load Studio workflow` with an RFC 9110 `404 Not Found` payload, check that `AEVATAR_API_TARGET` points to `Aevatar.Mainnet.Host.Api` rather than `Aevatar.Workflow.Host.Api`; scope workflow detail requests are served by mainnet.

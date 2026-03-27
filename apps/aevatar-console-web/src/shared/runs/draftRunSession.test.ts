@@ -1,5 +1,6 @@
 import {
   saveEndpointInvocationDraftPayload,
+  saveObservedRunSessionPayload,
   saveScopeDraftRunPayload,
   loadDraftRunPayload,
 } from "./draftRunSession";
@@ -76,6 +77,44 @@ describe("draftRunSession", () => {
         kind: "endpoint_invocation",
         endpointId: "run",
         serviceOverrideId: "svc-1",
+      })
+    );
+  });
+
+  it("stores and restores observed run session payloads", () => {
+    const key = saveObservedRunSessionPayload({
+      scopeId: "scope-a",
+      serviceOverrideId: "default",
+      endpointId: "chat",
+      prompt: "hello service",
+      actorId: "actor://scope-a/default",
+      commandId: "cmd-1",
+      runId: "run-1",
+      events: [
+        {
+          type: "RUN_STARTED",
+          runId: "run-1",
+          threadId: "thread-1",
+          timestamp: Date.now(),
+        } as any,
+      ],
+    });
+
+    expect(loadDraftRunPayload(key)).toEqual(
+      expect.objectContaining({
+        kind: "observed_run_session",
+        scopeId: "scope-a",
+        serviceOverrideId: "default",
+        endpointId: "chat",
+        actorId: "actor://scope-a/default",
+        commandId: "cmd-1",
+        runId: "run-1",
+        events: [
+          expect.objectContaining({
+            type: "RUN_STARTED",
+            runId: "run-1",
+          }),
+        ],
       })
     );
   });

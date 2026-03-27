@@ -273,12 +273,12 @@ export const scriptsApi = {
   },
 
   listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {
-    return requestJson(`/api/scripts/runtimes?take=${take}`);
+    return requestJson(`/api/app/scripts/runtimes?take=${take}`);
   },
 
   getRuntimeReadModel(actorId: string): Promise<ScriptReadModelSnapshot> {
     return requestJson(
-      `/api/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`,
+      `/api/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`,
     );
   },
 

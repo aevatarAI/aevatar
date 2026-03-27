@@ -483,6 +483,27 @@ export const workbenchTraceTabPanelStyle = {
   flexDirection: "column",
   flex: 1,
   minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+export const workbenchTraceTabsStyle = {
+  flex: 1,
+  minHeight: 0,
+} as const;
+
+export const workbenchTraceTabsStyles = {
+  content: {
+    display: "flex",
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
+  },
+  root: {
+    display: "flex",
+    flex: 1,
+    flexDirection: "column",
+    minHeight: 0,
+  },
 } as const;
 
 export const workbenchConsoleSurfaceStyle = {

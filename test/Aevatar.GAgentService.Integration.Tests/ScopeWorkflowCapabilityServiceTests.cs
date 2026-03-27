@@ -4,6 +4,9 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Options;
 
@@ -33,7 +36,9 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var expectedActorId = $"{expectedActorPrefix}:{expectedDeploymentId}";
 
         var commandPort = new FakeServiceCommandPort();
+        var governanceCommandPort = new FakeServiceGovernanceCommandPort();
         var queryPort = new FakeServiceLifecycleQueryPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
         queryPort.GetServiceResults.Enqueue(null);
         queryPort.GetServiceResults.Enqueue(new ServiceCatalogSnapshot(
             ServiceKeys.Build(identity),
@@ -58,6 +63,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var service = new ScopeWorkflowCommandApplicationService(
             commandPort,
             queryPort,
+            governanceCommandPort,
+            governanceQueryPort,
             queryService,
             Options.Create(options));
 
@@ -75,6 +82,9 @@ public sealed class ScopeWorkflowApplicationServicesTests
         result.DefinitionActorIdPrefix.Should().Be(expectedActorPrefix);
         commandPort.CreateServiceCommand!.Spec.Identity.Should().BeEquivalentTo(identity);
         commandPort.CreateRevisionCommand!.Spec.WorkflowSpec.DefinitionActorId.Should().Be(expectedActorPrefix);
+        governanceCommandPort.CreateEndpointCatalogCommand.Should().NotBeNull();
+        governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Identity.Should().BeEquivalentTo(identity);
+        governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
     }
 
     [Fact]
@@ -281,5 +291,52 @@ public sealed class ScopeWorkflowApplicationServicesTests
             Bindings.TryGetValue(actorId, out var binding);
             return Task.FromResult(binding);
         }
+    }
+
+    private sealed class FakeServiceGovernanceCommandPort : IServiceGovernanceCommandPort
+    {
+        private static readonly ServiceCommandAcceptedReceipt DefaultReceipt =
+            new("governance-actor", "cmd-governance", "corr-governance");
+
+        public CreateServiceEndpointCatalogCommand? CreateEndpointCatalogCommand { get; private set; }
+
+        public Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(CreateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateBindingAsync(UpdateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetireBindingAsync(RetireServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreateEndpointCatalogAsync(CreateServiceEndpointCatalogCommand command, CancellationToken ct = default)
+        {
+            CreateEndpointCatalogCommand = command;
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateEndpointCatalogAsync(UpdateServiceEndpointCatalogCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreatePolicyAsync(CreateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdatePolicyAsync(UpdateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetirePolicyAsync(RetireServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+    }
+
+    private sealed class FakeServiceGovernanceQueryPort : IServiceGovernanceQueryPort
+    {
+        public Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceBindingCatalogSnapshot?>(null);
+
+        public Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceEndpointCatalogSnapshot?>(null);
+
+        public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
     }
 }

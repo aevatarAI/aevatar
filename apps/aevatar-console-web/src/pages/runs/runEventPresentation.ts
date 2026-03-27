@@ -536,7 +536,7 @@ export function buildTimelineGroups(rows: RunEventRow[]): RunTimelineGroup[] {
 
   for (const row of rows) {
     const current = groups[groups.length - 1];
-    if (current && current.key === row.timelineKey) {
+    if (current && current.items[0]?.timelineKey === row.timelineKey) {
       current.items.push(row);
       current.eventCount += 1;
       current.status = mergeTimelineStatus(current.status, row.eventStatus);
@@ -546,7 +546,7 @@ export function buildTimelineGroups(rows: RunEventRow[]): RunTimelineGroup[] {
     groups.push({
       eventCount: 1,
       items: [row],
-      key: row.timelineKey,
+      key: `${row.timelineKey}:${groups.length}`,
       latestTimestamp: row.timestamp,
       label: row.timelineLabel,
       status: row.eventStatus,

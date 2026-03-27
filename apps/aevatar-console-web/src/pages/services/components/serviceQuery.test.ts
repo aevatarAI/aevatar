@@ -9,9 +9,10 @@ import {
 describe('serviceQuery', () => {
   it('reads service catalog filters from the query string', () => {
     expect(
-      readServiceQueryDraft('?tenantId=t1&namespace=n1&take=25'),
+      readServiceQueryDraft('?tenantId=t1&appId=a1&namespace=n1&take=25'),
     ).toEqual({
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
       take: 25,
     });
@@ -21,11 +22,13 @@ describe('serviceQuery', () => {
     expect(
       trimServiceQuery({
         tenantId: ' t1 ',
+        appId: ' a1 ',
         namespace: ' n1 ',
         take: 200,
       }),
     ).toEqual({
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
       take: 200,
     });
@@ -34,15 +37,16 @@ describe('serviceQuery', () => {
   it('builds list and detail URLs that preserve the service identity query', () => {
     const query = {
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
       take: 20,
     };
 
     expect(buildServicesHref(query)).toBe(
-      '/services?tenantId=t1&namespace=n1&take=20',
+      '/services?tenantId=t1&appId=a1&namespace=n1&take=20',
     );
     expect(buildServiceDetailHref('service.alpha', query)).toBe(
-      '/services/service.alpha?tenantId=t1&namespace=n1&take=20',
+      '/services/service.alpha?tenantId=t1&appId=a1&namespace=n1&take=20',
     );
   });
 

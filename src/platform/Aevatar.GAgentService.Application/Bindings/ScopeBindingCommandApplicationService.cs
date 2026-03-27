@@ -4,7 +4,9 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Internal;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -19,6 +21,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 {
     private readonly IServiceCommandPort _serviceCommandPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
+    private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
+    private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly IScopeScriptQueryPort _scopeScriptQueryPort;
     private readonly IScriptDefinitionSnapshotPort _scriptDefinitionSnapshotPort;
     private readonly IWorkflowRunActorPort _workflowRunActorPort;
@@ -27,6 +31,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     public ScopeBindingCommandApplicationService(
         IServiceCommandPort serviceCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
+        IServiceGovernanceCommandPort serviceGovernanceCommandPort,
+        IServiceGovernanceQueryPort serviceGovernanceQueryPort,
         IScopeScriptQueryPort scopeScriptQueryPort,
         IScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         IWorkflowRunActorPort workflowRunActorPort,
@@ -34,6 +40,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
+        _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
+        _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
         _scopeScriptQueryPort = scopeScriptQueryPort ?? throw new ArgumentNullException(nameof(scopeScriptQueryPort));
         _scriptDefinitionSnapshotPort = scriptDefinitionSnapshotPort ?? throw new ArgumentNullException(nameof(scriptDefinitionSnapshotPort));
         _workflowRunActorPort = workflowRunActorPort ?? throw new ArgumentNullException(nameof(workflowRunActorPort));
@@ -68,6 +76,12 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 Spec = updateSpec,
             }, ct);
         }
+
+        await ServiceEndpointCatalogUpsert.EnsureAsync(
+            desiredBinding.ServiceDefinition,
+            _serviceGovernanceCommandPort,
+            _serviceGovernanceQueryPort,
+            ct);
 
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = desiredBinding.BuildRevision(identity, revisionId);

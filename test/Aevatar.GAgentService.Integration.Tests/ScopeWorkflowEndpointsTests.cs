@@ -5,6 +5,9 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
@@ -614,6 +617,8 @@ public sealed class ScopeWorkflowEndpointsTests
         return new ScopeWorkflowCommandApplicationService(
             commandPort ?? new FakeServiceCommandPort(),
             resolvedQueryPort,
+            new NoOpServiceGovernanceCommandPort(),
+            new NoOpServiceGovernanceQueryPort(),
             queryService,
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
@@ -816,5 +821,47 @@ public sealed class ScopeWorkflowEndpointsTests
             Commands.Add(command);
             return Task.FromResult(Result);
         }
+    }
+
+    private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort
+    {
+        private static readonly ServiceCommandAcceptedReceipt DefaultReceipt =
+            new("governance-actor", "cmd-governance", "corr-governance");
+
+        public Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(CreateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateBindingAsync(UpdateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetireBindingAsync(RetireServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreateEndpointCatalogAsync(CreateServiceEndpointCatalogCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateEndpointCatalogAsync(UpdateServiceEndpointCatalogCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreatePolicyAsync(CreateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdatePolicyAsync(UpdateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetirePolicyAsync(RetireServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+    }
+
+    private sealed class NoOpServiceGovernanceQueryPort : IServiceGovernanceQueryPort
+    {
+        public Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceBindingCatalogSnapshot?>(null);
+
+        public Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceEndpointCatalogSnapshot?>(null);
+
+        public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
     }
 }

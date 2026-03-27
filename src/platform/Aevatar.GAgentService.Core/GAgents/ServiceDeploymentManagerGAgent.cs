@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
@@ -14,17 +15,20 @@ namespace Aevatar.GAgentService.Core.GAgents;
 
 public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymentState>
 {
+    private readonly IActorDispatchPort _dispatchPort;
     private readonly IServiceRevisionArtifactStore _artifactStore;
     private readonly IActivationCapabilityViewReader _capabilityViewReader;
     private readonly IActivationAdmissionEvaluator _admissionEvaluator;
     private readonly IServiceRuntimeActivator _runtimeActivator;
 
     public ServiceDeploymentManagerGAgent(
+        IActorDispatchPort dispatchPort,
         IServiceRevisionArtifactStore artifactStore,
         IActivationCapabilityViewReader capabilityViewReader,
         IActivationAdmissionEvaluator admissionEvaluator,
         IServiceRuntimeActivator runtimeActivator)
     {
+        _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
         _capabilityViewReader = capabilityViewReader ?? throw new ArgumentNullException(nameof(capabilityViewReader));
         _admissionEvaluator = admissionEvaluator ?? throw new ArgumentNullException(nameof(admissionEvaluator));
@@ -59,6 +63,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             !string.IsNullOrWhiteSpace(x.PrimaryActorId));
         if (existingActive != null)
         {
+            await DispatchResolvedServingTargetsAsync(
+                command.Identity,
+                command.RevisionId,
+                existingActive.DeploymentId,
+                existingActive.PrimaryActorId,
+                artifact,
+                CancellationToken.None);
             return;
         }
 
@@ -80,6 +91,13 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
             Status = ServiceDeploymentStatus.Active,
             ActivatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
         });
+        await DispatchResolvedServingTargetsAsync(
+            command.Identity,
+            command.RevisionId,
+            activation.DeploymentId,
+            activation.PrimaryActorId,
+            artifact,
+            CancellationToken.None);
     }
 
     [EventHandler]
@@ -205,6 +223,51 @@ public sealed class ServiceDeploymentManagerGAgent : GAgentBase<ServiceDeploymen
     {
         var serviceKey = identity == null ? "unbound" : ServiceKeys.Build(identity);
         return $"{serviceKey}:{deploymentId ?? "none"}:{suffix}";
+    }
+
+    private async Task DispatchResolvedServingTargetsAsync(
+        ServiceIdentity identity,
+        string revisionId,
+        string deploymentId,
+        string primaryActorId,
+        PreparedServiceRevisionArtifact artifact,
+        CancellationToken ct)
+    {
+        var actorId = ServiceActorIds.ServingSet(identity);
+        await _dispatchPort.DispatchAsync(
+            actorId,
+            CreateEnvelope(
+                actorId,
+                new ReplaceResolvedServiceServingTargetsCommand
+                {
+                    Identity = identity.Clone(),
+                    Reason = "deployment activation",
+                    Targets =
+                    {
+                        new ServiceServingTargetSpec
+                        {
+                            DeploymentId = deploymentId ?? string.Empty,
+                            RevisionId = revisionId ?? string.Empty,
+                            PrimaryActorId = primaryActorId ?? string.Empty,
+                            AllocationWeight = 100,
+                            ServingState = ServiceServingState.Active,
+                            EnabledEndpointIds = { artifact.Endpoints.Select(x => x.EndpointId) },
+                        },
+                    },
+                }),
+            ct);
+    }
+
+    private static EventEnvelope CreateEnvelope(string actorId, IMessage payload)
+    {
+        return new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateDirect("gagent-service.deployment", actorId),
+            Propagation = new EnvelopePropagation(),
+        };
     }
 
     private static void EnsureActivationAllowed(ActivationAdmissionDecision decision)

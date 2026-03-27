@@ -69,9 +69,9 @@ aevatar config llm probe test deepseek-main --json
 # NyxID gateway-backed provider
 # if Cli:App:NyxId:Authority is configured, --endpoint can be omitted
 aevatar config config-json set Cli:App:NyxId:Authority https://nyx.example.com --json
-aevatar config llm instances upsert nyx-main --provider-type nyxid --model claude-sonnet-4-5-20250929 --api-key-stdin < nyx_bearer_token.txt
-aevatar config llm default set nyx-main --json
-aevatar config llm probe test nyx-main --json
+aevatar config llm instances upsert nyxid --provider-type nyxid --model claude-sonnet-4-5-20250929 --api-key-stdin < nyx_bearer_token.txt
+aevatar config llm default set nyxid --json
+aevatar config llm probe test nyxid --json
 
 # workflows YAML
 aevatar config workflows put demo.yaml --file ./workflows/demo.yaml --source home --json

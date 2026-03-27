@@ -37,6 +37,15 @@ function extractHtmlErrorSummary(value: string): string | null {
   return summary || null;
 }
 
+function readJsonErrorText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = normalizeWhitespace(value);
+  return normalized || null;
+}
+
 export async function readResponseError(response: Pick<Response, "status" | "statusText" | "text">): Promise<string> {
   const text = await response.text();
   if (!text) {
@@ -46,10 +55,46 @@ export async function readResponseError(response: Pick<Response, "status" | "sta
   try {
     const payload = JSON.parse(text) as {
       code?: string;
+      detail?: string;
       error?: string;
       message?: string;
+      status?: number;
+      title?: string;
     };
-    return payload.message || payload.error || payload.code || text;
+    const message = readJsonErrorText(payload.message);
+    if (message) {
+      return message;
+    }
+
+    const error = readJsonErrorText(payload.error);
+    if (error) {
+      return error;
+    }
+
+    const detail = readJsonErrorText(payload.detail);
+    const title = readJsonErrorText(payload.title);
+    if (detail && title) {
+      return `${title}: ${detail}`;
+    }
+
+    if (detail) {
+      return detail;
+    }
+
+    if (title) {
+      return title;
+    }
+
+    const code = readJsonErrorText(payload.code);
+    if (code) {
+      return code;
+    }
+
+    if (typeof payload.status === "number" && Number.isFinite(payload.status)) {
+      return formatHttpError(payload.status, response.statusText);
+    }
+
+    return normalizeWhitespace(text);
   } catch {
     const htmlSummary = extractHtmlErrorSummary(text);
     if (!htmlSummary) {

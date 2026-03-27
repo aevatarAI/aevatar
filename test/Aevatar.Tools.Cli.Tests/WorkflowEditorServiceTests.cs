@@ -47,6 +47,28 @@ public sealed class WorkflowEditorServiceTests
         result.Findings.Should().ContainSingle(finding => finding.Code == "unknown_step_type");
     }
 
+    [Fact]
+    public void ParseYaml_ShouldSurfaceRuntimeValidationFailures_InStudioFindings()
+    {
+        var service = CreateService();
+
+        var result = service.ParseYaml(new ParseYamlRequest(
+            """
+            name: demo_runtime_only_validation
+            steps:
+              - id: run_actor
+                type: actor_send
+                parameters:
+                  agent_type: "bad agent type!"
+            """,
+            AvailableStepTypes: ["actor_send"]));
+
+        result.Document.Should().NotBeNull();
+        result.Findings.Should().Contain(finding =>
+            finding.Code == "runtime_validation" &&
+            finding.Message.Contains("agent_type", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static WorkflowEditorService CreateService()
     {
         var profile = WorkflowCompatibilityProfile.AevatarV1;

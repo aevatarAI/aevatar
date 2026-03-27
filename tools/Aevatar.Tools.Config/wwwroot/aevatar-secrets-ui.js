@@ -69,7 +69,7 @@
     // Current sidebar nav
     currentNav: "list",
   };
-  const categoryOrder = { configured: 0, tier1: 1, tier2: 2, aggregator: 3, regional: 4, local: 5, experimental: 6, embedding: 7 };
+  const categoryOrder = { configured: 0, tier1: 1, tier2: 2, aggregator: 3, identity: 4, regional: 5, local: 6, experimental: 7, embedding: 8 };
   const webSearchDefaults = {
     tavily: { endpoint: "https://api.tavily.com/search", searchDepth: "basic" },
     brave: { endpoint: "https://api.search.brave.com/res/v1/web/search", searchDepth: "" },
@@ -95,6 +95,23 @@
     // Keep it simple + stable: replace non [a-zA-Z0-9._-] with '-'
     const s = raw.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-+/, "").replace(/-+$/, "");
     return s || raw.replace(/[^a-zA-Z0-9]+/g, "-");
+  }
+
+  function usesFixedProviderName(providerType) {
+    const pt = safeText(providerType || "").trim().toLowerCase();
+    return pt === "nyxid";
+  }
+
+  function buildSuggestedProviderName(providerType, model) {
+    const pt = safeText(providerType || "").trim();
+    if (isEmpty(pt)) return "";
+    if (usesFixedProviderName(pt)) return pt.toLowerCase();
+
+    const m = safeText(model || "").trim();
+    if (isEmpty(m)) return pt;
+
+    const suffix = sanitizeModelForInstanceName(m);
+    return isEmpty(suffix) ? pt : `${pt}-${suffix}`;
   }
 
   function setView(view) {
@@ -454,6 +471,7 @@
     const tier1 = providers.filter((p) => p.category === "tier1");
     const tier2 = providers.filter((p) => p.category === "tier2");
     const aggregator = providers.filter((p) => p.category === "aggregator");
+    const identity = providers.filter((p) => p.category === "identity");
     const regional = providers.filter((p) => p.category === "regional" || p.category === "embedding");
     const local = providers.filter((p) => p.category === "local");
     const experimental = providers.filter((p) => p.category === "experimental");
@@ -465,6 +483,7 @@
     $("secTier1") && $("secTier1").classList.toggle("hidden", tier1.length === 0);
     $("secTier2") && $("secTier2").classList.toggle("hidden", tier2.length === 0);
     $("secAggregator") && $("secAggregator").classList.toggle("hidden", aggregator.length === 0);
+    $("secIdentity") && $("secIdentity").classList.toggle("hidden", identity.length === 0);
     $("secRegional") && $("secRegional").classList.toggle("hidden", regional.length === 0);
     $("secLocal") && $("secLocal").classList.toggle("hidden", local.length === 0);
     $("secExperimental") && $("secExperimental").classList.toggle("hidden", experimental.length === 0);
@@ -513,6 +532,7 @@
     $("listTier1") && renderProviderSection("listTier1", tier1);
     $("listTier2") && renderProviderSection("listTier2", tier2);
     $("listAggregator") && renderProviderSection("listAggregator", aggregator);
+    $("listIdentity") && renderProviderSection("listIdentity", identity);
     $("listRegional") && renderProviderSection("listRegional", regional);
     $("listLocal") && renderProviderSection("listLocal", local);
     $("listExperimental") && renderProviderSection("listExperimental", experimental);
@@ -1107,7 +1127,9 @@ steps:
 
     const type = findProviderType(id);
     const inst = type ? null : findInstance(id);
-    const providerName = inst ? safeText(inst.name || id) : safeText(type ? (type.id || id) : id);
+    const providerName = inst
+      ? safeText(inst.name || id)
+      : buildSuggestedProviderName(type ? (type.id || id) : id, "");
 
     state.selectedProviderType = safeText(inst ? (inst.providerType || "") : (type ? (type.id || "") : "")).trim();
     state.nameEdited = Boolean(inst); // editing an existing instance should not auto-rename on model change.
@@ -1115,8 +1137,9 @@ steps:
     const titleName = safeText(type ? (type.displayName || type.id) : (inst ? (inst.providerDisplayName || inst.providerType || inst.name) : id));
 
     $("connectTitle").textContent = "Connect " + titleName;
-    $("connectSubtitle").textContent =
-      "Enter your " + titleName + " API key to connect your account and use it in Aevatar apps.";
+    $("connectSubtitle").textContent = usesFixedProviderName(state.selectedProviderType)
+      ? "Enter your NyxID bearer token to connect the fixed gateway provider `nyxid` in Aevatar apps."
+      : "Enter your " + titleName + " API key to connect your account and use it in Aevatar apps.";
 
     $("providerNameInput").value = providerName;
     $("endpointInput").value = "";
@@ -2168,10 +2191,10 @@ steps:
     }, 60));
     $("endpointInput").addEventListener("input", debounce(updateSubmitEnabled, 60));
     $("modelSelect").addEventListener("change", debounce(() => {
-      // Auto-suggest instance name: "<provider>-<model>" (unless user already edited the name).
+      // Auto-suggest instance name unless the provider type uses a fixed singleton name.
       const m = safeText($("modelSelect").value).trim();
-      if (!state.nameEdited && !isEmpty(state.selectedProviderType) && !isEmpty(m)) {
-        const suggested = safeText(state.selectedProviderType).trim() + "-" + sanitizeModelForInstanceName(m);
+      if (!state.nameEdited && !isEmpty(state.selectedProviderType)) {
+        const suggested = buildSuggestedProviderName(state.selectedProviderType, m);
         if (!isEmpty(suggested)) {
           $("providerNameInput").value = suggested;
         }
@@ -2507,5 +2530,4 @@ steps:
   // Auto-init for the standalone page.
   void init();
 })();
-
 

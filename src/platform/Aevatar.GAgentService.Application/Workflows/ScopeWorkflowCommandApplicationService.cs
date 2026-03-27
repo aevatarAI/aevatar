@@ -2,6 +2,8 @@ using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Services;
+using Aevatar.GAgentService.Application.Internal;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Options;
 
@@ -11,17 +13,23 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
 {
     private readonly IServiceCommandPort _serviceCommandPort;
     private readonly IServiceLifecycleQueryPort _serviceLifecycleQueryPort;
+    private readonly IServiceGovernanceCommandPort _serviceGovernanceCommandPort;
+    private readonly IServiceGovernanceQueryPort _serviceGovernanceQueryPort;
     private readonly IScopeWorkflowQueryPort _scopeWorkflowQueryPort;
     private readonly ScopeWorkflowCapabilityOptions _options;
 
     public ScopeWorkflowCommandApplicationService(
         IServiceCommandPort serviceCommandPort,
         IServiceLifecycleQueryPort serviceLifecycleQueryPort,
+        IServiceGovernanceCommandPort serviceGovernanceCommandPort,
+        IServiceGovernanceQueryPort serviceGovernanceQueryPort,
         IScopeWorkflowQueryPort scopeWorkflowQueryPort,
         IOptions<ScopeWorkflowCapabilityOptions> options)
     {
         _serviceCommandPort = serviceCommandPort ?? throw new ArgumentNullException(nameof(serviceCommandPort));
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort ?? throw new ArgumentNullException(nameof(serviceLifecycleQueryPort));
+        _serviceGovernanceCommandPort = serviceGovernanceCommandPort ?? throw new ArgumentNullException(nameof(serviceGovernanceCommandPort));
+        _serviceGovernanceQueryPort = serviceGovernanceQueryPort ?? throw new ArgumentNullException(nameof(serviceGovernanceQueryPort));
         _scopeWorkflowQueryPort = scopeWorkflowQueryPort ?? throw new ArgumentNullException(nameof(scopeWorkflowQueryPort));
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new InvalidOperationException("User workflow capability options are required.");
@@ -69,6 +77,18 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
                 },
             }, ct);
         }
+
+        var endpointCatalogDefinition = new ServiceDefinitionSpec
+        {
+            Identity = identity.Clone(),
+            DisplayName = desiredDisplayName,
+        };
+        endpointCatalogDefinition.Endpoints.Add(BuildChatEndpointSpec());
+        await ServiceEndpointCatalogUpsert.EnsureAsync(
+            endpointCatalogDefinition,
+            _serviceGovernanceCommandPort,
+            _serviceGovernanceQueryPort,
+            ct);
 
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = new ServiceRevisionSpec

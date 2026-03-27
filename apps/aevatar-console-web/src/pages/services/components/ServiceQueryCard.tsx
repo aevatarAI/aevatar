@@ -34,6 +34,17 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           }
         />
         <Input
+          placeholder="appId"
+          style={{ width: 160 }}
+          value={draft.appId}
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              appId: event.target.value,
+            })
+          }
+        />
+        <Input
           placeholder="namespace"
           style={{ width: 180 }}
           value={draft.namespace}

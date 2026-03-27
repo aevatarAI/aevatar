@@ -4,8 +4,8 @@ import {
 } from "@aevatar-react-sdk/agui";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import {
+  type AGUIEvent,
   AGUIEventType,
-  type ChatRunRequest,
   CustomEventName,
   type WorkflowResumeRequest,
   type WorkflowSignalRequest,
@@ -62,6 +62,7 @@ import { isAutoEncodableTextPayloadTypeUrl } from "@/shared/runs/protobufPayload
 import {
   deleteDraftRunPayload as deleteQueuedDraftRunPayload,
   isEndpointInvocationDraftPayload,
+  isObservedRunSessionPayload,
   isScopeDraftRunPayload,
   loadDraftRunPayload as loadQueuedDraftRunPayload,
 } from "@/shared/runs/draftRunSession";
@@ -197,28 +198,50 @@ const RunsPage: React.FC = () => {
         : undefined,
     [draftRunPayload]
   );
+  const observedRunDraftPayload = useMemo(
+    () =>
+      isObservedRunSessionPayload(draftRunPayload)
+        ? draftRunPayload
+        : undefined,
+    [draftRunPayload]
+  );
   const initialFormValues = useMemo(
     () => ({
       ...urlInitialFormValues,
-      routeName: endpointInvocationDraftPayload
+      routeName:
+        endpointInvocationDraftPayload || observedRunDraftPayload
         ? undefined
         : urlInitialFormValues.routeName,
       prompt:
-        endpointInvocationDraftPayload?.prompt ?? urlInitialFormValues.prompt,
+        observedRunDraftPayload?.prompt ??
+        endpointInvocationDraftPayload?.prompt ??
+        urlInitialFormValues.prompt,
+      scopeId:
+        observedRunDraftPayload?.scopeId ?? urlInitialFormValues.scopeId,
       serviceOverrideId:
+        observedRunDraftPayload?.serviceOverrideId ??
         endpointInvocationDraftPayload?.serviceOverrideId ??
         urlInitialFormValues.serviceOverrideId,
       endpointId:
+        observedRunDraftPayload?.endpointId ??
         endpointInvocationDraftPayload?.endpointId ??
         urlInitialFormValues.endpointId,
       payloadTypeUrl:
+        observedRunDraftPayload?.payloadTypeUrl ??
         endpointInvocationDraftPayload?.payloadTypeUrl ??
         urlInitialFormValues.payloadTypeUrl,
       payloadBase64:
+        observedRunDraftPayload?.payloadBase64 ??
         endpointInvocationDraftPayload?.payloadBase64 ??
         urlInitialFormValues.payloadBase64,
+      actorId:
+        observedRunDraftPayload?.actorId ?? urlInitialFormValues.actorId,
     }),
-    [endpointInvocationDraftPayload, urlInitialFormValues]
+    [
+      endpointInvocationDraftPayload,
+      observedRunDraftPayload,
+      urlInitialFormValues,
+    ]
   );
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
     undefined
@@ -233,7 +256,9 @@ const RunsPage: React.FC = () => {
   const [catalogSearch, setCatalogSearch] = useState("");
   const [selectedRouteName, setSelectedRouteName] = useState(
     scopeDraftPayload?.bundleName ??
-      (endpointInvocationDraftPayload ? "" : undefined) ??
+      (endpointInvocationDraftPayload || observedRunDraftPayload
+        ? ""
+        : undefined) ??
       initialFormValues.routeName ??
       defaultRunRouteName
   );
@@ -269,6 +294,7 @@ const RunsPage: React.FC = () => {
   );
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
   const autoStartedDraftRunRef = useRef(false);
+  const hydratedObservedRunRef = useRef(false);
 
   const workflowCatalogQuery = useQuery({
     queryKey: ["workflow-catalog"],
@@ -284,6 +310,50 @@ const RunsPage: React.FC = () => {
     stopActiveRunRef.current = undefined;
     setStreaming(false);
   }, []);
+
+  const hydrateObservedSession = useCallback(
+    (snapshot: {
+      actorId?: string;
+      endpointId: string;
+      events: AGUIEvent[];
+      payloadBase64?: string;
+      payloadTypeUrl?: string;
+      prompt: string;
+      routeName?: string;
+      scopeId: string;
+      serviceOverrideId?: string;
+    }) => {
+      abortRun();
+      reset();
+      setTransportIssue(undefined);
+      setActiveTransport(selectedTransport);
+      setActiveScopeId(snapshot.scopeId);
+      setActiveServiceOverrideId(snapshot.serviceOverrideId ?? "");
+      setActiveEndpointId(snapshot.endpointId);
+      setSelectedRouteName(snapshot.routeName ?? "");
+      setSelectedTraceItemKey("");
+      setConsoleView("timeline");
+      setRunStartedAtMs(Date.now());
+
+      composerFormRef.current?.setFieldsValue({
+        ...initialFormValues,
+        actorId: snapshot.actorId,
+        endpointId: snapshot.endpointId,
+        payloadBase64: snapshot.payloadBase64,
+        payloadTypeUrl: snapshot.payloadTypeUrl,
+        prompt: snapshot.prompt,
+        routeName: snapshot.routeName,
+        scopeId: snapshot.scopeId,
+        serviceOverrideId: snapshot.serviceOverrideId,
+        transport: selectedTransport,
+      });
+
+      snapshot.events.forEach((event) => {
+        dispatch(event);
+      });
+    },
+    [abortRun, dispatch, initialFormValues, reset, selectedTransport]
+  );
 
   const reportTransportError = useCallback(
     (messageText: string, code?: string) => {
@@ -515,6 +585,47 @@ const RunsPage: React.FC = () => {
   });
 
   useEffect(() => () => abortRun(), [abortRun]);
+
+  useEffect(() => {
+    if (
+      !observedRunDraftPayload ||
+      !draftRunKey ||
+      hydratedObservedRunRef.current
+    ) {
+      return;
+    }
+
+    hydratedObservedRunRef.current = true;
+    deleteQueuedDraftRunPayload(draftRunKey);
+
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      searchParams.delete("draftKey");
+      const search = searchParams.toString();
+      // Avoid router remount during observed-session handoff; we only need to clean the URL.
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+      );
+    }
+
+    hydrateObservedSession({
+      actorId: observedRunDraftPayload.actorId,
+      endpointId: observedRunDraftPayload.endpointId,
+      events: observedRunDraftPayload.events,
+      payloadBase64: observedRunDraftPayload.payloadBase64,
+      payloadTypeUrl: observedRunDraftPayload.payloadTypeUrl,
+      prompt: observedRunDraftPayload.prompt,
+      routeName: undefined,
+      scopeId: observedRunDraftPayload.scopeId,
+      serviceOverrideId: observedRunDraftPayload.serviceOverrideId,
+    });
+  }, [
+    draftRunKey,
+    hydrateObservedSession,
+    observedRunDraftPayload,
+  ]);
 
   useEffect(() => {
     if (!scopeDraftPayload || !draftRunKey || autoStartedDraftRunRef.current) {
@@ -777,9 +888,28 @@ const RunsPage: React.FC = () => {
             entry.serviceOverrideId === entry.routeName
               ? undefined
               : entry.serviceOverrideId || undefined;
+          const restoredRouteName = isChatEndpoint
+            ? entry.routeName || undefined
+            : undefined;
+
+          if (entry.observedEvents.length > 0 && entry.scopeId) {
+            hydrateObservedSession({
+              actorId: entry.actorId || undefined,
+              endpointId: entry.endpointId || "chat",
+              events: entry.observedEvents,
+              payloadBase64: entry.payloadBase64 || undefined,
+              payloadTypeUrl: entry.payloadTypeUrl || undefined,
+              prompt: entry.prompt,
+              routeName: restoredRouteName,
+              scopeId: entry.scopeId,
+              serviceOverrideId: restoredServiceOverrideId,
+            });
+            return;
+          }
+
           composerFormRef.current?.setFieldsValue({
             prompt: entry.prompt,
-            routeName: isChatEndpoint ? entry.routeName : undefined,
+            routeName: restoredRouteName,
             scopeId: entry.scopeId || undefined,
             serviceOverrideId: restoredServiceOverrideId,
             endpointId: entry.endpointId || "chat",
@@ -800,7 +930,7 @@ const RunsPage: React.FC = () => {
               )
           : undefined,
       })),
-    [recentRuns, selectedTransport]
+    [hydrateObservedSession, recentRuns, selectedTransport]
   );
 
   const eventRows = useMemo<RunEventRow[]>(
@@ -1083,6 +1213,7 @@ const RunsPage: React.FC = () => {
         runId: session.runId ?? "",
         status: session.status,
         lastMessagePreview: latestMessagePreview,
+        observedEvents: session.events.map((event) => ({ ...event })),
       })
     );
   }, [
@@ -1093,6 +1224,7 @@ const RunsPage: React.FC = () => {
     resolveRunScopeId,
     resolveRunServiceOverrideId,
     resolveRunEndpointId,
+    session.events,
     session.runId,
     session.status,
     routeName,
