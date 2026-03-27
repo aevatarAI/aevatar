@@ -12,6 +12,25 @@ import {
   workbenchTraceTabsStyles,
 } from "../runWorkbenchConfig";
 
+const runsTraceTabsClassName = "runs-trace-tabs";
+const runsTraceTabsCss = `
+.${runsTraceTabsClassName} {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.${runsTraceTabsClassName} .ant-tabs-content-holder,
+.${runsTraceTabsClassName} .ant-tabs-content,
+.${runsTraceTabsClassName} .ant-tabs-tabpane-active {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+`;
+
 type RunsTracePaneProps = {
   consoleView: ConsoleViewKey;
   eventConsoleView: React.ReactNode;
@@ -54,8 +73,10 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
     }
   >
     <div style={workbenchConsoleViewportStyle}>
+      <style>{runsTraceTabsCss}</style>
       <Tabs
         activeKey={consoleView}
+        className={runsTraceTabsClassName}
         style={workbenchTraceTabsStyle}
         items={[
           {

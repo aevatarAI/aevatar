@@ -17,13 +17,13 @@ describe("RunsTracePane", () => {
       />
     );
 
-    expect(container.querySelector(".ant-tabs")).toHaveStyle({
+    expect(container.querySelector(".runs-trace-tabs")).toHaveStyle({
       flex: "1",
       minHeight: "0",
     });
-    const contentNode =
-      container.querySelector(".ant-tabs-content") ??
-      container.querySelector(".ant-tabs-content-holder");
+    const contentNode = container.querySelector(
+      ".runs-trace-tabs .ant-tabs-content-holder"
+    );
     expect(contentNode).not.toBeNull();
     expect(contentNode).toHaveStyle({
       flex: "1",
