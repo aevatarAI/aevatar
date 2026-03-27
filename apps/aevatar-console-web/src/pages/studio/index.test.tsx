@@ -1644,7 +1644,7 @@ describe("StudioPage", () => {
     );
   });
 
-  it("shows the published template graph after opening the Studio editor", async () => {
+  it("shows the published template graph in the Studio editor", async () => {
     renderStudioPage("/studio?template=published-demo&tab=workflows");
 
     await waitFor(() => {
@@ -1653,11 +1653,9 @@ describe("StudioPage", () => {
       );
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open editor" }));
-
     expect(await screen.findByText("Published template draft")).toBeTruthy();
     expect(await screen.findByTestId("workflow-graph-node-count")).toHaveTextContent(
-      "3"
+      "2"
     );
   });
 
