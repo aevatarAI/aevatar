@@ -60,6 +60,7 @@ import {
   type RecentRunEntry,
   saveRecentRun,
 } from "@/shared/runs/recentRuns";
+import { isAutoEncodableTextPayloadTypeUrl } from "@/shared/runs/protobufPayload";
 import {
   isServiceInvocationDraftPayload,
   isWorkflowDraftRunPayload,
@@ -289,8 +290,19 @@ const RunsPage: React.FC = () => {
       const normalizedScopeId = scopeId.trim();
       const normalizedServiceId = request.serviceId?.trim() ?? "";
       const normalizedEndpointId = request.endpointId?.trim() || "chat";
+      const requestedPayloadTypeUrl = request.payloadTypeUrl?.trim() ?? "";
+      const requestedPayloadBase64 = request.payloadBase64?.trim() ?? "";
       if (!normalizedScopeId) {
         throw new Error("Scope ID is required.");
+      }
+      if (
+        requestedPayloadTypeUrl &&
+        !requestedPayloadBase64 &&
+        !isAutoEncodableTextPayloadTypeUrl(requestedPayloadTypeUrl)
+      ) {
+        throw new Error(
+          `payloadBase64 is required for payloadTypeUrl '${requestedPayloadTypeUrl}'.`
+        );
       }
 
       abortRun();
@@ -387,14 +399,8 @@ const RunsPage: React.FC = () => {
                 String(receipt.command_id ?? receipt.commandId ?? "").trim() || undefined,
             },
           });
-          dispatch({
-            type: AGUIEventType.RUN_FINISHED,
-            threadId: receiptCorrelationId,
-            runId: receiptRunId,
-            result: receipt,
-          });
           messageApi.success(
-            `Endpoint ${normalizedEndpointId} accepted with run ${receiptRunId}.`
+            `Endpoint ${normalizedEndpointId} accepted with request ${receiptRunId}.`
           );
         }
       } catch (error) {
@@ -836,13 +842,24 @@ const RunsPage: React.FC = () => {
       };
     }
 
-    if (streaming || session.status === "running") {
+    if (streaming) {
       return {
         status: "running" as const,
         label: `Streaming over ${activeTransport.toUpperCase()}`,
         alertType: "info" as const,
         title: "Run in progress",
         description: "Messages and events are still arriving from the backend.",
+      };
+    }
+
+    if (session.status === "running") {
+      return {
+        status: "running" as const,
+        label: "Invocation accepted",
+        alertType: "info" as const,
+        title: "Awaiting observation",
+        description:
+          "The backend accepted the command. This console will stay pending until observed events arrive.",
       };
     }
 

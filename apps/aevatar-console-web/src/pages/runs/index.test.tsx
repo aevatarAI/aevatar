@@ -5,6 +5,9 @@ import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
 
+const mockDispatch = jest.fn();
+const mockReset = jest.fn();
+
 jest.mock("@aevatar-react-sdk/agui", () => ({
   connectChatWebSocket: jest.fn(),
   parseSSEStream: jest.fn(),
@@ -25,8 +28,8 @@ jest.mock("@aevatar-react-sdk/agui", () => ({
       runId: "",
       error: undefined,
     },
-    dispatch: jest.fn(),
-    reset: jest.fn(),
+    dispatch: mockDispatch,
+    reset: mockReset,
   })),
 }));
 
@@ -81,6 +84,8 @@ describe("RunsPage", () => {
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
     jest.clearAllMocks();
+    mockDispatch.mockReset();
+    mockReset.mockReset();
     mockedRuntimeRunsApi.invokeEndpoint.mockResolvedValue({
       requestId: "cmd-1",
       targetActorId: "actor-1",
@@ -145,5 +150,16 @@ describe("RunsPage", () => {
     });
     expect(mockedRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
     expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "RUN_STARTED",
+        runId: "cmd-1",
+      })
+    );
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "RUN_FINISHED",
+      })
+    );
   });
 });

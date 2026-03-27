@@ -1644,10 +1644,19 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       return;
     }
 
+    if (!resolvedScopeId) {
+      setNotice({
+        type: 'warning',
+        message: 'Test Run requires the current scope.',
+      });
+      return;
+    }
+
     setRunPending(true);
     setNotice(null);
     try {
       const result = await scriptsApi.runDraftScript({
+        scopeId: resolvedScopeId,
         scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
         scriptRevision: normalizeStudioId(selectedDraft.revision, 'draft'),
         source: serializePersistedSource(selectedDraft.package),
@@ -1698,6 +1707,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     isEmbeddedMode,
     openWorkspaceSection,
     queryClient,
+    resolvedScopeId,
     runInputDraft,
     selectedDraft,
     updateSelectedDraft,
@@ -2856,7 +2866,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         >
           <div className="console-scripts-detail-copy">
             Test Run executes the current draft directly through
-            <code style={{ marginInline: 4 }}>/api/app/scripts/draft-run</code>
+            <code style={{ marginInline: 4 }}>/api/scopes/{'{scopeId}'}/scripts/draft-run</code>
             without rebinding the scope default service.
           </div>
           <textarea

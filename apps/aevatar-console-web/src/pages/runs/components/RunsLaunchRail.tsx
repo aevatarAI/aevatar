@@ -151,8 +151,9 @@ function renderWorkflowMiniCard(
           style={{ margin: "6px 0 0" }}
           type="secondary"
         >
-          Invoke the selected service endpoint with either an explicit protobuf
-          payload or the default StringValue payload derived from the prompt.
+          Invoke the selected service endpoint with explicit protobuf bytes, or
+          let the workbench derive bytes only for StringValue and AppScriptCommand
+          payloads.
         </Typography.Paragraph>
       </div>
     );
@@ -571,13 +572,13 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                       name="payloadTypeUrl"
                       label="Payload type URL"
                       placeholder="type.googleapis.com/google.protobuf.StringValue"
-                      extra="When payload base64 is empty, the workbench derives protobuf bytes from the payload text."
+                      extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
                     />
                     <ProFormTextArea
                       name="payloadBase64"
                       label="Payload base64 (advanced)"
                       fieldProps={{ rows: 3 }}
-                      placeholder="Leave empty to let the workbench derive the payload from the prompt."
+                      placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
                     />
                   </ProForm>
                 </div>

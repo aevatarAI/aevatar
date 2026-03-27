@@ -247,6 +247,7 @@ export const scriptsApi = {
   },
 
   runDraftScript(payload: {
+    scopeId: string;
     scriptId?: string;
     scriptRevision?: string;
     source?: string;
@@ -255,11 +256,22 @@ export const scriptsApi = {
     runtimeActorId?: string;
     package?: ScriptPackage | null;
   }): Promise<DraftRunResult> {
-    return requestJson('/api/app/scripts/draft-run', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(payload.scopeId)}/scripts/draft-run`,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          scriptId: payload.scriptId,
+          scriptRevision: payload.scriptRevision,
+          source: payload.source,
+          input: payload.input,
+          definitionActorId: payload.definitionActorId,
+          runtimeActorId: payload.runtimeActorId,
+          package: payload.package,
+        }),
+      },
+    );
   },
 
   listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {

@@ -8,8 +8,10 @@ using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography;
 
 namespace Aevatar.GAgentService.Application.Bindings;
 
@@ -70,7 +72,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = desiredBinding.BuildRevision(identity, revisionId);
 
-        if (await ShouldCreateRevisionAsync(request, identity, revisionId, ct))
+        if (await ShouldCreateRevisionAsync(request, revisionSpec, ct))
         {
             await _serviceCommandPort.CreateRevisionAsync(new CreateServiceRevisionCommand
             {
@@ -104,8 +106,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
 
     private async Task<bool> ShouldCreateRevisionAsync(
         ScopeBindingUpsertRequest request,
-        ServiceIdentity identity,
-        string revisionId,
+        ServiceRevisionSpec revisionSpec,
         CancellationToken ct)
     {
         if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
@@ -115,6 +116,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         if (string.IsNullOrWhiteSpace(requestedRevisionId))
             return true;
 
+        var identity = revisionSpec.Identity
+            ?? throw new InvalidOperationException("service identity is required.");
+        var revisionId = ScopeWorkflowCapabilityOptions.NormalizeRequired(revisionSpec.RevisionId, nameof(revisionSpec.RevisionId));
         var revisions = await _serviceLifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
         var existingRevision = revisions?.Revisions.FirstOrDefault(x =>
             string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
@@ -133,7 +137,55 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                 $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
         }
 
+        var expectedArtifactHash = await ComputeScriptingArtifactHashAsync(revisionSpec, ct);
+        if (!string.Equals(existingRevision.ArtifactHash, expectedArtifactHash, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but points to a different scripting artifact.");
+        }
+
         return false;
+    }
+
+    private async Task<string> ComputeScriptingArtifactHashAsync(
+        ServiceRevisionSpec revisionSpec,
+        CancellationToken ct)
+    {
+        var identity = revisionSpec.Identity
+            ?? throw new InvalidOperationException("service identity is required.");
+        var scriptingSpec = revisionSpec.ScriptingSpec
+            ?? throw new InvalidOperationException("scripting implementation_spec is required.");
+        if (string.IsNullOrWhiteSpace(scriptingSpec.DefinitionActorId))
+            throw new InvalidOperationException("scripting definition_actor_id is required.");
+
+        var snapshot = await _scriptDefinitionSnapshotPort.GetRequiredAsync(
+            scriptingSpec.DefinitionActorId,
+            scriptingSpec.Revision,
+            ct);
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = identity.Clone(),
+            RevisionId = revisionSpec.RevisionId,
+            ImplementationKind = ServiceImplementationKind.Scripting,
+            ProtocolDescriptorSet = snapshot.ProtocolDescriptorSet,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    ScriptId = snapshot.ScriptId,
+                    Revision = snapshot.Revision,
+                    DefinitionActorId = scriptingSpec.DefinitionActorId,
+                    SourceHash = snapshot.SourceHash,
+                    PackageSpec = ToServicePackage(snapshot.ScriptPackage),
+                },
+            },
+        };
+        artifact.Endpoints.Add(
+            BuildScriptEndpointSpecs(snapshot)
+                .Select(ToEndpointDescriptor));
+        var normalizedArtifact = artifact.Clone();
+        normalizedArtifact.ArtifactHash = string.Empty;
+        return Convert.ToHexString(SHA256.HashData(normalizedArtifact.ToByteArray()));
     }
 
     private async Task<DesiredScopeBinding> ResolveDesiredBindingAsync(
@@ -451,6 +503,26 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             ResponseTypeUrl = spec.ResponseTypeUrl,
             Description = spec.Description,
         };
+
+    private static ServiceSourcePackageSpec ToServicePackage(ScriptPackageSpec packageSpec)
+    {
+        var result = new ServiceSourcePackageSpec
+        {
+            EntryBehaviorTypeName = packageSpec.EntryBehaviorTypeName ?? string.Empty,
+            EntrySourcePath = packageSpec.EntrySourcePath ?? string.Empty,
+        };
+        result.CsharpSources.Add(packageSpec.CsharpSources.Select(x => new ServicePackageFile
+        {
+            Path = x.Path ?? string.Empty,
+            Content = x.Content ?? string.Empty,
+        }));
+        result.ProtoFiles.Add(packageSpec.ProtoFiles.Select(x => new ServicePackageFile
+        {
+            Path = x.Path ?? string.Empty,
+            Content = x.Content ?? string.Empty,
+        }));
+        return result;
+    }
 
     private static ServiceEndpointSpec[] BuildScriptEndpointSpecs(ScriptDefinitionSnapshot snapshot)
     {

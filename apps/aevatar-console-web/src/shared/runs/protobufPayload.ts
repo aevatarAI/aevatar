@@ -65,6 +65,14 @@ export function getAppScriptCommandEndpointId(): string {
   return APP_SCRIPT_COMMAND_TYPE_URL.replace(TYPE_URL_PREFIX, "");
 }
 
+export function isAutoEncodableTextPayloadTypeUrl(typeUrl: string): boolean {
+  const normalized = typeUrl.trim();
+  return (
+    normalized === STRING_VALUE_TYPE_URL ||
+    normalized === APP_SCRIPT_COMMAND_TYPE_URL
+  );
+}
+
 export function normalizeTypeUrlEndpointId(typeUrl: string): string {
   const normalized = typeUrl.trim();
   if (!normalized) {
@@ -101,7 +109,13 @@ export function encodeTextPayloadBase64(
     });
   }
 
-  return encodeStringValueBase64(value);
+  if (normalizedTypeUrl === STRING_VALUE_TYPE_URL) {
+    return encodeStringValueBase64(value);
+  }
+
+  throw new Error(
+    `payloadBase64 is required for payloadTypeUrl '${normalizedTypeUrl}'.`
+  );
 }
 
 export const typeUrlToEndpointId = normalizeTypeUrlEndpointId;

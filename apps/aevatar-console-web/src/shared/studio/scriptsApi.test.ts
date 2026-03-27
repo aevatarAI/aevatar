@@ -60,7 +60,7 @@ describe('scriptsApi host-session requests', () => {
     );
   });
 
-  it('runs a draft script through the embedded Studio draft-run endpoint', async () => {
+  it('runs a draft script through the scope-first draft-run endpoint', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -96,6 +96,7 @@ describe('scriptsApi host-session requests', () => {
     global.fetch = fetchMock as typeof global.fetch;
 
     await scriptsApi.runDraftScript({
+      scopeId: 'scope-1',
       scriptId: 'demo',
       scriptRevision: 'draft-1',
       source: 'public class Demo {}',
@@ -108,7 +109,7 @@ describe('scriptsApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/app/scripts/draft-run');
+    expect(input).toBe('/api/scopes/scope-1/scripts/draft-run');
     expect(init?.method).toBe('POST');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',

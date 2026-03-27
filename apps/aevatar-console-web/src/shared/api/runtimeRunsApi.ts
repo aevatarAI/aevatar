@@ -16,6 +16,7 @@ import {
   encodeStringValueBase64,
   getAppScriptCommandEndpointId,
   getAppScriptCommandTypeUrl,
+  isAutoEncodableTextPayloadTypeUrl,
   getStringValueTypeUrl,
 } from "@/shared/runs/protobufPayload";
 
@@ -115,6 +116,31 @@ function inferPayloadTypeUrl(endpointId: string, requestedTypeUrl?: string): str
     : getStringValueTypeUrl();
 }
 
+function resolvePayloadBase64(
+  request: EndpointInvokeRequest,
+  payloadTypeUrl: string,
+  prompt: string,
+  commandId?: string
+): string {
+  const explicitPayloadBase64 = trimOptional(request.payloadBase64);
+  if (explicitPayloadBase64) {
+    return explicitPayloadBase64;
+  }
+
+  if (!isAutoEncodableTextPayloadTypeUrl(payloadTypeUrl)) {
+    throw new Error(
+      `payloadBase64 is required for payloadTypeUrl '${payloadTypeUrl}'.`
+    );
+  }
+
+  return payloadTypeUrl === getAppScriptCommandTypeUrl()
+    ? encodeAppScriptCommandBase64({
+        commandId: commandId ?? createClientCommandId(),
+        input: prompt,
+      })
+    : encodeStringValueBase64(prompt);
+}
+
 export type WorkflowStopRequest = {
   actorId?: string;
   runId: string;
@@ -211,7 +237,7 @@ export const runtimeRunsApi = {
     return response;
   },
 
-  invokeEndpoint(
+  async invokeEndpoint(
     scopeId: string,
     request: EndpointInvokeRequest,
     options?: {
@@ -228,14 +254,12 @@ export const runtimeRunsApi = {
       (payloadTypeUrl === getAppScriptCommandTypeUrl()
         ? createClientCommandId()
         : undefined);
-    const payloadBase64 =
-      trimOptional(request.payloadBase64) ||
-      (payloadTypeUrl === getAppScriptCommandTypeUrl()
-        ? encodeAppScriptCommandBase64({
-            commandId: resolvedCommandId ?? createClientCommandId(),
-            input: normalizedPrompt,
-          })
-        : encodeStringValueBase64(normalizedPrompt));
+    const payloadBase64 = resolvePayloadBase64(
+      request,
+      payloadTypeUrl,
+      normalizedPrompt,
+      resolvedCommandId
+    );
     const correlationId =
       trimOptional(request.correlationId) || resolvedCommandId;
 

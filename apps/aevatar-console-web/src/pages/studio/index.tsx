@@ -39,7 +39,10 @@ import {
   saveDraftRunPayload,
   saveServiceInvocationDraftPayload,
 } from '@/shared/runs/draftRunSession';
-import { getStringValueTypeUrl } from '@/shared/runs/protobufPayload';
+import {
+  getStringValueTypeUrl,
+  isAutoEncodableTextPayloadTypeUrl,
+} from '@/shared/runs/protobufPayload';
 import {
   applyRoleInspectorDraft,
   applyStepInspectorDraft,
@@ -2107,7 +2110,7 @@ const StudioPage: React.FC = () => {
 
     if (
       options?.openRuns &&
-      payloadTypeUrl !== getStringValueTypeUrl() &&
+      !isAutoEncodableTextPayloadTypeUrl(payloadTypeUrl) &&
       !input.payloadBase64?.trim()
     ) {
       setPublishNotice({

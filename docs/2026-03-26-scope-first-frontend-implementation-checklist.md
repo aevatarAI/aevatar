@@ -20,8 +20,8 @@
 
 ## P1
 
-- [pending] Scripts scope binding 的当前状态展示，包括默认 service、active revision、最近 revision 列表。
-- [pending] Scripts scope binding 的 revision 激活 / rollback 入口。
+- [completed] Scripts scope binding 的当前状态展示已补齐，包括默认 service、active revision、最近 revision 列表。
+- [completed] Scripts scope binding 的 revision 激活 / rollback 入口已补到 `Scope Scripts` 页。
 - [completed] 已补一个真正的 `scope -> 当前 binding/service` 总览页，作为 `Scopes` 的 landing page，集中展示 binding、revision、workflow/script 资产和 Studio/Runs 快捷入口。
 - [pending] 将 scripts workbench 的绑定结果同步到更明确的 scope 视图和通知文案。
 - [pending] Runs 历史仍是浏览器 `localStorage`，还没有 scope 级 read model 驱动的正式 run 列表 / 恢复 / 审计能力。

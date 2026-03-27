@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Core.Assemblers;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
@@ -142,6 +143,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     public async Task UpsertAsync_ShouldReuseExistingScriptingRevision_WhenExplicitRevisionAlreadyExists()
     {
         const string revisionId = "script-a-script-rev-1";
+        var snapshot = CreateScriptDefinitionSnapshot("script-a", "script-rev-1", "definition-script-1");
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(
             new ServiceCatalogSnapshot(
@@ -174,7 +176,85 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                         revisionId,
                         ServiceImplementationKind.Scripting.ToString(),
                         ServiceRevisionStatus.Published.ToString(),
-                        "hash-script-1",
+                        CreateScriptingArtifactHash(revisionId, snapshot),
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null),
+                ],
+                DateTimeOffset.UtcNow));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort
+        {
+            Script = new ScopeScriptSummary(
+                ScopeId,
+                "script-a",
+                "catalog-1",
+                "definition-script-1",
+                "script-rev-1",
+                "hash-script-1",
+                DateTimeOffset.UtcNow),
+        };
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort
+        {
+            Snapshot = snapshot,
+        };
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting,
+            Script: new ScopeBindingScriptSpec("script-a"),
+            DisplayName: "Orders Script",
+            RevisionId: revisionId));
+
+        commandPort.Calls.Should().HaveCount(4);
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        commandPort.Calls[0].Method.Should().Be("PrepareRevisionAsync");
+        result.RevisionId.Should().Be(revisionId);
+        result.Script.Should().NotBeNull();
+        result.Script!.ScriptRevision.Should().Be("script-rev-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectScriptingRevisionReuse_WhenExistingRevisionArtifactDiffers()
+    {
+        const string revisionId = "script-a-script-rev-1";
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:default",
+                ScopeId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                DefaultOptions.DefaultServiceId,
+                "Orders Script",
+                revisionId,
+                revisionId,
+                "dep-1",
+                "actor-1",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "google.protobuf.StringValue",
+                        "google.protobuf.StringValue",
+                        ServiceEndpointKind.Command.ToString(),
+                        "type.googleapis.com/google.protobuf.StringValue",
+                        string.Empty,
+                        "Scripting command endpoint for google.protobuf.StringValue."),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Scripting.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        "different-hash",
                         string.Empty,
                         [],
                         DateTimeOffset.UtcNow.AddHours(-1),
@@ -201,19 +281,16 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var actorPort = new FakeWorkflowRunActorPort();
         var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
-        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Scripting,
             Script: new ScopeBindingScriptSpec("script-a"),
             DisplayName: "Orders Script",
             RevisionId: revisionId));
 
-        commandPort.Calls.Should().HaveCount(4);
-        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
-        commandPort.Calls[0].Method.Should().Be("PrepareRevisionAsync");
-        result.RevisionId.Should().Be(revisionId);
-        result.Script.Should().NotBeNull();
-        result.Script!.ScriptRevision.Should().Be("script-rev-1");
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*different scripting artifact*");
+        commandPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -692,6 +769,75 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             },
             DefinitionActorId: definitionActorId,
             ScopeId: ScopeId);
+
+    private static string CreateScriptingArtifactHash(
+        string revisionId,
+        ScriptDefinitionSnapshot snapshot)
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = ScopeId,
+                AppId = DefaultOptions.ServiceAppId,
+                Namespace = DefaultOptions.ServiceNamespace,
+                ServiceId = DefaultOptions.DefaultServiceId,
+            },
+            RevisionId = revisionId,
+            ImplementationKind = ServiceImplementationKind.Scripting,
+            ProtocolDescriptorSet = snapshot.ProtocolDescriptorSet,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                ScriptingPlan = new ScriptingServiceDeploymentPlan
+                {
+                    ScriptId = snapshot.ScriptId,
+                    Revision = snapshot.Revision,
+                    DefinitionActorId = snapshot.DefinitionActorId,
+                    SourceHash = snapshot.SourceHash,
+                    PackageSpec = ToServicePackage(snapshot.ScriptPackage),
+                },
+            },
+        };
+        artifact.Endpoints.Add(
+            snapshot.RuntimeSemantics.Messages
+                .Where(x => x.Kind == ScriptMessageKind.Command)
+                .Select(x => new ServiceEndpointDescriptor
+                {
+                    EndpointId = string.IsNullOrWhiteSpace(x.DescriptorFullName)
+                        ? x.TypeUrl ?? string.Empty
+                        : x.DescriptorFullName,
+                    DisplayName = string.IsNullOrWhiteSpace(x.DescriptorFullName)
+                        ? x.TypeUrl ?? string.Empty
+                        : x.DescriptorFullName,
+                    Kind = ServiceEndpointKind.Command,
+                    RequestTypeUrl = x.TypeUrl ?? string.Empty,
+                    ResponseTypeUrl = string.Empty,
+                    Description = $"Scripting command endpoint for {(string.IsNullOrWhiteSpace(x.DescriptorFullName) ? x.TypeUrl ?? string.Empty : x.DescriptorFullName)}.",
+                }));
+        return new PreparedServiceRevisionArtifactAssembler()
+            .Assemble(artifact)
+            .ArtifactHash;
+    }
+
+    private static ServiceSourcePackageSpec ToServicePackage(ScriptPackageSpec packageSpec)
+    {
+        var result = new ServiceSourcePackageSpec
+        {
+            EntryBehaviorTypeName = packageSpec.EntryBehaviorTypeName ?? string.Empty,
+            EntrySourcePath = packageSpec.EntrySourcePath ?? string.Empty,
+        };
+        result.CsharpSources.Add(packageSpec.CsharpSources.Select(x => new ServicePackageFile
+        {
+            Path = x.Path ?? string.Empty,
+            Content = x.Content ?? string.Empty,
+        }));
+        result.ProtoFiles.Add(packageSpec.ProtoFiles.Select(x => new ServicePackageFile
+        {
+            Path = x.Path ?? string.Empty,
+            Content = x.Content ?? string.Empty,
+        }));
+        return result;
+    }
 
     private sealed record CommandCall(string Method, object? Command);
 

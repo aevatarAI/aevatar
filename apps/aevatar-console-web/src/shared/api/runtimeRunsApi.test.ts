@@ -241,4 +241,21 @@ describe("runtimeRunsApi", () => {
       })
     );
   });
+
+  it("rejects custom payload type URLs without explicit payload bytes", async () => {
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      runtimeRunsApi.invokeEndpoint("scope-1", {
+        endpointId: "orders.run",
+        prompt: "Launch the endpoint",
+        payloadTypeUrl: "type.googleapis.com/example.CustomCommand",
+      })
+    ).rejects.toThrow(
+      "payloadBase64 is required for payloadTypeUrl 'type.googleapis.com/example.CustomCommand'."
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

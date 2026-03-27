@@ -448,6 +448,7 @@ describe('ScriptsWorkbenchPage', () => {
 
     await waitFor(() => {
       expect(mockedScriptsApi.runDraftScript).toHaveBeenCalledWith({
+        scopeId: 'scope-1',
         scriptId: 'script-1',
         scriptRevision: expect.stringMatching(/^draft-/),
         source: expect.any(String),
