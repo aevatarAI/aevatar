@@ -4,6 +4,7 @@ import { parseCustomEvent } from '@aevatar-react-sdk/agui';
 import {
   AGUIEventType,
   CustomEventName,
+  type AGUIEvent,
 } from '@aevatar-react-sdk/types';
 import { useQuery } from '@tanstack/react-query';
 import { Alert, Button, Col, Input, Row, Select, Space, Tag, Typography } from 'antd';
@@ -15,6 +16,7 @@ import { servicesApi } from '@/shared/api/servicesApi';
 import { formatDateTime } from '@/shared/datetime/dateTime';
 import { history } from '@/shared/navigation/history';
 import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
+import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
 import { studioApi } from '@/shared/studio/api';
 import type {
   ServiceCatalogSnapshot,
@@ -65,6 +67,7 @@ type InvokeResultState = {
   actorId: string;
   commandId: string;
   eventCount: number;
+  events: AGUIEvent[];
 };
 
 const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
@@ -106,6 +109,7 @@ function createIdleResult(): InvokeResultState {
     actorId: '',
     commandId: '',
     eventCount: 0,
+    events: [],
   };
 }
 
@@ -413,11 +417,13 @@ const ScopeInvokePage: React.FC = () => {
         let runId = '';
         let eventCount = 0;
         let runError = '';
+        const events: AGUIEvent[] = [];
 
         for await (const event of parseBackendSSEStream(response, {
           signal: controller.signal,
         })) {
           eventCount += 1;
+          events.push(event);
 
           if (event.type === AGUIEventType.RUN_STARTED) {
             runId = event.runId || runId;
@@ -452,6 +458,7 @@ const ScopeInvokePage: React.FC = () => {
             actorId,
             commandId,
             eventCount,
+            events: [...events],
           });
         }
 
@@ -468,6 +475,7 @@ const ScopeInvokePage: React.FC = () => {
             actorId,
             commandId,
             eventCount,
+            events,
           });
         }
       } catch (error) {
@@ -479,6 +487,7 @@ const ScopeInvokePage: React.FC = () => {
             serviceId: selectedService.serviceId,
             endpointId: selectedEndpoint.endpointId,
             error: error instanceof Error ? error.message : String(error),
+            events: [],
           });
         }
       } finally {
@@ -511,6 +520,37 @@ const ScopeInvokePage: React.FC = () => {
           serviceId: selectedService.serviceId,
         },
       );
+      const responseRunId = String(
+        response.request_id ?? response.requestId ?? response.commandId ?? '',
+      ).trim();
+      const responseActorId = String(
+        response.target_actor_id ?? response.targetActorId ?? response.actorId ?? '',
+      ).trim();
+      const responseCommandId = String(
+        response.command_id ?? response.commandId ?? responseRunId,
+      ).trim();
+      const events: AGUIEvent[] = [
+        {
+          type: AGUIEventType.RUN_STARTED,
+          runId: responseRunId || undefined,
+          threadId:
+            String(
+              response.correlation_id ?? response.correlationId ?? responseRunId,
+            ).trim() || undefined,
+          timestamp: Date.now(),
+        } as AGUIEvent,
+      ];
+      if (responseActorId || responseCommandId) {
+        events.push({
+          type: AGUIEventType.CUSTOM,
+          name: CustomEventName.RunContext,
+          value: {
+            actorId: responseActorId || undefined,
+            commandId: responseCommandId || undefined,
+          },
+          timestamp: Date.now(),
+        } as AGUIEvent);
+      }
 
       setInvokeResult({
         ...createIdleResult(),
@@ -519,6 +559,11 @@ const ScopeInvokePage: React.FC = () => {
         serviceId: selectedService.serviceId,
         endpointId: selectedEndpoint.endpointId,
         responseJson: JSON.stringify(response, null, 2),
+        runId: responseRunId,
+        actorId: responseActorId,
+        commandId: responseCommandId,
+        eventCount: events.length,
+        events,
       });
     } catch (error) {
       setInvokeResult({
@@ -528,6 +573,7 @@ const ScopeInvokePage: React.FC = () => {
         serviceId: selectedService.serviceId,
         endpointId: selectedEndpoint.endpointId,
         error: error instanceof Error ? error.message : String(error),
+        events: [],
       });
     }
   };
@@ -541,16 +587,48 @@ const ScopeInvokePage: React.FC = () => {
     [selectedService?.endpoints],
   );
 
-  const openRunsHref = buildRuntimeRunsHref({
-    scopeId: selectedScopeId || undefined,
-    serviceId: selectedService?.serviceId,
-    endpointId: selectedEndpoint?.endpointId,
-    payloadTypeUrl:
-      selectedEndpoint && !isChatEndpoint(selectedEndpoint)
-        ? payloadTypeUrl || undefined
-        : undefined,
-    prompt: prompt || undefined,
-  });
+  const handleOpenRuns = () => {
+    if (!selectedScopeId) {
+      return;
+    }
+
+    const observedDraftKey =
+      invokeResult.events.length > 0
+        ? saveObservedRunSessionPayload({
+            scopeId: selectedScopeId,
+            serviceOverrideId: selectedService?.serviceId,
+            endpointId: invokeResult.endpointId || selectedEndpoint?.endpointId || 'chat',
+            prompt,
+            payloadTypeUrl:
+              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+                ? payloadTypeUrl || undefined
+                : undefined,
+            payloadBase64:
+              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+                ? payloadBase64 || undefined
+                : undefined,
+            actorId: invokeResult.actorId || undefined,
+            commandId: invokeResult.commandId || undefined,
+            runId: invokeResult.runId || undefined,
+            events: invokeResult.events,
+          })
+        : '';
+
+    history.push(
+      buildRuntimeRunsHref({
+        scopeId: selectedScopeId,
+        serviceId: selectedService?.serviceId,
+        endpointId: selectedEndpoint?.endpointId,
+        payloadTypeUrl:
+          selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+            ? payloadTypeUrl || undefined
+            : undefined,
+        prompt: prompt || undefined,
+        actorId: invokeResult.actorId || undefined,
+        draftKey: observedDraftKey || undefined,
+      }),
+    );
+  };
 
   return (
     <PageContainer
@@ -832,7 +910,7 @@ const ScopeInvokePage: React.FC = () => {
                       <Button disabled={!isStreaming} onClick={handleAbort}>
                         Abort stream
                       </Button>
-                      <Button onClick={() => history.push(openRunsHref)}>
+                      <Button onClick={handleOpenRuns}>
                         Open in Runs
                       </Button>
                     </Space>

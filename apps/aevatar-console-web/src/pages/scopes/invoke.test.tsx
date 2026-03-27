@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
+import { loadDraftRunPayload } from '@/shared/runs/draftRunSession';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ScopeInvokePage from './invoke';
 
@@ -210,5 +211,35 @@ describe('ScopeInvokePage', () => {
     expect(await screen.findByText('Assistant stream')).toBeTruthy();
     expect(screen.getByText('hello from scope service')).toBeTruthy();
     expect(screen.getByText('run-1')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Runs' }));
+
+    expect(window.location.pathname).toBe('/runtime/runs');
+    const draftKey = new URLSearchParams(window.location.search).get('draftKey');
+    expect(draftKey).toBeTruthy();
+    expect(loadDraftRunPayload(draftKey)).toEqual(
+      expect.objectContaining({
+        kind: 'observed_run_session',
+        scopeId: 'scope-a',
+        serviceOverrideId: 'default',
+        endpointId: 'chat',
+        actorId: 'actor://scope-a/default',
+        commandId: 'cmd-1',
+        runId: 'run-1',
+        events: [
+          expect.objectContaining({
+            type: 'RUN_STARTED',
+            runId: 'run-1',
+          }),
+          expect.objectContaining({
+            type: 'CUSTOM',
+          }),
+          expect.objectContaining({
+            type: 'TEXT_MESSAGE_CONTENT',
+            delta: 'hello from scope service',
+          }),
+        ],
+      }),
+    );
   });
 });

@@ -546,7 +546,7 @@ export function buildTimelineGroups(rows: RunEventRow[]): RunTimelineGroup[] {
     groups.push({
       eventCount: 1,
       items: [row],
-      key: row.timelineKey,
+      key: `${row.timelineKey}:${groups.length}`,
       latestTimestamp: row.timestamp,
       label: row.timelineLabel,
       status: row.eventStatus,

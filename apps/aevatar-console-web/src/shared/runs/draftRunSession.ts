@@ -1,3 +1,5 @@
+import type { AGUIEvent } from "@aevatar-react-sdk/types";
+
 export type ScopeDraftRunPayload = {
   kind: "scope_draft";
   bundleName: string;
@@ -15,9 +17,25 @@ export type EndpointInvocationDraftPayload = {
   createdAt: string;
 };
 
+export type ObservedRunSessionPayload = {
+  kind: "observed_run_session";
+  scopeId: string;
+  serviceOverrideId?: string;
+  endpointId: string;
+  prompt: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
+  actorId?: string;
+  commandId?: string;
+  runId?: string;
+  events: AGUIEvent[];
+  createdAt: string;
+};
+
 export type DraftRunPayload =
   | ScopeDraftRunPayload
-  | EndpointInvocationDraftPayload;
+  | EndpointInvocationDraftPayload
+  | ObservedRunSessionPayload;
 
 const STORAGE_PREFIX = "aevatar-console-draft-run:";
 
@@ -93,6 +111,50 @@ export function saveEndpointInvocationDraftPayload(payload: {
   return key;
 }
 
+export function saveObservedRunSessionPayload(payload: {
+  scopeId: string;
+  endpointId: string;
+  prompt: string;
+  events: AGUIEvent[];
+  serviceOverrideId?: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
+  actorId?: string;
+  commandId?: string;
+  runId?: string;
+}): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const scopeId = payload.scopeId.trim();
+  const endpointId = payload.endpointId.trim();
+  if (!scopeId || !endpointId || payload.events.length === 0) {
+    return "";
+  }
+
+  const key = createDraftRunKey();
+  const normalizedPayload: ObservedRunSessionPayload = {
+    kind: "observed_run_session",
+    scopeId,
+    endpointId,
+    prompt: payload.prompt.trim(),
+    events: payload.events.map((event) => ({ ...event })),
+    serviceOverrideId: payload.serviceOverrideId?.trim() || undefined,
+    payloadTypeUrl: payload.payloadTypeUrl?.trim() || undefined,
+    payloadBase64: payload.payloadBase64?.trim() || undefined,
+    actorId: payload.actorId?.trim() || undefined,
+    commandId: payload.commandId?.trim() || undefined,
+    runId: payload.runId?.trim() || undefined,
+    createdAt: new Date().toISOString(),
+  };
+  window.sessionStorage.setItem(
+    buildStorageKey(key),
+    JSON.stringify(normalizedPayload)
+  );
+  return key;
+}
+
 export function isScopeDraftRunPayload(
   payload: DraftRunPayload | null | undefined
 ): payload is ScopeDraftRunPayload {
@@ -103,6 +165,12 @@ export function isEndpointInvocationDraftPayload(
   payload: DraftRunPayload | null | undefined
 ): payload is EndpointInvocationDraftPayload {
   return payload?.kind === "endpoint_invocation";
+}
+
+export function isObservedRunSessionPayload(
+  payload: DraftRunPayload | null | undefined
+): payload is ObservedRunSessionPayload {
+  return payload?.kind === "observed_run_session";
 }
 
 export function loadDraftRunPayload(
@@ -122,6 +190,36 @@ export function loadDraftRunPayload(
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const parsedKind =
       typeof parsed.kind === "string" ? parsed.kind : undefined;
+    if (parsedKind === "observed_run_session") {
+      const observedPayload = parsed as Partial<ObservedRunSessionPayload>;
+      const scopeId = observedPayload.scopeId?.trim();
+      const endpointId = observedPayload.endpointId?.trim();
+      const events = Array.isArray(observedPayload.events)
+        ? observedPayload.events.filter(
+            (event): event is AGUIEvent =>
+              typeof event === "object" && event !== null
+          )
+        : [];
+      if (!scopeId || !endpointId || events.length === 0) {
+        return null;
+      }
+
+      return {
+        kind: "observed_run_session",
+        scopeId,
+        endpointId,
+        prompt: observedPayload.prompt?.trim() || "",
+        serviceOverrideId: observedPayload.serviceOverrideId?.trim() || undefined,
+        payloadTypeUrl: observedPayload.payloadTypeUrl?.trim() || undefined,
+        payloadBase64: observedPayload.payloadBase64?.trim() || undefined,
+        actorId: observedPayload.actorId?.trim() || undefined,
+        commandId: observedPayload.commandId?.trim() || undefined,
+        runId: observedPayload.runId?.trim() || undefined,
+        events,
+        createdAt: observedPayload.createdAt?.trim() || "",
+      };
+    }
+
     if (
       parsedKind === "endpoint_invocation" ||
       parsedKind === "service_invocation"
@@ -196,6 +294,7 @@ export function deleteDraftRunPayload(key: string | null | undefined): void {
 
 export type WorkflowDraftRunPayload = ScopeDraftRunPayload;
 export type ServiceInvocationDraftPayload = EndpointInvocationDraftPayload;
+export type ObservedServiceRunPayload = ObservedRunSessionPayload;
 
 export const saveDraftRunPayload = (payload: {
   workflowName: string;

@@ -4,7 +4,9 @@ import {
   loadDraftRunPayload,
   saveDraftRunPayload,
   saveEndpointInvocationDraftPayload,
+  saveObservedRunSessionPayload,
 } from "@/shared/runs/draftRunSession";
+import { saveRecentRun } from "@/shared/runs/recentRuns";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -209,6 +211,130 @@ describe("RunsPage", () => {
 
     expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
+  });
+
+  it("hydrates observed run sessions without starting a new invoke", async () => {
+    const draftKey = saveObservedRunSessionPayload({
+      scopeId: "scope-1",
+      serviceOverrideId: "svc-1",
+      endpointId: "chat",
+      prompt: "hello observed run",
+      actorId: "actor-1",
+      commandId: "cmd-1",
+      runId: "run-1",
+      events: [
+        {
+          type: "RUN_STARTED",
+          runId: "run-1",
+          threadId: "thread-1",
+          timestamp: Date.now(),
+        } as any,
+        {
+          type: "CUSTOM",
+          name: "aevatar.run.context",
+          value: {
+            actorId: "actor-1",
+            commandId: "cmd-1",
+            workflowName: "chat",
+          },
+          timestamp: Date.now(),
+        } as any,
+      ],
+    });
+    window.history.replaceState(
+      {},
+      "",
+      `/runtime/runs?scopeId=scope-1&endpointId=chat&draftKey=${draftKey}`
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    await waitFor(() => {
+      expect(mockReset).toHaveBeenCalled();
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockDispatch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "RUN_STARTED",
+        runId: "run-1",
+      })
+    );
+    expect(mockDispatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "CUSTOM",
+        name: "aevatar.run.context",
+      })
+    );
+    expect(mockedRuntimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
+    expect(mockedRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
+    expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
+    expect(loadDraftRunPayload(draftKey)).toBeNull();
+  });
+
+  it("replays observed logs when restoring a recent run", async () => {
+    saveRecentRun({
+      id: "cmd-recent",
+      scopeId: "scope-1",
+      routeName: "direct",
+      endpointId: "chat",
+      prompt: "recent replay",
+      actorId: "actor-1",
+      commandId: "cmd-1",
+      runId: "run-1",
+      status: "finished",
+      observedEvents: [
+        {
+          type: "RUN_STARTED",
+          runId: "run-1",
+          threadId: "thread-1",
+          timestamp: Date.now(),
+        } as any,
+        {
+          type: "CUSTOM",
+          name: "aevatar.run.context",
+          value: {
+            actorId: "actor-1",
+            commandId: "cmd-1",
+            workflowName: "direct",
+          },
+          timestamp: Date.now(),
+        } as any,
+      ],
+    });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    mockDispatch.mockClear();
+    mockReset.mockClear();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Restore" })[0]);
+
+    await waitFor(() => {
+      expect(mockReset).toHaveBeenCalled();
+      expect(mockDispatch).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockDispatch).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        type: "RUN_STARTED",
+        runId: "run-1",
+      })
+    );
+    expect(mockDispatch).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        type: "CUSTOM",
+        name: "aevatar.run.context",
+      })
+    );
+    expect(mockedRuntimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
+    expect(mockedRuntimeRunsApi.streamChat).not.toHaveBeenCalled();
+    expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
   it("routes chat runs through the selected workflow service when route is provided", async () => {

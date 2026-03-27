@@ -8,6 +8,8 @@ import {
   workbenchConsoleBodyStyle,
   workbenchConsoleViewportStyle,
   workbenchTraceTabPanelStyle,
+  workbenchTraceTabsStyle,
+  workbenchTraceTabsStyles,
 } from "../runWorkbenchConfig";
 
 type RunsTracePaneProps = {
@@ -54,6 +56,7 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
     <div style={workbenchConsoleViewportStyle}>
       <Tabs
         activeKey={consoleView}
+        style={workbenchTraceTabsStyle}
         items={[
           {
             key: "timeline",
@@ -75,6 +78,7 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
             ),
           },
         ]}
+        styles={workbenchTraceTabsStyles}
         onChange={(key) => onConsoleViewChange(key as ConsoleViewKey)}
       />
     </div>

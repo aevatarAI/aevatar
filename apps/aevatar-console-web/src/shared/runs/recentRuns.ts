@@ -1,3 +1,5 @@
+import type { AGUIEvent } from "@aevatar-react-sdk/types";
+
 export interface RecentRunEntry {
   id: string;
   recordedAt: string;
@@ -15,6 +17,7 @@ export interface RecentRunEntry {
   runId: string;
   status: string;
   lastMessagePreview: string;
+  observedEvents: AGUIEvent[];
 }
 
 const STORAGE_KEY = 'aevatar-console-recent-runs';
@@ -68,6 +71,14 @@ function sanitizeEntry(value: Partial<RecentRunEntry> & {
     runId: value.runId?.trim() || '',
     status: value.status?.trim() || 'unknown',
     lastMessagePreview: value.lastMessagePreview?.trim() || '',
+    observedEvents: Array.isArray(value.observedEvents)
+      ? value.observedEvents
+          .filter(
+            (event): event is AGUIEvent =>
+              typeof event === "object" && event !== null
+          )
+          .map((event) => ({ ...event }))
+      : [],
   };
 
   Object.defineProperties(sanitized, {
