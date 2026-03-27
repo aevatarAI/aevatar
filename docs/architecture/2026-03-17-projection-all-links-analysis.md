@@ -179,8 +179,8 @@ sequenceDiagram
 
 每个 scope actor 负责：
 
-1. 订阅 root actor stream。
-2. 把 observation 转成 self signal。
+1. 为 `root actor stream -> scope actor stream` 建立并维护 relay binding。
+2. 在自己的 inbox 内接收 forwarded committed observation。
 3. 在 actor turn 内顺序执行 materializer / projector。
 4. 记录：
   - `last_observed_version`
@@ -481,17 +481,17 @@ flowchart LR
 - 直接散落的字面量问题已明显下降。
 - 但 kind 仍缺少更强的仓库内语义约束，改名和排障仍依赖人工保持一致。
 
-### 10.3 scope actor 数量和订阅数量会随 feature/session 扩张
+### 10.3 scope actor 数量和 relay binding 数量会随 feature/session 扩张
 
 问题表现：
 
-1. 每个 scope actor 都会直接订阅 root actor stream。
+1. 每个 scope actor 都会为对应 root actor stream 建立一条 relay binding。
 2. durable materialization 与 session observation 都是单独 scope。
 3. 一个 root actor 可能同时挂多个 projection kind。
 
 结果：
 
-- 订阅数不是按 actor 数增长，而是按 `actor * projectionKinds * sessions` 增长。
+- relay binding 数不是按 actor 数增长，而是按 `actor * projectionKinds * sessions` 增长。
 - Workflow/Scripting 这种 feature 较重的子域，会天然放大 stream fan-out。
 - 这不会立刻违反语义，但会提高运行时和运维复杂度。
 

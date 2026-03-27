@@ -171,10 +171,22 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
 
         var selfActorId = this.GetPrimaryKeyString();
         var route = envelope.Route;
-        if (route.IsObserverPublication())
-            return;
+        var isObserverPublication = route.IsObserverPublication();
+        if (isObserverPublication)
+        {
+            if (!StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, selfActorId) ||
+                StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+            {
+                return;
+            }
+        }
 
-        if (route.IsDirect())
+        if (isObserverPublication)
+        {
+            // Forwarded observer publications are already explicitly targeted by the
+            // stream-layer relay path and should not fall through topology routing.
+        }
+        else if (route.IsDirect())
         {
             if (!string.Equals(route.GetTargetActorId(), selfActorId, StringComparison.Ordinal))
                 return;
@@ -396,8 +408,12 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
     private Task OnSelfStreamEventAsync(EventEnvelope envelope, StreamSequenceToken? token = null)
     {
         _ = token;
-        if (envelope.Route.IsObserverPublication())
+        if (envelope.Route.IsObserverPublication() &&
+            (!StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, this.GetPrimaryKeyString()) ||
+             StreamForwardingRules.IsTransitOnlyForwarding(envelope)))
+        {
             return Task.CompletedTask;
+        }
 
         return HandleEnvelopeAsync(envelope.ToByteArray());
     }
