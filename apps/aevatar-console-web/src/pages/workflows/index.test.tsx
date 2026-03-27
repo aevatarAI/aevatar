@@ -100,6 +100,7 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
 describe('WorkflowsPage', () => {
   beforeEach(() => {
     HTMLElement.prototype.scrollIntoView = jest.fn();
+    window.history.replaceState({}, '', '/runtime/workflows');
   });
 
   it('keeps advanced filters collapsed until requested', async () => {
@@ -216,5 +217,25 @@ describe('WorkflowsPage', () => {
         .getAttribute('data-highlighted'),
     ).toBe('true');
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it('routes workflow library actions into Studio drafts', async () => {
+    renderWithQueryClient(React.createElement(WorkflowsPage));
+
+    await waitFor(() => {
+      expect(runtimeCatalogApi.listWorkflowCatalog).toHaveBeenCalled();
+    });
+
+    fireEvent.click(
+      (await screen.findAllByRole('button', { name: 'Open in Studio' }))[0],
+    );
+
+    expect(window.location.pathname).toBe('/studio');
+    expect(new URLSearchParams(window.location.search).get('template')).toBe(
+      'demo_flow',
+    );
+    expect(new URLSearchParams(window.location.search).get('tab')).toBe(
+      'studio',
+    );
   });
 });
