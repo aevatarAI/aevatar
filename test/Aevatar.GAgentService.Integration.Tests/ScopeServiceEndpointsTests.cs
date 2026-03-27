@@ -260,6 +260,59 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task GetBindingEndpoint_ShouldPreferActiveServingTarget_WhenRevisionHasMultipleTargets()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-2");
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-2",
+                    "workflow",
+                    "Published",
+                    "hash-2",
+                    string.Empty,
+                    [],
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+        host.ServingQueryPort.ServingSet = new ServiceServingSetSnapshot(
+            "scope-a:default:default:default",
+            2,
+            string.Empty,
+            [
+                new ServiceServingTargetSnapshot(
+                    "dep-paused",
+                    "rev-2",
+                    "def-actor-paused",
+                    100,
+                    ServiceServingState.Paused.ToString(),
+                    []),
+                new ServiceServingTargetSnapshot(
+                    "dep-active",
+                    "rev-2",
+                    "def-actor-active",
+                    5,
+                    ServiceServingState.Active.ToString(),
+                    []),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeBindingStatusHttpResponse>("/api/scopes/scope-a/binding");
+
+        response.Should().NotBeNull();
+        response!.Revisions.Should().ContainSingle();
+        response.Revisions[0].ServingState.Should().Be(ServiceServingState.Active.ToString());
+        response.Revisions[0].DeploymentId.Should().Be("dep-active");
+        response.Revisions[0].PrimaryActorId.Should().Be("def-actor-active");
+        response.Revisions[0].AllocationWeight.Should().Be(5);
+    }
+
+    [Fact]
     public async Task GetBindingEndpoint_ShouldReturnUnavailable_WhenScopeHasNoBinding()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -874,6 +927,60 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task InvokeEndpoint_ShouldReturnBadRequest_WhenPayloadBase64IsInvalid()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "not-base64",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SCOPE_SERVICE_INVOKE_REQUEST");
+        body["message"].Should().Contain("valid base64");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldReturnNotFound_WhenInvocationTargetIsMissing()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InvocationPort.ExceptionFactory = _ => new InvalidOperationException("Service 'scope-a:default:default:orders' was not found.");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_SERVICE_INVOKE_TARGET_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task InvokeEndpoint_ShouldReturnConflict_WhenInvocationTargetIsUnavailable()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InvocationPort.ExceptionFactory = _ => new InvalidOperationException("No active serving targets are available.");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_SERVICE_INVOKE_TARGET_UNAVAILABLE");
+    }
+
+    [Fact]
     public async Task ResumeRunEndpoint_ShouldResolveRunFromServiceAndDispatch()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -1402,9 +1509,14 @@ public sealed class ScopeServiceEndpointsTests
     {
         public ServiceInvocationRequest? LastRequest { get; private set; }
 
+        public Func<ServiceInvocationRequest, Exception?>? ExceptionFactory { get; set; }
+
         public Task<ServiceInvocationAcceptedReceipt> InvokeAsync(ServiceInvocationRequest request, CancellationToken ct = default)
         {
             LastRequest = request;
+            var exception = ExceptionFactory?.Invoke(request);
+            if (exception != null)
+                throw exception;
             return Task.FromResult(new ServiceInvocationAcceptedReceipt
             {
                 DeploymentId = "dep-1",

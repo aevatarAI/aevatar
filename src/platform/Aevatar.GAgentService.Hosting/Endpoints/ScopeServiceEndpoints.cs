@@ -471,27 +471,34 @@ public static class ScopeServiceEndpoints
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
-        if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
-            return denied;
-
-        var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId);
-        var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
+        try
         {
-            Identity = identity,
-            EndpointId = endpointId?.Trim() ?? string.Empty,
-            CommandId = request.CommandId?.Trim() ?? string.Empty,
-            CorrelationId = request.CorrelationId?.Trim() ?? string.Empty,
-            Payload = ServiceJsonPayloads.PackBase64(
-                request.PayloadTypeUrl?.Trim() ?? string.Empty,
-                request.PayloadBase64),
-            Caller = new ServiceInvocationCaller
+            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+                return denied;
+
+            var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId);
+            var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
             {
-                ServiceKey = string.Empty,
-                TenantId = string.Empty,
-                AppId = string.Empty,
-            },
-        }, ct);
-        return Results.Accepted($"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}", receipt);
+                Identity = identity,
+                EndpointId = endpointId?.Trim() ?? string.Empty,
+                CommandId = request.CommandId?.Trim() ?? string.Empty,
+                CorrelationId = request.CorrelationId?.Trim() ?? string.Empty,
+                Payload = ServiceJsonPayloads.PackBase64(
+                    request.PayloadTypeUrl?.Trim() ?? string.Empty,
+                    request.PayloadBase64),
+                Caller = new ServiceInvocationCaller
+                {
+                    ServiceKey = string.Empty,
+                    TenantId = string.Empty,
+                    AppId = string.Empty,
+                },
+            }, ct);
+            return Results.Accepted($"/api/scopes/{Uri.EscapeDataString(scopeId)}/services/{Uri.EscapeDataString(serviceId)}", receipt);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+        {
+            return CreateScopeInvokeFailureResult(ex);
+        }
     }
 
     private static async Task<IResult> HandleResumeRunAsync(
@@ -927,10 +934,76 @@ public static class ScopeServiceEndpoints
             .ToDictionary(
                 group => group.Key,
                 group => group
-                    .OrderByDescending(x => x.AllocationWeight)
-                    .ThenByDescending(x => x.ServingState, StringComparer.Ordinal)
+                    // Prefer the most live target for summary output before comparing weights.
+                    .OrderByDescending(GetServingStateSummaryPriority)
+                    .ThenByDescending(x => x.AllocationWeight)
+                    .ThenBy(x => x.DeploymentId, StringComparer.Ordinal)
+                    .ThenBy(x => x.PrimaryActorId, StringComparer.Ordinal)
                     .First(),
                 StringComparer.Ordinal);
+    }
+
+    private static IResult CreateScopeInvokeFailureResult(Exception ex)
+    {
+        if (ex is FormatException)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SERVICE_INVOKE_REQUEST",
+                message = "payloadBase64 must be valid base64.",
+            });
+        }
+
+        var message = ex.Message;
+        if (IsScopeInvokeNotFoundFailure(message))
+        {
+            return Results.NotFound(new
+            {
+                code = "SCOPE_SERVICE_INVOKE_TARGET_NOT_FOUND",
+                message,
+            });
+        }
+
+        if (IsScopeInvokeUnavailableFailure(message))
+        {
+            return Results.Conflict(new
+            {
+                code = "SCOPE_SERVICE_INVOKE_TARGET_UNAVAILABLE",
+                message,
+            });
+        }
+
+        return Results.BadRequest(new
+        {
+            code = "INVALID_SCOPE_SERVICE_INVOKE_REQUEST",
+            message,
+        });
+    }
+
+    private static bool IsScopeInvokeNotFoundFailure(string message) =>
+        message.Contains(" was not found.", StringComparison.Ordinal) ||
+        message.Contains(" was not found on service ", StringComparison.Ordinal);
+
+    private static bool IsScopeInvokeUnavailableFailure(string message) =>
+        message.Contains("has no serving traffic view", StringComparison.Ordinal) ||
+        message.Contains("has no serving target", StringComparison.Ordinal) ||
+        message.Contains("No active serving targets are available.", StringComparison.Ordinal) ||
+        message.Contains("Prepared artifact", StringComparison.Ordinal);
+
+    private static int GetServingStateSummaryPriority(ServiceServingTargetSnapshot target)
+    {
+        if (!System.Enum.TryParse<ServiceServingState>(target.ServingState, ignoreCase: true, out var state))
+            return 0;
+
+        return state switch
+        {
+            ServiceServingState.Active => 5,
+            ServiceServingState.Paused => 4,
+            ServiceServingState.Draining => 3,
+            ServiceServingState.Disabled => 2,
+            ServiceServingState.Unspecified => 1,
+            _ => 0,
+        };
     }
 
     private static ServiceIdentity BuildScopeServiceIdentity(
