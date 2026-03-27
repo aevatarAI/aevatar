@@ -125,8 +125,8 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Open Runtime Explorer" })
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Open observability hub" })
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "Open observability hub" })
+    ).toBeNull();
     expect(screen.getByRole("button", { name: "Inspector" })).toBeTruthy();
     expect(container.textContent).toContain("Launch rail");
     expect(container.textContent).toContain("Run trace");

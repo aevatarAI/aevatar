@@ -104,6 +104,7 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
+import { describeError } from '@/shared/ui/errorText';
 
 type QueryState<T> = {
   readonly isLoading: boolean;
@@ -951,7 +952,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         <StudioNoticeCard
           type="error"
           title="Failed to load scope binding"
-          description={String(error)}
+          description={describeError(error)}
         />
       ) : !binding?.available ? (
         <StudioNoticeCard
@@ -1456,7 +1457,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
               <StudioNoticeCard
                 type="error"
                 title="Failed to load workspace settings"
-                description={String(workspaceSettings.error)}
+                description={describeError(workspaceSettings.error)}
               />
             ) : (
               <div style={workflowDirectoryContentStyle}>
@@ -1695,7 +1696,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
               <StudioNoticeCard
                 type="error"
                 title="Failed to load workspace workflows"
-                description={String(workflows.error)}
+                description={describeError(workflows.error)}
               />
             ) : filteredWorkflows.length > 0 ? (
               workflowLayout === 'grid' ? (
@@ -2587,7 +2588,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           <StudioNoticeCard
             type="error"
             title="Failed to load execution detail"
-            description={String(selectedExecution.error)}
+            description={describeError(selectedExecution.error)}
           />
         ) : selectedExecution.data ? (
           renderExecutionLogsSection({ fullscreen: true })
@@ -2609,14 +2610,14 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         <StudioNoticeCard
           type="error"
           title="Failed to load Studio executions"
-          description={String(executions.error)}
+          description={describeError(executions.error)}
         />
       ) : null}
       {selectedExecution.isError ? (
         <StudioNoticeCard
           type="error"
           title="Failed to load execution detail"
-          description={String(selectedExecution.error)}
+          description={describeError(selectedExecution.error)}
         />
       ) : null}
       {executionNotice ? (
@@ -3524,14 +3525,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       key="selected-workflow-error"
       type="error"
       title="Failed to load Studio workflow"
-      description={String(selectedWorkflow.error)}
+      description={describeError(selectedWorkflow.error)}
     />
   ) : templateWorkflow.isError ? (
     <StudioNoticeCard
       key="template-workflow-error"
       type="error"
       title="Failed to load published workflow template"
-      description={String(templateWorkflow.error)}
+      description={describeError(templateWorkflow.error)}
     />
   ) : null;
 
@@ -4529,7 +4530,7 @@ export const StudioRolesPage: React.FC<StudioRolesPageProps> = ({
           </div>
 
           {roles.isError ? (
-            <div className="empty-card">{String(roles.error)}</div>
+            <div className="empty-card">{describeError(roles.error)}</div>
           ) : roles.isLoading ? (
             <div className="empty-card">Loading roles...</div>
           ) : (
@@ -5064,7 +5065,7 @@ export const StudioConnectorsPage: React.FC<StudioConnectorsPageProps> = ({
           </div>
 
           {connectors.isError ? (
-            <div className="empty-card">{String(connectors.error)}</div>
+            <div className="empty-card">{describeError(connectors.error)}</div>
           ) : connectors.isLoading ? (
             <div className="empty-card">Loading connectors...</div>
           ) : (
@@ -5677,7 +5678,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
           <StudioNoticeCard
             type="error"
             title="Failed to load workbench config"
-            description={String(settings.error)}
+            description={describeError(settings.error)}
           />
         ) : settingsDraft ? (
           <div style={cardStackStyle}>
@@ -6187,13 +6188,13 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
               <StudioNoticeCard
                 type="error"
                 title="Failed to load workspace settings"
-                description={String(workspaceSettings.error)}
+                description={describeError(workspaceSettings.error)}
               />
             ) : settings.isError ? (
               <StudioNoticeCard
                 type="error"
                 title="Failed to load workbench config"
-                description={String(settings.error)}
+                description={describeError(settings.error)}
               />
             ) : settingsDraft ? (
               <div style={cardStackStyle}>
@@ -6254,7 +6255,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
               <StudioNoticeCard
                 type="error"
                 title="Failed to load workflow sources"
-                description={String(workspaceSettings.error)}
+                description={describeError(workspaceSettings.error)}
               />
             ) : workspaceSettings.data ? (
               <div style={cardStackStyle}>

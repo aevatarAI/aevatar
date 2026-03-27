@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { loadStoredAuthSession } from '@/shared/auth/session';
+import { describeError } from '@/shared/ui/errorText';
 
 const CallbackPage: React.FC = () => {
   const [errorText, setErrorText] = useState<string | undefined>(undefined);
@@ -26,7 +27,7 @@ const CallbackPage: React.FC = () => {
           return;
         }
 
-        setErrorText(error instanceof Error ? error.message : String(error));
+        setErrorText(describeError(error));
       }
     };
 

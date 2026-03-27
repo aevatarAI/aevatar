@@ -44,6 +44,7 @@ import {
   readNumber,
   readString,
 } from "@/shared/api/http/decoders";
+import { readResponseError } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
 
@@ -80,59 +81,10 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
-async function readError(response: Response): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return `HTTP ${response.status}`;
-  }
-
-  try {
-    const payload = JSON.parse(text) as {
-      message?: string;
-      error?: string;
-      code?: string;
-      detail?: string;
-      title?: string;
-      status?: number;
-    };
-    if (typeof payload.message === "string" && payload.message.trim()) {
-      return payload.message.trim();
-    }
-
-    if (typeof payload.error === "string" && payload.error.trim()) {
-      return payload.error.trim();
-    }
-
-    if (typeof payload.detail === "string" && payload.detail.trim()) {
-      if (typeof payload.title === "string" && payload.title.trim()) {
-        return `${payload.title.trim()}: ${payload.detail.trim()}`;
-      }
-
-      return payload.detail.trim();
-    }
-
-    if (typeof payload.title === "string" && payload.title.trim()) {
-      return payload.title.trim();
-    }
-
-    if (typeof payload.code === "string" && payload.code.trim()) {
-      return payload.code.trim();
-    }
-
-    if (typeof payload.status === "number" && Number.isFinite(payload.status)) {
-      return `HTTP ${payload.status}`;
-    }
-
-    return text;
-  } catch {
-    return text;
-  }
-}
-
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -149,7 +101,7 @@ async function requestDecodedJson<T>(
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -175,7 +127,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -205,7 +157,7 @@ async function streamSse(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (!response.body) {

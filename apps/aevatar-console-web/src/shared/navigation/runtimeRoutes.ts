@@ -3,7 +3,6 @@ const runtimePaths = {
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
   explorer: "/runtime/explorer",
-  observability: "/runtime/observability",
 } as const;
 
 type QueryValue = string | undefined;
@@ -74,14 +73,4 @@ export function buildRuntimeExplorerHref(options?: {
   actorId?: string;
 }): string {
   return buildHref(runtimePaths.explorer, options);
-}
-
-export function buildRuntimeObservabilityHref(options?: {
-  workflow?: string;
-  actorId?: string;
-  commandId?: string;
-  runId?: string;
-  stepId?: string;
-}): string {
-  return buildHref(runtimePaths.observability, options);
 }

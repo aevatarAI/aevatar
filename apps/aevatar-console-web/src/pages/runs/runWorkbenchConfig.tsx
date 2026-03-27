@@ -116,6 +116,7 @@ export const composerRailKeyboardStep = 24;
 export const monitorWorkbenchMinWidth = 520;
 export const composerRailCompactWidth = 320;
 export const composerRailComfortWidth = 336;
+export const defaultRunRouteName = "direct";
 
 const composerRailCompactBreakpoint = 1120;
 const composerRailComfortBreakpoint = 1360;
@@ -656,15 +657,13 @@ export function resolveResponsiveComposerWidth(
   return Math.min(clampedWidth, responsiveCap);
 }
 
-export function readInitialRunFormValues(
-  preferredWorkflow: string
-): RunFormValues {
+export function readInitialRunFormValues(): RunFormValues {
   const defaultScopeId = loadStoredAuthSession()?.user.sub;
 
   if (typeof window === "undefined") {
     return {
       prompt: "",
-      routeName: preferredWorkflow,
+      routeName: defaultRunRouteName,
       scopeId: defaultScopeId,
       serviceOverrideId: undefined,
       endpointId: "chat",
@@ -676,15 +675,15 @@ export function readInitialRunFormValues(
   }
 
   const params = new URLSearchParams(window.location.search);
-  return {
-    prompt: params.get("prompt") ?? "",
-    routeName:
-      trimOptional(params.get("route")) ??
-      trimOptional(params.get("workflow")) ??
-      preferredWorkflow,
-    scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
-    serviceOverrideId:
-      trimOptional(params.get("serviceOverrideId")) ??
+    return {
+      prompt: params.get("prompt") ?? "",
+      routeName:
+        trimOptional(params.get("route")) ??
+        trimOptional(params.get("workflow")) ??
+        defaultRunRouteName,
+      scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
+      serviceOverrideId:
+        trimOptional(params.get("serviceOverrideId")) ??
       trimOptional(params.get("serviceId")),
     endpointId: trimOptional(params.get("endpointId")) ?? "chat",
     payloadTypeUrl: trimOptional(params.get("payloadTypeUrl")),

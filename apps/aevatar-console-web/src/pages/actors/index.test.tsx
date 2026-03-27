@@ -41,9 +41,7 @@ describe('ActorsPage', () => {
     expect(
       screen.getByRole('button', { name: 'Open Runtime Workflows' }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Open observability' }),
-    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open observability' })).toBeNull();
     expect(container.textContent).toContain('Runtime actor query');
     expect(container.textContent).toContain('No recent runs yet');
     expect(container.textContent).toContain(

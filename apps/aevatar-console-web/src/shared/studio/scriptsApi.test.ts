@@ -170,4 +170,30 @@ describe('scriptsApi host-session requests', () => {
       'Bearer access-token',
     );
   });
+
+  it('collapses HTML error pages for Studio script endpoints', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      text: async () => `<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <title>scripts gateway | 502: Bad gateway</title>
+  </head>
+  <body>
+    <h1>Bad gateway</h1>
+  </body>
+</html>`,
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      scriptsApi.validateDraft({
+        scriptId: 'demo',
+        scriptRevision: 'draft-1',
+        source: 'public class Demo {}',
+      }),
+    ).rejects.toThrow('HTTP 502 Bad Gateway');
+  });
 });
