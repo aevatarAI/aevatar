@@ -43,8 +43,14 @@ const studioProxyEntries = [
   return entries;
 }, {});
 
+const studioScopeProxyEntries = {
+  '^/api/scopes/[^/]+/scripts/draft-run$':
+    buildProxyTarget(studioApiTarget),
+};
+
 const createProxyConfig = () => ({
   ...studioProxyEntries,
+  ...studioScopeProxyEntries,
   '/api/': {
     target: apiTarget,
     changeOrigin: true,

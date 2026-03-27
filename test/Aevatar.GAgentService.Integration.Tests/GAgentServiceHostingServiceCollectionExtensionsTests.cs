@@ -171,12 +171,24 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/services/{serviceId}/policies");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:activate");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/revisions");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/revisions/{revisionId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:retire");
         endpoints.Should().Contain("/api/scopes/{scopeId}/draft-run");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/chat:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/{endpointId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/runs");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}/audit");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:resume");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:signal");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs/{runId}:stop");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs/{runId}");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/services/{serviceId}/runs/{runId}/audit");
     }
 
     [Fact]

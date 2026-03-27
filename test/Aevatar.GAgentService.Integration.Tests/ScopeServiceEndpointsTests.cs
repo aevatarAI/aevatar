@@ -547,6 +547,122 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task GetDefaultServiceRevisionEndpoint_ShouldReturnTypedRevision()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            "scope-a",
+            "default",
+            "default",
+            "default",
+            "Orders App",
+            "rev-workflow",
+            "rev-workflow",
+            "dep-2",
+            "workflow-def-1",
+            "Active",
+            [],
+            [],
+            DateTimeOffset.UtcNow);
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-workflow",
+                    "workflow",
+                    "Published",
+                    "hash-workflow",
+                    string.Empty,
+                    [],
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    DateTimeOffset.UtcNow.AddHours(-1),
+                    null,
+                    new ServiceRevisionImplementationSnapshot(
+                        Workflow: new ServiceRevisionWorkflowSnapshot("approval", "workflow-def-1", 2))),
+            ],
+            DateTimeOffset.UtcNow,
+            9,
+            "evt-9");
+        host.ServingQueryPort.ServingSet = new ServiceServingSetSnapshot(
+            "scope-a:default:default:default",
+            9,
+            string.Empty,
+            [
+                new ServiceServingTargetSnapshot(
+                    "dep-2",
+                    "rev-workflow",
+                    "workflow-def-1",
+                    100,
+                    ServiceServingState.Active.ToString(),
+                    []),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeBindingRevisionHttpResponse>("/api/scopes/scope-a/revisions/rev-workflow");
+
+        response.Should().NotBeNull();
+        response!.RevisionId.Should().Be("rev-workflow");
+        response.WorkflowName.Should().Be("approval");
+        response.WorkflowDefinitionActorId.Should().Be("workflow-def-1");
+        response.InlineWorkflowCount.Should().Be(2);
+        response.IsDefaultServing.Should().BeTrue();
+        response.IsActiveServing.Should().BeTrue();
+        response.DeploymentId.Should().Be("dep-2");
+    }
+
+    [Fact]
+    public async Task GetServiceRevisionEndpoint_ShouldReturnTypedRevisionForNamedService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "static-actor-1");
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:orders",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-static",
+                    "static",
+                    "Published",
+                    "hash-static",
+                    string.Empty,
+                    [],
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    null,
+                    new ServiceRevisionImplementationSnapshot(
+                        new ServiceRevisionStaticSnapshot("Tests.StaticActor, Tests", "static-actor-1"))),
+            ],
+            DateTimeOffset.UtcNow,
+            3,
+            "evt-3");
+        host.ServingQueryPort.ServingSet = new ServiceServingSetSnapshot(
+            "scope-a:default:default:orders",
+            3,
+            string.Empty,
+            [
+                new ServiceServingTargetSnapshot(
+                    "dep-static",
+                    "rev-static",
+                    "static-actor-1",
+                    100,
+                    ServiceServingState.Active.ToString(),
+                    []),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeBindingRevisionHttpResponse>("/api/scopes/scope-a/services/orders/revisions/rev-static");
+
+        response.Should().NotBeNull();
+        response!.RevisionId.Should().Be("rev-static");
+        response.StaticActorTypeName.Should().Be("Tests.StaticActor, Tests");
+        response.StaticPreferredActorId.Should().Be("static-actor-1");
+        response.IsServingTarget.Should().BeTrue();
+        response.ServingState.Should().Be(ServiceServingState.Active.ToString());
+    }
+
+    [Fact]
     public async Task RetireBindingRevisionEndpoint_ShouldDispatchRetireRevisionForDefaultService()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -584,6 +700,46 @@ public sealed class ScopeServiceEndpointsTests
             ServiceId = "default",
         });
         host.ServiceCommandPort.RetireRevisionCommand.RevisionId.Should().Be("rev-1");
+    }
+
+    [Fact]
+    public async Task RetireServiceRevisionEndpoint_ShouldDispatchRetireRevisionForNamedService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "def-actor-1");
+        host.LifecycleQueryPort.Revisions = new ServiceRevisionCatalogSnapshot(
+            "scope-a:default:default:orders",
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-1",
+                    "workflow",
+                    "Published",
+                    "hash-1",
+                    string.Empty,
+                    [],
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    DateTimeOffset.UtcNow.AddHours(-2),
+                    null),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/revisions/rev-1:retire", new { });
+        var body = await response.Content.ReadFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRevisionActionHttpResponse>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.ServiceId.Should().Be("orders");
+        body.RevisionId.Should().Be("rev-1");
+        body.Status.Should().Be("retired");
+        host.ServiceCommandPort.RetireRevisionCommand.Should().NotBeNull();
+        host.ServiceCommandPort.RetireRevisionCommand!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "orders",
+        });
     }
 
     [Fact]
@@ -788,6 +944,89 @@ public sealed class ScopeServiceEndpointsTests
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
         body["message"].Should().Contain("Only workflow services support SSE stream execution");
+    }
+
+    [Fact]
+    public async Task InvokeStreamEndpoint_ShouldResolveExplicitServiceAndDelegateToWorkflowPipeline()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var service = BuildService("scope-a", "orders", "definition-actor-orders");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-orders-1",
+                            "rev-orders-1",
+                            "definition-actor-orders",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-orders-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "orders",
+                },
+                RevisionId = "rev-orders-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                        ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "orders",
+                        WorkflowYaml = "name: orders\nsteps:\n  - run: echo orders",
+                        DefinitionActorId = "definition-actor-orders",
+                    },
+                },
+            },
+            CancellationToken.None);
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-orders", "orders", "cmd-orders", "corr-orders");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/services/orders/invoke/chat:stream", new
+        {
+            prompt = "hello orders",
+            headers = new Dictionary<string, string> { ["channel"] = "tests" },
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().Contain("aevatar.run.context");
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
+        host.InteractionService.LastRequest.ScopeId.Should().Be("scope-a");
+        host.InteractionService.LastRequest.Metadata.Should().ContainKey("channel").WhoseValue.Should().Be("tests");
     }
 
     [Fact]
@@ -1279,6 +1518,112 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ListDefaultRunsEndpoint_ShouldReturnDefaultServiceRunHistory()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-6);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-active");
+        host.LifecycleQueryPort.Deployments = new ServiceDeploymentCatalogSnapshot(
+            "scope-a:default:default:default",
+            [
+                new ServiceDeploymentSnapshot("dep-active", "rev-2", "def-actor-active", "Active", createdAt, updatedAt),
+                new ServiceDeploymentSnapshot("dep-old", "rev-1", "def-actor-old", "Inactive", createdAt.AddMinutes(-10), updatedAt.AddMinutes(-10)),
+            ],
+            updatedAt);
+        host.RunBindingReader.BindingsByRunId["run-default-list-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-default-list-1",
+                "def-actor-old",
+                "run-default-list-1",
+                "default-flow",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-default-list-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-default-list-1",
+            WorkflowName = "default-flow",
+            CompletionStatus = WorkflowRunCompletionStatus.Running,
+            StateVersion = 3,
+            LastEventId = "evt-3",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = true,
+            TotalSteps = 2,
+            CompletedSteps = 1,
+            RoleReplyCount = 1,
+            LastOutput = "working",
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunCatalogHttpResponse>("/api/scopes/scope-a/runs?take=5");
+
+        response.Should().NotBeNull();
+        response!.ServiceId.Should().Be("default");
+        response.Runs.Should().ContainSingle();
+        response.Runs[0].RunId.Should().Be("run-default-list-1");
+        response.Runs[0].RevisionId.Should().Be("rev-1");
+        response.Runs[0].DeploymentId.Should().Be("dep-old");
+        response.Runs[0].WorkflowName.Should().Be("default-flow");
+        host.RunBindingReader.Queries.Should().ContainSingle();
+        host.RunBindingReader.Queries[0].ScopeId.Should().Be("scope-a");
+    }
+
+    [Fact]
+    public async Task GetDefaultRunEndpoint_ShouldReturnScopeScopedRunSummary()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-7);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "default", "def-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:default", "dep-1", "rev-1", "def-actor-1");
+        host.RunBindingReader.BindingsByRunId["run-default-detail-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-default-detail-1",
+                "def-actor-1",
+                "run-default-detail-1",
+                "approval",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-default-detail-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-default-detail-1",
+            WorkflowName = "approval",
+            CompletionStatus = WorkflowRunCompletionStatus.Running,
+            StateVersion = 4,
+            LastEventId = "evt-4",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = null,
+            TotalSteps = 3,
+            CompletedSteps = 2,
+            RoleReplyCount = 1,
+            LastOutput = "awaiting approval",
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunSummaryHttpResponse>("/api/scopes/scope-a/runs/run-default-detail-1");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.ServiceId.Should().Be("default");
+        response.RunId.Should().Be("run-default-detail-1");
+        response.ActorId.Should().Be("run-actor-default-detail-1");
+        response.RevisionId.Should().Be("rev-1");
+        response.WorkflowName.Should().Be("approval");
+        response.StateVersion.Should().Be(4);
+        response.LastEventId.Should().Be("evt-4");
+    }
+
+    [Fact]
     public async Task ListRunsEndpoint_ShouldReturnScopeScopedRunHistory()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -1335,6 +1680,56 @@ public sealed class ScopeServiceEndpointsTests
         host.RunBindingReader.Queries[0].ScopeId.Should().Be("scope-a");
         host.RunBindingReader.Queries[0].Take.Should().Be(5);
         host.RunBindingReader.Queries[0].DefinitionActorIds.Should().BeEquivalentTo(["def-actor-active", "def-actor-old"]);
+    }
+
+    [Fact]
+    public async Task GetRunEndpoint_ShouldReturnScopeScopedRunSummaryForNamedService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-7);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "def-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "def-actor-1");
+        host.RunBindingReader.BindingsByRunId["run-orders-detail-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-orders-detail-1",
+                "def-actor-1",
+                "run-orders-detail-1",
+                "orders",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-orders-detail-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-orders-detail-1",
+            WorkflowName = "orders",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 8,
+            LastEventId = "evt-8",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = true,
+            TotalSteps = 4,
+            CompletedSteps = 4,
+            RoleReplyCount = 2,
+            LastOutput = "done",
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunSummaryHttpResponse>("/api/scopes/scope-a/services/orders/runs/run-orders-detail-1");
+
+        response.Should().NotBeNull();
+        response!.ScopeId.Should().Be("scope-a");
+        response.ServiceId.Should().Be("orders");
+        response.RunId.Should().Be("run-orders-detail-1");
+        response.ActorId.Should().Be("run-actor-orders-detail-1");
+        response.RevisionId.Should().Be("rev-1");
+        response.WorkflowName.Should().Be("orders");
+        response.StateVersion.Should().Be(8);
+        response.LastEventId.Should().Be("evt-8");
     }
 
     [Fact]
@@ -1408,6 +1803,78 @@ public sealed class ScopeServiceEndpointsTests
         response.Audit.WorkflowName.Should().Be("approval");
         response.Audit.Summary.TotalSteps.Should().Be(3);
         host.WorkflowQueryService.ReportCalls.Should().ContainSingle("run-actor-audit-1");
+    }
+
+    [Fact]
+    public async Task GetRunAuditEndpoint_ShouldReturnRunAuditReportForNamedService()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-8);
+        var updatedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        host.LifecycleQueryPort.Service = BuildService("scope-a", "orders", "def-actor-1");
+        host.LifecycleQueryPort.Deployments = BuildDeployments("scope-a:default:default:orders", "dep-1", "rev-1", "def-actor-1");
+        host.RunBindingReader.BindingsByRunId["run-orders-audit-1"] =
+        [
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-orders-audit-1",
+                "def-actor-1",
+                "run-orders-audit-1",
+                "orders",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a",
+                CreatedAt: createdAt,
+                UpdatedAt: updatedAt),
+        ];
+        host.WorkflowQueryService.SnapshotsByActorId["run-actor-orders-audit-1"] = new WorkflowActorSnapshot
+        {
+            ActorId = "run-actor-orders-audit-1",
+            WorkflowName = "orders",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            StateVersion = 12,
+            LastEventId = "evt-12",
+            LastUpdatedAt = updatedAt,
+            LastSuccess = true,
+            TotalSteps = 4,
+            CompletedSteps = 4,
+            RoleReplyCount = 2,
+            LastOutput = "approved",
+        };
+        host.WorkflowQueryService.ReportsByActorId["run-actor-orders-audit-1"] = new WorkflowRunReport
+        {
+            WorkflowName = "orders",
+            RootActorId = "run-actor-orders-audit-1",
+            CommandId = "cmd-2",
+            StateVersion = 12,
+            LastEventId = "evt-12",
+            CompletionStatus = WorkflowRunCompletionStatus.Completed,
+            ProjectionScope = WorkflowRunProjectionScope.RunIsolated,
+            TopologySource = WorkflowRunTopologySource.RuntimeSnapshot,
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt,
+            StartedAt = createdAt,
+            EndedAt = updatedAt,
+            DurationMs = 1000,
+            Success = true,
+            FinalOutput = "approved",
+            Summary = new WorkflowRunStatistics
+            {
+                TotalSteps = 4,
+                CompletedSteps = 4,
+                RoleReplyCount = 2,
+            },
+        };
+
+        var response = await host.Client.GetFromJsonAsync<ScopeServiceEndpoints.ScopeServiceRunAuditHttpResponse>("/api/scopes/scope-a/services/orders/runs/run-orders-audit-1/audit");
+
+        response.Should().NotBeNull();
+        response!.Summary.ServiceId.Should().Be("orders");
+        response.Summary.RunId.Should().Be("run-orders-audit-1");
+        response.Summary.ActorId.Should().Be("run-actor-orders-audit-1");
+        response.Audit.RootActorId.Should().Be("run-actor-orders-audit-1");
+        response.Audit.WorkflowName.Should().Be("orders");
+        host.WorkflowQueryService.ReportCalls.Should().ContainSingle("run-actor-orders-audit-1");
     }
 
     private static ServiceCatalogSnapshot BuildService(string scopeId, string serviceId, string primaryActorId) =>
