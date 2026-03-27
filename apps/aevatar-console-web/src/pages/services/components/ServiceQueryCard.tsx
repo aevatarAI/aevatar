@@ -23,24 +23,13 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
     <ProCard {...moduleCardProps}>
       <Space wrap>
         <Input
-          placeholder="platform tenantId"
-          style={{ width: 180 }}
+          placeholder="tenantId (scopeId)"
+          style={{ width: 200 }}
           value={draft.tenantId}
           onChange={(event) =>
             onChange({
               ...draft,
               tenantId: event.target.value,
-            })
-          }
-        />
-        <Input
-          placeholder="platform appId"
-          style={{ width: 180 }}
-          value={draft.appId}
-          onChange={(event) =>
-            onChange({
-              ...draft,
-              appId: event.target.value,
             })
           }
         />
@@ -75,8 +64,8 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         type="secondary"
         style={{ display: 'block', marginTop: 12 }}
       >
-        Raw platform catalog only. `tenantId` and `appId` are platform-managed
-        identity fields. End-user workflow assets should be opened from Scopes.
+        Raw platform catalog only. End-user workflow assets should be opened
+        from Scopes.
       </Typography.Text>
     </ProCard>
   );

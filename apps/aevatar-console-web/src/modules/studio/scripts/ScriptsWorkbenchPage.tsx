@@ -846,7 +846,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const scopeScriptsQuery = useQuery({
     queryKey: ['studio-scripts-scope', appContext.scopeId],
     enabled: scopeBacked,
-    queryFn: () => scriptsApi.listScripts(true),
+    queryFn: () => scriptsApi.listScripts(resolvedScopeId, true),
   });
 
   const runtimeSnapshotsQuery = useQuery({
@@ -870,7 +870,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       const entries = await Promise.all(
         scopeScriptIds.map(async (scriptId) => {
           try {
-            const catalog = await scriptsApi.getScriptCatalog(scriptId);
+            const catalog = await scriptsApi.getScriptCatalog(resolvedScopeId, scriptId);
             return [scriptId, catalog] as const;
           } catch {
             return null;
@@ -1550,12 +1550,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       throw new Error('Save is only available after Studio resolves the current scope.');
     }
 
-    const response = await scriptsApi.saveScript({
+    const response = await scriptsApi.saveScript(resolvedScopeId, {
       scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
       revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
       expectedBaseRevision: selectedDraft.baseRevision || undefined,
       sourceText: serializePersistedSource(selectedDraft.package),
-      package: selectedDraft.package,
     });
 
     updateSelectedDraft((draft) => ({
@@ -1792,12 +1791,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setPromotionPending(true);
     setNotice(null);
     try {
-      const response = await scriptsApi.proposeEvolution({
-        scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
+      const scriptId = normalizeStudioId(selectedDraft.scriptId, 'script');
+      const response = await scriptsApi.proposeEvolution(resolvedScopeId, scriptId, {
         baseRevision,
         candidateRevision: normalizeStudioId(selectedDraft.revision, 'rev'),
         candidateSource: serializePersistedSource(selectedDraft.package),
-        candidatePackage: selectedDraft.package,
         reason: promotionReasonDraft || selectedDraft.reason || undefined,
       });
 

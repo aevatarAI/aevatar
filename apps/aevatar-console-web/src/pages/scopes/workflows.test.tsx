@@ -33,7 +33,6 @@ jest.mock('@/shared/api/scopesApi', () => ({
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
     getAuthSession: jest.fn(async () => ({ enabled: false })),
-    getAppContext: jest.fn(async () => ({})),
   },
 }));
 

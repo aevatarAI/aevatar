@@ -74,6 +74,7 @@ import type { StudioTab } from '@/shared/studio/navigation';
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
+import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import type {
   StudioConnectorDefinition,
   StudioExecutionDetail,
@@ -1159,6 +1160,12 @@ const StudioPage: React.FC = () => {
     enabled: studioHostReady && Boolean(resolvedStudioScopeId),
     queryFn: () => studioApi.getScopeBinding(resolvedStudioScopeId),
   });
+  const runtimePrimitivesQuery = useQuery({
+    queryKey: ['studio-runtime-primitives'],
+    enabled: studioHostReady,
+    retry: false,
+    queryFn: () => runtimeQueryApi.listPrimitives(),
+  });
   const matchingWorkspaceWorkflow = useMemo(
     () =>
       (workflowsQuery.data ?? []).find((item) => item.name === templateWorkflow) ??
@@ -1180,6 +1187,26 @@ const StudioPage: React.FC = () => {
     () => (workflowsQuery.data ?? []).map((item) => item.name),
     [workflowsQuery.data],
   );
+  const availableStepTypes = useMemo(() => {
+    const stepTypes = new Set<string>();
+    for (const primitive of runtimePrimitivesQuery.data ?? []) {
+      const primitiveName = primitive.name.trim();
+      if (primitiveName) {
+        stepTypes.add(primitiveName);
+      }
+
+      for (const alias of primitive.aliases) {
+        const normalizedAlias = alias.trim();
+        if (normalizedAlias) {
+          stepTypes.add(normalizedAlias);
+        }
+      }
+    }
+
+    return Array.from(stepTypes).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }, [runtimePrimitivesQuery.data]);
   const deferredDraftYaml = useDeferredValue(draftYaml);
   const defaultDirectoryId = useMemo(
     () => readDefaultDirectoryId(workspaceSettingsQuery.data?.directories),
@@ -1238,13 +1265,19 @@ const StudioPage: React.FC = () => {
   const sourceWorkflowLayout = activeWorkflowFile?.layout ?? null;
 
   const parseYamlQuery = useQuery({
-    queryKey: ['studio-parse-yaml', deferredDraftYaml, workflowNames.join('|')],
+    queryKey: [
+      'studio-parse-yaml',
+      deferredDraftYaml,
+      workflowNames.join('|'),
+      availableStepTypes.join('|'),
+    ],
     enabled: studioHostReady && Boolean(deferredDraftYaml.trim()),
     retry: false,
     queryFn: () =>
       studioApi.parseYaml({
         yaml: deferredDraftYaml,
         availableWorkflowNames: workflowNames,
+        availableStepTypes,
       }),
   });
 
@@ -1622,6 +1655,7 @@ const StudioPage: React.FC = () => {
             await studioApi.parseYaml({
               yaml: workflowFile.yaml,
               availableWorkflowNames,
+              availableStepTypes,
             })
           ).document ??
           null;
@@ -1638,6 +1672,7 @@ const StudioPage: React.FC = () => {
   }, [
     activeWorkflowDocument,
     activeWorkflowName,
+    availableStepTypes,
     draftWorkflowName,
     draftYaml,
     workflowsQuery.data,
@@ -2423,6 +2458,7 @@ const StudioPage: React.FC = () => {
     const parsed = await studioApi.parseYaml({
       yaml,
       availableWorkflowNames: workflowNames,
+      availableStepTypes,
     });
 
     setSelectedWorkflowId('');
@@ -3177,6 +3213,7 @@ const StudioPage: React.FC = () => {
     const serialized = await studioApi.serializeYaml({
       document: nextPayload.document,
       availableWorkflowNames: workflowNames,
+      availableStepTypes,
     });
 
     setDraftYaml(serialized.yaml);
@@ -4171,15 +4208,33 @@ const StudioPage: React.FC = () => {
               }),
             )
           }
-          onRunInConsole={() =>
-            history.push(
-              buildRuntimeRunsHref({
-                scopeId: resolvedStudioScopeId || undefined,
-                route: activeWorkflowName || templateWorkflow || undefined,
-                prompt: runPrompt || undefined,
-              }),
-            )
-          }
+          onRunInConsole={async () => {
+            const workflowName = (activeWorkflowName || templateWorkflow || '').trim();
+            const scopeId = resolvedStudioScopeId;
+            try {
+              const workflowYamls = await buildWorkflowYamlBundle();
+              const draftKey = saveScopeDraftRunPayload({
+                bundleName: workflowName,
+                bundleYamls: workflowYamls,
+              });
+              history.push(
+                buildRuntimeRunsHref({
+                  scopeId: scopeId || undefined,
+                  route: workflowName || undefined,
+                  prompt: runPrompt || undefined,
+                  draftKey,
+                }),
+              );
+            } catch {
+              history.push(
+                buildRuntimeRunsHref({
+                  scopeId: scopeId || undefined,
+                  route: workflowName || undefined,
+                  prompt: runPrompt || undefined,
+                }),
+              );
+            }
+          }}
           onAskAiPromptChange={(value) => {
             setAskAiPrompt(value);
             setAskAiNotice(null);

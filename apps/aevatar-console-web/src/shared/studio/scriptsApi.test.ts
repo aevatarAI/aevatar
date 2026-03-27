@@ -53,7 +53,7 @@ describe('scriptsApi host-session requests', () => {
       string,
       RequestInit | undefined,
     ];
-    expect(input).toBe('/api/app/scripts/validate');
+    expect(input).toBe('/api/scripts/validate');
     expect(init?.credentials).toBe('same-origin');
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',

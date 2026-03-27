@@ -625,7 +625,7 @@ function decodeStudioScopeBindingStatus(
 
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
-    return requestJson("/api/app/context");
+    return requestJson("/api/studio/context");
   },
 
   getAuthSession(): Promise<StudioAuthSession> {
@@ -675,6 +675,7 @@ export const studioApi = {
   parseYaml(input: {
     yaml: string;
     availableWorkflowNames?: string[];
+    availableStepTypes?: string[];
   }): Promise<StudioParseYamlResult> {
     return requestJson("/api/editor/parse-yaml", {
       method: "POST",
@@ -682,6 +683,7 @@ export const studioApi = {
       body: JSON.stringify({
         yaml: input.yaml,
         availableWorkflowNames: input.availableWorkflowNames,
+        availableStepTypes: input.availableStepTypes,
       }),
     });
   },
@@ -689,6 +691,7 @@ export const studioApi = {
   serializeYaml(input: {
     document: StudioWorkflowDocument;
     availableWorkflowNames?: string[];
+    availableStepTypes?: string[];
   }): Promise<StudioSerializeYamlResult> {
     return requestJson("/api/editor/serialize-yaml", {
       method: "POST",
@@ -696,6 +699,7 @@ export const studioApi = {
       body: JSON.stringify({
         document: input.document,
         availableWorkflowNames: input.availableWorkflowNames,
+        availableStepTypes: input.availableStepTypes,
       }),
     });
   },
@@ -1084,7 +1088,7 @@ export const studioApi = {
     let reasoningText = "";
 
     await streamSse(
-      "/api/app/workflow-generator",
+      "/api/workflows/generator",
       {
         prompt: input.prompt.trim(),
         currentYaml: input.currentYaml,

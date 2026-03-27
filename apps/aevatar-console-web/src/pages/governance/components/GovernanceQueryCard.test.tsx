@@ -11,17 +11,15 @@ describe('GovernanceQueryCard', () => {
       <GovernanceQueryCard
         draft={{
           tenantId: '',
-          appId: '',
           namespace: '',
           serviceId: 'svc-1',
           revisionId: '',
         }}
         serviceOptions={[
           {
-            label: 'Payments (t1/a1/n1/svc-1)',
+            label: 'Payments (t1/n1/svc-1)',
             value: 't1/a1/n1/svc-1',
             tenantId: 't1',
-            appId: 'a1',
             namespace: 'n1',
             serviceId: 'svc-1',
           },
@@ -33,14 +31,13 @@ describe('GovernanceQueryCard', () => {
 
     expect(
       screen.getByText(
-        'Select a service to hydrate the platform tenantId, appId, and namespace for this raw governance view.',
+        'Select a service to hydrate the identity fields for this raw governance view.',
       ),
     ).toBeInTheDocument();
 
     await waitFor(() =>
       expect(onChange).toHaveBeenCalledWith({
         tenantId: 't1',
-        appId: 'a1',
         namespace: 'n1',
         serviceId: 'svc-1',
         revisionId: '',
@@ -53,7 +50,6 @@ describe('GovernanceQueryCard', () => {
       <GovernanceQueryCard
         draft={{
           tenantId: '',
-          appId: '',
           namespace: '',
           serviceId: '',
           revisionId: '',
@@ -66,12 +62,12 @@ describe('GovernanceQueryCard', () => {
     );
 
     expect(
-      screen.getByText('Enter platform tenantId, appId, namespace first'),
+      screen.getByText('Enter tenantId and namespace first'),
     ).toBeInTheDocument();
     expect(screen.getByRole('combobox')).toBeDisabled();
     expect(
       screen.getByText(
-        'This raw governance view needs platform tenantId, appId, and namespace first. Most user flows should stay on Scopes or open this page from Platform Services.',
+        'This raw governance view needs tenantId and namespace first. Most user flows should stay on Scopes or open this page from Platform Services.',
       ),
     ).toBeInTheDocument();
   });

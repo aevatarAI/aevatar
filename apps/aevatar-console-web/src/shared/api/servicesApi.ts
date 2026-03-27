@@ -529,7 +529,6 @@ const decodeServiceCatalogSnapshots: Decoder<ServiceCatalogSnapshot[]> = (
 function buildQuery(query: ServiceIdentityQuery): string {
   return withQuery("", {
     tenantId: query.tenantId?.trim(),
-    appId: query.appId?.trim(),
     namespace: query.namespace?.trim(),
     take: query.take,
   });
@@ -550,7 +549,6 @@ export const servicesApi = {
     return requestJson(
       withQuery(`/api/services/${encodeURIComponent(serviceId)}`, {
         tenantId: query.tenantId?.trim(),
-        appId: query.appId?.trim(),
         namespace: query.namespace?.trim(),
       }),
       (value) =>
@@ -567,7 +565,6 @@ export const servicesApi = {
     return requestJson(
       withQuery(`/api/services/${encodeURIComponent(serviceId)}/revisions`, {
         tenantId: query.tenantId?.trim(),
-        appId: query.appId?.trim(),
         namespace: query.namespace?.trim(),
       }),
       (value) =>
@@ -587,7 +584,6 @@ export const servicesApi = {
     return requestJson(
       withQuery(`/api/services/${encodeURIComponent(serviceId)}/deployments`, {
         tenantId: query.tenantId?.trim(),
-        appId: query.appId?.trim(),
         namespace: query.namespace?.trim(),
       }),
       (value) =>
@@ -607,7 +603,6 @@ export const servicesApi = {
     return requestJson(
       withQuery(`/api/services/${encodeURIComponent(serviceId)}/serving`, {
         tenantId: query.tenantId?.trim(),
-        appId: query.appId?.trim(),
         namespace: query.namespace?.trim(),
       }),
       (value) =>
@@ -624,7 +619,6 @@ export const servicesApi = {
     return requestJson(
       withQuery(`/api/services/${encodeURIComponent(serviceId)}/rollouts`, {
         tenantId: query.tenantId?.trim(),
-        appId: query.appId?.trim(),
         namespace: query.namespace?.trim(),
       }),
       (value) =>
@@ -641,7 +635,6 @@ export const servicesApi = {
     return requestJson(
       withQuery(`/api/services/${encodeURIComponent(serviceId)}/traffic`, {
         tenantId: query.tenantId?.trim(),
-        appId: query.appId?.trim(),
         namespace: query.namespace?.trim(),
       }),
       (value) =>

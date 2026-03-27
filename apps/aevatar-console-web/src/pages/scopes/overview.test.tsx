@@ -35,10 +35,9 @@ jest.mock('@/shared/api/scopesApi', () => ({
 
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
-    getAuthSession: jest.fn(async () => ({ enabled: false })),
-    getAppContext: jest.fn(async () => ({
+    getAuthSession: jest.fn(async () => ({
+      enabled: false,
       scopeId: 'scope-a',
-      scopeResolved: true,
       scopeSource: 'nyxid',
     })),
     getScopeBinding: jest.fn(async () => ({

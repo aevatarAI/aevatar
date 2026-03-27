@@ -1,6 +1,5 @@
 export interface ServiceIdentityQuery {
   tenantId?: string;
-  appId?: string;
   namespace?: string;
   take?: number;
 }

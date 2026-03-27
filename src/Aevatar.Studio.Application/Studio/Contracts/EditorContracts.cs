@@ -5,7 +5,8 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 
 public sealed record ParseYamlRequest(
     string Yaml,
-    IReadOnlyCollection<string>? AvailableWorkflowNames = null);
+    IReadOnlyCollection<string>? AvailableWorkflowNames = null,
+    IReadOnlyCollection<string>? AvailableStepTypes = null);
 
 public sealed record ParseYamlResponse(
     WorkflowDocument? Document,
@@ -14,7 +15,8 @@ public sealed record ParseYamlResponse(
 
 public sealed record SerializeYamlRequest(
     WorkflowDocument Document,
-    IReadOnlyCollection<string>? AvailableWorkflowNames = null);
+    IReadOnlyCollection<string>? AvailableWorkflowNames = null,
+    IReadOnlyCollection<string>? AvailableStepTypes = null);
 
 public sealed record SerializeYamlResponse(
     string Yaml,
@@ -23,13 +25,15 @@ public sealed record SerializeYamlResponse(
 
 public sealed record ValidateWorkflowRequest(
     WorkflowDocument Document,
-    IReadOnlyCollection<string>? AvailableWorkflowNames = null);
+    IReadOnlyCollection<string>? AvailableWorkflowNames = null,
+    IReadOnlyCollection<string>? AvailableStepTypes = null);
 
 public sealed record ValidateWorkflowResponse(IReadOnlyList<ValidationFinding> Findings);
 
 public sealed record NormalizeWorkflowRequest(
     WorkflowDocument Document,
-    IReadOnlyCollection<string>? AvailableWorkflowNames = null);
+    IReadOnlyCollection<string>? AvailableWorkflowNames = null,
+    IReadOnlyCollection<string>? AvailableStepTypes = null);
 
 public sealed record NormalizeWorkflowResponse(
     WorkflowDocument Document,

@@ -95,21 +95,9 @@ const ScopeScriptsPage: React.FC = () => {
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
-  const studioHostAccessResolved =
-    !authSessionQuery.isLoading && !authSessionQuery.isError;
-  const studioHostAuthenticated =
-    authSessionQuery.data?.enabled === false ||
-    Boolean(authSessionQuery.data?.authenticated);
-  const appContextQuery = useQuery({
-    queryKey: ["scopes", "app-context"],
-    enabled: studioHostAccessResolved && studioHostAuthenticated,
-    queryFn: () => studioApi.getAppContext(),
-    retry: false,
-  });
   const resolvedScope = useMemo(
-    () =>
-      resolveStudioScopeContext(authSessionQuery.data, appContextQuery.data),
-    [appContextQuery.data, authSessionQuery.data]
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data]
   );
 
   useEffect(() => {

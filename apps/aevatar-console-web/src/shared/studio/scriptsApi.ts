@@ -198,6 +198,10 @@ async function streamSse(
   }
 }
 
+function scopePath(scopeId: string): string {
+  return `/api/scopes/${encodeURIComponent(scopeId)}`;
+}
+
 export const scriptsApi = {
   validateDraft(
     payload: {
@@ -208,7 +212,7 @@ export const scriptsApi = {
     },
     signal?: AbortSignal,
   ): Promise<ScriptValidationResult> {
-    return requestJson('/api/app/scripts/validate', {
+    return requestJson('/api/scripts/validate', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify(payload),
@@ -216,34 +220,45 @@ export const scriptsApi = {
     });
   },
 
-  listScripts(includeSource = false): Promise<ScopedScriptDetail[]> {
+  listScripts(scopeId: string, includeSource = false): Promise<ScopedScriptDetail[]> {
     return requestJson(
-      `/api/app/scripts?includeSource=${includeSource ? 'true' : 'false'}`,
+      `${scopePath(scopeId)}/scripts?includeSource=${includeSource ? 'true' : 'false'}`,
     );
   },
 
-  getScript(scriptId: string): Promise<ScopedScriptDetail> {
-    return requestJson(`/api/app/scripts/${encodeURIComponent(scriptId)}`);
-  },
-
-  getScriptCatalog(scriptId: string): Promise<ScriptCatalogSnapshot> {
+  getScript(scopeId: string, scriptId: string): Promise<ScopedScriptDetail> {
     return requestJson(
-      `/api/app/scripts/${encodeURIComponent(scriptId)}/catalog`,
+      `${scopePath(scopeId)}/scripts/${encodeURIComponent(scriptId)}`,
     );
   },
 
-  saveScript(payload: {
-    scriptId: string;
-    sourceText?: string;
-    revisionId?: string;
-    expectedBaseRevision?: string;
-    package?: ScriptPackage | null;
-  }): Promise<ScopedScriptDetail> {
-    return requestJson('/api/app/scripts', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
+  getScriptCatalog(scopeId: string, scriptId: string): Promise<ScriptCatalogSnapshot> {
+    return requestJson(
+      `${scopePath(scopeId)}/scripts/${encodeURIComponent(scriptId)}/catalog`,
+    );
+  },
+
+  saveScript(
+    scopeId: string,
+    payload: {
+      scriptId: string;
+      sourceText?: string;
+      revisionId?: string;
+      expectedBaseRevision?: string;
+    },
+  ): Promise<ScopedScriptDetail> {
+    return requestJson(
+      `${scopePath(scopeId)}/scripts/${encodeURIComponent(payload.scriptId)}`,
+      {
+        method: 'PUT',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          sourceText: payload.sourceText,
+          revisionId: payload.revisionId,
+          expectedBaseRevision: payload.expectedBaseRevision,
+        }),
+      },
+    );
   },
 
   runDraftScript(payload: {
@@ -257,7 +272,7 @@ export const scriptsApi = {
     package?: ScriptPackage | null;
   }): Promise<DraftRunResult> {
     return requestJson(
-      `/api/scopes/${encodeURIComponent(payload.scopeId)}/scripts/draft-run`,
+      `${scopePath(payload.scopeId)}/scripts/draft-run`,
       {
         method: 'POST',
         headers: JSON_HEADERS,
@@ -275,35 +290,40 @@ export const scriptsApi = {
   },
 
   listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {
-    return requestJson(`/api/app/scripts/runtimes?take=${take}`);
+    return requestJson(`/api/scripts/runtimes?take=${take}`);
   },
 
   getRuntimeReadModel(actorId: string): Promise<ScriptReadModelSnapshot> {
     return requestJson(
-      `/api/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`,
+      `/api/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`,
     );
   },
 
-  proposeEvolution(payload: {
-    scriptId: string;
-    baseRevision?: string;
-    candidateRevision?: string;
-    candidateSource?: string;
-    candidateSourceHash?: string;
-    reason?: string;
-    proposalId?: string;
-    candidatePackage?: ScriptPackage | null;
-  }): Promise<ScriptPromotionDecision> {
-    return requestJson('/api/app/scripts/evolutions/proposals', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
+  proposeEvolution(
+    scopeId: string,
+    scriptId: string,
+    payload: {
+      baseRevision?: string;
+      candidateRevision?: string;
+      candidateSource?: string;
+      candidateSourceHash?: string;
+      reason?: string;
+      proposalId?: string;
+    },
+  ): Promise<ScriptPromotionDecision> {
+    return requestJson(
+      `${scopePath(scopeId)}/scripts/${encodeURIComponent(scriptId)}/evolutions/proposals`,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(payload),
+      },
+    );
   },
 
   getEvolutionDecision(proposalId: string): Promise<ScriptPromotionDecision> {
     return requestJson(
-      `/api/app/scripts/evolutions/${encodeURIComponent(proposalId)}`,
+      `/api/scripts/evolutions/${encodeURIComponent(proposalId)}`,
     );
   },
 
@@ -316,7 +336,7 @@ export const scriptsApi = {
     let scriptPackage: ScriptPackage | null = null;
 
     await streamSse(
-      '/api/app/scripts/generator',
+      '/api/scripts/generator',
       payload,
       (frame) => {
         const normalized = normalizeAssistantFrame(frame);
