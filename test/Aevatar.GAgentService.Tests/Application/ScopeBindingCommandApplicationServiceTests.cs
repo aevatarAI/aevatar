@@ -107,6 +107,41 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldIgnoreConfiguredServiceIdentityOverrides()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            scopeScriptQueryPort,
+            scriptDefinitionSnapshotPort,
+            actorPort,
+            new ScopeWorkflowCapabilityOptions
+            {
+                DefaultServiceId = DefaultOptions.DefaultServiceId,
+                ServiceAppId = "custom-app",
+                ServiceNamespace = "custom-namespace",
+            });
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ])));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
+        createCommand.Spec.Identity.Namespace.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceNamespace);
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldCreateScriptingRevision_FromScopeScript()
     {
         var commandPort = new RecordingServiceCommandPort();
@@ -781,6 +816,25 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         FakeScopeScriptQueryPort scopeScriptQueryPort,
         FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
         FakeWorkflowRunActorPort actorPort) =>
+        CreateService(
+            commandPort,
+            lifecyclePort,
+            governanceCommandPort,
+            governanceQueryPort,
+            scopeScriptQueryPort,
+            scriptDefinitionSnapshotPort,
+            actorPort,
+            DefaultOptions);
+
+    private static ScopeBindingCommandApplicationService CreateService(
+        RecordingServiceCommandPort commandPort,
+        FakeServiceLifecycleQueryPort lifecyclePort,
+        RecordingServiceGovernanceCommandPort governanceCommandPort,
+        FakeServiceGovernanceQueryPort governanceQueryPort,
+        FakeScopeScriptQueryPort scopeScriptQueryPort,
+        FakeScriptDefinitionSnapshotPort scriptDefinitionSnapshotPort,
+        FakeWorkflowRunActorPort actorPort,
+        ScopeWorkflowCapabilityOptions options) =>
         new(
             commandPort,
             lifecyclePort,
@@ -789,7 +843,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             scopeScriptQueryPort,
             scriptDefinitionSnapshotPort,
             actorPort,
-            Options.Create(DefaultOptions));
+            Options.Create(options));
 
     private static ScriptDefinitionSnapshot CreateScriptDefinitionSnapshot(
         string scriptId,

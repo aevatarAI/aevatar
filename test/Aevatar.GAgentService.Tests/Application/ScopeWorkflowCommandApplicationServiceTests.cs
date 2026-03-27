@@ -92,6 +92,32 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
     }
 
     [Fact]
+    public async Task UpsertAsync_ShouldIgnoreConfiguredServiceIdentityOverrides()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var queryPort = new FakeWorkflowQueryPort(getByWorkflowIdResult: null);
+        var service = CreateService(
+            commandPort,
+            lifecyclePort,
+            new RecordingServiceGovernanceCommandPort(),
+            new FakeServiceGovernanceQueryPort(),
+            queryPort,
+            new ScopeWorkflowCapabilityOptions
+            {
+                ServiceAppId = "custom-app",
+                ServiceNamespace = "custom-namespace",
+            });
+
+        await service.UpsertAsync(new ScopeWorkflowUpsertRequest(
+            ScopeId, WorkflowId, WorkflowYaml));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
+        createCommand.Spec.Identity.Namespace.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceNamespace);
+    }
+
+    [Fact]
     public async Task UpsertAsync_ShouldReturnFallbackSummary_WhenQueryReturnsNull()
     {
         var commandPort = new RecordingServiceCommandPort();
@@ -139,13 +165,28 @@ public sealed class ScopeWorkflowCommandApplicationServiceTests
         RecordingServiceGovernanceCommandPort governanceCommandPort,
         FakeServiceGovernanceQueryPort governanceQueryPort,
         FakeWorkflowQueryPort queryPort) =>
+        CreateService(
+            commandPort,
+            lifecyclePort,
+            governanceCommandPort,
+            governanceQueryPort,
+            queryPort,
+            new ScopeWorkflowCapabilityOptions());
+
+    private static ScopeWorkflowCommandApplicationService CreateService(
+        RecordingServiceCommandPort commandPort,
+        FakeServiceLifecycleQueryPort lifecyclePort,
+        RecordingServiceGovernanceCommandPort governanceCommandPort,
+        FakeServiceGovernanceQueryPort governanceQueryPort,
+        FakeWorkflowQueryPort queryPort,
+        ScopeWorkflowCapabilityOptions options) =>
         new(
             commandPort,
             lifecyclePort,
             governanceCommandPort,
             governanceQueryPort,
             queryPort,
-            Options.Create(new ScopeWorkflowCapabilityOptions()));
+            Options.Create(options));
 
     private static ServiceCatalogSnapshot CreateServiceSnapshot(
         string serviceId,

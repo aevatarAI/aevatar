@@ -14,6 +14,16 @@ import RunsPage from "./index";
 
 const mockDispatch = jest.fn();
 const mockReset = jest.fn();
+const mockSession = {
+  context: undefined,
+  status: "idle",
+  messages: [],
+  events: [],
+  activeSteps: new Set<string>(),
+  pendingHumanInput: undefined,
+  runId: "",
+  error: undefined,
+};
 
 jest.mock("@aevatar-react-sdk/agui", () => ({
   connectChatWebSocket: jest.fn(),
@@ -25,16 +35,7 @@ jest.mock("@aevatar-react-sdk/agui", () => ({
     signaling: false,
   })),
   useRunSession: jest.fn(() => ({
-    session: {
-      context: undefined,
-      status: "idle",
-      messages: [],
-      events: [],
-      activeSteps: new Set<string>(),
-      pendingHumanInput: undefined,
-      runId: "",
-      error: undefined,
-    },
+    session: mockSession,
     dispatch: mockDispatch,
     reset: mockReset,
   })),
@@ -97,9 +98,18 @@ describe("RunsPage", () => {
   beforeEach(() => {
     window.history.replaceState({}, "", "/runtime/runs");
     window.sessionStorage.clear();
+    window.localStorage.clear();
     jest.clearAllMocks();
     mockDispatch.mockReset();
     mockReset.mockReset();
+    mockSession.context = undefined;
+    mockSession.status = "idle";
+    mockSession.messages = [];
+    mockSession.events = [];
+    mockSession.activeSteps = new Set<string>();
+    mockSession.pendingHumanInput = undefined;
+    mockSession.runId = "";
+    mockSession.error = undefined;
     mockedRuntimeRunsApi.invokeEndpoint.mockResolvedValue({
       requestId: "cmd-1",
       targetActorId: "actor-1",
