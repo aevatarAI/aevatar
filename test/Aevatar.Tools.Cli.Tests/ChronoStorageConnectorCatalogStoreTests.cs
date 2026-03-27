@@ -135,7 +135,7 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
     }
 
     [Fact]
-    public async Task GetConnectorCatalogAsync_WhenDownloadUrlReturnsNotFound_ShouldThrow()
+    public async Task GetConnectorCatalogAsync_WhenDownloadUrlReturnsNotFound_ShouldTreatCatalogAsMissing()
     {
         using var workspaceRoot = new TemporaryDirectory();
         var storageServer = new BrokenDownloadChronoStorageServer();
@@ -146,10 +146,11 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             storageServer.CreateHttpClientFactory(),
             workspaceRoot.Path);
 
-        var act = () => store.GetConnectorCatalogAsync();
+        var catalog = await store.GetConnectorCatalogAsync();
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*could not be downloaded*");
+        catalog.FileExists.Should().BeFalse();
+        catalog.Connectors.Should().BeEmpty();
+        catalog.FilePath.Should().Be("chrono-storage://aevatar-studio/scope-missing/connectors.json");
     }
 
     private static ChronoStorageConnectorCatalogStore CreateStore(

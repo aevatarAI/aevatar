@@ -266,9 +266,6 @@ const RunsPage: React.FC = () => {
   const [activeScopeId, setActiveScopeId] = useState(
     initialFormValues.scopeId ?? ""
   );
-  const [selectedServiceOverrideId, setSelectedServiceOverrideId] = useState(
-    initialFormValues.serviceOverrideId ?? ""
-  );
   const [activeServiceOverrideId, setActiveServiceOverrideId] = useState(
     initialFormValues.serviceOverrideId ?? ""
   );
@@ -796,7 +793,6 @@ const RunsPage: React.FC = () => {
             actorId: entry.actorId || undefined,
             transport: selectedTransport,
           });
-          setSelectedServiceOverrideId(restoredServiceOverrideId ?? "");
           setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
           setActiveEndpointId(entry.endpointId || "chat");
         },
@@ -1147,13 +1143,14 @@ const RunsPage: React.FC = () => {
           {
             endpointId: endpointName,
             routeName: selectedRouteName,
-            serviceOverrideId: selectedServiceOverrideId,
+            serviceOverrideId:
+              activeServiceOverrideId || initialFormValues.serviceOverrideId,
           },
           false
         )
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
         : "/api/scopes/{scopeId}/invoke/chat:stream"
-      : trimOptional(selectedServiceOverrideId)
+      : trimOptional(activeServiceOverrideId || initialFormValues.serviceOverrideId)
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
@@ -1426,7 +1423,6 @@ const RunsPage: React.FC = () => {
               onCatalogSearchChange={setCatalogSearch}
               onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
               onEndpointChange={setActiveEndpointId}
-              onServiceOverrideChange={setSelectedServiceOverrideId}
               onSelectRouteName={setSelectedRouteName}
               onSubmitRun={async (values) => {
                 await sendRun(values.scopeId ?? "", values);
@@ -1446,7 +1442,6 @@ const RunsPage: React.FC = () => {
                   actorId: undefined,
                   transport: selectedTransport,
                 });
-                setSelectedServiceOverrideId("");
                 setSelectedRouteName(
                   scopeDraftPayload?.bundleName ?? record.routeName
                 );

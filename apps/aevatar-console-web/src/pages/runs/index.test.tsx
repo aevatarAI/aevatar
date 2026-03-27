@@ -211,7 +211,7 @@ describe("RunsPage", () => {
     expect(loadDraftRunPayload(draftKey)).toBeNull();
   });
 
-  it("routes preset-backed chat runs through the selected workflow service", async () => {
+  it("routes chat runs through the selected workflow service when route is provided", async () => {
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([
       {
         name: "direct",
@@ -229,20 +229,22 @@ describe("RunsPage", () => {
       },
     ]);
 
-    window.history.replaceState({}, "", "/runtime/runs?scopeId=scope-1");
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&route=direct&prompt=Run%20it"
+    );
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Presets (1)" }));
-    fireEvent.click(screen.getByRole("button", { name: "Use preset" }));
+    await screen.findByDisplayValue("Run it");
     fireEvent.click(screen.getByRole("button", { name: "Start run" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
         "scope-1",
         expect.objectContaining({
-          prompt:
-            "Summarize what this chat bundle can do and produce a concise execution result.",
+          prompt: "Run it",
         }),
         expect.any(AbortSignal),
         {

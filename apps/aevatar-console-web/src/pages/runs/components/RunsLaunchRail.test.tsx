@@ -48,7 +48,6 @@ describe("RunsLaunchRail", () => {
         onCatalogSearchChange={jest.fn()}
         onClearRecentRuns={jest.fn()}
         onEndpointChange={jest.fn()}
-        onServiceOverrideChange={jest.fn()}
         onSelectRouteName={jest.fn()}
         onSubmitRun={async () => {}}
         onTransportChange={jest.fn()}

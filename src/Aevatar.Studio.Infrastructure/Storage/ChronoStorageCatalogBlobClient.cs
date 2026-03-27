@@ -106,8 +106,7 @@ internal sealed class ChronoStorageCatalogBlobClient
         using var downloadResponse = await GetDownloadClient(context, downloadUri).SendAsync(downloadRequest, cancellationToken);
         if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
         {
-            throw new InvalidOperationException(
-                $"Chrono-storage download URL returned 404 for object '{context.ObjectKey}'. The catalog object exists but could not be downloaded.");
+            return null;
         }
 
         downloadResponse.EnsureSuccessStatusCode();

@@ -134,6 +134,25 @@ public sealed class ChronoStorageRoleCatalogStoreTests
         loadedDraft.Draft.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetRoleCatalogAsync_WhenDownloadUrlReturnsNotFound_ShouldTreatCatalogAsMissing()
+    {
+        using var workspaceRoot = new TemporaryDirectory();
+        var storageServer = new BrokenDownloadChronoStorageServer();
+        storageServer.MarkObjectPresent("aevatar-studio", "scope-missing/roles.json");
+        var store = CreateStore(
+            new InMemoryStudioWorkspaceStore(),
+            new StubAppScopeResolver("scope-missing"),
+            storageServer.CreateHttpClientFactory(),
+            workspaceRoot.Path);
+
+        var catalog = await store.GetRoleCatalogAsync();
+
+        catalog.FileExists.Should().BeFalse();
+        catalog.Roles.Should().BeEmpty();
+        catalog.FilePath.Should().Be("chrono-storage://aevatar-studio/scope-missing/roles.json");
+    }
+
     private static ChronoStorageRoleCatalogStore CreateStore(
         IStudioWorkspaceStore localStore,
         IAppScopeResolver scopeResolver,
@@ -366,6 +385,85 @@ public sealed class ChronoStorageRoleCatalogStoreTests
             {
                 Content = new ByteArrayContent(payload),
             };
+        }
+    }
+
+    private sealed class BrokenDownloadChronoStorageServer
+    {
+        private readonly HashSet<string> _presentObjects = [];
+
+        public void MarkObjectPresent(string bucket, string objectKey) =>
+            _presentObjects.Add($"{bucket}:{objectKey}");
+
+        public IHttpClientFactory CreateHttpClientFactory()
+        {
+            var client = new HttpClient(new Handler(_presentObjects))
+            {
+                BaseAddress = new Uri("http://chrono-storage.test/"),
+            };
+            return new StubHttpClientFactory(client);
+        }
+
+        private sealed class Handler : HttpMessageHandler
+        {
+            private readonly IReadOnlySet<string> _presentObjects;
+
+            public Handler(IReadOnlySet<string> presentObjects)
+            {
+                _presentObjects = presentObjects;
+            }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var uri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
+                if (request.Method == HttpMethod.Get &&
+                    string.Equals(uri.AbsolutePath.Trim('/'), "api/buckets/aevatar-studio/presigned-url", StringComparison.Ordinal))
+                {
+                    var key = GetRequiredQueryValue(uri, "key");
+                    if (!_presentObjects.Contains($"aevatar-studio:{key}"))
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                    }
+
+                    return Task.FromResult(CreateJsonResponse(
+                        HttpStatusCode.OK,
+                        new
+                        {
+                            data = new
+                            {
+                                presignedUrl = $"http://download.local/missing/{Uri.EscapeDataString(key)}",
+                            },
+                            error = (object?)null,
+                        }));
+                }
+
+                if (string.Equals(uri.Host, "download.local", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                }
+
+                throw new InvalidOperationException($"Unhandled request {request.Method} {uri}.");
+            }
+
+            private static string GetRequiredQueryValue(Uri uri, string key)
+            {
+                var query = uri.Query.TrimStart('?')
+                    .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(pair => pair.Split('=', 2))
+                    .ToDictionary(
+                        pair => Uri.UnescapeDataString(pair[0]),
+                        pair => pair.Length > 1 ? Uri.UnescapeDataString(pair[1]) : string.Empty,
+                        StringComparer.Ordinal);
+                return query.TryGetValue(key, out var value)
+                    ? value
+                    : throw new InvalidOperationException($"Missing query key '{key}'.");
+            }
+
+            private static HttpResponseMessage CreateJsonResponse(HttpStatusCode statusCode, object payload) =>
+                new(statusCode)
+                {
+                    Content = JsonContent.Create(payload),
+                };
         }
     }
 
