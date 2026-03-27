@@ -854,7 +854,7 @@ public sealed class WorkflowCoreModulesCoverageTests
     }
 
     [Fact]
-    public async Task LLMCallModule_ShouldIgnoreNonLlmStep_AndPublishSelfChatRequestForLlmStep()
+    public async Task LLMCallModule_ShouldIgnoreNonLlmStep_AndSendBareLlmCallToImplicitAssistant()
     {
         var module = new LLMCallModule();
         var ctx = CreateContext();
@@ -886,6 +886,8 @@ public sealed class WorkflowCoreModulesCoverageTests
         chat.Prompt.Should().Be("system\n\nquestion");
         chat.SessionId.Should().Be(ChatSessionKeys.CreateWorkflowStepSessionId(ctx.AgentId, "run-llm-1", "llm-1", attempt: 1));
         chat.TimeoutMs.Should().Be(1800000);
+        ctx.Sent.Should().ContainSingle();
+        ctx.Sent[0].targetActorId.Should().Be($"{ctx.AgentId}:assistant");
         ctx.Published.Last().direction.Should().Be(TopologyAudience.Self);
     }
 

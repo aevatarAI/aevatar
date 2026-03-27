@@ -41,6 +41,7 @@ type RunsLaunchRailProps = {
   onCatalogSearchChange: (value: string) => void;
   onClearRecentRuns: () => void;
   onEndpointChange: (value: string) => void;
+  onServiceOverrideChange: (value: string) => void;
   onSelectRouteName: (value: string) => void;
   onSubmitRun: (values: RunFormValues) => Promise<void>;
   onTransportChange: (value: RunTransport) => void;
@@ -361,6 +362,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   onCatalogSearchChange,
   onClearRecentRuns,
   onEndpointChange,
+  onServiceOverrideChange,
   onSelectRouteName,
   onSubmitRun,
   onTransportChange,
@@ -434,6 +436,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     onValuesChange={(_, values) => {
                       onSelectRouteName(values.routeName ?? "");
                       onEndpointChange(values.endpointId || "chat");
+                      onServiceOverrideChange(values.serviceOverrideId ?? "");
                       if (values.transport) {
                         onTransportChange(values.transport);
                       }
@@ -505,7 +508,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         label={
                           draftMode
                             ? "Draft bundle"
-                            : "Chat route preview (optional)"
+                            : "Chat route (optional)"
                         }
                         placeholder={
                           draftMode
@@ -515,7 +518,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         extra={
                           draftMode
                             ? "Draft runs execute the bundled Studio draft."
-                            : "Preview a catalog chat route for route notes and observability shortcuts. Bound scope chat runs always follow the current scope binding."
+                            : "Selecting a route targets the published scope service with the same id. Leave it empty to use the scope default binding; binding override wins when provided."
                         }
                         disabled={draftMode}
                         options={routeOptions}

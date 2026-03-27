@@ -177,6 +177,38 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_WhenBareLlmCallWorkflowRuns_ShouldCreateImplicitAssistantRoleActor()
+    {
+        var runtime = new RecordingActorRuntime();
+        var agent = CreateRunAgent(
+            runtime: runtime,
+            roleResolver: new StaticRoleAgentTypeResolver(typeof(FakeRoleAgent)));
+        SetAgentId(agent, "workflow-run-implicit-assistant");
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            """
+            name: wf_implicit_assistant
+            steps:
+              - id: step_1
+                type: llm_call
+            """,
+            "wf_implicit_assistant",
+            runId: "run-implicit-assistant");
+
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
+
+        runtime.CreateCalls.Should().Be(1);
+        runtime.Linked.Should().ContainSingle()
+            .Which.child.Should().Be("workflow-run-implicit-assistant:assistant");
+
+        var roleAgent = runtime.CreatedActors.Single().Agent.Should().BeOfType<FakeRoleAgent>().Subject;
+        roleAgent.RoleName.Should().Be("Assistant");
+        roleAgent.LastInitializeEvent.Should().NotBeNull();
+        roleAgent.LastInitializeEvent!.ProviderName.Should().BeEmpty();
+        roleAgent.LastInitializeEvent.Model.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_WhenRebindingDefinition_ShouldResetExecutionStateAndDestroyOldChildren()
     {
         var publisher = new RecordingEventPublisher();

@@ -90,7 +90,7 @@ describe('scriptsApi host-session requests', () => {
         runId: 'run-1',
         sourceHash: 'hash-1',
         commandTypeUrl: 'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
-        readModelUrl: '/api/app/scripts/runtimes/runtime-1/readmodel',
+        readModelUrl: '/api/scripts/runtimes/runtime-1/readmodel',
       }),
     } as Response);
     global.fetch = fetchMock as typeof global.fetch;

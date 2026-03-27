@@ -5,6 +5,7 @@ import {
   saveDraftRunPayload,
   saveEndpointInvocationDraftPayload,
 } from "@/shared/runs/draftRunSession";
+import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
@@ -57,6 +58,10 @@ jest.mock("@/shared/api/runtimeCatalogApi", () => ({
   },
 }));
 
+jest.mock("@/shared/agui/sseFrameNormalizer", () => ({
+  parseBackendSSEStream: jest.fn(() => (async function* () {})()),
+}));
+
 jest.mock("@/shared/api/runtimeActorsApi", () => ({
   runtimeActorsApi: {
     getActorSnapshot: jest.fn(),
@@ -75,6 +80,9 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
 }));
 
 describe("RunsPage", () => {
+  const mockedRuntimeCatalogApi = runtimeCatalogApi as unknown as {
+    listWorkflowCatalog: jest.Mock;
+  };
   const mockedRuntimeRunsApi = runtimeRunsApi as unknown as {
     invokeEndpoint: jest.Mock;
     streamChat: jest.Mock;
@@ -95,7 +103,12 @@ describe("RunsPage", () => {
       targetActorId: "actor-1",
       endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
     });
+    mockedRuntimeRunsApi.streamChat.mockResolvedValue({
+      ok: true,
+      body: {},
+    });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
+    mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
   });
 
   it("renders the runtime run console header and navigation actions", async () => {
@@ -196,5 +209,46 @@ describe("RunsPage", () => {
 
     expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
+  });
+
+  it("routes preset-backed chat runs through the selected workflow service", async () => {
+    mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([
+      {
+        name: "direct",
+        description: "Direct chat workflow",
+        category: "core",
+        group: "default",
+        groupLabel: "Default",
+        sortOrder: 0,
+        source: "built-in",
+        sourceLabel: "Built-in",
+        showInLibrary: true,
+        isPrimitiveExample: false,
+        requiresLlmProvider: true,
+        primitives: [],
+      },
+    ]);
+
+    window.history.replaceState({}, "", "/runtime/runs?scopeId=scope-1");
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Presets (1)" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use preset" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt:
+            "Summarize what this chat bundle can do and produce a concise execution result.",
+        }),
+        expect.any(AbortSignal),
+        {
+          serviceId: "direct",
+        }
+      );
+    });
   });
 });

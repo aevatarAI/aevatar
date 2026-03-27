@@ -1,8 +1,8 @@
 import {
-  parseSSEStream,
   useHumanInteraction,
   useRunSession,
 } from "@aevatar-react-sdk/agui";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import {
   AGUIEventType,
   type ChatRunRequest,
@@ -154,6 +154,24 @@ const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
   justifyContent: "flex-end",
 };
 
+function resolveRequestedServiceId(
+  request: Pick<RunFormValues, "endpointId" | "routeName" | "serviceOverrideId">,
+  draftMode: boolean
+): string {
+  if (draftMode) {
+    return "";
+  }
+
+  const normalizedEndpointId = trimOptional(request.endpointId) || "chat";
+  const normalizedServiceOverrideId =
+    trimOptional(request.serviceOverrideId) || "";
+  if (normalizedEndpointId !== "chat") {
+    return normalizedServiceOverrideId;
+  }
+
+  return normalizedServiceOverrideId || trimOptional(request.routeName) || "";
+}
+
 const RunsPage: React.FC = () => {
   const preferences = useMemo(() => loadConsolePreferences(), []);
   const [messageApi, messageContextHolder] = message.useMessage();
@@ -248,6 +266,9 @@ const RunsPage: React.FC = () => {
   const [activeScopeId, setActiveScopeId] = useState(
     initialFormValues.scopeId ?? ""
   );
+  const [selectedServiceOverrideId, setSelectedServiceOverrideId] = useState(
+    initialFormValues.serviceOverrideId ?? ""
+  );
   const [activeServiceOverrideId, setActiveServiceOverrideId] = useState(
     initialFormValues.serviceOverrideId ?? ""
   );
@@ -291,9 +312,11 @@ const RunsPage: React.FC = () => {
       request: RunFormValues
     ) => {
       const normalizedScopeId = scopeId.trim();
-      const normalizedServiceOverrideId =
-        request.serviceOverrideId?.trim() ?? "";
       const normalizedEndpointId = request.endpointId?.trim() || "chat";
+      const resolvedServiceId = resolveRequestedServiceId(
+        request,
+        Boolean(scopeDraftPayload)
+      );
       const requestedPayloadTypeUrl = request.payloadTypeUrl?.trim() ?? "";
       const requestedPayloadBase64 = request.payloadBase64?.trim() ?? "";
       if (!normalizedScopeId) {
@@ -314,7 +337,7 @@ const RunsPage: React.FC = () => {
       setTransportIssue(undefined);
       setActiveTransport(request.transport);
       setActiveScopeId(normalizedScopeId);
-      setActiveServiceOverrideId(normalizedServiceOverrideId);
+      setActiveServiceOverrideId(resolvedServiceId);
       setActiveEndpointId(normalizedEndpointId);
       setRunStartedAtMs(Date.now());
       setStreaming(true);
@@ -343,13 +366,13 @@ const RunsPage: React.FC = () => {
                 },
                 controller.signal,
                 {
-                  serviceId: normalizedServiceOverrideId || undefined,
+                  serviceId: resolvedServiceId || undefined,
                 }
               )
             : null;
 
         if (response) {
-          for await (const event of parseSSEStream(response, {
+          for await (const event of parseBackendSSEStream(response, {
             signal: controller.signal,
           })) {
             if (controller.signal.aborted) {
@@ -369,7 +392,7 @@ const RunsPage: React.FC = () => {
               payloadBase64: request.payloadBase64 || undefined,
             },
             {
-              serviceId: normalizedServiceOverrideId || undefined,
+              serviceId: resolvedServiceId || undefined,
             }
           );
           const receiptRunId =
@@ -757,17 +780,23 @@ const RunsPage: React.FC = () => {
         onRestore: () => {
           const isChatEndpoint =
             !entry.endpointId || entry.endpointId === "chat";
+          const restoredServiceOverrideId =
+            isChatEndpoint &&
+            entry.serviceOverrideId === entry.routeName
+              ? undefined
+              : entry.serviceOverrideId || undefined;
           composerFormRef.current?.setFieldsValue({
             prompt: entry.prompt,
             routeName: isChatEndpoint ? entry.routeName : undefined,
             scopeId: entry.scopeId || undefined,
-            serviceOverrideId: entry.serviceOverrideId || undefined,
+            serviceOverrideId: restoredServiceOverrideId,
             endpointId: entry.endpointId || "chat",
             payloadTypeUrl: entry.payloadTypeUrl || undefined,
             payloadBase64: entry.payloadBase64 || undefined,
             actorId: entry.actorId || undefined,
             transport: selectedTransport,
           });
+          setSelectedServiceOverrideId(restoredServiceOverrideId ?? "");
           setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
           setActiveEndpointId(entry.endpointId || "chat");
         },
@@ -1033,6 +1062,8 @@ const RunsPage: React.FC = () => {
       composerFormRef.current?.getFieldValue("payloadTypeUrl") ?? "";
     const currentPayloadBase64 =
       composerFormRef.current?.getFieldValue("payloadBase64") ?? "";
+    const currentEndpointId = resolveRunEndpointId();
+    const currentServiceOverrideId = resolveRunServiceOverrideId();
     const candidateId =
       commandId ??
       session.runId ??
@@ -1046,8 +1077,12 @@ const RunsPage: React.FC = () => {
       saveRecentRun({
         id: candidateId,
         scopeId: resolveRunScopeId(),
-        serviceOverrideId: resolveRunServiceOverrideId(),
-        endpointId: resolveRunEndpointId(),
+        serviceOverrideId:
+          currentEndpointId === "chat" &&
+          currentServiceOverrideId === routeName
+            ? ""
+            : currentServiceOverrideId,
+        endpointId: currentEndpointId,
         payloadTypeUrl: currentPayloadTypeUrl,
         payloadBase64: currentPayloadBase64,
         routeName,
@@ -1108,12 +1143,17 @@ const RunsPage: React.FC = () => {
   const submitPathLabel = scopeDraftPayload
     ? "/api/scopes/{scopeId}/draft-run"
     : endpointName === "chat"
-      ? (activeServiceOverrideId.trim() ||
-        initialFormValues.serviceOverrideId?.trim())
+      ? resolveRequestedServiceId(
+          {
+            endpointId: endpointName,
+            routeName: selectedRouteName,
+            serviceOverrideId: selectedServiceOverrideId,
+          },
+          false
+        )
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
         : "/api/scopes/{scopeId}/invoke/chat:stream"
-      : (activeServiceOverrideId.trim() ||
-        initialFormValues.serviceOverrideId?.trim())
+      : trimOptional(selectedServiceOverrideId)
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
@@ -1386,6 +1426,7 @@ const RunsPage: React.FC = () => {
               onCatalogSearchChange={setCatalogSearch}
               onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
               onEndpointChange={setActiveEndpointId}
+              onServiceOverrideChange={setSelectedServiceOverrideId}
               onSelectRouteName={setSelectedRouteName}
               onSubmitRun={async (values) => {
                 await sendRun(values.scopeId ?? "", values);
@@ -1398,18 +1439,14 @@ const RunsPage: React.FC = () => {
                   scopeId:
                     composerFormRef.current?.getFieldValue("scopeId") ??
                     initialFormValues.scopeId,
-                  serviceOverrideId: scopeDraftPayload
-                    ? undefined
-                    : (
-                    composerFormRef.current?.getFieldValue("serviceOverrideId") ??
-                    initialFormValues.serviceOverrideId
-                  ),
+                  serviceOverrideId: undefined,
                   endpointId: "chat",
                   payloadTypeUrl: undefined,
                   payloadBase64: undefined,
                   actorId: undefined,
                   transport: selectedTransport,
                 });
+                setSelectedServiceOverrideId("");
                 setSelectedRouteName(
                   scopeDraftPayload?.bundleName ?? record.routeName
                 );

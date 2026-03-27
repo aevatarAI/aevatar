@@ -542,7 +542,7 @@ public sealed class WorkflowRunGAgent
         if (_compiledWorkflow == null)
             return roleActorIds.ToList();
 
-        foreach (var role in _compiledWorkflow.Roles)
+        foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow))
         {
             roleActorIds.Add(BuildChildActorId(role.Id));
         }
@@ -562,7 +562,7 @@ public sealed class WorkflowRunGAgent
                 $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
         }
 
-        foreach (var role in _compiledWorkflow.Roles)
+        foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow))
         {
             var roleId = role.Id;
             var childActorId = BuildChildActorId(roleId);
@@ -1053,7 +1053,7 @@ public sealed class WorkflowRunGAgent
         if (currentWorkflow == null)
             return roleActorIds;
 
-        foreach (var role in currentWorkflow.Roles)
+        foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(currentWorkflow))
         {
             if (string.IsNullOrWhiteSpace(role.Id))
                 continue;

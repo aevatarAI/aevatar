@@ -48,6 +48,7 @@ describe("RunsLaunchRail", () => {
         onCatalogSearchChange={jest.fn()}
         onClearRecentRuns={jest.fn()}
         onEndpointChange={jest.fn()}
+        onServiceOverrideChange={jest.fn()}
         onSelectRouteName={jest.fn()}
         onSubmitRun={async () => {}}
         onTransportChange={jest.fn()}
@@ -56,12 +57,12 @@ describe("RunsLaunchRail", () => {
     );
 
     expect(
-      screen.getByLabelText("Chat route preview (optional)")
+      screen.getByLabelText("Chat route (optional)")
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Preview a catalog chat route for route notes and observability shortcuts. Bound scope chat runs always follow the current scope binding."
+        "Selecting a route targets the published scope service with the same id. Leave it empty to use the scope default binding; binding override wins when provided."
       )
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Presets (1)" }));

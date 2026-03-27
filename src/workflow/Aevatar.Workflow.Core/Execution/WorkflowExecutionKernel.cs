@@ -928,12 +928,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         IWorkflowExecutionContext ctx)
     {
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
+        var effectiveTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(_workflow, step);
         var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
         ctx.Logger.LogInformation(
             "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
             step.Id,
             canonicalStepType,
-            step.TargetRole ?? "(none)",
+            string.IsNullOrWhiteSpace(effectiveTargetRole) ? "(none)" : effectiveTargetRole,
             input.Length,
             inputPreview);
 
@@ -943,7 +944,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             StepType = canonicalStepType,
             RunId = state.RunId,
             Input = input,
-            TargetRole = step.TargetRole ?? string.Empty,
+            TargetRole = effectiveTargetRole,
         };
 
         state.Variables["input"] = input;
@@ -967,10 +968,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 request.Parameters[$"branch.{branchKey}"] = branchValue;
         }
 
-        if (!string.IsNullOrWhiteSpace(step.TargetRole) && _workflow != null)
+        if (!string.IsNullOrWhiteSpace(effectiveTargetRole) && _workflow != null)
         {
             var role = _workflow.Roles.FirstOrDefault(
-                x => string.Equals(x.Id, step.TargetRole, StringComparison.OrdinalIgnoreCase));
+                x => string.Equals(x.Id, effectiveTargetRole, StringComparison.OrdinalIgnoreCase));
             if (role is { Connectors.Count: > 0 })
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }

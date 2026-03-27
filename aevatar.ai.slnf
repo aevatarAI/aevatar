@@ -5,6 +5,7 @@
       "src\\Aevatar.AI.Abstractions\\Aevatar.AI.Abstractions.csproj",
       "src\\Aevatar.AI.Core\\Aevatar.AI.Core.csproj",
       "src\\Aevatar.AI.LLMProviders.MEAI\\Aevatar.AI.LLMProviders.MEAI.csproj",
+      "src\\Aevatar.AI.LLMProviders.NyxId\\Aevatar.AI.LLMProviders.NyxId.csproj",
       "src\\Aevatar.AI.LLMProviders.Tornado\\Aevatar.AI.LLMProviders.Tornado.csproj",
       "src\\Aevatar.AI.ToolProviders.MCP\\Aevatar.AI.ToolProviders.MCP.csproj",
       "src\\Aevatar.AI.ToolProviders.Skills\\Aevatar.AI.ToolProviders.Skills.csproj",

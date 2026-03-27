@@ -46,10 +46,26 @@ static class LLMProbe
     {
         return provider.Kind switch
         {
+            LLMProviderKind.NyxId => await FetchNyxIdGatewayStatusAsync(provider, max, ct),
             LLMProviderKind.Anthropic => await FetchAnthropicModelsAsync(provider, max, ct),
             LLMProviderKind.Google => await FetchGoogleModelsAsync(provider, max, ct),
             _ => await FetchOpenAiModelsAsync(provider, max, ct)
         };
+    }
+
+    private static async Task<(bool Ok, List<string> Models, string? Error)> FetchNyxIdGatewayStatusAsync(ResolvedProvider provider, int max, CancellationToken ct)
+    {
+        var url = BuildNyxIdStatusUrl(provider.Endpoint);
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", provider.ApiKey);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        var body = await ReadBodyAsync(resp, ct);
+        if (!resp.IsSuccessStatusCode)
+            return (false, [], $"HTTP {(int)resp.StatusCode}: {TrimForUi(body)}");
+
+        var models = ParseNyxIdSupportedModels(body);
+        return (true, models.Take(max).ToList(), null);
     }
 
     private static async Task<(bool Ok, List<string> Models, string? Error)> FetchOpenAiModelsAsync(ResolvedProvider provider, int max, CancellationToken ct)
@@ -110,6 +126,19 @@ static class LLMProbe
         return baseUrl + p;
     }
 
+    private static string BuildNyxIdStatusUrl(string endpoint)
+    {
+        var baseUrl = (endpoint ?? string.Empty).Trim().TrimEnd('/');
+        const string gatewaySuffix = "/api/v1/llm/gateway/v1";
+        if (baseUrl.EndsWith(gatewaySuffix, StringComparison.OrdinalIgnoreCase))
+            return baseUrl[..^gatewaySuffix.Length] + "/api/v1/llm/status";
+
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+            return $"{uri.Scheme}://{uri.Authority}/api/v1/llm/status";
+
+        return BuildPath(baseUrl, "/api/v1/llm/status");
+    }
+
     private static List<string> ParseModelsFromJson(string json, string idKey)
     {
         if (string.IsNullOrWhiteSpace(json)) return [];
@@ -136,6 +165,30 @@ static class LLMProbe
                 return models.EnumerateArray().Select(x => x.TryGetProperty("name", out var name) ? name.GetString() : null).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
         catch { }
+        return [];
+    }
+
+    private static List<string> ParseNyxIdSupportedModels(string json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return [];
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("supported_models", out var models) &&
+                models.ValueKind == JsonValueKind.Array)
+            {
+                return models
+                    .EnumerateArray()
+                    .Where(item => item.ValueKind == JsonValueKind.String)
+                    .Select(item => item.GetString())
+                    .Where(item => !string.IsNullOrWhiteSpace(item))
+                    .Select(item => item!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+        }
+        catch { }
+
         return [];
     }
 

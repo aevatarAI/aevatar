@@ -33,6 +33,7 @@ const studioProxyEntries = [
   '/api/executions',
   '/api/roles',
   '/api/settings',
+  '/api/studio',
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {
   const proxyFactory = path === '/api/auth'
@@ -46,6 +47,9 @@ const studioProxyEntries = [
 const studioScopeProxyEntries = {
   '^/api/scopes/[^/]+/scripts/draft-run$':
     buildProxyTarget(studioApiTarget),
+  '^/api/scripts/validate$': buildProxyTarget(studioApiTarget),
+  '^/api/scripts/generator$': buildProxyTarget(studioApiTarget),
+  '^/api/workflows/generator$': buildProxyTarget(studioApiTarget),
 };
 
 const createProxyConfig = () => ({

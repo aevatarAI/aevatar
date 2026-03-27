@@ -75,6 +75,51 @@ public sealed class CliConfigCommandTests
     }
 
     [Fact]
+    public async Task ConfigLlmProviderTypes_ShouldIncludeNyxId()
+    {
+        await WithTempHomeAsync(async _ =>
+        {
+            var result = await InvokeCliAsync(["config", "llm", "provider-types", "list", "--json"]);
+            result.ExitCode.Should().Be(0);
+
+            using var doc = ParseJson(result.StdOut);
+            var ids = doc.RootElement
+                .GetProperty("data")
+                .GetProperty("items")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("id").GetString())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .ToList();
+
+            ids.Should().Contain("nyxid");
+        });
+    }
+
+    [Fact]
+    public async Task ConfigLlmInstancesUpsert_NyxIdWithoutEndpoint_ShouldDeriveGatewayEndpointFromAuthority()
+    {
+        await WithTempHomeAsync(async _ =>
+        {
+            var authorityResult = await InvokeCliAsync(["config", "config-json", "set", "Cli:App:NyxId:Authority", "https://nyx.example.com", "--json"]);
+            authorityResult.ExitCode.Should().Be(0);
+
+            var upsertResult = await InvokeCliAsync([
+                "config", "llm", "instances", "upsert", "nyx-main",
+                "--provider-type", "nyxid",
+                "--model", "claude-sonnet-4-5-20250929",
+                "--api-key", "nyx-token",
+                "--json"]);
+            upsertResult.ExitCode.Should().Be(0);
+
+            using var upsertDoc = ParseJson(upsertResult.StdOut);
+            var provider = upsertDoc.RootElement.GetProperty("data").GetProperty("provider");
+            provider.GetProperty("providerType").GetString().Should().Be("nyxid");
+            provider.GetProperty("endpoint").GetString().Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
+        });
+    }
+
+    [Fact]
     public async Task ConfigWorkflows_PutListGetDelete_ShouldRoundtrip()
     {
         await WithTempHomeAsync(async tempHome =>

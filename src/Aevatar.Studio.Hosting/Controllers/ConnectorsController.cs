@@ -17,12 +17,38 @@ public sealed class ConnectorsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<ConnectorCatalogResponse>> Get(CancellationToken cancellationToken) =>
-        Ok(await _connectorService.GetCatalogAsync(cancellationToken));
+    public async Task<ActionResult<ConnectorCatalogResponse>> Get(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _connectorService.GetCatalogAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
+    }
 
     [HttpGet("draft")]
-    public async Task<ActionResult<ConnectorDraftResponse>> GetDraft(CancellationToken cancellationToken) =>
-        Ok(await _connectorService.GetDraftAsync(cancellationToken));
+    public async Task<ActionResult<ConnectorDraftResponse>> GetDraft(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _connectorService.GetDraftAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
+    }
 
     [HttpPut]
     public async Task<ActionResult<ConnectorCatalogResponse>> Save(
@@ -36,6 +62,10 @@ public sealed class ConnectorsController : ControllerBase
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
         }
     }
 
@@ -63,13 +93,37 @@ public sealed class ConnectorsController : ControllerBase
     [HttpPut("draft")]
     public async Task<ActionResult<ConnectorDraftResponse>> SaveDraft(
         [FromBody] SaveConnectorDraftRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await _connectorService.SaveDraftAsync(request, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _connectorService.SaveDraftAsync(request, cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
+    }
 
     [HttpDelete("draft")]
     public async Task<IActionResult> DeleteDraft(CancellationToken cancellationToken)
     {
-        await _connectorService.DeleteDraftAsync(cancellationToken);
-        return NoContent();
+        try
+        {
+            await _connectorService.DeleteDraftAsync(cancellationToken);
+            return NoContent();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
     }
 }
