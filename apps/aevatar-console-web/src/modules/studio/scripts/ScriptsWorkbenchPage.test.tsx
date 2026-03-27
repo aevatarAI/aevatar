@@ -224,6 +224,85 @@ describe('ScriptsWorkbenchPage', () => {
     });
   });
 
+  it('boots a fresh draft with the app script starter contract', async () => {
+    renderPage();
+
+    await screen.findByLabelText('Script ID');
+
+    expect(
+      screen.getByDisplayValue(/Aevatar\.Studio\.Application\.Scripts\.Contracts/),
+    ).toBeTruthy();
+  });
+
+  it('migrates the broken legacy starter script from local storage', async () => {
+    window.localStorage.setItem(
+      'aevatar:console:scripts-studio:v1',
+      JSON.stringify([
+        {
+          key: 'draft-legacy',
+          scriptId: 'script-legacy',
+          revision: 'draft-legacy',
+          source: `using System;
+using System.Threading;
+using System.Threading.Tasks;
+using Aevatar.Scripting.Abstractions;
+using Aevatar.Scripting.Abstractions.Behaviors;
+using Aevatar.Tools.Cli.Hosting;
+
+public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
+{
+    protected override void Configure(IScriptBehaviorBuilder<AppScriptReadModel, AppScriptReadModel> builder)
+    {
+        builder
+            .OnCommand<AppScriptCommand>(HandleAsync)
+            .OnEvent<AppScriptUpdated>(
+                apply: static (_, evt, _) => evt.Current == null ? new AppScriptReadModel() : evt.Current.Clone())
+            .ProjectState(static (state, _) => state == null ? new AppScriptReadModel() : state.Clone());
+    }
+
+    private static Task HandleAsync(
+        AppScriptCommand input,
+        ScriptCommandContext<AppScriptReadModel> context,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var commandId = context.CommandId ?? input?.CommandId ?? string.Empty;
+        var text = input?.Input ?? string.Empty;
+        var current = AppScriptProtocol.CreateState(
+            text,
+            text.Trim().ToUpperInvariant(),
+            "ok",
+            commandId,
+            new[]
+            {
+                "trimmed",
+                "uppercased",
+            });
+
+        context.Emit(new AppScriptUpdated
+        {
+            CommandId = commandId,
+            Current = current,
+        });
+        return Task.CompletedTask;
+    }
+}
+`,
+        },
+      ]),
+    );
+
+    renderPage();
+
+    await screen.findByLabelText('Script ID');
+
+    expect(
+      screen.getByDisplayValue(/Aevatar\.Studio\.Application\.Scripts\.Contracts/),
+    ).toBeTruthy();
+    expect(screen.queryByDisplayValue(/Aevatar\.Tools\.Cli\.Hosting/)).toBeNull();
+  });
+
   it('adds and removes package files through in-app dialogs', async () => {
     renderPage();
 

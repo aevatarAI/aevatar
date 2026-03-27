@@ -16,6 +16,8 @@ public interface IWorkflowExecutionQueryApplicationService
 
     Task<WorkflowActorSnapshot?> GetActorSnapshotAsync(string actorId, CancellationToken ct = default);
 
+    Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default);
+
     Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default);
 
     Task<IReadOnlyList<WorkflowActorGraphEdge>> ListActorGraphEdgesAsync(

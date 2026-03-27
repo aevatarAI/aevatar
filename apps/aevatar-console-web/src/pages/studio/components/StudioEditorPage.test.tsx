@@ -164,6 +164,7 @@ function createBaseProps(overrides = {}) {
     recentPromptHistory: [],
     promptHistoryCount: 0,
     runPending: false,
+    canOpenRunWorkflow: true,
     canRunWorkflow: true,
     runNotice: null,
     onSwitchStudioView: jest.fn(),

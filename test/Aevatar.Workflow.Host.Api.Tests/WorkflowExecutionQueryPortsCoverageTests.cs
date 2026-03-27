@@ -363,6 +363,7 @@ public sealed class WorkflowExecutionQueryPortsCoverageTests
                 new WorkflowExecutionReadModelMapper(),
                 options),
             new WorkflowExecutionArtifactQueryPort(
+                reportReader,
                 timelineReader,
                 new WorkflowExecutionReadModelMapper(),
                 graphStore,

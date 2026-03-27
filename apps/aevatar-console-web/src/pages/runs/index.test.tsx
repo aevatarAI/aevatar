@@ -1,6 +1,10 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { saveServiceInvocationDraftPayload } from "@/shared/runs/draftRunSession";
+import {
+  loadDraftRunPayload,
+  saveDraftRunPayload,
+  saveServiceInvocationDraftPayload,
+} from "@/shared/runs/draftRunSession";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
@@ -10,7 +14,7 @@ const mockReset = jest.fn();
 
 jest.mock("@aevatar-react-sdk/agui", () => ({
   connectChatWebSocket: jest.fn(),
-  parseSSEStream: jest.fn(),
+  parseSSEStream: jest.fn(() => (async function* () {})()),
   useHumanInteraction: jest.fn(() => ({
     resume: jest.fn(),
     signal: jest.fn(),
@@ -91,6 +95,7 @@ describe("RunsPage", () => {
       targetActorId: "actor-1",
       endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
     });
+    mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
   });
 
   it("renders the runtime run console header and navigation actions", async () => {
@@ -161,5 +166,36 @@ describe("RunsPage", () => {
         type: "RUN_FINISHED",
       })
     );
+  });
+
+  it("auto-starts workflow draft runs handed off from Studio", async () => {
+    const draftKey = saveDraftRunPayload({
+      workflowName: "workspace-demo",
+      workflowYamls: ["name: workspace-demo\nsteps:\n  - id: review_step\n"],
+    });
+    window.history.replaceState(
+      {},
+      "",
+      `/runtime/runs?scopeId=scope-1&workflow=workspace-demo&prompt=Run%20the%20draft&draftKey=${draftKey}`
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
+        "scope-1",
+        expect.objectContaining({
+          prompt: "Run the draft",
+          workflow: "workspace-demo",
+          workflowYamls: [
+            expect.stringContaining("name: workspace-demo"),
+          ],
+        }),
+        expect.any(AbortSignal)
+      );
+    });
+
+    expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
+    expect(loadDraftRunPayload(draftKey)).toBeNull();
   });
 });

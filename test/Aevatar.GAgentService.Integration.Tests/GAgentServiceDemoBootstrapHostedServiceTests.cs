@@ -120,6 +120,8 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
 
         public List<PublishServiceRevisionCommand> PublishRevisionCommands { get; } = [];
 
+        public List<RetireServiceRevisionCommand> RetireRevisionCommands { get; } = [];
+
         public List<SetDefaultServingRevisionCommand> SetDefaultServingRevisionCommands { get; } = [];
 
         public List<ActivateServiceRevisionCommand> ActivateServiceRevisionCommands { get; } = [];
@@ -165,6 +167,12 @@ public sealed class GAgentServiceDemoBootstrapHostedServiceTests
         public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(PublishServiceRevisionCommand command, CancellationToken ct = default)
         {
             PublishRevisionCommands.Add(command.Clone());
+            return Task.FromResult(CreateReceipt(command.Identity));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default)
+        {
+            RetireRevisionCommands.Add(command.Clone());
             return Task.FromResult(CreateReceipt(command.Identity));
         }
 

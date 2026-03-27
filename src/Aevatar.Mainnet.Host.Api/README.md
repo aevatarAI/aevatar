@@ -94,7 +94,15 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 
 - `POST /api/scopes/{scopeId}/draft-run`
 - `PUT /api/scopes/{scopeId}/binding`
+- `GET /api/scopes/{scopeId}/binding`
+- `GET /api/scopes/{scopeId}/revisions`
+- `GET /api/scopes/{scopeId}/revisions/{revisionId}`
+- `POST /api/scopes/{scopeId}/binding/revisions/{revisionId}:activate`
+- `POST /api/scopes/{scopeId}/binding/revisions/{revisionId}:retire`
 - `POST /api/scopes/{scopeId}/invoke/chat:stream`
+- `GET /api/scopes/{scopeId}/runs`
+- `GET /api/scopes/{scopeId}/runs/{runId}`
+- `GET /api/scopes/{scopeId}/runs/{runId}/audit`
 - `POST /api/scopes/{scopeId}/runs/{runId}:resume`
 - `POST /api/scopes/{scopeId}/runs/{runId}:signal`
 - `POST /api/scopes/{scopeId}/runs/{runId}:stop`
@@ -105,10 +113,23 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 - `workflowYamls[1..]` 是 sub workflow
 - `workflow_call` 默认在这组 YAML 内解析
 
+scope-first 正式运行面现在补齐了两类治理能力：
+
+- formal run 的历史 / 详情 / 审计：通过 `GET /runs`、`GET /runs/{runId}`、`GET /runs/{runId}/audit` 暴露 scope 级正式 run 查询面，继续配合 `resume|signal|stop` 做恢复与控制。
+- revision / version 治理：通过 `GET /revisions`、`GET /revisions/{revisionId}`、`activate`、`retire` 暴露正式 revision catalog；read side 会返回 `CatalogStateVersion` 与 `CatalogLastEventId`，revision 项也会返回 workflow / script / static gagent 的 typed implementation 摘要。
+
+`invoke` 请求现在允许显式携带 `revisionId`，用于绕过 default serving alias，直接命中指定 active revision。
+
 内部与扩展面仍保留 service-level 入口：
 
 - `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream`
 - `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/revisions`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/runs`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}/audit`
 - `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume`
 - `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:signal`
 - `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:stop`

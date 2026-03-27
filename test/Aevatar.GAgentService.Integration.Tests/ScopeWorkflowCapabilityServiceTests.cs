@@ -219,6 +219,9 @@ public sealed class ScopeWorkflowApplicationServicesTests
             return Task.FromResult(Accepted());
         }
 
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) =>
+            Task.FromResult(Accepted());
+
         public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
         {
             SetDefaultServingRevisionCommand = command;

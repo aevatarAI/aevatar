@@ -7,17 +7,20 @@ namespace Aevatar.Workflow.Projection.Orchestration;
 
 public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtifactQueryPort
 {
+    private readonly IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> _reportReader;
     private readonly IProjectionDocumentReader<WorkflowRunTimelineDocument, string> _timelineReader;
     private readonly IProjectionGraphStore _graphStore;
     private readonly WorkflowExecutionReadModelMapper _mapper;
     private readonly bool _enableActorQueryEndpoints;
 
     public WorkflowExecutionArtifactQueryPort(
+        IProjectionDocumentReader<WorkflowRunInsightReportDocument, string> reportReader,
         IProjectionDocumentReader<WorkflowRunTimelineDocument, string> timelineReader,
         WorkflowExecutionReadModelMapper mapper,
         IProjectionGraphStore graphStore,
         WorkflowExecutionProjectionOptions? options = null)
     {
+        _reportReader = reportReader ?? throw new ArgumentNullException(nameof(reportReader));
         _timelineReader = timelineReader ?? throw new ArgumentNullException(nameof(timelineReader));
         _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
         _graphStore = graphStore ?? throw new ArgumentNullException(nameof(graphStore));
@@ -25,6 +28,17 @@ public sealed class WorkflowExecutionArtifactQueryPort : IWorkflowExecutionArtif
     }
 
     public bool EnableActorQueryEndpoints => _enableActorQueryEndpoints;
+
+    public async Task<WorkflowRunReport?> GetActorReportAsync(
+        string actorId,
+        CancellationToken ct = default)
+    {
+        if (!_enableActorQueryEndpoints || string.IsNullOrWhiteSpace(actorId))
+            return null;
+
+        var report = await _reportReader.GetAsync(actorId, ct);
+        return report == null ? null : _mapper.ToRunReport(report);
+    }
 
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,

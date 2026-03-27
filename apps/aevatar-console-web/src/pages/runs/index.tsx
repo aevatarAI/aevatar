@@ -62,6 +62,7 @@ import {
 } from "@/shared/runs/recentRuns";
 import { isAutoEncodableTextPayloadTypeUrl } from "@/shared/runs/protobufPayload";
 import {
+  deleteDraftRunPayload as deleteQueuedDraftRunPayload,
   isServiceInvocationDraftPayload,
   isWorkflowDraftRunPayload,
   loadDraftRunPayload as loadQueuedDraftRunPayload,
@@ -253,6 +254,7 @@ const RunsPage: React.FC = () => {
     initialFormValues.endpointId ?? "chat"
   );
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
+  const autoStartedDraftRunRef = useRef(false);
 
   const workflowCatalogQuery = useQuery({
     queryKey: ["workflow-catalog"],
@@ -501,6 +503,46 @@ const RunsPage: React.FC = () => {
   });
 
   useEffect(() => () => abortRun(), [abortRun]);
+
+  useEffect(() => {
+    if (!workflowDraftPayload || !draftRunKey || autoStartedDraftRunRef.current) {
+      return;
+    }
+
+    const scopeId = initialFormValues.scopeId?.trim() ?? "";
+    const prompt = initialFormValues.prompt?.trim() ?? "";
+    if (!scopeId || !prompt) {
+      return;
+    }
+
+    autoStartedDraftRunRef.current = true;
+    deleteQueuedDraftRunPayload(draftRunKey);
+
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      searchParams.delete("draftKey");
+      const search = searchParams.toString();
+      // Avoid router remount during auto-start handoff; we only need to clean the URL.
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+      );
+    }
+
+    void sendRun(scopeId, {
+      ...initialFormValues,
+      actorId: undefined,
+      endpointId: "chat",
+      payloadBase64: undefined,
+      payloadTypeUrl: undefined,
+      prompt,
+      scopeId,
+      serviceId: undefined,
+      transport: initialFormValues.transport ?? "sse",
+      workflow: workflowDraftPayload.workflowName,
+    });
+  }, [draftRunKey, initialFormValues, sendRun, workflowDraftPayload]);
 
   useEffect(() => {
     const syncComposerWidth = () => {

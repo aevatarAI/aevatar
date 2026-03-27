@@ -1866,6 +1866,7 @@ export type StudioExecutionPageProps = {
   readonly savePending: boolean;
   readonly canSaveWorkflow: boolean;
   readonly runPending: boolean;
+  readonly canOpenRunWorkflow: boolean;
   readonly canRunWorkflow: boolean;
   readonly executionCanStop: boolean;
   readonly executionStopPending: boolean;
@@ -1901,6 +1902,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   savePending,
   canSaveWorkflow,
   runPending,
+  canOpenRunWorkflow,
   canRunWorkflow,
   executionCanStop,
   executionStopPending,
@@ -2680,7 +2682,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 <button
                   type="button"
                   onClick={() => setRunModalOpen(true)}
-                  disabled={!canRunWorkflow || runPending}
+                  disabled={!canOpenRunWorkflow || runPending}
                   aria-label="Run"
                   title="Run"
                   className="panel-icon-button header-toolbar-action header-run-action"
@@ -2796,7 +2798,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       >
         <div style={cardStackStyle}>
           <Typography.Text type="secondary">
-            Optional input will be passed into the workflow as{' '}
+            Execution prompt will be passed into the workflow as{' '}
             <Typography.Text code>$input</Typography.Text>.
           </Typography.Text>
           <Input.TextArea
@@ -2859,6 +2861,7 @@ export type StudioEditorPageProps = {
   readonly recentPromptHistory: readonly PlaygroundPromptHistoryEntry[];
   readonly promptHistoryCount: number;
   readonly runPending: boolean;
+  readonly canOpenRunWorkflow: boolean;
   readonly canRunWorkflow: boolean;
   readonly runNotice: StudioNoticeLike | null;
   readonly resolvedScopeId?: string;
@@ -2954,6 +2957,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   askAiAnswer,
   runPrompt,
   runPending,
+  canOpenRunWorkflow,
   canRunWorkflow,
   runNotice,
   resolvedScopeId,
@@ -3660,7 +3664,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   type="primary"
                   shape="circle"
                   icon={<CaretRightFilled />}
-                  disabled={!canRunWorkflow}
+                  disabled={!canOpenRunWorkflow}
                   onClick={() => setRunModalOpen(true)}
                   aria-label="Run"
                   title="Run"

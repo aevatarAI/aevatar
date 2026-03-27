@@ -76,16 +76,23 @@ public sealed class ServiceCommandApplicationServiceTests
             Identity = identity.Clone(),
             RevisionId = "r3",
         });
+        var retireReceipt = await service.RetireRevisionAsync(new RetireServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r4",
+        });
 
-        provisioner.RevisionCatalogRequests.Should().HaveCount(3);
+        provisioner.RevisionCatalogRequests.Should().HaveCount(4);
         revisionProjectionPort.ActorIds.Should().Equal(
             ServiceActorIds.RevisionCatalog(identity),
             ServiceActorIds.RevisionCatalog(identity),
+            ServiceActorIds.RevisionCatalog(identity),
             ServiceActorIds.RevisionCatalog(identity));
-        dispatchPort.Calls.Should().HaveCount(3);
+        dispatchPort.Calls.Should().HaveCount(4);
         createReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r1");
         prepareReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r2");
         publishReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r3");
+        retireReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r4");
     }
 
     [Fact]

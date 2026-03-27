@@ -219,6 +219,114 @@ public sealed class ServiceInvocationResolutionServiceTests
             .WithMessage("*Prepared artifact*was not found*");
     }
 
+    [Fact]
+    public async Task ResolveAsync_ShouldHonorExplicitRevisionSelection()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "r2",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r2",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var service = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
+            new RecordingTrafficViewQueryReader
+            {
+                GetResult = new ServiceTrafficViewSnapshot(
+                    ServiceKeys.Build(identity),
+                    2,
+                    string.Empty,
+                    [
+                        new ServiceTrafficEndpointSnapshot(
+                            "chat",
+                            [
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-1",
+                                    "r1",
+                                    "actor-1",
+                                    100,
+                                    ServiceServingState.Active.ToString()),
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-2",
+                                    "r2",
+                                    "actor-2",
+                                    100,
+                                    ServiceServingState.Active.ToString()),
+                            ]),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            artifactStore);
+
+        var resolved = await service.ResolveAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            RevisionId = "r1",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        resolved.Service.RevisionId.Should().Be("r1");
+        resolved.Service.DeploymentId.Should().Be("dep-1");
+        resolved.Artifact.RevisionId.Should().Be("r1");
+    }
+
+    [Fact]
+    public async Task ResolveAsync_ShouldRejectExplicitRevisionWhenTargetIsNotActive()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var service = new ServiceInvocationResolutionService(
+            new RecordingCatalogQueryReader
+            {
+                GetResult = CreateCatalogSnapshot(identity),
+            },
+            new RecordingTrafficViewQueryReader
+            {
+                GetResult = new ServiceTrafficViewSnapshot(
+                    ServiceKeys.Build(identity),
+                    2,
+                    string.Empty,
+                    [
+                        new ServiceTrafficEndpointSnapshot(
+                            "chat",
+                            [
+                                new ServiceTrafficTargetSnapshot(
+                                    "dep-1",
+                                    "r1",
+                                    "actor-1",
+                                    100,
+                                    ServiceServingState.Paused.ToString()),
+                            ]),
+                    ],
+                    DateTimeOffset.UtcNow),
+            },
+            new ConfiguredServiceRevisionArtifactStore());
+
+        var act = () => service.ResolveAsync(new ServiceInvocationRequest
+        {
+            Identity = identity.Clone(),
+            EndpointId = "chat",
+            RevisionId = "r1",
+            Payload = Any.Pack(new StringValue { Value = "payload" }),
+        });
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage($"*Revision 'r1' is not active on service '{ServiceKeys.Build(identity)}'.*");
+    }
+
     private static ServiceCatalogSnapshot CreateCatalogSnapshot(
         ServiceIdentity identity,
         IReadOnlyList<string>? policyIds = null) =>

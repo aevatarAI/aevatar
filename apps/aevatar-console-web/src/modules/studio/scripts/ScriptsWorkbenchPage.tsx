@@ -81,7 +81,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
-using Aevatar.Tools.Cli.Hosting;
+using Aevatar.Studio.Application.Scripts.Contracts;
 
 public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
 {
@@ -90,8 +90,8 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
         builder
             .OnCommand<AppScriptCommand>(HandleAsync)
             .OnEvent<AppScriptUpdated>(
-                apply: static (_, evt, _) => evt.Current == null ? new AppScriptReadModel() : evt.Current.Clone())
-            .ProjectState(static (state, _) => state == null ? new AppScriptReadModel() : state.Clone());
+                apply: static (_, evt, _) => evt.Current?.Clone() ?? new AppScriptReadModel())
+            .ProjectState(static (state, _) => state?.Clone() ?? new AppScriptReadModel());
     }
 
     private static Task HandleAsync(
@@ -102,17 +102,18 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
         ct.ThrowIfCancellationRequested();
 
         var commandId = context.CommandId ?? input?.CommandId ?? string.Empty;
-        var text = input?.Input ?? string.Empty;
-        var current = AppScriptProtocol.CreateState(
-            text,
-            text.Trim().ToUpperInvariant(),
-            "ok",
-            commandId,
-            new[]
-            {
-                "trimmed",
-                "uppercased",
-            });
+        var rawInput = input?.Input ?? string.Empty;
+        var normalized = rawInput.Trim();
+        var current = new AppScriptReadModel
+        {
+            Input = rawInput,
+            Output = normalized.ToUpperInvariant(),
+            Status = normalized.Length == 0 ? "empty" : "ok",
+            LastCommandId = commandId,
+        };
+
+        current.Notes.Add(normalized.Length == 0 ? "no-input" : "trimmed");
+        current.Notes.Add("uppercased");
 
         context.Emit(new AppScriptUpdated
         {
@@ -272,8 +273,18 @@ function isLegacyStarterSource(source: string): boolean {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+  const matchesBrokenAppStarter =
+    normalized.includes('public sealed class draftbehavior') &&
+    normalized.includes(
+      'scriptbehavior<appscriptreadmodel, appscriptreadmodel>',
+    ) &&
+    normalized.includes('oncommand<appscriptcommand>(handleasync)') &&
+    normalized.includes('context.emit(new appscriptupdated') &&
+    (normalized.includes('using aevatar.tools.cli.hosting;') ||
+      normalized.includes('using aevatar.studio.hosting.endpoints;'));
 
   return (
+    matchesBrokenAppStarter ||
     normalized.includes('oncommand<stringvalue>') ||
     normalized.includes('scriptbehavior<struct, struct>') ||
     (normalized.includes('google.protobuf.wellknowntypes') &&
