@@ -37,12 +37,38 @@ message GroupTimelineMessageReadModel {
 
 message GroupParticipantRuntimeBindingReadModel {
   string participant_agent_id = 1;
-  string tenant_id = 2;
-  string app_id = 3;
-  string namespace = 4;
-  string service_id = 5;
-  string endpoint_id = 6;
-  string scope_id = 7;
+  int32 target_kind_value = 2;
+  GroupServiceRuntimeTargetReadModel service_target = 3;
+  GroupWorkflowRuntimeTargetReadModel workflow_target = 4;
+  GroupScriptRuntimeTargetReadModel script_target = 5;
+  GroupLocalRuntimeTargetReadModel local_target = 6;
+}
+
+message GroupServiceRuntimeTargetReadModel {
+  string tenant_id = 1;
+  string app_id = 2;
+  string namespace = 3;
+  string service_id = 4;
+  string endpoint_id = 5;
+  string scope_id = 6;
+}
+
+message GroupWorkflowRuntimeTargetReadModel {
+  string definition_actor_id = 1;
+  string workflow_name = 2;
+  string scope_id = 3;
+}
+
+message GroupScriptRuntimeTargetReadModel {
+  string definition_actor_id = 1;
+  string revision = 2;
+  string runtime_actor_id = 3;
+  string requested_event_type = 4;
+  string scope_id = 5;
+}
+
+message GroupLocalRuntimeTargetReadModel {
+  string provider = 1;
 }
 
 message AgentFeedReadModel {

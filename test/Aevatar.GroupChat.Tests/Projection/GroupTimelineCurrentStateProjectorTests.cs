@@ -104,4 +104,73 @@ public sealed class GroupTimelineCurrentStateProjectorTests
 
         (await store.QueryAsync(new ProjectionDocumentQuery { Take = 10 })).Items.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldPreserveWorkflowRuntimeBindingOneof()
+    {
+        var store = new RecordingDocumentStore<GroupTimelineReadModel>(x => x.Id);
+        var projector = new GroupTimelineCurrentStateProjector(
+            store,
+            new FixedProjectionClock(DateTimeOffset.Parse("2026-03-25T00:00:00+00:00")));
+        var context = new GroupTimelineProjectionContext
+        {
+            RootActorId = "group-chat:thread:group-a:workflow-thread",
+            ProjectionKind = "group-chat-timeline",
+        };
+        var state = new GroupThreadState
+        {
+            GroupId = "group-a",
+            ThreadId = "workflow-thread",
+            DisplayName = "Workflow Thread",
+            ParticipantAgentIds =
+            {
+                "agent-alpha",
+            },
+            ParticipantRuntimeBindingEntries =
+            {
+                new GroupParticipantRuntimeBinding
+                {
+                    ParticipantAgentId = "agent-alpha",
+                    TargetKind = GroupParticipantRuntimeTargetKind.Workflow,
+                    WorkflowTarget = new GroupWorkflowRuntimeTarget
+                    {
+                        DefinitionActorId = "workflow-definition-1",
+                        WorkflowName = "group_chat_reply",
+                        ScopeId = "scope-1",
+                    },
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Id = "outer-workflow",
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-25T09:00:00+00:00")),
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-workflow",
+                        Version = 1,
+                        Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-25T09:00:00+00:00")),
+                    },
+                    StateRoot = Any.Pack(state),
+                }),
+            });
+
+        var readModel = await store.GetAsync("group-chat:thread:group-a:workflow-thread");
+        readModel.Should().NotBeNull();
+        readModel!.ParticipantRuntimeBindings.Should().ContainSingle();
+        var binding = readModel.ParticipantRuntimeBindings[0];
+        binding.ParticipantAgentId.Should().Be("agent-alpha");
+        binding.TargetKindValue.Should().Be((int)GroupParticipantRuntimeTargetKind.Workflow);
+        binding.WorkflowTarget.Should().NotBeNull();
+        binding.WorkflowTarget!.DefinitionActorId.Should().Be("workflow-definition-1");
+        binding.WorkflowTarget.WorkflowName.Should().Be("group_chat_reply");
+        binding.ServiceTarget.Should().BeNull();
+        binding.ScriptTarget.Should().BeNull();
+        binding.LocalTarget.Should().BeNull();
+    }
 }

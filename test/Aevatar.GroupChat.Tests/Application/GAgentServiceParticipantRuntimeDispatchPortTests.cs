@@ -41,12 +41,14 @@ public sealed class GAgentServiceParticipantRuntimeDispatchPortTests
                     [
                         new GroupParticipantRuntimeBindingSnapshot(
                             "agent-alpha",
-                            "tenant-a",
-                            "app-a",
-                            "demo",
-                            "agent-alpha-service",
-                            "chat",
-                            "scope-1"),
+                            Aevatar.GroupChat.Abstractions.GroupParticipantRuntimeTargetKind.Service,
+                            new GroupServiceRuntimeTargetSnapshot(
+                                "tenant-a",
+                                "app-a",
+                                "demo",
+                                "agent-alpha-service",
+                                "chat",
+                                "scope-1")),
                     ],
                     [],
                     2,
@@ -54,16 +56,21 @@ public sealed class GAgentServiceParticipantRuntimeDispatchPortTests
                     DateTimeOffset.Parse("2026-03-25T00:00:00+00:00")),
                 new GroupParticipantRuntimeBindingSnapshot(
                     "agent-alpha",
-                    "tenant-a",
-                    "app-a",
-                    "demo",
-                    "agent-alpha-service",
-                    "chat",
-                    "scope-1")),
+                    Aevatar.GroupChat.Abstractions.GroupParticipantRuntimeTargetKind.Service,
+                    new GroupServiceRuntimeTargetSnapshot(
+                        "tenant-a",
+                        "app-a",
+                        "demo",
+                        "agent-alpha-service",
+                        "chat",
+                        "scope-1"))),
             CancellationToken.None);
 
         result.Should().NotBeNull();
+        result!.BackendKind.Should().Be(ParticipantRuntimeBackendKind.Service);
+        result.CompletionMode.Should().Be(ParticipantRuntimeCompletionMode.AsyncObserved);
         result!.RootActorId.Should().Be("target-actor-1");
+        result.ReplyMessageId.Should().Be("participant-reply:agent-alpha:evt-user-1");
         GroupParticipantRuntimeSessionId.TryParse(result.SessionId, out var session).Should().BeTrue();
         session.GroupId.Should().Be("group-a");
         session.ThreadId.Should().Be("general");

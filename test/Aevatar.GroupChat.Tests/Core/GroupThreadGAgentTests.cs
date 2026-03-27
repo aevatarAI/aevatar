@@ -143,4 +143,102 @@ public sealed class GroupThreadGAgentTests
         agent.State.MessageEntries[0].EvidenceRefs.Should().ContainSingle();
         agent.State.MessageEntries[0].EvidenceRefs[0].SourceId.Should().Be("doc-1");
     }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldPreserveServiceRuntimeBindingAcrossReplay()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actorId = GroupChatActorIds.Thread("group-a", "service-thread");
+        var agent = GroupChatTestKit.CreateStatefulAgent<GroupThreadGAgent, GroupThreadState>(
+            eventStore,
+            actorId,
+            static () => new GroupThreadGAgent());
+        await agent.ActivateAsync();
+
+        var command = GroupChatTestKit.CreateThreadCommand(
+            groupId: "group-a",
+            threadId: "service-thread",
+            displayName: "Service Thread",
+            "agent-alpha");
+        command.ParticipantRuntimeBindingEntries.Add(new GroupParticipantRuntimeBinding
+        {
+            ParticipantAgentId = "agent-alpha",
+            TargetKind = GroupParticipantRuntimeTargetKind.Service,
+            ServiceTarget = new GroupServiceRuntimeTarget
+            {
+                TenantId = "tenant-1",
+                AppId = "app-1",
+                Namespace = "ns-1",
+                ServiceId = "svc-1",
+                EndpointId = "ep-1",
+                ScopeId = "scope-1",
+            },
+        });
+
+        await agent.HandleCreateAsync(command);
+        await agent.DeactivateAsync();
+
+        var replayed = GroupChatTestKit.CreateStatefulAgent<GroupThreadGAgent, GroupThreadState>(
+            eventStore,
+            actorId,
+            static () => new GroupThreadGAgent());
+        await replayed.ActivateAsync();
+
+        replayed.State.ParticipantRuntimeBindingEntries.Should().ContainSingle();
+        var binding = replayed.State.ParticipantRuntimeBindingEntries[0];
+        binding.ParticipantAgentId.Should().Be("agent-alpha");
+        binding.TargetKind.Should().Be(GroupParticipantRuntimeTargetKind.Service);
+        binding.TargetCase.Should().Be(GroupParticipantRuntimeBinding.TargetOneofCase.ServiceTarget);
+        binding.ServiceTarget.Should().NotBeNull();
+        binding.ServiceTarget!.ServiceId.Should().Be("svc-1");
+        binding.WorkflowTarget.Should().BeNull();
+        binding.ScriptTarget.Should().BeNull();
+        binding.LocalTarget.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleCreateAsync_ShouldAllowWorkflowRuntimeBindingWithoutDefinitionActorId()
+    {
+        var eventStore = new InMemoryEventStore();
+        var actorId = GroupChatActorIds.Thread("group-a", "workflow-thread");
+        var agent = GroupChatTestKit.CreateStatefulAgent<GroupThreadGAgent, GroupThreadState>(
+            eventStore,
+            actorId,
+            static () => new GroupThreadGAgent());
+        await agent.ActivateAsync();
+
+        var command = GroupChatTestKit.CreateThreadCommand(
+            groupId: "group-a",
+            threadId: "workflow-thread",
+            displayName: "Workflow Thread",
+            "agent-alpha");
+        command.ParticipantRuntimeBindingEntries.Add(new GroupParticipantRuntimeBinding
+        {
+            ParticipantAgentId = "agent-alpha",
+            TargetKind = GroupParticipantRuntimeTargetKind.Workflow,
+            WorkflowTarget = new GroupWorkflowRuntimeTarget
+            {
+                WorkflowName = "simple_qa",
+                ScopeId = "scope-1",
+            },
+        });
+
+        await agent.HandleCreateAsync(command);
+        await agent.DeactivateAsync();
+
+        var replayed = GroupChatTestKit.CreateStatefulAgent<GroupThreadGAgent, GroupThreadState>(
+            eventStore,
+            actorId,
+            static () => new GroupThreadGAgent());
+        await replayed.ActivateAsync();
+
+        replayed.State.ParticipantRuntimeBindingEntries.Should().ContainSingle();
+        var binding = replayed.State.ParticipantRuntimeBindingEntries[0];
+        binding.TargetKind.Should().Be(GroupParticipantRuntimeTargetKind.Workflow);
+        binding.TargetCase.Should().Be(GroupParticipantRuntimeBinding.TargetOneofCase.WorkflowTarget);
+        binding.WorkflowTarget.Should().NotBeNull();
+        binding.WorkflowTarget!.DefinitionActorId.Should().BeEmpty();
+        binding.WorkflowTarget.WorkflowName.Should().Be("simple_qa");
+        binding.WorkflowTarget.ScopeId.Should().Be("scope-1");
+    }
 }

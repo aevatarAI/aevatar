@@ -129,6 +129,7 @@ message WorkflowRunState
   string scope_id = 18;
   repeated PendingSubWorkflowDefinitionResolution pending_sub_workflow_definition_resolutions = 19;
   map<string, int32> pending_sub_workflow_definition_resolution_index_by_invocation_id = 20;
+  string session_id = 21;
 }
 
 enum WorkflowRuntimeCallbackBackendState

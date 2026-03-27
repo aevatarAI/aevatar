@@ -9,19 +9,18 @@ namespace Aevatar.GroupChat.Tests.Application;
 public sealed class GroupParticipantReplyCompletedServiceTests
 {
     [Fact]
-    public async Task SubscribeAsync_ShouldAppendReplyAndReleaseProjectionAfterCompletedEvent()
+    public async Task SubscribeAsync_ShouldForwardCompletedEventToReplyRunCommandPort()
     {
         var streams = new InMemoryStreamProvider();
-        var commandPort = new AwaitingGroupThreadCommandPort();
-        var projectionPort = new AwaitingGroupParticipantReplyProjectionPort();
-        var service = new GroupParticipantReplyCompletedService(streams, commandPort, projectionPort);
+        var runCommandPort = new AwaitingParticipantReplyRunCommandPort();
+        var service = new GroupParticipantReplyCompletedService(streams, runCommandPort);
 
         await using var subscription = await service.SubscribeAsync();
         await streams.GetStream(GroupParticipantReplyCompletedStreamIds.Global).ProduceAsync(
             new GroupParticipantReplyCompletedEvent
             {
                 RootActorId = "runtime-root-1",
-                SessionId = "group-chat-reply|group-a|general|agent-alpha|evt-user-1|msg-user-1",
+                SessionId = "group-chat-reply|group-a|general|topic-a|agent-alpha|evt-user-1|msg-user-1",
                 GroupId = "group-a",
                 ThreadId = "general",
                 ReplyToMessageId = "msg-user-1",
@@ -29,45 +28,30 @@ public sealed class GroupParticipantReplyCompletedServiceTests
                 SourceEventId = "evt-user-1",
                 ReplyMessageId = "participant-reply:agent-alpha:evt-user-1",
                 Content = "reply from runtime",
+                TopicId = "topic-a",
             });
 
-        var append = await commandPort.WaitForAppendAsync();
-        var released = await projectionPort.WaitForReleaseAsync();
+        var complete = await runCommandPort.WaitForCompleteAsync();
 
-        append.Text.Should().Be("reply from runtime");
-        append.ParticipantAgentId.Should().Be("agent-alpha");
-        released.Should().Be(("runtime-root-1", "group-chat-reply|group-a|general|agent-alpha|evt-user-1|msg-user-1"));
+        complete.RootActorId.Should().Be("runtime-root-1");
+        complete.SessionId.Should().Be("group-chat-reply|group-a|general|topic-a|agent-alpha|evt-user-1|msg-user-1");
+        complete.Content.Should().Be("reply from runtime");
+        complete.ReplyMessageId.Should().Be("participant-reply:agent-alpha:evt-user-1");
     }
 
-    private sealed class AwaitingGroupThreadCommandPort : RecordingGroupThreadCommandPort
+    private sealed class AwaitingParticipantReplyRunCommandPort : RecordingParticipantReplyRunCommandPort
     {
-        private readonly TaskCompletionSource<AppendAgentMessageCommand> _appendTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public override Task<Aevatar.GroupChat.Abstractions.Commands.GroupCommandAcceptedReceipt> AppendAgentMessageAsync(
-            AppendAgentMessageCommand command,
-            CancellationToken ct = default)
-        {
-            _appendTcs.TrySetResult(command);
-            return base.AppendAgentMessageAsync(command, ct);
-        }
-
-        public Task<AppendAgentMessageCommand> WaitForAppendAsync() => _appendTcs.Task;
-    }
-
-    private sealed class AwaitingGroupParticipantReplyProjectionPort : RecordingGroupParticipantReplyProjectionPort
-    {
-        private readonly TaskCompletionSource<(string actorId, string sessionId)> _releaseTcs =
+        private readonly TaskCompletionSource<CompleteParticipantReplyRunCommand> _completeTcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public override Task ReleaseParticipantReplyProjectionAsync(
-            string rootActorId,
-            string sessionId,
+        public override Task<Aevatar.GroupChat.Abstractions.Commands.GroupCommandAcceptedReceipt> CompleteAsync(
+            CompleteParticipantReplyRunCommand command,
             CancellationToken ct = default)
         {
-            _releaseTcs.TrySetResult((rootActorId, sessionId));
-            return base.ReleaseParticipantReplyProjectionAsync(rootActorId, sessionId, ct);
+            _completeTcs.TrySetResult(command);
+            return base.CompleteAsync(command, ct);
         }
 
-        public Task<(string actorId, string sessionId)> WaitForReleaseAsync() => _releaseTcs.Task;
+        public Task<CompleteParticipantReplyRunCommand> WaitForCompleteAsync() => _completeTcs.Task;
     }
 }

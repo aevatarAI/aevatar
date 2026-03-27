@@ -251,6 +251,7 @@ public sealed class WorkflowRunGAgent
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, request.Metadata, State.ScopeId),
+            SessionId = request.SessionId ?? string.Empty,
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -295,6 +296,7 @@ public sealed class WorkflowRunGAgent
             Input = request.Input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = State.ScopeId ?? string.Empty,
+            SessionId = State.SessionId ?? string.Empty,
         });
 
         await PublishAsync(new StartWorkflowEvent
@@ -390,10 +392,9 @@ public sealed class WorkflowRunGAgent
                 (evt.Output ?? string.Empty).Length);
         }
 
-        await PublishAsync(new TextMessageEndEvent
-        {
-            Content = evt.Success ? evt.Output : $"Workflow execution failed: {evt.Error}",
-        }, TopologyAudience.Parent);
+        await EmitTerminalTextAsync(
+            evt.Success ? (evt.Output ?? string.Empty) : $"Workflow execution failed: {evt.Error}",
+            CancellationToken.None);
     }
 
     [EventHandler]
@@ -697,6 +698,7 @@ public sealed class WorkflowRunGAgent
             next.DefinitionActorId = evt.DefinitionActorId.Trim();
         if (string.IsNullOrWhiteSpace(next.ScopeId) && !string.IsNullOrWhiteSpace(evt.ScopeId))
             next.ScopeId = evt.ScopeId.Trim();
+        next.SessionId = evt.SessionId?.Trim() ?? string.Empty;
         return next;
     }
 
@@ -844,10 +846,19 @@ public sealed class WorkflowRunGAgent
             runId,
             string.IsNullOrWhiteSpace(reason) ? "(none)" : reason);
 
-        await PublishAsync(new TextMessageEndEvent
+        await EmitTerminalTextAsync(BuildStoppedMessage(reason), CancellationToken.None);
+    }
+
+    private async Task EmitTerminalTextAsync(string content, CancellationToken ct)
+    {
+        var textEnd = new TextMessageEndEvent
         {
-            Content = BuildStoppedMessage(reason),
-        }, TopologyAudience.Parent);
+            Content = content ?? string.Empty,
+            SessionId = State.SessionId,
+        };
+
+        await PersistDomainEventAsync(textEnd, ct);
+        await PublishAsync(textEnd, TopologyAudience.Parent, ct);
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

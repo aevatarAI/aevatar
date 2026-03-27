@@ -91,12 +91,14 @@ public sealed class GroupMentionHintReplyLoopHandlerTests
                 [
                     new GroupParticipantRuntimeBindingSnapshot(
                         "agent-alpha",
-                        "tenant-a",
-                        "app-a",
-                        "demo",
-                        "agent-alpha-service",
-                        "chat",
-                        "scope-1"),
+                        GroupParticipantRuntimeTargetKind.Service,
+                        new GroupServiceRuntimeTargetSnapshot(
+                            "tenant-a",
+                            "app-a",
+                            "demo",
+                            "agent-alpha-service",
+                            "chat",
+                            "scope-1")),
                 ]),
         };
         var commandPort = new RecordingGroupThreadCommandPort();
@@ -107,8 +109,11 @@ public sealed class GroupMentionHintReplyLoopHandlerTests
         var dispatchPort = new RecordingParticipantRuntimeDispatchPort
         {
             Result = new Aevatar.GroupChat.Abstractions.Participants.ParticipantRuntimeDispatchResult(
+                Aevatar.GroupChat.Abstractions.Participants.ParticipantRuntimeBackendKind.Service,
+                Aevatar.GroupChat.Abstractions.Participants.ParticipantRuntimeCompletionMode.AsyncObserved,
                 "runtime-root-1",
-                "group-chat-reply|group-a|general|agent-alpha|evt-user-1|msg-user-1"),
+                "group-chat-reply|group-a|general|topic-general|agent-alpha|evt-user-1|msg-user-1",
+                "participant-reply:agent-alpha:evt-user-1"),
         };
         var projectionPort = new RecordingGroupParticipantReplyProjectionPort();
         var handler = new GroupMentionHintReplyLoopHandler(queryPort, commandPort, replyPort, dispatchPort, projectionPort);
@@ -116,9 +121,9 @@ public sealed class GroupMentionHintReplyLoopHandlerTests
         await handler.HandleAsync(CreateHint());
 
         dispatchPort.Requests.Should().ContainSingle();
-        dispatchPort.Requests[0].Binding.ServiceId.Should().Be("agent-alpha-service");
+        dispatchPort.Requests[0].Binding.ServiceTarget!.ServiceId.Should().Be("agent-alpha-service");
         projectionPort.EnsureCalls.Should().ContainSingle()
-            .Which.Should().Be(("runtime-root-1", "group-chat-reply|group-a|general|agent-alpha|evt-user-1|msg-user-1"));
+            .Which.Should().Be(("runtime-root-1", "group-chat-reply|group-a|general|topic-general|agent-alpha|evt-user-1|msg-user-1"));
         replyPort.Requests.Should().BeEmpty();
         commandPort.AppendCalls.Should().BeEmpty();
     }

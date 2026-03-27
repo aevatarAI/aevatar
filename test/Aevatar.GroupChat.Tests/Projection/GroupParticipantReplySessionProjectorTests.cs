@@ -61,6 +61,45 @@ public sealed class GroupParticipantReplySessionProjectorTests
         observed.Content.Should().Be("reply from role");
     }
 
+    [Fact]
+    public async Task ProjectAsync_ShouldPublishReplyCompletedEventForWorkflowTextMessageEnd()
+    {
+        var publisher = new RecordingPublisher();
+        var projector = new GroupParticipantReplySessionProjector(publisher);
+        var context = new GroupParticipantReplyProjectionContext
+        {
+            RootActorId = "workflow-run-1",
+            ProjectionKind = GroupChatProjectionKinds.ParticipantReply,
+            SessionId = "group-chat-reply|group-a|general|topic-general|agent-alpha|evt-user-1|msg-user-1",
+        };
+
+        await projector.ProjectAsync(
+            context,
+            new EventEnvelope
+            {
+                Route = new EnvelopeRoute
+                {
+                    PublisherActorId = "workflow-run-1",
+                },
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-user-1",
+                        Version = 2,
+                        EventData = Any.Pack(new TextMessageEndEvent
+                        {
+                            SessionId = context.SessionId,
+                            Content = "reply from workflow",
+                        }),
+                    },
+                }),
+            });
+
+        publisher.Events.Should().ContainSingle();
+        publisher.Events[0].Content.Should().Be("reply from workflow");
+    }
+
     private sealed class RecordingPublisher : Aevatar.GroupChat.Abstractions.Ports.IGroupParticipantReplyCompletedPublisher
     {
         public List<GroupParticipantReplyCompletedEvent> Events { get; } = [];

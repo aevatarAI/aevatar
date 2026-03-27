@@ -69,12 +69,35 @@ public sealed class GroupTimelineQueryPort : IGroupTimelineQueryPort
             readModel.ParticipantRuntimeBindings
                 .Select(x => new GroupParticipantRuntimeBindingSnapshot(
                     x.ParticipantAgentId,
-                    x.TenantId,
-                    x.AppId,
-                    x.Namespace,
-                    x.ServiceId,
-                    x.EndpointId,
-                    x.ScopeId))
+                    Enum.IsDefined(typeof(GroupParticipantRuntimeTargetKind), x.TargetKindValue)
+                        ? (GroupParticipantRuntimeTargetKind)x.TargetKindValue
+                        : GroupParticipantRuntimeTargetKind.Unspecified,
+                    x.ServiceTarget == null
+                        ? null
+                        : new GroupServiceRuntimeTargetSnapshot(
+                            x.ServiceTarget.TenantId,
+                            x.ServiceTarget.AppId,
+                            x.ServiceTarget.Namespace,
+                            x.ServiceTarget.ServiceId,
+                            x.ServiceTarget.EndpointId,
+                            x.ServiceTarget.ScopeId),
+                    x.WorkflowTarget == null
+                        ? null
+                        : new GroupWorkflowRuntimeTargetSnapshot(
+                            x.WorkflowTarget.DefinitionActorId,
+                            x.WorkflowTarget.WorkflowName,
+                            x.WorkflowTarget.ScopeId),
+                    x.ScriptTarget == null
+                        ? null
+                        : new GroupScriptRuntimeTargetSnapshot(
+                            x.ScriptTarget.DefinitionActorId,
+                            x.ScriptTarget.Revision,
+                            x.ScriptTarget.RuntimeActorId,
+                            x.ScriptTarget.RequestedEventType,
+                            x.ScriptTarget.ScopeId),
+                    x.LocalTarget == null
+                        ? null
+                        : new GroupLocalRuntimeTargetSnapshot(x.LocalTarget.Provider)))
                 .ToList(),
             readModel.Messages.Select(MapMessage).ToList(),
             readModel.StateVersion,

@@ -28,6 +28,7 @@ message WorkflowRunExecutionStartedEvent
   string input = 3;
   string definition_actor_id = 4;
   string scope_id = 5;
+  string session_id = 6;
 }
 message WorkflowCommandObservedEvent { string command_id = 1; }
 message WorkflowExecutionStateUpsertedEvent

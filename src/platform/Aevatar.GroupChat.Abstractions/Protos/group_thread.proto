@@ -53,6 +53,15 @@ enum GroupFeedAcceptReason {
   GROUP_FEED_ACCEPT_REASON_PUBLISHER_SUBSCRIPTION = 3;
 }
 
+enum GroupParticipantReplyRunStatus {
+  GROUP_PARTICIPANT_REPLY_RUN_STATUS_UNSPECIFIED = 0;
+  GROUP_PARTICIPANT_REPLY_RUN_STATUS_STARTED = 1;
+  GROUP_PARTICIPANT_REPLY_RUN_STATUS_AWAITING_COMPLETION = 2;
+  GROUP_PARTICIPANT_REPLY_RUN_STATUS_COMPLETED = 3;
+  GROUP_PARTICIPANT_REPLY_RUN_STATUS_NO_CONTENT = 4;
+  GROUP_PARTICIPANT_REPLY_RUN_STATUS_FAILED = 5;
+}
+
 message GroupSourceRef {
   GroupSourceKind source_kind = 1;
   string locator = 2;
@@ -185,14 +194,51 @@ message GroupMentionHint {
   int32 evidence_ref_count = 15;
 }
 
+enum GroupParticipantRuntimeTargetKind {
+  GROUP_PARTICIPANT_RUNTIME_TARGET_KIND_UNSPECIFIED = 0;
+  GROUP_PARTICIPANT_RUNTIME_TARGET_KIND_SERVICE = 1;
+  GROUP_PARTICIPANT_RUNTIME_TARGET_KIND_WORKFLOW = 2;
+  GROUP_PARTICIPANT_RUNTIME_TARGET_KIND_SCRIPT = 3;
+  GROUP_PARTICIPANT_RUNTIME_TARGET_KIND_LOCAL = 4;
+}
+
+message GroupServiceRuntimeTarget {
+  string tenant_id = 1;
+  string app_id = 2;
+  string namespace = 3;
+  string service_id = 4;
+  string endpoint_id = 5;
+  string scope_id = 6;
+}
+
+message GroupWorkflowRuntimeTarget {
+  string definition_actor_id = 1;
+  string workflow_name = 2;
+  string scope_id = 3;
+}
+
+message GroupScriptRuntimeTarget {
+  string definition_actor_id = 1;
+  string revision = 2;
+  string runtime_actor_id = 3;
+  string requested_event_type = 4;
+  string scope_id = 5;
+}
+
+message GroupLocalRuntimeTarget {
+  string provider = 1;
+}
+
 message GroupParticipantRuntimeBinding {
   string participant_agent_id = 1;
-  string tenant_id = 2;
-  string app_id = 3;
-  string namespace = 4;
-  string service_id = 5;
-  string endpoint_id = 6;
-  string scope_id = 7;
+  GroupParticipantRuntimeTargetKind target_kind = 2;
+
+  oneof target {
+    GroupServiceRuntimeTarget service_target = 10;
+    GroupWorkflowRuntimeTarget workflow_target = 11;
+    GroupScriptRuntimeTarget script_target = 12;
+    GroupLocalRuntimeTarget local_target = 13;
+  }
 }
 
 message GroupParticipantReplyCompletedEvent {
@@ -206,6 +252,101 @@ message GroupParticipantReplyCompletedEvent {
   string reply_message_id = 8;
   string content = 9;
   string topic_id = 10;
+}
+
+message ParticipantReplyRunState {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  string topic_id = 6;
+  string reply_message_id = 7;
+  string root_actor_id = 8;
+  string session_id = 9;
+  GroupParticipantReplyRunStatus status = 10;
+  string failure_reason = 11;
+  int64 last_applied_event_version = 12;
+  string last_event_id = 13;
+}
+
+message StartParticipantReplyRunCommand {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  int64 source_state_version = 6;
+  int64 timeline_cursor = 7;
+  string topic_id = 8;
+}
+
+message CompleteParticipantReplyRunCommand {
+  string root_actor_id = 1;
+  string session_id = 2;
+  string group_id = 3;
+  string thread_id = 4;
+  string reply_to_message_id = 5;
+  string participant_agent_id = 6;
+  string source_event_id = 7;
+  string reply_message_id = 8;
+  string content = 9;
+  string topic_id = 10;
+}
+
+message ParticipantReplyRunStartedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  int64 source_state_version = 6;
+  int64 timeline_cursor = 7;
+  string topic_id = 8;
+  string reply_message_id = 9;
+}
+
+message ParticipantReplyRunAsyncDispatchAcceptedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  string topic_id = 6;
+  string reply_message_id = 7;
+  string root_actor_id = 8;
+  string session_id = 9;
+}
+
+message ParticipantReplyRunCompletedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  string topic_id = 6;
+  string reply_message_id = 7;
+}
+
+message ParticipantReplyRunNoContentEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  string topic_id = 6;
+  string reply_message_id = 7;
+}
+
+message ParticipantReplyRunFailedEvent {
+  string group_id = 1;
+  string thread_id = 2;
+  string participant_agent_id = 3;
+  string signal_id = 4;
+  string source_event_id = 5;
+  string topic_id = 6;
+  string reply_message_id = 7;
+  string failure_reason = 8;
 }
 
 message GroupSourceRegistryState {

@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GroupChat.Abstractions;
 using Aevatar.GroupChat.Abstractions.Feeds;
@@ -7,6 +8,7 @@ using Aevatar.GroupChat.Abstractions.Ports;
 using Aevatar.GroupChat.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Workflow.Application.Abstractions.Runs;
 
 namespace Aevatar.GroupChat.Tests.Application;
 
@@ -182,6 +184,25 @@ internal sealed class RecordingAgentFeedCommandPort : IAgentFeedCommandPort
     }
 }
 
+internal class RecordingParticipantReplyRunCommandPort : IParticipantReplyRunCommandPort
+{
+    public List<StartParticipantReplyRunCommand> StartCalls { get; } = [];
+
+    public List<CompleteParticipantReplyRunCommand> CompleteCalls { get; } = [];
+
+    public virtual Task<GroupCommandAcceptedReceipt> StartAsync(StartParticipantReplyRunCommand command, CancellationToken ct = default)
+    {
+        StartCalls.Add(command);
+        return Task.FromResult(new GroupCommandAcceptedReceipt("reply-run-actor", "cmd", "corr"));
+    }
+
+    public virtual Task<GroupCommandAcceptedReceipt> CompleteAsync(CompleteParticipantReplyRunCommand command, CancellationToken ct = default)
+    {
+        CompleteCalls.Add(command);
+        return Task.FromResult(new GroupCommandAcceptedReceipt("reply-run-actor", "cmd", "corr"));
+    }
+}
+
 internal sealed class StubAgentFeedInterestEvaluator : IAgentFeedInterestEvaluator
 {
     public AgentFeedInterestDecision? Decision { get; set; }
@@ -311,5 +332,23 @@ internal sealed class RecordingServiceInvocationPort : IServiceInvocationPort
             CommandId = request.CommandId,
             CorrelationId = request.CorrelationId,
         });
+    }
+}
+
+internal sealed class RecordingWorkflowChatRunDispatchService
+    : ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>
+{
+    public CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError> Result { get; set; } =
+        CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>.Success(
+            new WorkflowChatRunAcceptedReceipt("workflow-run-1", "demo", "cmd-1", "corr-1"));
+
+    public List<WorkflowChatRunRequest> Requests { get; } = [];
+
+    public Task<CommandDispatchResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>> DispatchAsync(
+        WorkflowChatRunRequest command,
+        CancellationToken ct = default)
+    {
+        Requests.Add(command);
+        return Task.FromResult(Result);
     }
 }

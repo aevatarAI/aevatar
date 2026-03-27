@@ -31,6 +31,32 @@ public sealed class GroupThreadApplicationServiceTests
     }
 
     [Fact]
+    public async Task AppendAgentMessageAsync_ShouldEnsureProjectionAndDispatchCommandEnvelope()
+    {
+        var runtime = new RecordingActorRuntime();
+        var dispatchPort = new RecordingActorDispatchPort();
+        var projectionPort = new RecordingGroupTimelineProjectionPort();
+        var service = new GroupThreadCommandApplicationService(runtime, dispatchPort, projectionPort);
+
+        var receipt = await service.AppendAgentMessageAsync(
+            GroupChatTestKit.CreateAgentMessageCommand(
+                messageId: "msg-agent-1",
+                participantAgentId: "agent-alpha",
+                text: "@agent-beta 你怎么看？"));
+
+        projectionPort.EnsuredActorIds.Should().ContainSingle()
+            .Which.Should().Be("group-chat:thread:group-a:general");
+        runtime.CreateCalls.Should().ContainSingle();
+        runtime.CreateCalls[0].actorId.Should().Be("group-chat:thread:group-a:general");
+        dispatchPort.Calls.Should().ContainSingle();
+        dispatchPort.Calls[0].actorId.Should().Be("group-chat:thread:group-a:general");
+        dispatchPort.Calls[0].envelope.Payload.Should().NotBeNull();
+        dispatchPort.Calls[0].envelope.Payload!.Is(AppendAgentMessageCommand.Descriptor).Should().BeTrue();
+        receipt.TargetActorId.Should().Be("group-chat:thread:group-a:general");
+        receipt.CorrelationId.Should().Be("group-a:general:msg-agent-1");
+    }
+
+    [Fact]
     public async Task QueryService_ShouldDelegateToTimelineQueryPort()
     {
         var snapshot = new Aevatar.GroupChat.Abstractions.Queries.GroupThreadSnapshot(

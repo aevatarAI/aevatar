@@ -1,14 +1,14 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.GroupChat.Abstractions;
 using Aevatar.GroupChat.Abstractions.Groups;
 using Aevatar.GroupChat.Abstractions.Participants;
-using Aevatar.GroupChat.Abstractions.Ports;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GroupChat.Application.Participants;
 
-public sealed class GAgentServiceParticipantRuntimeDispatchPort : IParticipantRuntimeDispatchPort
+public sealed class GAgentServiceParticipantRuntimeDispatchPort : IParticipantRuntimeDispatcher
 {
     private readonly IServiceInvocationPort _serviceInvocationPort;
 
@@ -17,9 +17,16 @@ public sealed class GAgentServiceParticipantRuntimeDispatchPort : IParticipantRu
         _serviceInvocationPort = serviceInvocationPort ?? throw new ArgumentNullException(nameof(serviceInvocationPort));
     }
 
+    public bool CanDispatch(Aevatar.GroupChat.Abstractions.Queries.GroupParticipantRuntimeBindingSnapshot binding) =>
+        binding.TargetKind == GroupParticipantRuntimeTargetKind.Service &&
+        binding.ServiceTarget != null;
+
     public async Task<ParticipantRuntimeDispatchResult?> DispatchAsync(ParticipantRuntimeDispatchRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var target = request.Binding.ServiceTarget;
+        if (target == null)
+            return null;
 
         var sessionId = GroupParticipantRuntimeSessionId.Build(
             request.GroupId,
@@ -34,27 +41,35 @@ public sealed class GAgentServiceParticipantRuntimeDispatchPort : IParticipantRu
             {
                 Identity = new ServiceIdentity
                 {
-                    TenantId = request.Binding.TenantId,
-                    AppId = request.Binding.AppId,
-                    Namespace = request.Binding.Namespace,
-                    ServiceId = request.Binding.ServiceId,
+                    TenantId = target.TenantId,
+                    AppId = target.AppId,
+                    Namespace = target.Namespace,
+                    ServiceId = target.ServiceId,
                 },
-                EndpointId = request.Binding.EndpointId,
-                Payload = Any.Pack(BuildChatRequest(request, sessionId)),
+                EndpointId = target.EndpointId,
+                Payload = Any.Pack(BuildChatRequest(request, sessionId, target.ScopeId)),
                 CommandId = $"group-chat-dispatch:{request.ParticipantAgentId}:{request.SourceEventId}",
                 CorrelationId = $"{request.GroupId}:{request.ThreadId}:{request.TriggerMessage.MessageId}:{request.ParticipantAgentId}",
             },
             ct);
-        return new ParticipantRuntimeDispatchResult(receipt.TargetActorId, sessionId);
+        return new ParticipantRuntimeDispatchResult(
+            ParticipantRuntimeBackendKind.Service,
+            ParticipantRuntimeCompletionMode.AsyncObserved,
+            receipt.TargetActorId,
+            sessionId,
+            GroupParticipantReplyMessageIds.FromSource(request.ParticipantAgentId, request.SourceEventId));
     }
 
-    private static ChatRequestEvent BuildChatRequest(ParticipantRuntimeDispatchRequest request, string sessionId)
+    private static ChatRequestEvent BuildChatRequest(
+        ParticipantRuntimeDispatchRequest request,
+        string sessionId,
+        string scopeId)
     {
         var chatRequest = new ChatRequestEvent
         {
             Prompt = request.TriggerMessage.Text,
             SessionId = sessionId,
-            ScopeId = request.Binding.ScopeId,
+            ScopeId = scopeId,
         };
         chatRequest.Metadata.Add("group_id", request.GroupId);
         chatRequest.Metadata.Add("thread_id", request.ThreadId);

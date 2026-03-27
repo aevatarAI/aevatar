@@ -20,4 +20,17 @@ public static class GroupChatActorIds
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceId);
         return $"group-chat:source:{sourceId}";
     }
+
+    public static string ParticipantReplyRun(
+        string groupId,
+        string threadId,
+        string participantAgentId,
+        string sourceEventId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(groupId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(threadId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(participantAgentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceEventId);
+        return $"group-chat:reply-run:{groupId}:{threadId}:{participantAgentId}:{sourceEventId}";
+    }
 }

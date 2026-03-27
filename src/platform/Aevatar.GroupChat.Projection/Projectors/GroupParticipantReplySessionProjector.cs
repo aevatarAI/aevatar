@@ -25,8 +25,7 @@ public sealed class GroupParticipantReplySessionProjector
         ArgumentNullException.ThrowIfNull(envelope);
 
         if (!CommittedStateEventEnvelope.TryGetObservedPayload(envelope, out var payload, out _, out _) ||
-            payload == null ||
-            !payload.Is(RoleChatSessionCompletedEvent.Descriptor))
+            payload == null)
         {
             return;
         }
@@ -35,9 +34,10 @@ public sealed class GroupParticipantReplySessionProjector
         if (!BelongsToObservedRoot(context.RootActorId, publisherActorId))
             return;
 
-        var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
-        if (!GroupParticipantRuntimeSessionId.TryParse(completed.SessionId, out var session) ||
-            !string.Equals(context.SessionId, completed.SessionId, StringComparison.Ordinal))
+        var completed = ResolveCompletedSession(payload);
+        if (completed == null ||
+            !GroupParticipantRuntimeSessionId.TryParse(completed.Value.SessionId, out var session) ||
+            !string.Equals(context.SessionId, completed.Value.SessionId, StringComparison.Ordinal))
         {
             return;
         }
@@ -46,7 +46,7 @@ public sealed class GroupParticipantReplySessionProjector
             new GroupParticipantReplyCompletedEvent
             {
                 RootActorId = context.RootActorId,
-                SessionId = completed.SessionId,
+                SessionId = completed.Value.SessionId,
                 GroupId = session.GroupId,
                 ThreadId = session.ThreadId,
                 TopicId = session.TopicId,
@@ -54,9 +54,26 @@ public sealed class GroupParticipantReplySessionProjector
                 ParticipantAgentId = session.ParticipantAgentId,
                 SourceEventId = session.SourceEventId,
                 ReplyMessageId = GroupParticipantReplyMessageIds.FromSource(session.ParticipantAgentId, session.SourceEventId),
-                Content = completed.Content ?? string.Empty,
+                Content = completed.Value.Content,
             },
             ct);
+    }
+
+    private static (string SessionId, string Content)? ResolveCompletedSession(Google.Protobuf.WellKnownTypes.Any payload)
+    {
+        if (payload.Is(RoleChatSessionCompletedEvent.Descriptor))
+        {
+            var completed = payload.Unpack<RoleChatSessionCompletedEvent>();
+            return (completed.SessionId, completed.Content ?? string.Empty);
+        }
+
+        if (payload.Is(TextMessageEndEvent.Descriptor))
+        {
+            var completed = payload.Unpack<TextMessageEndEvent>();
+            return (completed.SessionId, completed.Content ?? string.Empty);
+        }
+
+        return null;
     }
 
     private static bool BelongsToObservedRoot(string rootActorId, string publisherActorId) =>

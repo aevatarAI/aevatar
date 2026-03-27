@@ -93,7 +93,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentFeedQueryPort>(sp => sp.GetRequiredService<AgentFeedQueryPort>());
         services.TryAddSingleton<ISourceCatalogProjectionPort>(sp => sp.GetRequiredService<SourceCatalogProjectionPort>());
         services.TryAddSingleton<ISourceRegistryQueryPort>(sp => sp.GetRequiredService<SourceCatalogQueryPort>());
-        services.TryAddSingleton<IGroupParticipantReplyProjectionPort>(sp => sp.GetRequiredService<GroupParticipantReplyProjectionPort>());
+        services.Replace(ServiceDescriptor.Singleton<IGroupParticipantReplyProjectionPort>(sp => sp.GetRequiredService<GroupParticipantReplyProjectionPort>()));
         services.AddProjectionArtifactMaterializer<
             GroupTimelineProjectionContext,
             GroupMentionHintProjector>();

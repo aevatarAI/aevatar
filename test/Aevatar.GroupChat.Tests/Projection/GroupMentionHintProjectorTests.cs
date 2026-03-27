@@ -164,4 +164,79 @@ public sealed class GroupMentionHintProjectorTests
 
         publisher.Hints.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task ProjectAsync_ShouldPublishHintsForAgentMessageWithDirectHints()
+    {
+        var publisher = new RecordingMentionHintPublisher();
+        var projector = new GroupMentionHintProjector(publisher);
+        var state = new GroupThreadState
+        {
+            GroupId = "group-a",
+            ThreadId = "general",
+            MessageEntries =
+            {
+                new GroupThreadMessageState
+                {
+                    MessageId = "msg-agent-1",
+                    TimelineCursor = 2,
+                    SenderKind = GroupMessageSenderKind.Agent,
+                    SenderId = "agent-alpha",
+                    Text = "@agent-beta @agent-gamma 你们怎么看？",
+                    TopicId = "topic-general",
+                    SignalKind = GroupSignalKind.Question,
+                    DirectHintAgentIds =
+                    {
+                        "agent-beta",
+                        "agent-gamma",
+                    },
+                },
+            },
+        };
+
+        await projector.ProjectAsync(
+            new GroupTimelineProjectionContext
+            {
+                RootActorId = "group-chat:thread:group-a:general",
+                ProjectionKind = "group-chat-timeline",
+            },
+            new EventEnvelope
+            {
+                Id = "outer-2",
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-03-26T09:00:00+00:00")),
+                Payload = Any.Pack(new CommittedStateEventPublished
+                {
+                    StateEvent = new StateEvent
+                    {
+                        EventId = "evt-agent-message",
+                        Version = 3,
+                        EventData = Any.Pack(new AgentMessageAppendedEvent
+                        {
+                            GroupId = "group-a",
+                            ThreadId = "general",
+                            MessageId = "msg-agent-1",
+                            ParticipantAgentId = "agent-alpha",
+                            Text = "@agent-beta @agent-gamma 你们怎么看？",
+                            TopicId = "topic-general",
+                            SignalKind = GroupSignalKind.Question,
+                            DirectHintAgentIds =
+                            {
+                                "agent-beta",
+                                "agent-gamma",
+                            },
+                        }),
+                    },
+                    StateRoot = Any.Pack(state),
+                }),
+            });
+
+        publisher.Hints.Should().HaveCount(2);
+        publisher.Hints.Select(x => x.ParticipantAgentId).Should().Equal("agent-beta", "agent-gamma");
+        publisher.Hints.All(x => x.SourceEventId == "evt-agent-message").Should().BeTrue();
+        publisher.Hints.All(x => x.TimelineCursor == 2).Should().BeTrue();
+        publisher.Hints.All(x => x.SenderKind == GroupMessageSenderKind.Agent).Should().BeTrue();
+        publisher.Hints.All(x => x.SenderId == "agent-alpha").Should().BeTrue();
+        publisher.Hints.All(x => x.SignalKind == GroupSignalKind.Question).Should().BeTrue();
+        publisher.Hints.All(x => x.DirectHintAgentIds.SequenceEqual(["agent-beta", "agent-gamma"])).Should().BeTrue();
+    }
 }

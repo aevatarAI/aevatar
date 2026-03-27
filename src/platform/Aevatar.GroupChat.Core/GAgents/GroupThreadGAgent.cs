@@ -394,20 +394,127 @@ public sealed class GroupThreadGAgent : GAgentBase<GroupThreadState>
             if (!seen.Add(participantAgentId))
                 continue;
 
-            normalized.Add(new GroupParticipantRuntimeBinding
+            var normalizedBinding = new GroupParticipantRuntimeBinding
             {
                 ParticipantAgentId = participantAgentId,
-                TenantId = NormalizeRequired(binding.TenantId, nameof(binding.TenantId)),
-                AppId = NormalizeRequired(binding.AppId, nameof(binding.AppId)),
-                Namespace = NormalizeRequired(binding.Namespace, nameof(binding.Namespace)),
-                ServiceId = NormalizeRequired(binding.ServiceId, nameof(binding.ServiceId)),
-                EndpointId = NormalizeRequired(binding.EndpointId, nameof(binding.EndpointId)),
-                ScopeId = binding.ScopeId?.Trim() ?? string.Empty,
-            });
+                TargetKind = NormalizeTargetKind(binding),
+            };
+
+            switch (binding.TargetCase)
+            {
+                case GroupParticipantRuntimeBinding.TargetOneofCase.ServiceTarget:
+                    normalizedBinding.ServiceTarget = NormalizeServiceTarget(binding);
+                    break;
+                case GroupParticipantRuntimeBinding.TargetOneofCase.WorkflowTarget:
+                    normalizedBinding.WorkflowTarget = NormalizeWorkflowTarget(binding);
+                    break;
+                case GroupParticipantRuntimeBinding.TargetOneofCase.ScriptTarget:
+                    normalizedBinding.ScriptTarget = NormalizeScriptTarget(binding);
+                    break;
+                case GroupParticipantRuntimeBinding.TargetOneofCase.LocalTarget:
+                    normalizedBinding.LocalTarget = NormalizeLocalTarget(binding);
+                    break;
+            }
+
+            normalized.Add(normalizedBinding);
         }
 
         return normalized;
     }
+
+    private static GroupParticipantRuntimeTargetKind NormalizeTargetKind(GroupParticipantRuntimeBinding binding)
+    {
+        var targetKind = binding.TargetKind == GroupParticipantRuntimeTargetKind.Unspecified
+            ? ResolveTargetKind(binding.TargetCase)
+            : binding.TargetKind;
+        var resolvedTargetKind = ResolveTargetKind(binding.TargetCase);
+        if (resolvedTargetKind == GroupParticipantRuntimeTargetKind.Unspecified)
+            throw new InvalidOperationException("runtime target is required.");
+        if (targetKind != resolvedTargetKind)
+        {
+            throw new InvalidOperationException(
+                $"target_kind '{targetKind}' does not match runtime target '{binding.TargetCase}'.");
+        }
+
+        return targetKind;
+    }
+
+    private static GroupServiceRuntimeTarget? NormalizeServiceTarget(GroupParticipantRuntimeBinding binding)
+    {
+        if (binding.TargetCase != GroupParticipantRuntimeBinding.TargetOneofCase.ServiceTarget)
+            return null;
+
+        var target = binding.ServiceTarget ?? throw new InvalidOperationException("service_target is required.");
+        return new GroupServiceRuntimeTarget
+        {
+            TenantId = NormalizeRequired(target.TenantId, nameof(target.TenantId)),
+            AppId = NormalizeRequired(target.AppId, nameof(target.AppId)),
+            Namespace = NormalizeRequired(target.Namespace, nameof(target.Namespace)),
+            ServiceId = NormalizeRequired(target.ServiceId, nameof(target.ServiceId)),
+            EndpointId = NormalizeRequired(target.EndpointId, nameof(target.EndpointId)),
+            ScopeId = target.ScopeId?.Trim() ?? string.Empty,
+        };
+    }
+
+    private static GroupWorkflowRuntimeTarget? NormalizeWorkflowTarget(GroupParticipantRuntimeBinding binding)
+    {
+        if (binding.TargetCase != GroupParticipantRuntimeBinding.TargetOneofCase.WorkflowTarget)
+            return null;
+
+        var target = binding.WorkflowTarget ?? throw new InvalidOperationException("workflow_target is required.");
+        var definitionActorId = target.DefinitionActorId?.Trim() ?? string.Empty;
+        var workflowName = target.WorkflowName?.Trim() ?? string.Empty;
+        if (definitionActorId.Length == 0 && workflowName.Length == 0)
+        {
+            throw new InvalidOperationException(
+                "workflow_target requires definition_actor_id or workflow_name.");
+        }
+
+        return new GroupWorkflowRuntimeTarget
+        {
+            DefinitionActorId = definitionActorId,
+            WorkflowName = workflowName,
+            ScopeId = target.ScopeId?.Trim() ?? string.Empty,
+        };
+    }
+
+    private static GroupScriptRuntimeTarget? NormalizeScriptTarget(GroupParticipantRuntimeBinding binding)
+    {
+        if (binding.TargetCase != GroupParticipantRuntimeBinding.TargetOneofCase.ScriptTarget)
+            return null;
+
+        var target = binding.ScriptTarget ?? throw new InvalidOperationException("script_target is required.");
+        return new GroupScriptRuntimeTarget
+        {
+            DefinitionActorId = NormalizeRequired(target.DefinitionActorId, nameof(target.DefinitionActorId)),
+            Revision = NormalizeRequired(target.Revision, nameof(target.Revision)),
+            RuntimeActorId = target.RuntimeActorId?.Trim() ?? string.Empty,
+            RequestedEventType = target.RequestedEventType?.Trim() ?? string.Empty,
+            ScopeId = target.ScopeId?.Trim() ?? string.Empty,
+        };
+    }
+
+    private static GroupLocalRuntimeTarget? NormalizeLocalTarget(GroupParticipantRuntimeBinding binding)
+    {
+        if (binding.TargetCase != GroupParticipantRuntimeBinding.TargetOneofCase.LocalTarget)
+            return null;
+
+        var target = binding.LocalTarget ?? throw new InvalidOperationException("local_target is required.");
+        return new GroupLocalRuntimeTarget
+        {
+            Provider = NormalizeRequired(target.Provider, nameof(target.Provider)),
+        };
+    }
+
+    private static GroupParticipantRuntimeTargetKind ResolveTargetKind(GroupParticipantRuntimeBinding.TargetOneofCase targetCase) =>
+        targetCase switch
+        {
+            GroupParticipantRuntimeBinding.TargetOneofCase.ServiceTarget => GroupParticipantRuntimeTargetKind.Service,
+            GroupParticipantRuntimeBinding.TargetOneofCase.WorkflowTarget => GroupParticipantRuntimeTargetKind.Workflow,
+            GroupParticipantRuntimeBinding.TargetOneofCase.ScriptTarget => GroupParticipantRuntimeTargetKind.Script,
+            GroupParticipantRuntimeBinding.TargetOneofCase.LocalTarget => GroupParticipantRuntimeTargetKind.Local,
+            _ => GroupParticipantRuntimeTargetKind.Unspecified,
+        };
 
     private static string NormalizeRequired(string? value, string name)
     {

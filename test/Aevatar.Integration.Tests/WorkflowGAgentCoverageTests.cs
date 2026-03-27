@@ -285,6 +285,10 @@ public class WorkflowGAgentCoverageTests
         var persisted = await eventStore.GetEventsAsync(agent1.Id);
         persisted.Should().Contain(x => x.EventType.Contains(nameof(BindWorkflowRunDefinitionEvent), StringComparison.Ordinal));
         persisted.Should().Contain(x => x.EventType.Contains(nameof(WorkflowCompletedEvent), StringComparison.Ordinal));
+        persisted.Where(x => x.EventData.Is(TextMessageEndEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<TextMessageEndEvent>())
+            .Should()
+            .ContainSingle(x => x.Content == "done");
 
         var agent2 = CreateRunAgent(eventStore: eventStore);
         await agent2.ActivateAsync();
@@ -310,6 +314,7 @@ public class WorkflowGAgentCoverageTests
             BuildValidWorkflowYaml("role_a", "RoleA"),
             "wf_valid",
             runId: "run-self");
+        await agent.HandleChatRequest(new ChatRequestEvent { Prompt = "hello", SessionId = "s1" });
 
         await agent.HandleEventAsync(Envelope(
             new WorkflowCompletedEvent
@@ -324,8 +329,9 @@ public class WorkflowGAgentCoverageTests
 
         agent.State.Status.Should().Be("completed");
         agent.State.FinalOutput.Should().Be("done-via-envelope");
+        agent.State.SessionId.Should().Be("s1");
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
-            .Should().ContainSingle(x => x.Content == "done-via-envelope");
+            .Should().ContainSingle(x => x.Content == "done-via-envelope" && x.SessionId == "s1");
     }
 
     [Fact]
@@ -837,15 +843,20 @@ public class WorkflowGAgentCoverageTests
 
         agent.State.Status.Should().Be("stopped");
         agent.State.FinalError.Should().Be("manual-stop");
+        agent.State.SessionId.Should().Be("s1");
         agent.State.ExecutionStates.Should().BeEmpty();
         runtime.Unlinked.Should().Contain(roleActorId);
         runtime.Destroyed.Should().Contain(roleActorId);
         publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>()
             .Should()
-            .ContainSingle(x => x.Content == "Workflow execution stopped: manual-stop");
+            .ContainSingle(x => x.Content == "Workflow execution stopped: manual-stop" && x.SessionId == "s1");
 
         var persisted = await eventStore.GetEventsAsync(agent.Id);
         persisted.Should().Contain(x => x.EventData.Is(WorkflowStoppedEvent.Descriptor));
+        persisted.Where(x => x.EventData.Is(TextMessageEndEvent.Descriptor))
+            .Select(x => x.EventData.Unpack<TextMessageEndEvent>())
+            .Should()
+            .ContainSingle(x => x.Content == "Workflow execution stopped: manual-stop" && x.SessionId == "s1");
         persisted.Where(x => x.EventData.Is(WorkflowStoppedEvent.Descriptor))
             .Select(x => x.EventData.Unpack<WorkflowStoppedEvent>())
             .Should()

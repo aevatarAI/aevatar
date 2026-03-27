@@ -8,17 +8,14 @@ namespace Aevatar.GroupChat.Application.Workers;
 public sealed class GroupParticipantReplyCompletedService
 {
     private readonly IStreamProvider _streamProvider;
-    private readonly IGroupThreadCommandPort _commandPort;
-    private readonly IGroupParticipantReplyProjectionPort _projectionPort;
+    private readonly IParticipantReplyRunCommandPort _replyRunCommandPort;
 
     public GroupParticipantReplyCompletedService(
         IStreamProvider streamProvider,
-        IGroupThreadCommandPort commandPort,
-        IGroupParticipantReplyProjectionPort projectionPort)
+        IParticipantReplyRunCommandPort replyRunCommandPort)
     {
         _streamProvider = streamProvider ?? throw new ArgumentNullException(nameof(streamProvider));
-        _commandPort = commandPort ?? throw new ArgumentNullException(nameof(commandPort));
-        _projectionPort = projectionPort ?? throw new ArgumentNullException(nameof(projectionPort));
+        _replyRunCommandPort = replyRunCommandPort ?? throw new ArgumentNullException(nameof(replyRunCommandPort));
     }
 
     public Task<IAsyncDisposable> SubscribeAsync(CancellationToken ct = default) =>
@@ -29,39 +26,21 @@ public sealed class GroupParticipantReplyCompletedService
     private async Task HandleAsync(GroupParticipantReplyCompletedEvent evt, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(evt);
-        if (string.IsNullOrWhiteSpace(evt.Content))
-            return;
 
-        try
-        {
-            await _commandPort.AppendAgentMessageAsync(
-                new AppendAgentMessageCommand
-                {
-                    GroupId = evt.GroupId,
-                    ThreadId = evt.ThreadId,
-                    MessageId = evt.ReplyMessageId,
-                    ParticipantAgentId = evt.ParticipantAgentId,
-                    Text = evt.Content,
-                    ReplyToMessageId = evt.ReplyToMessageId,
-                    TopicId = evt.TopicId,
-                    SignalKind = GroupSignalKind.Result,
-                    DerivedFromSignalIds =
-                    {
-                        evt.ReplyToMessageId,
-                    },
-                },
-                ct);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("already exists", StringComparison.Ordinal))
-        {
-            // Duplicate replay is tolerated by deterministic reply message ids.
-        }
-        finally
-        {
-            await _projectionPort.ReleaseParticipantReplyProjectionAsync(
-                evt.RootActorId,
-                evt.SessionId,
-                ct);
-        }
+        await _replyRunCommandPort.CompleteAsync(
+            new CompleteParticipantReplyRunCommand
+            {
+                RootActorId = evt.RootActorId,
+                SessionId = evt.SessionId,
+                GroupId = evt.GroupId,
+                ThreadId = evt.ThreadId,
+                ReplyToMessageId = evt.ReplyToMessageId,
+                ParticipantAgentId = evt.ParticipantAgentId,
+                SourceEventId = evt.SourceEventId,
+                ReplyMessageId = evt.ReplyMessageId,
+                Content = evt.Content,
+                TopicId = evt.TopicId,
+            },
+            ct);
     }
 }

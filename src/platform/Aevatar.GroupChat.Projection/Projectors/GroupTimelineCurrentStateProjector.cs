@@ -48,15 +48,55 @@ public sealed class GroupTimelineCurrentStateProjector
         };
         document.ParticipantAgentIds = [.. state.ParticipantAgentIds];
         document.ParticipantRuntimeBindings = state.ParticipantRuntimeBindingEntries
-            .Select(static binding => new GroupParticipantRuntimeBindingReadModel
+            .Select(static binding =>
             {
-                ParticipantAgentId = binding.ParticipantAgentId,
-                TenantId = binding.TenantId,
-                AppId = binding.AppId,
-                Namespace = binding.Namespace,
-                ServiceId = binding.ServiceId,
-                EndpointId = binding.EndpointId,
-                ScopeId = binding.ScopeId,
+                var readModel = new GroupParticipantRuntimeBindingReadModel
+                {
+                    ParticipantAgentId = binding.ParticipantAgentId,
+                    TargetKindValue = (int)binding.TargetKind,
+                };
+
+                if (binding.ServiceTarget != null)
+                {
+                    readModel.ServiceTarget = new GroupServiceRuntimeTargetReadModel
+                    {
+                        TenantId = binding.ServiceTarget.TenantId,
+                        AppId = binding.ServiceTarget.AppId,
+                        Namespace = binding.ServiceTarget.Namespace,
+                        ServiceId = binding.ServiceTarget.ServiceId,
+                        EndpointId = binding.ServiceTarget.EndpointId,
+                        ScopeId = binding.ServiceTarget.ScopeId,
+                    };
+                }
+                else if (binding.WorkflowTarget != null)
+                {
+                    readModel.WorkflowTarget = new GroupWorkflowRuntimeTargetReadModel
+                    {
+                        DefinitionActorId = binding.WorkflowTarget.DefinitionActorId,
+                        WorkflowName = binding.WorkflowTarget.WorkflowName,
+                        ScopeId = binding.WorkflowTarget.ScopeId,
+                    };
+                }
+                else if (binding.ScriptTarget != null)
+                {
+                    readModel.ScriptTarget = new GroupScriptRuntimeTargetReadModel
+                    {
+                        DefinitionActorId = binding.ScriptTarget.DefinitionActorId,
+                        Revision = binding.ScriptTarget.Revision,
+                        RuntimeActorId = binding.ScriptTarget.RuntimeActorId,
+                        RequestedEventType = binding.ScriptTarget.RequestedEventType,
+                        ScopeId = binding.ScriptTarget.ScopeId,
+                    };
+                }
+                else if (binding.LocalTarget != null)
+                {
+                    readModel.LocalTarget = new GroupLocalRuntimeTargetReadModel
+                    {
+                        Provider = binding.LocalTarget.Provider,
+                    };
+                }
+
+                return readModel;
             })
             .ToList();
         document.Messages = state.MessageEntries
