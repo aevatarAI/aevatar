@@ -22,5 +22,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\tools\Aevatar.Tools.Cli\Aevatar.Tools.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Domain\Aevatar.Studio.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Hosting\Aevatar.Studio.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

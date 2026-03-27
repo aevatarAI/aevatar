@@ -1,35 +1,98 @@
+import type { AGUIEvent } from "@aevatar-react-sdk/types";
+
 export interface RecentRunEntry {
   id: string;
   recordedAt: string;
-  workflowName: string;
+  scopeId: string;
+  serviceOverrideId: string;
+  serviceId?: string;
+  endpointId: string;
+  payloadTypeUrl: string;
+  payloadBase64: string;
+  routeName: string;
+  workflowName?: string;
   prompt: string;
   actorId: string;
   commandId: string;
   runId: string;
   status: string;
   lastMessagePreview: string;
+  observedEvents: AGUIEvent[];
 }
 
 const STORAGE_KEY = 'aevatar-console-recent-runs';
 const MAX_RECENT_RUNS = 6;
 
-function sanitizeEntry(value: Partial<RecentRunEntry>): RecentRunEntry | null {
+function readLegacyCompatibleString(
+  value: Record<string, unknown>,
+  primaryKey: string,
+  legacyKey?: string
+): string {
+  const primaryValue = value[primaryKey];
+  if (typeof primaryValue === 'string' && primaryValue.trim()) {
+    return primaryValue.trim();
+  }
+
+  if (!legacyKey) {
+    return '';
+  }
+
+  const legacyValue = value[legacyKey];
+  return typeof legacyValue === 'string' ? legacyValue.trim() : '';
+}
+
+function sanitizeEntry(value: Partial<RecentRunEntry> & {
+  serviceId?: string;
+  workflowName?: string;
+}): RecentRunEntry | null {
   const id = value.id?.trim();
   if (!id) {
     return null;
   }
 
-  return {
+  const record = value as Record<string, unknown>;
+
+  const sanitized: RecentRunEntry = {
     id,
     recordedAt: value.recordedAt?.trim() || new Date().toISOString(),
-    workflowName: value.workflowName?.trim() || 'unknown',
+    scopeId: value.scopeId?.trim() || "",
+    serviceOverrideId: readLegacyCompatibleString(
+      record,
+      'serviceOverrideId',
+      'serviceId'
+    ),
+    endpointId: value.endpointId?.trim() || "",
+    payloadTypeUrl: value.payloadTypeUrl?.trim() || "",
+    payloadBase64: value.payloadBase64?.trim() || "",
+    routeName: readLegacyCompatibleString(record, 'routeName', 'workflowName'),
     prompt: value.prompt?.trim() || '',
     actorId: value.actorId?.trim() || '',
     commandId: value.commandId?.trim() || '',
     runId: value.runId?.trim() || '',
     status: value.status?.trim() || 'unknown',
     lastMessagePreview: value.lastMessagePreview?.trim() || '',
+    observedEvents: Array.isArray(value.observedEvents)
+      ? value.observedEvents
+          .filter(
+            (event): event is AGUIEvent =>
+              typeof event === "object" && event !== null
+          )
+          .map((event) => ({ ...event }))
+      : [],
   };
+
+  Object.defineProperties(sanitized, {
+    serviceId: {
+      enumerable: false,
+      get: () => sanitized.serviceOverrideId,
+    },
+    workflowName: {
+      enumerable: false,
+      get: () => sanitized.routeName,
+    },
+  });
+
+  return sanitized;
 }
 
 export function loadRecentRuns(): RecentRunEntry[] {

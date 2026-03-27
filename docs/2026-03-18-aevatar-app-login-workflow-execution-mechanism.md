@@ -1,5 +1,24 @@
 # Aevatar App 从登录到 Workflow 执行完成的背后机制
 
+> 说明（2026-03-26 更新）：
+> 本文主体仍然保留 `2026-03-18` 当时仓库里的实际实现路径，所以文中会看到
+> `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+> 这类 workflow 级 endpoint。
+>
+> 但按当前 app-level 架构收敛，对外产品面 / AI-facing surface 已经不应该直接暴露
+> `workflowId`，而应统一抽象成：
+>
+> - `POST /api/apps/{appId}/functions/{functionId}:invoke`
+> - 或 `POST /api/apps/{appId}/releases/{releaseId}/functions/{functionId}:invoke`
+> - 需要工作流 SSE 时，则走
+>   - `POST /api/apps/{appId}/functions/{functionId}:stream`
+>   - 或 `POST /api/apps/{appId}/releases/{releaseId}/functions/{functionId}:stream`
+>
+> 所以：
+>
+> - 本文里的 `scope workflow run` 路径，应理解为“历史实现 / 当前内部兼容路径”
+> - 不应再理解为 app 对外正式调用契约
+
 本文基于仓库在 2026-03-18 的实际代码路径整理，目标是把这条链路讲清楚：
 
 1. 用户打开 `aevatar app`
@@ -20,6 +39,12 @@
 - App 运行在 `embedded` 模式
 - workflow 存储模式是 `scope`
 - 用户运行的是一个已经发布的 workflow
+
+如果按当前对外语义改写，这里更准确的说法应当是：
+
+- 用户调用的是某个 app `function`
+- 这个 function 当前绑定到 `workflow` 实现
+- 调用方不需要感知底下是否真的是某条 workflow
 
 最后会补充 `workspace/draft run` 和 `proxy` 模式的差异。
 
@@ -127,6 +152,20 @@ sequenceDiagram
   APP-->>FE: "completed / failed / waiting state"
 ```
 
+按当前 app-level 抽象，上图中真正应该对外稳定的是：
+
+- `FE ->> APP: POST /api/executions`
+- `APP ->> AppPlatform: POST /api/apps/{appId}/functions/{functionId}:invoke`
+
+而不是直接把：
+
+- `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+
+暴露成调用方必须知道的正式接口。
+
+当前仓库里 `ExecutionService` 仍然直接拼 workflow run URL，
+所以这条 workflow route 在代码上还存在；但它应该被收敛为内部实现细节，而不是外部 app 契约。
+
 ## 4. App 启动与模式判定
 
 入口是 `tools/Aevatar.Tools.Cli/Hosting/AppToolHost.cs`。
@@ -167,7 +206,7 @@ sequenceDiagram
 
 `UseNyxIdAppProtection()` 会保护绝大多数 `/api/**` 路径，匿名例外只有：
 
-- `/api/app/health`
+- `/api/health`
 - `/api/auth/me`
 
 ### 5.2 登录流程
@@ -508,12 +547,30 @@ catalog 内容不是明文直存，流程是：
 - 它不是 workflow runtime 的权威状态
 - 它只是前端 execution 面板的本地聚合视图
 
-## 12. Published workflow run 的 HTTP 真正打到了哪里
+## 12. 历史实现：Published workflow run 的 HTTP 当时打到了哪里
+
+这一节描述的是 `2026-03-18` 起的历史实现链路，以及 `scope + workflowId` 这条兼容 fallback，
+不是当前推荐的 app 对外调用模型。
+
+按当前架构，对外应统一看作：
+
+- `POST /api/apps/{appId}/functions/{functionId}:invoke`
+- `POST /api/apps/{appId}/functions/{functionId}:stream`
+
+只有在内部 runtime / authoring 兼容层里，才继续出现 `scope + workflowId` 路径。
 
 `ExecutionService.BuildStartExecutionRequest()` 里：
 
-- 如果带 `scopeId + workflowId`，就请求：
+- 如果带 `appId + functionId`，优先请求 app-level function stream；
+  - 未显式指定 `releaseId` 时：
+    - `POST /api/apps/{appId}/functions/{functionId}:stream`
+  - 显式指定 `releaseId` 时：
+    - `POST /api/apps/{appId}/releases/{releaseId}/functions/{functionId}:stream`
+- 否则如果带 `scopeId + workflowId`，就走历史兼容的 published workflow run；
+  - 未显式指定 `appId` 时：
   - `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+  - 显式指定 `appId` 时：
+    - `POST /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}/runs:stream`
 - 否则请求：
   - `POST /api/chat`
 
@@ -526,6 +583,17 @@ catalog 内容不是明文直存，流程是：
 - `WorkflowRunEventEnvelope` SSE
 
 不是 AGUI SSE。
+
+换句话说：
+
+- 从“当前代码实现”角度，`ExecutionService` 已经优先面向 `functionId`，只把 workflow run endpoint 当 fallback
+- 从“当前产品/API 抽象”角度，正式外部契约应理解成 `function invoke / function stream`
+
+当前实现已经朝这个方向收敛：
+
+1. `ExecutionService` 面向 `functionId`
+2. 由 app/control plane resolve 到具体 `service + endpoint`
+3. 若该 function 背后是 workflow，再由 app-level `:stream` endpoint 命中 workflow capability 主链
 
 ## 13. Scope workflow run 入口如何把 workflowId 解析成 active definition actor
 
@@ -888,7 +956,10 @@ scope workflow endpoint 会走：
 
 - `ExecutionsController.Resume`
   -> `ExecutionService.ResumeAsync(...)`
-  -> 调 runtime `/api/workflows/resume`
+  -> 若 execution 记录里有 `appId + functionId`，优先调
+    - `POST /api/apps/{appId}/functions/{functionId}/runs:resume`
+    - 或 `POST /api/apps/{appId}/releases/{releaseId}/functions/{functionId}/runs:resume`
+  -> 否则回退调 runtime `/api/workflows/resume`
 
 resume API 成功后，studio 还会额外记一条本地 frame：
 

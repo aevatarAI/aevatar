@@ -1,16 +1,15 @@
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
-  ProList,
   ProTable,
 } from "@ant-design/pro-components";
-import type {
-  ProColumns,
-  ProDescriptionsItemProps,
-} from "@ant-design/pro-components";
+import type { ProColumns } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
+import {
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import {
   Alert,
   Button,
@@ -30,14 +29,26 @@ import type {
   WorkflowPrimitiveParameterDescriptor,
 } from "@/shared/models/runtime/query";
 import {
+  cardListActionStyle,
+  cardListHeaderStyle,
+  cardListItemStyle,
+  cardListMainStyle,
+  cardListStyle,
   cardStackStyle,
+  compactPanelHeight,
   compactTableCardProps,
   embeddedPanelStyle,
   fillCardStyle,
   moduleCardProps,
-  scrollPanelStyle,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
+import { describeError } from "@/shared/ui/errorText";
 
 type PrimitiveLibraryRow = WorkflowPrimitiveDescriptor & {
   key: string;
@@ -53,6 +64,16 @@ type PrimitiveSummaryRecord = {
   exampleWorkflowCount: number;
 };
 
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+type SummaryMetricProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
 function readInitialPrimitiveSelection(): string {
   if (typeof window === "undefined") {
     return "";
@@ -62,29 +83,6 @@ function readInitialPrimitiveSelection(): string {
     new URLSearchParams(window.location.search).get("primitive")?.trim() ?? ""
   );
 }
-
-const primitiveSummaryColumns: ProDescriptionsItemProps<PrimitiveSummaryRecord>[] =
-  [
-    {
-      title: "Category",
-      dataIndex: "category",
-    },
-    {
-      title: "Aliases",
-      dataIndex: "aliasCount",
-      valueType: "digit",
-    },
-    {
-      title: "Parameters",
-      dataIndex: "parameterCount",
-      valueType: "digit",
-    },
-    {
-      title: "Example workflows",
-      dataIndex: "exampleWorkflowCount",
-      valueType: "digit",
-    },
-  ];
 
 const parameterColumns: ProColumns<WorkflowPrimitiveParameterDescriptor>[] = [
   {
@@ -126,6 +124,24 @@ const parameterColumns: ProColumns<WorkflowPrimitiveParameterDescriptor>[] = [
     ellipsis: true,
   },
 ];
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    {typeof value === "string" || typeof value === "number" ? (
+      <Typography.Text>{value}</Typography.Text>
+    ) : (
+      value
+    )}
+  </div>
+);
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
+  </div>
+);
 
 const PrimitivesPage: React.FC = () => {
   const [keyword, setKeyword] = useState("");
@@ -274,12 +290,22 @@ const PrimitivesPage: React.FC = () => {
             style={fillCardStyle}
           >
             <div style={cardStackStyle}>
-              <Alert
-                showIcon
-                type="info"
-                title="Runtime-backed browser"
-                description="This page is powered by the formal /api/primitives view instead of stitching capability and catalog data in the browser."
-              />
+              <div
+                style={{
+                  ...embeddedPanelStyle,
+                  background: "var(--ant-color-fill-quaternary)",
+                }}
+              >
+                <Typography.Text strong>Runtime-backed browser</Typography.Text>
+                <Typography.Paragraph
+                  style={{ margin: "8px 0 0" }}
+                  type="secondary"
+                >
+                  This page is powered by the formal `/api/primitives` view
+                  instead of stitching capability and catalog data in the
+                  browser.
+                </Typography.Paragraph>
+              </div>
 
               <Input.Search
                 allowClear
@@ -307,7 +333,7 @@ const PrimitivesPage: React.FC = () => {
                 dataSource={filteredRows}
                 loading={primitivesQuery.isLoading}
                 cardProps={compactTableCardProps}
-                scroll={{ x: 860, y: 520 }}
+                scroll={{ x: 860, y: compactPanelHeight }}
                 onRow={(record) => ({
                   onClick: () => setSelectedPrimitiveName(record.name),
                 })}
@@ -344,7 +370,7 @@ const PrimitivesPage: React.FC = () => {
                 showIcon
                 type="error"
                 title="Failed to load primitive library"
-                description={String(primitivesQuery.error)}
+                description={describeError(primitivesQuery.error)}
               />
             ) : !selectedPrimitive ? (
               <Empty
@@ -364,11 +390,30 @@ const PrimitivesPage: React.FC = () => {
                   ))}
                 </Space>
 
-                <ProDescriptions<PrimitiveSummaryRecord>
-                  column={2}
-                  dataSource={summaryRecord}
-                  columns={primitiveSummaryColumns}
-                />
+                {summaryRecord ? (
+                  <div style={cardStackStyle}>
+                    <div style={summaryFieldGridStyle}>
+                      <SummaryField
+                        label="Category"
+                        value={summaryRecord.category}
+                      />
+                    </div>
+                    <div style={summaryMetricGridStyle}>
+                      <SummaryMetric
+                        label="Aliases"
+                        value={summaryRecord.aliasCount}
+                      />
+                      <SummaryMetric
+                        label="Parameters"
+                        value={summaryRecord.parameterCount}
+                      />
+                      <SummaryMetric
+                        label="Example workflows"
+                        value={summaryRecord.exampleWorkflowCount}
+                      />
+                    </div>
+                  </div>
+                ) : null}
 
                 <div style={embeddedPanelStyle}>
                   <Typography.Text strong>Parameters</Typography.Text>
@@ -394,67 +439,62 @@ const PrimitivesPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div style={{ ...embeddedPanelStyle, ...scrollPanelStyle }}>
+                <div style={embeddedPanelStyle}>
                   <Typography.Text strong>Example workflows</Typography.Text>
                   <div style={{ marginTop: 12 }}>
                     {selectedPrimitive.exampleWorkflows.length > 0 ? (
-                      <ProList
-                        rowKey="name"
-                        search={false}
-                        split
-                        dataSource={selectedPrimitive.exampleWorkflows.map(
-                          (name) => ({
-                            name,
-                          })
-                        )}
-                        metas={{
-                          title: {
-                            dataIndex: "name",
-                          },
-                          description: {
-                            render: (_, record) =>
-                              `Open ${record.name} in the runtime workflow library, launch a run, or jump to scope-owned published assets.`,
-                          },
-                          content: {
-                            render: (_, record) => (
-                              <Space wrap>
-                                <Button
-                                  type="link"
-                                  onClick={() =>
-                                    history.push(
-                                      `/workflows?workflow=${encodeURIComponent(
-                                        record.name
-                                      )}&tab=yaml`
-                                    )
-                                  }
+                      <div style={cardListStyle}>
+                        {selectedPrimitive.exampleWorkflows.map((name) => (
+                          <div key={name} style={cardListItemStyle}>
+                            <div style={cardListHeaderStyle}>
+                              <div style={cardListMainStyle}>
+                                <Typography.Text strong>{name}</Typography.Text>
+                                <Typography.Paragraph
+                                  style={{ margin: 0 }}
+                                  type="secondary"
                                 >
-                                  Inspect runtime
-                                </Button>
-                                <Button
-                                  type="link"
-                                  onClick={() =>
-                                    history.push(
-                                      `/runs?workflow=${encodeURIComponent(
-                                        record.name
-                                      )}`
-                                    )
-                                  }
-                                >
-                                  Run
-                                </Button>
-                                <Button
-                                  type="link"
-                                  onClick={() =>
-                                    history.push("/scopes/workflows")
-                                  }
-                                >
-                                  Scope assets
-                                </Button>
-                              </Space>
-                            ),
-                          },
-                        }}
-                      />
+                                  Open {name} in the runtime workflow library,
+                                  launch a run, or jump to scope-owned
+                                  published assets.
+                                </Typography.Paragraph>
+                              </div>
+                            </div>
+                            <div style={cardListActionStyle}>
+                              <Button
+                                type="link"
+                                onClick={() =>
+                                  history.push(
+                                    buildRuntimeWorkflowsHref({
+                                      workflow: name,
+                                      tab: "yaml",
+                                    })
+                                  )
+                                }
+                              >
+                                Inspect runtime
+                              </Button>
+                              <Button
+                                type="link"
+                                onClick={() =>
+                                  history.push(
+                                    buildRuntimeRunsHref({
+                                      workflow: name,
+                                    })
+                                  )
+                                }
+                              >
+                                Run
+                              </Button>
+                              <Button
+                                type="link"
+                                onClick={() => history.push("/scopes/workflows")}
+                              >
+                                Scope assets
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     ) : (
                       <Empty
                         image={Empty.PRESENTED_IMAGE_SIMPLE}

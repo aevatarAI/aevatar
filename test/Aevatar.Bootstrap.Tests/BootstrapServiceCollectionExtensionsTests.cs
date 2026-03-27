@@ -113,7 +113,7 @@ public class BootstrapServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void UseAevatarDefaultHost_WhenAutoMapCapabilitiesDisabled_ShouldOnlyMapRootHealthRoute()
+    public void UseAevatarDefaultHost_WhenAutoMapCapabilitiesDisabled_ShouldMapHostRoutesWithoutCapabilities()
     {
         using var home = new TemporaryAevatarHomeScope();
         var builder = CreateBuilder();
@@ -139,7 +139,33 @@ public class BootstrapServiceCollectionExtensionsTests
             .ToList();
 
         routeEndpoints.Should().Contain("/");
+        routeEndpoints.Should().Contain("/health/live");
+        routeEndpoints.Should().Contain("/health/ready");
         routeEndpoints.Should().NotContain("/dummy");
+    }
+
+    [Fact]
+    public void UseAevatarDefaultHost_ShouldMapOpenApiDocumentRoute_ByDefault()
+    {
+        using var home = new TemporaryAevatarHomeScope();
+        var builder = CreateBuilder();
+        builder.AddAevatarDefaultHost(options =>
+        {
+            options.EnableConnectorBootstrap = false;
+            options.EnableCors = false;
+        });
+
+        var app = builder.Build();
+        app.UseAevatarDefaultHost();
+
+        var routeBuilder = (IEndpointRouteBuilder)app;
+        var routeEndpoints = routeBuilder.DataSources
+            .SelectMany(x => x.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Select(x => x.RoutePattern.RawText)
+            .ToList();
+
+        routeEndpoints.Should().Contain("/api/openapi.json");
     }
 
     private static IConfiguration BuildConfiguration(Dictionary<string, string?>? values = null)

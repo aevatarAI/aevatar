@@ -56,7 +56,7 @@ aevatar config secrets get LLMProviders:Providers:deepseek:ApiKey --json
 aevatar config secrets remove LLMProviders:Providers:deepseek:ApiKey --yes --json
 
 # config.json key-value
-aevatar config config-json set Cli:App:ApiBaseUrl http://localhost:5000 --json
+aevatar config config-json set Cli:App:ApiBaseUrl http://localhost:5100 --json
 aevatar config config-json get Cli:App:ApiBaseUrl --json
 ```
 
@@ -65,6 +65,13 @@ aevatar config config-json get Cli:App:ApiBaseUrl --json
 aevatar config llm instances upsert deepseek-main --provider-type deepseek --model deepseek-chat --api-key-stdin < api_key.txt
 aevatar config llm default set deepseek-main --json
 aevatar config llm probe test deepseek-main --json
+
+# NyxID gateway-backed provider
+# if Cli:App:NyxId:Authority is configured, --endpoint can be omitted
+aevatar config config-json set Cli:App:NyxId:Authority https://nyx.example.com --json
+aevatar config llm instances upsert nyxid --provider-type nyxid --model claude-sonnet-4-5-20250929 --api-key-stdin < nyx_bearer_token.txt
+aevatar config llm default set nyxid --json
+aevatar config llm probe test nyxid --json
 
 # workflows YAML
 aevatar config workflows put demo.yaml --file ./workflows/demo.yaml --source home --json
@@ -86,7 +93,7 @@ aevatar app
 aevatar app --no-browser --port 6690
 
 # optional explicit SDK base url
-aevatar app --api-base http://localhost:5000
+aevatar app --api-base http://localhost:5100
 
 # force restart app on port (kill listener process then relaunch)
 aevatar app restart
@@ -173,7 +180,7 @@ aevatar chat "summarize current workflow status"
 aevatar chat "hello" --port 6690
 
 # one-shot override remote workflow API base url
-aevatar chat "hello" --url http://localhost:5000
+aevatar chat "hello" --url http://localhost:5100
 ```
 
 ```bash
@@ -184,7 +191,7 @@ aevatar chat workflow "build a customer-support triage workflow"
 echo "design an incident response workflow with human approval" | aevatar chat workflow --stdin --yes
 
 # custom API base and output filename
-aevatar chat workflow "generate a rollout plan workflow with approval gate" --url http://localhost:5000 --filename rollout_plan
+aevatar chat workflow "generate a rollout plan workflow with approval gate" --url http://localhost:5100 --filename rollout_plan
 ```
 
 `aevatar chat workflow` writes files to `AEVATAR_HOME/workflows` (`~/.aevatar/workflows` by default).  
@@ -192,7 +199,7 @@ Without `--yes`, it prompts for confirmation before saving.
 
 ```bash
 # persist chat/app remote workflow API base url
-aevatar chat config set-url http://localhost:5000
+aevatar chat config set-url http://localhost:5100
 
 # read persisted url
 aevatar chat config get-url

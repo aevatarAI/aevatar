@@ -103,6 +103,158 @@ public sealed class ScopeScriptEndpointsTests
     }
 
     [Fact]
+    public async Task HandleGetScriptCatalogAsync_ShouldReturnCatalog_WhenFound()
+    {
+        var catalogQueryPort = new RecordingScriptCatalogQueryPort
+        {
+            Entry = new ScriptCatalogEntrySnapshot(
+                "script-1",
+                "rev-1",
+                "definition-1",
+                "hash-1",
+                "rev-0",
+                ["rev-0", "rev-1"],
+                "proposal-1",
+                CatalogActorId: "catalog-1",
+                ScopeId: "user-1",
+                UpdatedAtUnixTimeMs: 1711234567000),
+        };
+        var addressResolver = new FakeScriptingActorAddressResolver { CatalogActorId = "catalog-1" };
+
+        var result = await ScopeScriptEndpoints.HandleGetScriptCatalogAsync(
+            "user-1",
+            "script-1",
+            catalogQueryPort,
+            addressResolver,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"scriptId\":\"script-1\"");
+        body.Should().Contain("\"activeRevision\":\"rev-1\"");
+        body.Should().Contain("\"catalogActorId\":\"catalog-1\"");
+        body.Should().Contain("\"scopeId\":\"user-1\"");
+    }
+
+    [Fact]
+    public async Task HandleGetScriptCatalogAsync_ShouldReturnNotFound_WhenMissing()
+    {
+        var catalogQueryPort = new RecordingScriptCatalogQueryPort { Entry = null };
+        var addressResolver = new FakeScriptingActorAddressResolver { CatalogActorId = "catalog-1" };
+
+        var result = await ScopeScriptEndpoints.HandleGetScriptCatalogAsync(
+            "user-1",
+            "script-1",
+            catalogQueryPort,
+            addressResolver,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task HandleUpsertScriptAsync_ShouldReturnOk_WhenCommandSucceeds()
+    {
+        var updatedAt = DateTimeOffset.UtcNow;
+        var commandPort = new AcceptingScopeScriptCommandPort
+        {
+            Result = new ScopeScriptUpsertResult(
+                new ScopeScriptSummary("user-1", "script-1", "catalog-1", "definition-1", "rev-1", "hash-1", updatedAt),
+                "rev-1",
+                "catalog-1",
+                "definition-1"),
+        };
+
+        var result = await ScopeScriptEndpoints.HandleUpsertScriptAsync(
+            "user-1",
+            "script-1",
+            new ScopeScriptEndpoints.UpsertScopeScriptHttpRequest("public sealed class Demo {}"),
+            commandPort,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"scriptId\":\"script-1\"");
+        body.Should().Contain("\"revisionId\":\"rev-1\"");
+    }
+
+    [Fact]
+    public async Task HandleListScriptsAsync_ShouldReturnEmptyArray_WhenNoScripts()
+    {
+        var queryPort = new RecordingScopeScriptQueryPort { ListResult = [] };
+
+        var result = await ScopeScriptEndpoints.HandleListScriptsAsync(
+            "user-1",
+            includeSource: false,
+            queryPort,
+            new RecordingDefinitionSnapshotPort(),
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Be("[]");
+    }
+
+    [Fact]
+    public async Task HandleGetScriptDetailAsync_ShouldReturnDetail_WhenFound()
+    {
+        var updatedAt = DateTimeOffset.UtcNow;
+        var queryPort = new RecordingScopeScriptQueryPort
+        {
+            GetResult = new ScopeScriptSummary(
+                "user-1",
+                "script-1",
+                "catalog-1",
+                "definition-1",
+                "rev-1",
+                "hash-1",
+                updatedAt),
+        };
+        var snapshotPort = new RecordingDefinitionSnapshotPort
+        {
+            Snapshot = new ScriptDefinitionSnapshot(
+                "script-1",
+                "rev-1",
+                "public sealed class Demo {}",
+                "hash-1",
+                StateTypeUrl: string.Empty,
+                ReadModelTypeUrl: string.Empty,
+                ReadModelSchemaVersion: string.Empty,
+                ReadModelSchemaHash: string.Empty,
+                DefinitionActorId: "definition-1",
+                ScopeId: "user-1"),
+        };
+
+        var result = await ScopeScriptEndpoints.HandleGetScriptDetailAsync(
+            "user-1",
+            "script-1",
+            queryPort,
+            snapshotPort,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"scopeId\":\"user-1\"");
+        body.Should().Contain("\"scriptId\":\"script-1\"");
+        body.Should().Contain("\"sourceText\":\"public sealed class Demo {}\"");
+    }
+
+    [Fact]
     public async Task HandleProposeScriptEvolutionAsync_ShouldBindScopeAndScriptId()
     {
         var service = new RecordingScriptEvolutionApplicationService();
@@ -206,6 +358,41 @@ public sealed class ScopeScriptEndpointsTests
         }
 
         public sealed record Request(string DefinitionActorId, string RequestedRevision);
+    }
+
+    private sealed class AcceptingScopeScriptCommandPort : IScopeScriptCommandPort
+    {
+        public ScopeScriptUpsertResult Result { get; set; } = null!;
+
+        public Task<ScopeScriptUpsertResult> UpsertAsync(ScopeScriptUpsertRequest request, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class RecordingScriptCatalogQueryPort : IScriptCatalogQueryPort
+    {
+        public ScriptCatalogEntrySnapshot? Entry { get; set; }
+
+        public Task<ScriptCatalogEntrySnapshot?> GetCatalogEntryAsync(string? catalogActorId, string scriptId, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(Entry);
+        }
+
+        public Task<IReadOnlyList<ScriptCatalogEntrySnapshot>> ListCatalogEntriesAsync(string? catalogActorId, int take, CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<ScriptCatalogEntrySnapshot>>([]);
+    }
+
+    private sealed class FakeScriptingActorAddressResolver : IScriptingActorAddressResolver
+    {
+        public string CatalogActorId { get; set; } = "catalog-default";
+
+        public string GetEvolutionManagerActorId() => "evo-manager";
+        public string GetEvolutionSessionActorId(string proposalId) => $"evo-session-{proposalId}";
+        public string GetCatalogActorId() => CatalogActorId;
+        public string GetDefinitionActorId(string scriptId) => $"definition-{scriptId}";
     }
 
     private sealed class RecordingScriptEvolutionApplicationService : IScriptEvolutionApplicationService

@@ -1,5 +1,5 @@
 using System.Security.Claims;
-using Aevatar.Tools.Cli.Hosting;
+using Aevatar.Studio.Infrastructure.ScopeResolution;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;

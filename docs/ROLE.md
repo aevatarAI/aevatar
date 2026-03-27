@@ -89,7 +89,7 @@ steps:
       timeout_ms: "10000"
 ```
 
-步骤里不写 `role` 时，`llm_call` 会退化为「发给工作流根自身」（通常无 LLM）；`connector_call` 则不按角色做 connector 允许列表校验（仅按名称解析 connector）。
+步骤里不写 `role` 时，`llm_call` 会默认补成隐式 `assistant` 角色；如果 YAML 里已显式声明了 `assistant`，则复用该角色，否则 runtime 会临时创建一个默认 `Assistant` role actor。`connector_call` 则不按角色做 connector 允许列表校验（仅按名称解析 connector）。
 
 ---
 

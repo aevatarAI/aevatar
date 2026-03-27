@@ -2,6 +2,9 @@
 
 `Aevatar.Mainnet.Host.Api` 是主网宿主。
 
+本地直接执行 `dotnet run --project src/Aevatar.Mainnet.Host.Api` 时，默认监听 `http://127.0.0.1:5080`。
+如果显式传入 `ASPNETCORE_URLS` 或 `--urls`，宿主仍然优先使用外部配置。
+
 ## 默认能力装配
 
 - `builder.AddAevatarDefaultHost(...)`
@@ -85,21 +88,60 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 
 ## 端点
 
-`Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。workflow authoring、user workflow publish/run、resume/signal 都应接到 mainnet，不再额外依赖独立的 workflow host。
+`Aevatar.Mainnet.Host.Api` 现在是 `aevatar app` 的唯一后端 API 面。当前用户面 contract 已经收敛为 `scope-first`，默认认为一个 `scope` 对应一个对外 service binding；内核仍保留 `service` 级别接口，作为未来扩展到多 service 的基础。
 
-- `POST /api/chat`
-- `GET /api/ws/chat`
-- `GET /api/agents`
-- `GET /api/workflows`
-- `GET /api/actors/{actorId}`
-- `GET /api/actors/{actorId}/timeline`
+当前推荐使用的 scope-first 入口：
+
+- `POST /api/scopes/{scopeId}/draft-run`
+- `PUT /api/scopes/{scopeId}/binding`
+- `GET /api/scopes/{scopeId}/binding`
+- `GET /api/scopes/{scopeId}/revisions`
+- `GET /api/scopes/{scopeId}/revisions/{revisionId}`
+- `POST /api/scopes/{scopeId}/binding/revisions/{revisionId}:activate`
+- `POST /api/scopes/{scopeId}/binding/revisions/{revisionId}:retire`
+- `POST /api/scopes/{scopeId}/invoke/chat:stream`
+- `GET /api/scopes/{scopeId}/runs`
+- `GET /api/scopes/{scopeId}/runs/{runId}`
+- `GET /api/scopes/{scopeId}/runs/{runId}/audit`
+- `POST /api/scopes/{scopeId}/runs/{runId}:resume`
+- `POST /api/scopes/{scopeId}/runs/{runId}:signal`
+- `POST /api/scopes/{scopeId}/runs/{runId}:stop`
+
+`draft-run` 与 `binding` 使用 `workflowYamls` 作为 workflow bundle：
+
+- `workflowYamls[0]` 是主 workflow
+- `workflowYamls[1..]` 是 sub workflow
+- `workflow_call` 默认在这组 YAML 内解析
+
+scope-first 正式运行面现在补齐了两类治理能力：
+
+- formal run 的历史 / 详情 / 审计：通过 `GET /runs`、`GET /runs/{runId}`、`GET /runs/{runId}/audit` 暴露 scope 级正式 run 查询面，继续配合 `resume|signal|stop` 做恢复与控制。
+- revision / version 治理：通过 `GET /revisions`、`GET /revisions/{revisionId}`、`activate`、`retire` 暴露正式 revision catalog；read side 会返回 `CatalogStateVersion` 与 `CatalogLastEventId`，revision 项也会返回 workflow / script / static gagent 的 typed implementation 摘要。
+
+`invoke` 请求现在允许显式携带 `revisionId`，用于绕过 default serving alias，直接命中指定 active revision。
+
+内部与扩展面仍保留 service-level 入口：
+
+- `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/revisions`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/revisions/{revisionId}:retire`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/runs`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}/audit`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:signal`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:stop`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/bindings`
+- `PUT /api/scopes/{scopeId}/services/{serviceId}/bindings/{bindingId}`
+- `POST /api/scopes/{scopeId}/services/{serviceId}/bindings/{bindingId}:retire`
+- `GET /api/scopes/{scopeId}/services/{serviceId}/bindings`
+
+scope workflow 的 catalog/read 面目前仍然保留：
+
 - `GET /api/scopes/{scopeId}/workflows`
 - `GET /api/scopes/{scopeId}/workflows/{workflowId}`
 - `PUT /api/scopes/{scopeId}/workflows/{workflowId}`
-- `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
-- `POST /api/scopes/{scopeId}/workflow-runs:stream`（兼容旧 actorId 调用）
 
-`/api/scopes/{scopeId}/workflows/{workflowId}/runs:stream` 支持请求体字段 `eventFormat`：
-
-- `workflow`：返回现有 workflow frame SSE。
-- `agui`：返回 AGUI 原始事件 SSE，供 app 前端展示 workflow execution 过程。
+旧的 `/api/chat`、`/api/ws/chat`、`/api/workflows/resume|signal|stop` 不再是 `aevatar app` 的正式运行时 contract。

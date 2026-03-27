@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   BuildOutlined,
+  CodeOutlined,
   DoubleRightOutlined,
   NodeIndexOutlined,
   SettingOutlined,
@@ -13,6 +14,7 @@ import { cardStackStyle, stretchColumnStyle } from '@/shared/ui/proComponents';
 export type StudioWorkspacePage =
   | 'workflows'
   | 'studio'
+  | 'scripts'
   | 'roles'
   | 'connectors'
   | 'settings';
@@ -116,9 +118,32 @@ const workbenchFooterStyle: React.CSSProperties = {
   paddingInline: 6,
 };
 
+const shellRootStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  flex: 1,
+  minHeight: 'calc(100vh - 176px)',
+};
+
+const shellRowStyle: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+};
+
+const shellColumnStyle: React.CSSProperties = {
+  ...stretchColumnStyle,
+  minHeight: 0,
+};
+
+const shellContentStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  flex: 1,
+  minHeight: 0,
+};
+
 const navItemIconByKey: Record<StudioWorkspacePage, React.ReactNode> = {
   workflows: <NodeIndexOutlined />,
   studio: <BuildOutlined />,
+  scripts: <CodeOutlined />,
   roles: <TeamOutlined />,
   connectors: <ApiOutlined />,
   settings: <SettingOutlined />,
@@ -141,13 +166,13 @@ const StudioShell: React.FC<StudioShellProps> = ({
   const sidebarWidth = isExpanded ? 160 : 64;
 
   return (
-    <div style={cardStackStyle}>
+    <div style={shellRootStyle}>
       {alerts}
-      <Row gutter={[16, 16]} align="stretch" wrap={false}>
+      <Row gutter={[16, 16]} align="stretch" wrap={false} style={shellRowStyle}>
         <Col
           flex={`${sidebarWidth}px`}
           style={{
-            ...stretchColumnStyle,
+            ...shellColumnStyle,
             maxWidth: sidebarWidth,
             minWidth: sidebarWidth,
             transition: 'max-width 0.2s ease, min-width 0.2s ease',
@@ -269,8 +294,8 @@ const StudioShell: React.FC<StudioShellProps> = ({
             </div>
           </aside>
         </Col>
-        <Col flex="auto" style={{ ...stretchColumnStyle, minWidth: 0 }}>
-          <div style={cardStackStyle}>
+        <Col flex="auto" style={{ ...shellColumnStyle, minWidth: 0 }}>
+          <div style={shellContentStyle}>
             {showPageHeader ? (
               <div
                 style={{

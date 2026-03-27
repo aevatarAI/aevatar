@@ -1,4 +1,4 @@
-using Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
+using Aevatar.Studio.Infrastructure.Storage;
 using FluentAssertions;
 
 namespace Aevatar.Tools.Cli.Tests;

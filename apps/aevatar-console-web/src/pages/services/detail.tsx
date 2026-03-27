@@ -1,15 +1,13 @@
 import type {
   ProColumns,
-  ProDescriptionsItemProps,
 } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Button, Col, Row, Space, Tabs, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { servicesApi } from "@/shared/api/servicesApi";
@@ -23,8 +21,16 @@ import type {
   ServiceTrafficEndpointSnapshot,
 } from "@/shared/models/services";
 import {
+  cardStackStyle,
   compactTableCardProps,
+  embeddedPanelStyle,
   moduleCardProps,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
+  summaryMetricGridStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
 import ServiceQueryCard from "./components/ServiceQueryCard";
 import {
@@ -45,38 +51,33 @@ type ServiceSummaryRecord = {
   updatedAt: string;
 };
 
-const summaryColumns: ProDescriptionsItemProps<ServiceSummaryRecord>[] = [
-  {
-    title: "Service key",
-    dataIndex: "serviceKey",
-    render: (_, record) => (
-      <Typography.Text copyable>{record.serviceKey}</Typography.Text>
-    ),
-  },
-  {
-    title: "Display name",
-    dataIndex: "displayName",
-  },
-  {
-    title: "Endpoints",
-    dataIndex: "endpointCount",
-    valueType: "digit",
-  },
-  {
-    title: "Policies",
-    dataIndex: "policyCount",
-    valueType: "digit",
-  },
-  {
-    title: "Deployment status",
-    dataIndex: "deploymentStatus",
-  },
-  {
-    title: "Updated",
-    dataIndex: "updatedAt",
-    render: (_, record) => formatDateTime(record.updatedAt),
-  },
-];
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+type SummaryMetricProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    {typeof value === "string" || typeof value === "number" ? (
+      <Typography.Text>{value}</Typography.Text>
+    ) : (
+      value
+    )}
+  </div>
+);
+
+const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  <div style={summaryMetricStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
+  </div>
+);
 
 const initialDraft = readServiceQueryDraft();
 const initialServiceId = readServiceIdFromPathname();
@@ -272,8 +273,8 @@ const ServiceDetailPage: React.FC = () => {
 
   return (
     <PageContainer
-      title={serviceId ? `Service ${serviceId}` : "Service detail"}
-      content="Inspect the service lifecycle view exposed by GAgentService: detail, revisions, deployments, serving, rollout, and traffic."
+      title={serviceId ? `Platform Service ${serviceId}` : "Platform service detail"}
+      content="Inspect the raw GAgentService lifecycle view for one platform service identity: detail, revisions, deployments, serving, rollout, and traffic."
       extra={[
         <Button
           key="back"
@@ -296,7 +297,7 @@ const ServiceDetailPage: React.FC = () => {
             )
           }
         >
-          Open governance
+          Open platform governance
         </Button>,
       ]}
     >
@@ -315,21 +316,77 @@ const ServiceDetailPage: React.FC = () => {
         </Col>
 
         <Col xs={24}>
+          <div
+            style={{
+              ...embeddedPanelStyle,
+              background: "var(--ant-color-fill-quaternary)",
+            }}
+          >
+            <Typography.Text strong>Raw platform detail</Typography.Text>
+            <Typography.Paragraph
+              style={{ margin: "8px 0 0" }}
+              type="secondary"
+            >
+              This page inspects a concrete tenantId/appId/namespace-backed
+              service identity. Scope pages keep those platform fields hidden
+              behind the current scope.
+            </Typography.Paragraph>
+          </div>
+        </Col>
+
+        <Col xs={24}>
           {!serviceId ? (
             <Alert
               showIcon
               type="warning"
               title="Missing serviceId"
-              description="Open this page from the Services catalog so the route can supply a concrete service identifier."
+              description="Open this page from the Platform Services catalog so the route can supply a concrete service identifier."
             />
           ) : summaryRecord ? (
             <Space direction="vertical" size={16} style={{ width: "100%" }}>
               <ProCard {...moduleCardProps} title="Summary">
-                <ProDescriptions<ServiceSummaryRecord>
-                  column={2}
-                  dataSource={summaryRecord}
-                  columns={summaryColumns}
-                />
+                <div style={cardStackStyle}>
+                  <div style={summaryFieldGridStyle}>
+                    <SummaryField
+                      label="Service key"
+                      value={
+                        <Typography.Text copyable>
+                          {summaryRecord.serviceKey}
+                        </Typography.Text>
+                      }
+                    />
+                    <SummaryField
+                      label="Display name"
+                      value={summaryRecord.displayName}
+                    />
+                    <SummaryField
+                      label="Deployment status"
+                      value={summaryRecord.deploymentStatus}
+                    />
+                    <SummaryField
+                      label="Updated"
+                      value={formatDateTime(summaryRecord.updatedAt)}
+                    />
+                  </div>
+                  <div style={summaryMetricGridStyle}>
+                    <SummaryMetric
+                      label="Endpoints"
+                      value={summaryRecord.endpointCount}
+                    />
+                    <SummaryMetric
+                      label="Policies"
+                      value={summaryRecord.policyCount}
+                    />
+                    <SummaryMetric
+                      label="Revisions"
+                      value={revisionsQuery.data?.revisions.length ?? 0}
+                    />
+                    <SummaryMetric
+                      label="Deployments"
+                      value={deploymentsQuery.data?.deployments.length ?? 0}
+                    />
+                  </div>
+                </div>
               </ProCard>
 
               <Tabs

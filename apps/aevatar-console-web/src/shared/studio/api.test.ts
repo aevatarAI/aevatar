@@ -15,7 +15,7 @@ describe('studioApi host-session requests', () => {
     window.localStorage.clear();
   });
 
-  it('does not inject a bearer token for Studio host endpoints', async () => {
+  it('injects the NyxID bearer token for Studio host endpoints', async () => {
     persistAuthSession({
       tokens: {
         accessToken: 'access-token',
@@ -47,10 +47,23 @@ describe('studioApi host-session requests', () => {
     ];
     expect(input).toBe('/api/auth/me');
     expect(init?.credentials).toBe('same-origin');
-    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
   });
 
-  it('loads template workflows from the Studio sidecar instead of console auth APIs', async () => {
+  it('loads template workflows from the Studio host using bearer auth', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -90,6 +103,317 @@ describe('studioApi host-session requests', () => {
     ];
     expect(input).toBe('/api/workflows/published-demo');
     expect(init?.credentials).toBe('same-origin');
-    expect(new Headers(init?.headers).get('Authorization')).toBeNull();
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+  });
+
+  it('surfaces RFC 9110 problem details as a readable Studio error', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () =>
+        JSON.stringify({
+          type: 'https://tools.ietf.org/html/rfc9110#section-15.5.5',
+          title: 'Not Found',
+          status: 404,
+          traceId: '00-trace',
+        }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toThrow(
+      'Not Found',
+    );
+  });
+
+  it('collapses HTML error pages into a compact HTTP error message', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      text: async () => `<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <title>aevatar.ai | 502: Bad gateway</title>
+  </head>
+  <body>
+    <h1>Bad gateway</h1>
+  </body>
+</html>`,
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getAuthSession()).rejects.toThrow(
+      'HTTP 502 Bad Gateway',
+    );
+  });
+
+  it('sends available step types when parsing workflow yaml', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        document: {
+          name: 'demo_template',
+          description: '',
+          roles: [],
+          steps: [],
+        },
+        graph: null,
+        findings: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.parseYaml({
+      yaml: 'name: demo_template\nsteps:\n  - id: step_1\n    type: demo_template\n',
+      availableWorkflowNames: ['workspace-demo'],
+      availableStepTypes: ['demo_template', 'llm_call'],
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/editor/parse-yaml');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      yaml: 'name: demo_template\nsteps:\n  - id: step_1\n    type: demo_template\n',
+      availableWorkflowNames: ['workspace-demo'],
+      availableStepTypes: ['demo_template', 'llm_call'],
+    });
+  });
+
+  it('binds a saved script to the default service using the scope binding endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        serviceId: 'default',
+        displayName: 'script-1',
+        revisionId: 'rev-1',
+        implementationKind: 2,
+        expectedActorId: 'definition-scope-1',
+        script: {
+          scriptId: 'script-1',
+          scriptRevision: 'rev-1',
+          definitionActorId: 'definition',
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await studioApi.bindScopeScript({
+      scopeId: 'scope-1',
+      displayName: 'script-1',
+      scriptId: 'script-1',
+      scriptRevision: 'rev-1',
+      revisionId: 'rev-1',
+    });
+
+    expect(result.implementationKind).toBe('script');
+    expect(result.targetKind).toBe('script');
+    expect(result.targetName).toBe('script-1');
+    expect(result.script).toEqual({
+      scriptId: 'script-1',
+      scriptRevision: 'rev-1',
+      definitionActorId: 'definition',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/binding');
+    expect(init?.method).toBe('PUT');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      implementationKind: 'script',
+      displayName: 'script-1',
+      script: {
+        scriptId: 'script-1',
+        scriptRevision: 'rev-1',
+      },
+      revisionId: 'rev-1',
+    });
+  });
+
+  it('binds a GAgent to the default service using the scope binding endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        serviceId: 'default',
+        displayName: 'orders-gagent',
+        revisionId: 'rev-1',
+        implementationKind: 'GAgent',
+        expectedActorId: 'orders-gagent:dep-1',
+        gAgent: {
+          actorTypeName: 'Tests.OrdersGAgent, Tests',
+          preferredActorId: 'orders-gagent',
+        },
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const result = await studioApi.bindScopeGAgent({
+      scopeId: 'scope-1',
+      displayName: 'orders-gagent',
+      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      preferredActorId: 'orders-gagent',
+      revisionId: 'rev-1',
+      endpoints: [
+        {
+          endpointId: 'run',
+          displayName: 'Run',
+          kind: 'command',
+          requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+          description: 'Run the bound gagent.',
+        },
+      ],
+    });
+
+    expect(result.implementationKind).toBe('gagent');
+    expect(result.targetKind).toBe('gagent');
+    expect(result.targetName).toBe('orders-gagent');
+    expect(result.gAgent).toEqual({
+      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      preferredActorId: 'orders-gagent',
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/binding');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      implementationKind: 'gagent',
+      displayName: 'orders-gagent',
+      gagent: {
+        actorTypeName: 'Tests.OrdersGAgent, Tests',
+        preferredActorId: 'orders-gagent',
+        endpoints: [
+          {
+            endpointId: 'run',
+            displayName: 'Run',
+            kind: 'command',
+            requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+            description: 'Run the bound gagent.',
+          },
+        ],
+      },
+      revisionId: 'rev-1',
+    });
+  });
+
+  it('normalizes scope binding revisions from backend implementation names', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        available: true,
+        scopeId: 'scope-1',
+        serviceId: 'default',
+        displayName: 'Script Service',
+        serviceKey: 'scope-1/default',
+        defaultServingRevisionId: 'rev-2',
+        activeServingRevisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        deploymentStatus: 'Active',
+        primaryActorId: 'actor://scope/default',
+        updatedAt: '2026-03-26T08:00:00Z',
+        revisions: [
+          {
+            revisionId: 'rev-2',
+            implementationKind: 'Scripting',
+            status: 'Published',
+            artifactHash: 'hash-2',
+            failureReason: '',
+            isDefaultServing: true,
+            isActiveServing: true,
+            isServingTarget: true,
+            allocationWeight: 100,
+            servingState: 'Active',
+            deploymentId: 'deploy-2',
+            primaryActorId: 'actor://scope/default',
+            createdAt: '2026-03-26T07:00:00Z',
+            preparedAt: '2026-03-26T07:01:00Z',
+            publishedAt: '2026-03-26T07:02:00Z',
+            retiredAt: null,
+          },
+        ],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    const status = await studioApi.getScopeBinding('scope-1');
+
+    expect(status.revisions[0]?.implementationKind).toBe('script');
   });
 });

@@ -76,16 +76,23 @@ public sealed class ServiceCommandApplicationServiceTests
             Identity = identity.Clone(),
             RevisionId = "r3",
         });
+        var retireReceipt = await service.RetireRevisionAsync(new RetireServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r4",
+        });
 
-        provisioner.RevisionCatalogRequests.Should().HaveCount(3);
+        provisioner.RevisionCatalogRequests.Should().HaveCount(4);
         revisionProjectionPort.ActorIds.Should().Equal(
             ServiceActorIds.RevisionCatalog(identity),
             ServiceActorIds.RevisionCatalog(identity),
+            ServiceActorIds.RevisionCatalog(identity),
             ServiceActorIds.RevisionCatalog(identity));
-        dispatchPort.Calls.Should().HaveCount(3);
+        dispatchPort.Calls.Should().HaveCount(4);
         createReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r1");
         prepareReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r2");
         publishReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r3");
+        retireReceipt.CorrelationId.Should().Be($"{ServiceKeys.Build(identity)}:r4");
     }
 
     [Fact]
@@ -95,12 +102,16 @@ public sealed class ServiceCommandApplicationServiceTests
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var deploymentProjectionPort = new RecordingProjectionPort();
+        var servingProjectionPort = new RecordingProjectionPort();
+        var trafficProjectionPort = new RecordingProjectionPort();
         var service = CreateService(
             provisioner,
             dispatchPort,
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort(),
-            deploymentProjectionPort: deploymentProjectionPort);
+            deploymentProjectionPort: deploymentProjectionPort,
+            servingProjectionPort: servingProjectionPort,
+            trafficProjectionPort: trafficProjectionPort);
 
         var receipt = await service.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
@@ -110,7 +121,10 @@ public sealed class ServiceCommandApplicationServiceTests
 
         receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
         provisioner.DeploymentRequests.Should().ContainSingle();
+        provisioner.ServingSetRequests.Should().ContainSingle();
         deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
         dispatchPort.Calls.Should().ContainSingle(x => x.actorId == ServiceActorIds.Deployment(identity));
     }
 

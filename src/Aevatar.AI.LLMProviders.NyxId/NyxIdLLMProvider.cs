@@ -1,0 +1,107 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.LLMProviders.MEAI;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace Aevatar.AI.LLMProviders.NyxId;
+
+/// <summary>
+/// NyxID gateway-backed provider. Requests are sent through NyxID's OpenAI-compatible gateway.
+/// </summary>
+public sealed class NyxIdLLMProvider : ILLMProvider
+{
+    private readonly string _defaultModel;
+    private readonly Uri _gatewayEndpoint;
+    private readonly Func<string?> _accessTokenAccessor;
+    private readonly ILogger _logger;
+
+    public NyxIdLLMProvider(
+        string name,
+        string defaultModel,
+        string gatewayEndpoint,
+        Func<string?> accessTokenAccessor,
+        ILogger? logger = null)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Provider name is required.", nameof(name));
+        if (string.IsNullOrWhiteSpace(defaultModel))
+            throw new ArgumentException("Default model is required.", nameof(defaultModel));
+        if (string.IsNullOrWhiteSpace(gatewayEndpoint))
+            throw new ArgumentException("Gateway endpoint is required.", nameof(gatewayEndpoint));
+
+        Name = name.Trim();
+        _defaultModel = defaultModel.Trim();
+        _gatewayEndpoint = NormalizeGatewayEndpoint(gatewayEndpoint);
+        _accessTokenAccessor = accessTokenAccessor ?? throw new ArgumentNullException(nameof(accessTokenAccessor));
+        _logger = logger ?? NullLogger.Instance;
+    }
+
+    public string Name { get; }
+
+    public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+        CreateDelegateProvider(request).ChatAsync(NormalizeRequest(request), ct);
+
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, CancellationToken ct = default) =>
+        CreateDelegateProvider(request).ChatStreamAsync(NormalizeRequest(request), ct);
+
+    private ILLMProvider CreateDelegateProvider(LLMRequest request)
+    {
+        var resolvedModel = ResolveModel(request);
+        var accessToken = ResolveAccessToken();
+
+        var options = new OpenAI.OpenAIClientOptions
+        {
+            Endpoint = _gatewayEndpoint,
+        };
+        var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
+        var chatClient = client.GetChatClient(resolvedModel).AsIChatClient();
+        return new MEAILLMProvider(Name, chatClient, _logger);
+    }
+
+    private LLMRequest NormalizeRequest(LLMRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return new LLMRequest
+        {
+            Messages = request.Messages,
+            RequestId = request.RequestId,
+            Metadata = request.Metadata,
+            Tools = request.Tools,
+            Model = ResolveModel(request),
+            Temperature = request.Temperature,
+            MaxTokens = request.MaxTokens,
+        };
+    }
+
+    private string ResolveModel(LLMRequest request)
+    {
+        var requestedModel = request.Model?.Trim();
+        return string.IsNullOrWhiteSpace(requestedModel)
+            ? _defaultModel
+            : requestedModel;
+    }
+
+    private string ResolveAccessToken()
+    {
+        var accessToken = _accessTokenAccessor()?.Trim();
+        if (!string.IsNullOrWhiteSpace(accessToken))
+            return accessToken;
+
+        throw new InvalidOperationException(
+            $"NyxID access token is not configured for provider '{Name}'. " +
+            "Set LLMProviders:Providers:<name>:ApiKey to a NyxID bearer token or service-account token.");
+    }
+
+    private static Uri NormalizeGatewayEndpoint(string gatewayEndpoint)
+    {
+        var trimmed = gatewayEndpoint.Trim();
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var endpoint))
+            throw new ArgumentException(
+                $"NyxID gateway endpoint '{gatewayEndpoint}' must be an absolute URI.",
+                nameof(gatewayEndpoint));
+
+        return new Uri(endpoint.ToString().TrimEnd('/') + "/", UriKind.Absolute);
+    }
+}

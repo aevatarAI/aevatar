@@ -1,7 +1,7 @@
-using Aevatar.Tools.Cli.Studio.Application.Abstractions;
-using Aevatar.Tools.Cli.Studio.Application.Contracts;
-using Aevatar.Tools.Cli.Studio.Application.Services;
-using Aevatar.Tools.Cli.Studio.Domain.Models;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
+using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Domain.Studio.Models;
 using FluentAssertions;
 
 namespace Aevatar.Tools.Cli.Tests;

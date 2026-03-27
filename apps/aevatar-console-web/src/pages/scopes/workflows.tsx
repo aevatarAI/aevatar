@@ -1,27 +1,30 @@
 import type {
   ProColumns,
-  ProDescriptionsItemProps,
 } from "@ant-design/pro-components";
 import {
   PageContainer,
   ProCard,
-  ProDescriptions,
   ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import { Alert, Button, Col, Drawer, Row, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { studioApi } from "@/shared/studio/api";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type {
-  ScopeWorkflowDetail,
   ScopeWorkflowSummary,
 } from "@/shared/models/scopes";
 import {
   compactTableCardProps,
+  drawerBodyStyle,
+  drawerScrollStyle,
+  embeddedPanelStyle,
   moduleCardProps,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryFieldStyle,
 } from "@/shared/ui/proComponents";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
@@ -33,28 +36,21 @@ import {
   type ScopeQueryDraft,
 } from "./components/scopeQuery";
 
-const workflowDetailColumns: ProDescriptionsItemProps<ScopeWorkflowDetail>[] = [
-  {
-    title: "Display name",
-    dataIndex: ["workflow", "displayName"],
-  },
-  {
-    title: "Service key",
-    render: (_, record) => (
-      <Typography.Text copyable>
-        {record.workflow?.serviceKey || "n/a"}
-      </Typography.Text>
-    ),
-  },
-  {
-    title: "Definition actor",
-    render: (_, record) => (
-      <Typography.Text copyable>
-        {record.source?.definitionActorId || "n/a"}
-      </Typography.Text>
-    ),
-  },
-];
+type SummaryFieldProps = {
+  label: string;
+  value: React.ReactNode;
+};
+
+const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
+  <div style={summaryFieldStyle}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    {typeof value === "string" || typeof value === "number" ? (
+      <Typography.Text>{value}</Typography.Text>
+    ) : (
+      value
+    )}
+  </div>
+);
 
 const initialDraft = readScopeQueryDraft();
 const initialWorkflowId =
@@ -73,21 +69,9 @@ const ScopeWorkflowsPage: React.FC = () => {
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
-  const studioHostAccessResolved =
-    !authSessionQuery.isLoading && !authSessionQuery.isError;
-  const studioHostAuthenticated =
-    authSessionQuery.data?.enabled === false ||
-    Boolean(authSessionQuery.data?.authenticated);
-  const appContextQuery = useQuery({
-    queryKey: ["scopes", "app-context"],
-    enabled: studioHostAccessResolved && studioHostAuthenticated,
-    queryFn: () => studioApi.getAppContext(),
-    retry: false,
-  });
   const resolvedScope = useMemo(
-    () =>
-      resolveStudioScopeContext(authSessionQuery.data, appContextQuery.data),
-    [appContextQuery.data, authSessionQuery.data]
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data]
   );
 
   useEffect(() => {
@@ -198,8 +182,8 @@ const ScopeWorkflowsPage: React.FC = () => {
   return (
     <PageContainer
       title="Scope Workflows"
-      content="Inspect published workflow assets for a single scope."
-      onBack={() => history.push(buildScopeHref("/scopes", activeDraft))}
+      content="Inspect published workflow assets for a single scope. tenantId and appId stay platform-managed and hidden behind this view."
+      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
     >
       <Row gutter={[16, 16]}>
         <Col xs={24}>
@@ -268,20 +252,43 @@ const ScopeWorkflowsPage: React.FC = () => {
         }
         size={760}
         onClose={() => setSelectedWorkflowId("")}
+        styles={{ body: drawerBodyStyle }}
       >
         {workflowDetailQuery.data ? (
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
-            <ProDescriptions<ScopeWorkflowDetail>
-              column={1}
-              dataSource={workflowDetailQuery.data}
-              columns={workflowDetailColumns}
-            />
-            <ProCard title="Workflow YAML" {...moduleCardProps}>
-              {renderMultilineText(
-                workflowDetailQuery.data.source?.workflowYaml
-              )}
-            </ProCard>
-          </Space>
+          <div style={drawerScrollStyle}>
+            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+              <div style={embeddedPanelStyle}>
+                <div style={summaryFieldGridStyle}>
+                  <SummaryField
+                    label="Display name"
+                    value={workflowDetailQuery.data.workflow?.displayName || "n/a"}
+                  />
+                  <SummaryField
+                    label="Service key"
+                    value={
+                      <Typography.Text copyable>
+                        {workflowDetailQuery.data.workflow?.serviceKey || "n/a"}
+                      </Typography.Text>
+                    }
+                  />
+                  <SummaryField
+                    label="Definition actor"
+                    value={
+                      <Typography.Text copyable>
+                        {workflowDetailQuery.data.source?.definitionActorId ||
+                          "n/a"}
+                      </Typography.Text>
+                    }
+                  />
+                </div>
+              </div>
+              <ProCard title="Workflow YAML" {...moduleCardProps}>
+                {renderMultilineText(
+                  workflowDetailQuery.data.source?.workflowYaml
+                )}
+              </ProCard>
+            </Space>
+          </div>
         ) : (
           <Alert
             showIcon

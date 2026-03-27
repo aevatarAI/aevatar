@@ -24,6 +24,10 @@ public interface IServiceCommandPort
         PublishServiceRevisionCommand command,
         CancellationToken ct = default);
 
+    Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(
+        RetireServiceRevisionCommand command,
+        CancellationToken ct = default);
+
     Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
         SetDefaultServingRevisionCommand command,
         CancellationToken ct = default);

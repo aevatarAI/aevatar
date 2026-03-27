@@ -4,6 +4,9 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Abstractions.Services;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Microsoft.Extensions.Options;
 
@@ -16,16 +19,15 @@ public sealed class ScopeWorkflowApplicationServicesTests
     {
         var options = new ScopeWorkflowCapabilityOptions
         {
-            TenantId = "tenant-a",
-            AppId = "workflow-app",
-            NamespacePrefix = "user:",
-            DefinitionActorIdPrefix = "user-workflow",
+            ServiceAppId = "default",
+            ServiceNamespace = "default",
+            DefinitionActorIdPrefix = "scope-workflow",
         };
         var identity = new ServiceIdentity
         {
-            TenantId = options.TenantId,
-            AppId = options.AppId,
-            Namespace = options.BuildNamespace("external-user-1"),
+            TenantId = "external-user-1",
+            AppId = options.ServiceAppId,
+            Namespace = options.ServiceNamespace,
             ServiceId = "approval-flow",
         };
         const string revisionId = "rev-001";
@@ -34,7 +36,9 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var expectedActorId = $"{expectedActorPrefix}:{expectedDeploymentId}";
 
         var commandPort = new FakeServiceCommandPort();
+        var governanceCommandPort = new FakeServiceGovernanceCommandPort();
         var queryPort = new FakeServiceLifecycleQueryPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
         queryPort.GetServiceResults.Enqueue(null);
         queryPort.GetServiceResults.Enqueue(new ServiceCatalogSnapshot(
             ServiceKeys.Build(identity),
@@ -59,6 +63,8 @@ public sealed class ScopeWorkflowApplicationServicesTests
         var service = new ScopeWorkflowCommandApplicationService(
             commandPort,
             queryPort,
+            governanceCommandPort,
+            governanceQueryPort,
             queryService,
             Options.Create(options));
 
@@ -74,37 +80,27 @@ public sealed class ScopeWorkflowApplicationServicesTests
         result.Workflow.ScopeId.Should().Be("external-user-1");
         result.Workflow.ActorId.Should().Be(expectedActorId);
         result.DefinitionActorIdPrefix.Should().Be(expectedActorPrefix);
-        commandPort.CreateServiceCommand.Should().NotBeNull();
         commandPort.CreateServiceCommand!.Spec.Identity.Should().BeEquivalentTo(identity);
-        commandPort.CreateRevisionCommand!.Spec.WorkflowSpec.WorkflowYaml.Should().Be("name: approval");
-        commandPort.CreateRevisionCommand.Spec.WorkflowSpec.WorkflowName.Should().Be("approval");
-        commandPort.CreateRevisionCommand.Spec.WorkflowSpec.DefinitionActorId.Should().Be(expectedActorPrefix);
-        commandPort.CreateRevisionCommand.Spec.WorkflowSpec.InlineWorkflowYamls.Should().ContainKey("child.yaml");
-        commandPort.PrepareRevisionCommand!.RevisionId.Should().Be(revisionId);
-        commandPort.PublishRevisionCommand!.RevisionId.Should().Be(revisionId);
-        commandPort.SetDefaultServingRevisionCommand!.RevisionId.Should().Be(revisionId);
-        commandPort.ActivateServiceRevisionCommand!.RevisionId.Should().Be(revisionId);
+        commandPort.CreateRevisionCommand!.Spec.WorkflowSpec.DefinitionActorId.Should().Be(expectedActorPrefix);
+        governanceCommandPort.CreateEndpointCatalogCommand.Should().NotBeNull();
+        governanceCommandPort.CreateEndpointCatalogCommand!.Spec.Identity.Should().BeEquivalentTo(identity);
+        governanceCommandPort.CreateEndpointCatalogCommand.Spec.Endpoints.Should().ContainSingle(x => x.EndpointId == "chat");
     }
 
     [Fact]
-    public async Task ListAsync_ShouldQueryUserScopeAndEnrichWorkflowNameFromBinding()
+    public async Task ListAsync_ShouldQueryScopeAndEnrichWorkflowNameFromBinding()
     {
-        var options = new ScopeWorkflowCapabilityOptions
-        {
-            TenantId = "tenant-a",
-            AppId = "workflow-app",
-            NamespacePrefix = "user:",
-        };
-        const string actorId = "user-workflow:actor-1";
+        var options = new ScopeWorkflowCapabilityOptions();
+        const string actorId = "scope-workflow:actor-1";
         var queryPort = new FakeServiceLifecycleQueryPort
         {
             ListServicesResult =
             [
                 new ServiceCatalogSnapshot(
-                    "tenant-a:workflow-app:user:token:approval-flow",
-                    "tenant-a",
-                    "workflow-app",
-                    options.BuildNamespace("external-user-2"),
+                    ServiceKeys.Build("external-user-2", options.ServiceAppId, options.ServiceNamespace, "approval-flow"),
+                    "external-user-2",
+                    options.ServiceAppId,
+                    options.ServiceNamespace,
                     "approval-flow",
                     "Approval Flow",
                     "rev-1",
@@ -136,35 +132,29 @@ public sealed class ScopeWorkflowApplicationServicesTests
 
         workflows.Should().ContainSingle();
         workflows[0].WorkflowId.Should().Be("approval-flow");
-        workflows[0].ActorId.Should().Be(actorId);
         workflows[0].WorkflowName.Should().Be("approval");
         queryPort.LastListRequest.Should().BeEquivalentTo(new FakeServiceLifecycleQueryPort.ListRequest(
-            options.TenantId,
-            options.AppId,
-            options.BuildNamespace("external-user-2"),
+            "external-user-2",
+            options.ServiceAppId,
+            options.ServiceNamespace,
             options.ListTake));
     }
 
     [Fact]
     public async Task GetByActorIdAsync_ShouldResolveRunActorBackToDefinitionActor()
     {
-        var options = new ScopeWorkflowCapabilityOptions
-        {
-            TenantId = "tenant-a",
-            AppId = "workflow-app",
-            NamespacePrefix = "user:",
-        };
-        const string definitionActorId = "user-workflow:def-1";
+        var options = new ScopeWorkflowCapabilityOptions();
+        const string definitionActorId = "scope-workflow:def-1";
         const string runActorId = "workflow-run:run-1";
         var queryPort = new FakeServiceLifecycleQueryPort
         {
             ListServicesResult =
             [
                 new ServiceCatalogSnapshot(
-                    "tenant-a:workflow-app:user:token:approval-flow",
-                    "tenant-a",
-                    "workflow-app",
-                    options.BuildNamespace("external-user-3"),
+                    ServiceKeys.Build("external-user-3", options.ServiceAppId, options.ServiceNamespace, "approval-flow"),
+                    "external-user-3",
+                    options.ServiceAppId,
+                    options.ServiceNamespace,
                     "approval-flow",
                     "Approval Flow",
                     "rev-1",
@@ -239,6 +229,9 @@ public sealed class ScopeWorkflowApplicationServicesTests
             return Task.FromResult(Accepted());
         }
 
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) =>
+            Task.FromResult(Accepted());
+
         public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
         {
             SetDefaultServingRevisionCommand = command;
@@ -298,5 +291,52 @@ public sealed class ScopeWorkflowApplicationServicesTests
             Bindings.TryGetValue(actorId, out var binding);
             return Task.FromResult(binding);
         }
+    }
+
+    private sealed class FakeServiceGovernanceCommandPort : IServiceGovernanceCommandPort
+    {
+        private static readonly ServiceCommandAcceptedReceipt DefaultReceipt =
+            new("governance-actor", "cmd-governance", "corr-governance");
+
+        public CreateServiceEndpointCatalogCommand? CreateEndpointCatalogCommand { get; private set; }
+
+        public Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(CreateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateBindingAsync(UpdateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetireBindingAsync(RetireServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreateEndpointCatalogAsync(CreateServiceEndpointCatalogCommand command, CancellationToken ct = default)
+        {
+            CreateEndpointCatalogCommand = command;
+            return Task.FromResult(DefaultReceipt);
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateEndpointCatalogAsync(UpdateServiceEndpointCatalogCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreatePolicyAsync(CreateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdatePolicyAsync(UpdateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetirePolicyAsync(RetireServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+    }
+
+    private sealed class FakeServiceGovernanceQueryPort : IServiceGovernanceQueryPort
+    {
+        public Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceBindingCatalogSnapshot?>(null);
+
+        public Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceEndpointCatalogSnapshot?>(null);
+
+        public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
     }
 }

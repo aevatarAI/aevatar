@@ -77,6 +77,15 @@ public sealed class ServiceRevisionCatalogProjector
                 .Select(MapEndpoint)
                 .OrderBy(x => x.EndpointId, StringComparer.Ordinal)
                 .ToList(),
+            StaticActorTypeName = state.Spec?.StaticSpec?.ActorTypeName ?? string.Empty,
+            StaticPreferredActorId = state.Spec?.StaticSpec?.PreferredActorId ?? string.Empty,
+            ScriptingScriptId = state.Spec?.ScriptingSpec?.ScriptId ?? string.Empty,
+            ScriptingRevision = state.Spec?.ScriptingSpec?.Revision ?? string.Empty,
+            ScriptingDefinitionActorId = state.Spec?.ScriptingSpec?.DefinitionActorId ?? string.Empty,
+            ScriptingSourceHash = state.Spec?.ScriptingSpec?.SourceHash ?? string.Empty,
+            WorkflowName = state.Spec?.WorkflowSpec?.WorkflowName ?? string.Empty,
+            WorkflowDefinitionActorId = state.Spec?.WorkflowSpec?.DefinitionActorId ?? string.Empty,
+            WorkflowInlineWorkflowCount = state.Spec?.WorkflowSpec?.InlineWorkflowYamls?.Count ?? 0,
         };
     }
 

@@ -5,13 +5,19 @@ import type {
 } from "@ant-design/pro-components";
 import { Button, Space, Tag, Typography } from "antd";
 import React from "react";
+import { loadStoredAuthSession } from "@/shared/auth/session";
 import type { RecentRunEntry } from "@/shared/runs/recentRuns";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { RunTransport } from "./runEventPresentation";
 
 export type RunFormValues = {
   prompt: string;
-  workflow?: string;
+  routeName?: string;
+  scopeId?: string;
+  serviceOverrideId?: string;
+  endpointId?: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
   actorId?: string;
   transport: RunTransport;
 };
@@ -28,7 +34,7 @@ export type SignalFormValues = {
 export type RunPreset = {
   key: string;
   title: string;
-  workflow: string;
+  routeName: string;
   prompt: string;
   description: string;
   tags: string[];
@@ -44,6 +50,14 @@ export type RunFocusStatus =
   | "finished"
   | "error";
 
+export type RunFocusRecord = {
+  status: RunFocusStatus;
+  label: string;
+  alertType: "info" | "success" | "warning" | "error";
+  title: string;
+  description: string;
+};
+
 export type RecentRunRow = RecentRunEntry & {
   key: string;
   statusValue: RunStatusValue;
@@ -57,7 +71,8 @@ export type RecentRunTableRow = RecentRunRow & {
 export type RunSummaryRecord = {
   status: RunStatus;
   transport: RunTransport;
-  workflowName: string;
+  routeName: string;
+  endpointId: string;
   actorId: string;
   commandId: string;
   runId: string;
@@ -69,8 +84,8 @@ export type RunSummaryRecord = {
   activeSteps: string[];
 };
 
-export type SelectedWorkflowRecord = {
-  workflowName: string;
+export type SelectedRouteRecord = {
+  routeName: string;
   groupLabel: string;
   sourceLabel: string;
   llmStatus: "processing" | "success";
@@ -92,38 +107,44 @@ export type HumanInputRecord = {
   timeoutSeconds: number;
 };
 
-export type ConsoleViewKey = "dual" | "messages" | "events";
+export type ConsoleViewKey = "timeline" | "messages" | "events";
 
 export const composerRailMinWidth = 320;
 export const composerRailDefaultWidth = 360;
 export const composerRailMaxWidth = 560;
 export const composerRailKeyboardStep = 24;
 export const monitorWorkbenchMinWidth = 520;
+export const composerRailCompactWidth = 320;
+export const composerRailComfortWidth = 336;
+export const defaultRunRouteName = "direct";
+
+const composerRailCompactBreakpoint = 1120;
+const composerRailComfortBreakpoint = 1360;
 
 export const builtInPresets: RunPreset[] = [
   {
     key: "direct",
     title: "Direct chat",
-    workflow: "direct",
+    routeName: "direct",
     prompt:
-      "Summarize what this workflow can do and produce a concise execution result.",
+      "Summarize what this chat bundle can do and produce a concise execution result.",
     description:
-      "Baseline direct workflow for quick validation of the chat stream.",
+      "Baseline direct chat bundle for quick validation of the chat stream.",
     tags: ["baseline", "llm"],
   },
   {
     key: "human-input",
     title: "Human input triage",
-    workflow: "human_input_manual_triage",
+    routeName: "human_input_manual_triage",
     prompt:
-      "A production incident needs manual classification before the workflow can continue.",
+      "A production incident needs manual classification before the run can continue.",
     description: "Use this to verify human input prompts and resume flow.",
     tags: ["human_input", "resume"],
   },
   {
     key: "human-approval",
     title: "Human approval gate",
-    workflow: "human_approval_release_gate",
+    routeName: "human_approval_release_gate",
     prompt:
       "Prepare a release summary that requires explicit human approval before rollout.",
     description: "Use this to verify approval flow and moderation checkpoints.",
@@ -132,7 +153,7 @@ export const builtInPresets: RunPreset[] = [
   {
     key: "wait-signal",
     title: "Wait signal",
-    workflow: "wait_signal_manual_success",
+    routeName: "wait_signal_manual_success",
     prompt: "Wait for an external readiness signal before completing the run.",
     description:
       "Use this to verify waiting_signal and manual signal delivery.",
@@ -149,8 +170,8 @@ export const runStatusValueEnum = {
 } as const;
 
 const transportValueEnum = {
-  sse: { text: "SSE", status: "Processing" },
-  ws: { text: "WebSocket", status: "Success" },
+  sse: { text: "Service SSE", status: "Processing" },
+  ws: { text: "Legacy WebSocket", status: "Default" },
 } as const;
 
 const runFocusValueEnum = {
@@ -171,9 +192,15 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
     valueEnum: transportValueEnum,
   },
   {
-    title: "Workflow",
-    dataIndex: "workflowName",
-    render: (_, record) => record.workflowName || "n/a",
+    title: "Endpoint",
+    dataIndex: "endpointId",
+    render: (_, record) => record.endpointId || "chat",
+  },
+  {
+    title: "Route",
+    dataIndex: "routeName",
+    render: (_, record) =>
+      formatRunRouteLabel(record.routeName, record.endpointId),
   },
   {
     title: "Actor",
@@ -264,13 +291,13 @@ export const humanInputColumns: ProDescriptionsItemProps<HumanInputRecord>[] = [
   },
 ];
 
-export const workflowDescriptionColumns: ProDescriptionsItemProps<SelectedWorkflowRecord>[] =
+export const routeDescriptionColumns: ProDescriptionsItemProps<SelectedRouteRecord>[] =
   [
     {
-      title: "Workflow",
-      dataIndex: "workflowName",
+      title: "Route",
+      dataIndex: "routeName",
       render: (_, record) => (
-        <Tag color="processing">{record.workflowName}</Tag>
+        <Tag color="processing">{record.routeName}</Tag>
       ),
     },
     {
@@ -451,11 +478,32 @@ export const workbenchConsoleViewportStyle = {
   minHeight: 0,
 } as const;
 
-export const workbenchConsoleTabPanelStyle = {
+export const workbenchTraceTabPanelStyle = {
   display: "flex",
   flexDirection: "column",
-  height: "calc((100vh - 64px) * 0.3 - 120px)",
-  minHeight: 180,
+  flex: 1,
+  minHeight: 0,
+  overflow: "hidden",
+} as const;
+
+export const workbenchTraceTabsStyle = {
+  flex: 1,
+  minHeight: 0,
+} as const;
+
+export const workbenchTraceTabsStyles = {
+  content: {
+    display: "flex",
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
+  },
+  root: {
+    display: "flex",
+    flex: 1,
+    flexDirection: "column",
+    minHeight: 0,
+  },
 } as const;
 
 export const workbenchConsoleSurfaceStyle = {
@@ -507,9 +555,16 @@ export const workbenchEventRowStyle = {
 
 export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
   {
-    title: "Workflow",
-    dataIndex: "workflowName",
+    title: "Route",
+    dataIndex: "routeName",
     ellipsis: true,
+    render: (_, record) => formatRunRouteLabel(record.routeName, record.endpointId),
+  },
+  {
+    title: "Endpoint",
+    dataIndex: "endpointId",
+    ellipsis: true,
+    render: (_, record) => record.endpointId || "chat",
   },
   {
     title: "Status",
@@ -562,6 +617,23 @@ export function trimOptional(value?: string | null): string | undefined {
   return normalized ? normalized : undefined;
 }
 
+export function formatRunRouteLabel(
+  routeName?: string | null,
+  endpointId?: string | null,
+): string {
+  const normalizedRouteName = trimOptional(routeName);
+  const normalizedEndpointId = trimOptional(endpointId) ?? "chat";
+
+  if (normalizedEndpointId === "chat") {
+    return normalizedRouteName || "chat";
+  }
+
+  return normalizedRouteName &&
+    normalizedRouteName !== normalizedEndpointId
+    ? `${normalizedEndpointId} · ${normalizedRouteName}`
+    : normalizedEndpointId;
+}
+
 export function formatElapsedDuration(totalMilliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(totalMilliseconds / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -591,23 +663,53 @@ export function clampComposerWidth(
   return Math.min(Math.max(requestedWidth, composerRailMinWidth), maxWidth);
 }
 
-export function readInitialRunFormValues(
-  preferredWorkflow: string
-): RunFormValues {
+export function resolveResponsiveComposerWidth(
+  requestedWidth: number,
+  containerWidth: number
+): number {
+  const clampedWidth = clampComposerWidth(requestedWidth, containerWidth);
+  const responsiveCap =
+    containerWidth <= composerRailCompactBreakpoint
+      ? composerRailCompactWidth
+      : containerWidth <= composerRailComfortBreakpoint
+      ? composerRailComfortWidth
+      : composerRailMaxWidth;
+
+  return Math.min(clampedWidth, responsiveCap);
+}
+
+export function readInitialRunFormValues(): RunFormValues {
+  const defaultScopeId = loadStoredAuthSession()?.user.sub;
+
   if (typeof window === "undefined") {
     return {
       prompt: "",
-      workflow: preferredWorkflow,
+      routeName: defaultRunRouteName,
+      scopeId: defaultScopeId,
+      serviceOverrideId: undefined,
+      endpointId: "chat",
+      payloadTypeUrl: undefined,
+      payloadBase64: undefined,
       actorId: undefined,
       transport: "sse",
     };
   }
 
   const params = new URLSearchParams(window.location.search);
-  return {
-    prompt: params.get("prompt") ?? "",
-    workflow: trimOptional(params.get("workflow")) ?? preferredWorkflow,
+    return {
+      prompt: params.get("prompt") ?? "",
+      routeName:
+        trimOptional(params.get("route")) ??
+        trimOptional(params.get("workflow")) ??
+        defaultRunRouteName,
+      scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
+      serviceOverrideId:
+        trimOptional(params.get("serviceOverrideId")) ??
+      trimOptional(params.get("serviceId")),
+    endpointId: trimOptional(params.get("endpointId")) ?? "chat",
+    payloadTypeUrl: trimOptional(params.get("payloadTypeUrl")),
+    payloadBase64: trimOptional(params.get("payloadBase64")),
     actorId: trimOptional(params.get("actorId")),
-    transport: trimOptional(params.get("transport")) === "ws" ? "ws" : "sse",
+    transport: "sse",
   };
 }

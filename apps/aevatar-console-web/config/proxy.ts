@@ -10,10 +10,8 @@
  * @doc https://umijs.org/docs/guides/proxy
  */
 const apiTarget = process.env.AEVATAR_API_TARGET || 'http://127.0.0.1:5080';
-const configurationApiTarget =
-  process.env.AEVATAR_CONFIGURATION_API_TARGET || 'http://127.0.0.1:6688';
 const studioApiTarget =
-  process.env.AEVATAR_STUDIO_API_TARGET || 'http://127.0.0.1:6690';
+  process.env.AEVATAR_STUDIO_API_TARGET || apiTarget;
 
 const buildProxyTarget = (target: string) => ({
   target,
@@ -35,6 +33,7 @@ const studioProxyEntries = [
   '/api/executions',
   '/api/roles',
   '/api/settings',
+  '/api/studio',
   '/api/workspace',
 ].reduce<Record<string, ReturnType<typeof buildProxyTarget>>>((entries, path) => {
   const proxyFactory = path === '/api/auth'
@@ -45,13 +44,17 @@ const studioProxyEntries = [
   return entries;
 }, {});
 
+const studioScopeProxyEntries = {
+  '^/api/scopes/[^/]+/scripts/draft-run$':
+    buildProxyTarget(studioApiTarget),
+  '^/api/scripts/validate$': buildProxyTarget(studioApiTarget),
+  '^/api/scripts/generator$': buildProxyTarget(studioApiTarget),
+  '^/api/workflows/generator$': buildProxyTarget(studioApiTarget),
+};
+
 const createProxyConfig = () => ({
-  '/api/configuration/': {
-    target: configurationApiTarget,
-    changeOrigin: true,
-    ws: true,
-  },
   ...studioProxyEntries,
+  ...studioScopeProxyEntries,
   '/api/': {
     target: apiTarget,
     changeOrigin: true,

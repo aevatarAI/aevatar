@@ -44,6 +44,7 @@ message ServiceInvocationRequest {
   string command_id = 4;
   string correlation_id = 5;
   ServiceInvocationCaller caller = 6;
+  string revision_id = 7;
 }
 
 message ServiceInvocationAcceptedReceipt {

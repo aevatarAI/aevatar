@@ -560,6 +560,82 @@ public sealed class SubWorkflowOrchestratorTests
     }
 
     [Fact]
+    public async Task TryHandleStoppedAsync_WhenTransientChildStops_ShouldPublishParentFailureAndCleanup()
+    {
+        var harness = CreateHarness();
+        var state = BuildStateWithPending(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-stop-1",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-stop-a",
+            WorkflowName = "sub_flow",
+            ChildActorId = "child-stop-1",
+            ChildRunId = "child-run-stop-1",
+            Lifecycle = WorkflowCallLifecycle.Transient,
+        });
+
+        var handled = await harness.Orchestrator.TryHandleStoppedAsync(
+            new WorkflowStoppedEvent
+            {
+                RunId = "child-run-stop-1",
+                Reason = "manual",
+            },
+            "child-stop-1",
+            state,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>().Should().ContainSingle(x =>
+            x.InvocationId == "invoke-stop-1" &&
+            !x.Success &&
+            x.Error.Contains("manual", StringComparison.Ordinal));
+        var parentCompletion = harness.Published.Single().Message.Should().BeOfType<StepCompletedEvent>().Subject;
+        parentCompletion.StepId.Should().Be("step-stop-a");
+        parentCompletion.RunId.Should().Be("parent-run");
+        parentCompletion.Success.Should().BeFalse();
+        parentCompletion.Error.Should().Contain("manual");
+        parentCompletion.Annotations["workflow_call.child_actor_id"].Should().Be("child-stop-1");
+        parentCompletion.Annotations["workflow_call.child_run_id"].Should().Be("child-run-stop-1");
+        harness.Runtime.Unlinked.Should().ContainSingle("child-stop-1");
+        harness.Runtime.Destroyed.Should().ContainSingle("child-stop-1");
+    }
+
+    [Fact]
+    public async Task TryHandleRunStoppedAsync_WhenChildActorIdMissing_ShouldPublishFailureWithoutCleanup()
+    {
+        var harness = CreateHarness();
+        var state = BuildStateWithPending(new WorkflowRunState.Types.PendingSubWorkflowInvocation
+        {
+            InvocationId = "invoke-stop-2",
+            ParentRunId = "parent-run",
+            ParentStepId = "step-stop-b",
+            WorkflowName = "sub_flow",
+            ChildActorId = " ",
+            ChildRunId = "child-run-stop-2",
+            Lifecycle = WorkflowCallLifecycle.Singleton,
+        });
+
+        var handled = await harness.Orchestrator.TryHandleRunStoppedAsync(
+            new WorkflowRunStoppedEvent
+            {
+                RunId = "child-run-stop-2",
+                Reason = "manual",
+            },
+            "publisher-ignored",
+            state,
+            CancellationToken.None);
+
+        handled.Should().BeTrue();
+        harness.Persisted.OfType<SubWorkflowInvocationCompletedEvent>().Should().ContainSingle(x =>
+            x.InvocationId == "invoke-stop-2" &&
+            !x.Success &&
+            x.Error.Contains("manual", StringComparison.Ordinal));
+        harness.Published.Should().ContainSingle();
+        harness.Runtime.Unlinked.Should().BeEmpty();
+        harness.Runtime.Destroyed.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CleanupPendingInvocationsForRunAsync_ShouldPersistCompletions_AndCleanupOnlyNonSingletonChildren()
     {
         var harness = CreateHarness();

@@ -79,6 +79,15 @@ message ServiceRevisionEntryReadModel {
   google.protobuf.Timestamp published_at_utc_value = 8;
   google.protobuf.Timestamp retired_at_utc_value = 9;
   repeated ServiceCatalogEndpointReadModel endpoint_entries = 10;
+  string static_actor_type_name = 11;
+  string static_preferred_actor_id = 12;
+  string scripting_script_id = 13;
+  string scripting_revision = 14;
+  string scripting_definition_actor_id = 15;
+  string scripting_source_hash = 16;
+  string workflow_name = 17;
+  string workflow_definition_actor_id = 18;
+  int32 workflow_inline_workflow_count = 19;
 }
 
 // --- ServiceRolloutReadModel ---

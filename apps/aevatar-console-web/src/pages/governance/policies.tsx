@@ -1,27 +1,44 @@
-import { PageContainer, ProTable } from "@ant-design/pro-components";
-import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
-import { Alert, Col, Row } from "antd";
-import React, { useMemo, useState } from "react";
-import { governanceApi } from "@/shared/api/governanceApi";
-import { servicesApi } from "@/shared/api/servicesApi";
-import type { ServicePolicySnapshot } from "@/shared/models/governance";
-import { compactTableCardProps } from "@/shared/ui/proComponents";
-import { policyColumns } from "./components/columns";
-import GovernanceQueryCard from "./components/GovernanceQueryCard";
+import { PageContainer, ProCard, ProTable } from '@ant-design/pro-components';
+import { useQuery } from '@tanstack/react-query';
+import { Col, Row } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { governanceApi } from '@/shared/api/governanceApi';
+import { servicesApi } from '@/shared/api/servicesApi';
+import { history } from '@/shared/navigation/history';
+import type { ServicePolicySnapshot } from '@/shared/models/governance';
 import {
+  cardStackStyle,
+  compactTableCardProps,
+  moduleCardProps,
+} from '@/shared/ui/proComponents';
+import { policyColumns } from './components/columns';
+import GovernanceQueryCard from './components/GovernanceQueryCard';
+import {
+  formatGovernanceTimestamp,
+  GovernanceSelectionNotice,
+  GovernanceSummaryPanel,
+  type GovernanceSummaryMetric,
+} from './components/GovernanceResultPanels';
+import {
+  buildGovernanceServiceOptions,
   buildGovernanceHref,
+  hasGovernanceScope,
   normalizeGovernanceDraft,
   normalizeGovernanceQuery,
   readGovernanceDraft,
   type GovernanceDraft,
-} from "./components/governanceQuery";
+} from './components/governanceQuery';
 
 const initialDraft = readGovernanceDraft();
 
 const GovernancePoliciesPage: React.FC = () => {
   const [draft, setDraft] = useState<GovernanceDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<GovernanceDraft>(initialDraft);
+  const serviceQuery = useMemo(() => normalizeGovernanceQuery(draft), [draft]);
+  const serviceSearchEnabled = useMemo(
+    () => hasGovernanceScope(draft),
+    [draft]
+  );
 
   const query = useMemo(
     () => normalizeGovernanceQuery(activeDraft),
@@ -29,8 +46,9 @@ const GovernancePoliciesPage: React.FC = () => {
   );
 
   const servicesQuery = useQuery({
-    queryKey: ["governance", "policies", "services", query],
-    queryFn: () => servicesApi.listServices({ ...query, take: 200 }),
+    queryKey: ["governance", "policies", "services", serviceQuery],
+    enabled: serviceSearchEnabled,
+    queryFn: () => servicesApi.listServices({ ...serviceQuery, take: 200 }),
   });
   const policiesQuery = useQuery({
     queryKey: ["governance", "policies", query, activeDraft.serviceId],
@@ -39,20 +57,43 @@ const GovernancePoliciesPage: React.FC = () => {
   });
 
   const serviceOptions = useMemo(
-    () =>
-      (servicesQuery.data ?? []).map((item) => ({
-        label: item.displayName
-          ? `${item.displayName} (${item.serviceId})`
-          : item.serviceId,
-        value: item.serviceId,
-      })),
+    () => buildGovernanceServiceOptions(servicesQuery.data ?? []),
     [servicesQuery.data]
+  );
+
+  const policyCatalog = policiesQuery.data;
+  const policyMetrics = useMemo<GovernanceSummaryMetric[]>(
+    () => [
+      {
+        label: 'Policies',
+        value: String(policyCatalog?.policies.length ?? 0),
+      },
+      {
+        label: 'Activation checks',
+        value: String(
+          policyCatalog?.policies.filter(
+            (policy) => policy.activationRequiredBindingIds.length > 0,
+          ).length ?? 0,
+        ),
+        tone: 'warning',
+      },
+      {
+        label: 'Caller restrictions',
+        value: String(
+          policyCatalog?.policies.filter(
+            (policy) => policy.invokeAllowedCallerServiceKeys.length > 0,
+          ).length ?? 0,
+        ),
+        tone: 'success',
+      },
+    ],
+    [policyCatalog],
   );
 
   return (
     <PageContainer
-      title="Governance Policies"
-      content="Inspect caller policy, activation requirements, and deployment requirements for a single service."
+      title="Platform Governance Policies"
+      content="Inspect raw caller policy, activation requirements, and deployment requirements for one platform service identity."
       onBack={() =>
         history.push(buildGovernanceHref("/governance", activeDraft))
       }
@@ -62,6 +103,7 @@ const GovernancePoliciesPage: React.FC = () => {
           <GovernanceQueryCard
             draft={draft}
             serviceOptions={serviceOptions}
+            serviceSearchEnabled={serviceSearchEnabled}
             onChange={setDraft}
             onLoad={() => {
               const nextActiveDraft = normalizeGovernanceDraft(draft);
@@ -81,21 +123,40 @@ const GovernancePoliciesPage: React.FC = () => {
         </Col>
         <Col xs={24}>
           {activeDraft.serviceId.trim() ? (
-            <ProTable<ServicePolicySnapshot>
-              columns={policyColumns}
-              dataSource={policiesQuery.data?.policies ?? []}
-              loading={policiesQuery.isLoading}
-              rowKey="policyId"
-              search={false}
-              pagination={false}
-              cardProps={compactTableCardProps}
-              toolBarRender={false}
-            />
+            <div style={cardStackStyle}>
+              <GovernanceSummaryPanel
+                title="Policy catalog"
+                description="Review activation requirements, caller allowlists, and deployment gates for the selected platform service."
+                draft={activeDraft}
+                extraFields={[
+                  {
+                    label: 'Catalog updated',
+                    value: formatGovernanceTimestamp(policyCatalog?.updatedAt),
+                  },
+                ]}
+                metrics={policyMetrics}
+                status={{
+                  color: policiesQuery.isLoading ? 'processing' : 'success',
+                  label: policiesQuery.isLoading ? 'Loading' : 'Loaded',
+                }}
+              />
+              <ProCard title="Policies" {...moduleCardProps}>
+                <ProTable<ServicePolicySnapshot>
+                  columns={policyColumns}
+                  dataSource={policyCatalog?.policies ?? []}
+                  loading={policiesQuery.isLoading}
+                  rowKey="policyId"
+                  search={false}
+                  pagination={false}
+                  cardProps={compactTableCardProps}
+                  toolBarRender={false}
+                />
+              </ProCard>
+            </div>
           ) : (
-            <Alert
-              showIcon
-              type="info"
-              title="Select a service to inspect its policy catalog."
+            <GovernanceSelectionNotice
+              title="Select a platform service"
+              description="Load a service identity to inspect its raw policy catalog and activation requirements."
             />
           )}
         </Col>

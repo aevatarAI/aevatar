@@ -20,6 +20,7 @@ static class ProviderProfiles
         new ProviderProfile("alibaba", "Alibaba (Qwen)", "regional", "Qwen series via DashScope", LLMProviderKind.OpenAiCompatible, "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
         new ProviderProfile("moonshot", "Moonshot AI", "regional", "Kimi series (China)", LLMProviderKind.OpenAiCompatible, "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
         new ProviderProfile("zhipu", "Zhipu AI", "regional", "GLM-4 series (China)", LLMProviderKind.OpenAiCompatible, "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        new ProviderProfile("nyxid", "NyxID Gateway", "identity", "Use LLM providers connected in NyxID through its OpenAI-compatible gateway", LLMProviderKind.NyxId, "", "gpt-4o-mini"),
         new ProviderProfile("ollama", "Ollama", "local", "Local models (llama3, qwen, etc.)", LLMProviderKind.OpenAiCompatible, "http://localhost:11434/v1", "llama3.2"),
         new ProviderProfile("lmstudio", "LM Studio", "local", "Local GUI with OpenAI API", LLMProviderKind.OpenAiCompatible, "http://localhost:1234/v1", ""),
     ];

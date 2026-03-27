@@ -28,10 +28,20 @@ export default [
     component: "./overview",
   },
   {
+    path: "/studio",
+    name: "Studio",
+    icon: "project",
+    component: "./studio",
+  },
+  {
     path: "/scopes",
     name: "Scopes",
     icon: "cluster",
-    redirect: "/scopes/workflows",
+    redirect: "/scopes/overview",
+  },
+  {
+    path: "/scopes/overview",
+    component: "./scopes/overview",
   },
   {
     path: "/scopes/workflows",
@@ -42,8 +52,12 @@ export default [
     component: "./scopes/scripts",
   },
   {
+    path: "/scopes/invoke",
+    component: "./scopes/invoke",
+  },
+  {
     path: "/services",
-    name: "Services",
+    name: "Platform Services",
     icon: "api",
     component: "./services",
   },
@@ -53,7 +67,7 @@ export default [
   },
   {
     path: "/governance",
-    name: "Governance",
+    name: "Platform Governance",
     icon: "safetyCertificate",
     redirect: "/governance/bindings",
   },
@@ -75,53 +89,56 @@ export default [
   },
   {
     path: "/workflows",
-    name: "Runtime Workflows",
-    icon: "branches",
-    component: "./workflows",
-  },
-  {
-    path: "/studio",
-    name: "Studio",
-    icon: "project",
-    component: "./studio",
+    redirect: "/runtime/workflows",
   },
   {
     path: "/primitives",
-    name: "Runtime Primitives",
-    icon: "appstore",
-    component: "./primitives",
+    redirect: "/runtime/primitives",
   },
   {
     path: "/runs",
-    name: "Runtime Runs",
-    icon: "playSquare",
-    component: "./runs",
+    redirect: "/runtime/runs",
   },
   {
     path: "/actors",
-    name: "Runtime Explorer",
-    icon: "apartment",
-    component: "./actors",
+    redirect: "/runtime/explorer",
   },
   {
-    path: "/observability",
-    name: "Observability",
-    icon: "eye",
-    component: "./observability",
+    name: "Runtime",
+    icon: "deploymentUnit",
+    path: "/runtime",
+    routes: [
+      {
+        path: "/runtime",
+        redirect: "/runtime/workflows",
+      },
+      {
+        path: "workflows",
+        name: "Workflows",
+        component: "./workflows",
+      },
+      {
+        path: "primitives",
+        name: "Primitives",
+        component: "./primitives",
+      },
+      {
+        path: "runs",
+        name: "Runs",
+        component: "./runs",
+      },
+      {
+        path: "explorer",
+        name: "Explorer",
+        component: "./actors",
+      },
+    ],
   },
   {
     path: "/settings",
     name: "Settings",
     icon: "setting",
-    redirect: "/settings/console",
-  },
-  {
-    path: "/settings/console",
-    component: "./settings/console",
-  },
-  {
-    path: "/settings/runtime",
-    component: "./settings/runtime",
+    component: "./settings/account",
   },
   {
     path: "/",

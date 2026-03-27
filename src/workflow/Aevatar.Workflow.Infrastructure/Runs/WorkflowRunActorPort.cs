@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Workflow.Core.Validation;
@@ -17,6 +18,8 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
     private readonly IWorkflowActorBindingReader _bindingReader;
+    private readonly IWorkflowBindingProjectionActivationPort _bindingProjectionActivationPort;
+    private readonly IWorkflowExecutionMaterializationActivationPort _materializationActivationPort;
     private readonly ISet<string> _knownStepTypes;
     private readonly WorkflowParser _workflowParser = new();
 
@@ -24,11 +27,15 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         IActorRuntime runtime,
         IActorDispatchPort dispatchPort,
         IWorkflowActorBindingReader bindingReader,
+        IWorkflowBindingProjectionActivationPort bindingProjectionActivationPort,
+        IWorkflowExecutionMaterializationActivationPort materializationActivationPort,
         IEnumerable<IWorkflowModulePack> modulePacks)
     {
         _runtime = runtime;
         _dispatchPort = dispatchPort;
         _bindingReader = bindingReader;
+        _bindingProjectionActivationPort = bindingProjectionActivationPort;
+        _materializationActivationPort = materializationActivationPort;
         var packs = modulePacks?.ToList()
             ?? throw new ArgumentNullException(nameof(modulePacks));
         if (packs.Count == 0)
@@ -65,6 +72,8 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             createdActorIds.Add(runActor.Id);
             if (!string.IsNullOrWhiteSpace(definitionResolution.ActorId))
                 await _runtime.LinkAsync(definitionResolution.ActorId, runActor.Id, ct);
+            await EnsureBindingProjectionAsync(runActor.Id, ct);
+            await EnsureExecutionMaterializationAsync(runActor.Id, ct);
 
             await _dispatchPort.DispatchAsync(
                 runActor.Id,
@@ -97,7 +106,7 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         return _runtime.DestroyAsync(actorId, ct);
     }
 
-    public Task BindWorkflowDefinitionAsync(
+    public async Task BindWorkflowDefinitionAsync(
         IActor actor,
         string workflowYaml,
         string workflowName,
@@ -106,8 +115,9 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(actor);
+        await EnsureBindingProjectionAsync(actor.Id, ct);
         var envelope = CreateWorkflowDefinitionBindEnvelope(workflowYaml, workflowName, inlineWorkflowYamls, scopeId);
-        return _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
+        await _dispatchPort.DispatchAsync(actor.Id, envelope, ct);
     }
 
     public Task MarkStoppedAsync(
@@ -278,6 +288,24 @@ internal sealed class WorkflowRunActorPort : IWorkflowRunActorPort
             {
                 // Best effort rollback path.
             }
+        }
+    }
+
+    private async Task EnsureBindingProjectionAsync(string actorId, CancellationToken ct)
+    {
+        if (!await _bindingProjectionActivationPort.ActivateAsync(actorId, ct))
+        {
+            throw new InvalidOperationException(
+                $"Workflow binding projection is disabled for actor '{actorId}'.");
+        }
+    }
+
+    private async Task EnsureExecutionMaterializationAsync(string actorId, CancellationToken ct)
+    {
+        if (!await _materializationActivationPort.ActivateAsync(actorId, ct))
+        {
+            throw new InvalidOperationException(
+                $"Workflow execution materialization is disabled for actor '{actorId}'.");
         }
     }
 

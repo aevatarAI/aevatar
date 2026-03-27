@@ -8,7 +8,7 @@ internal static class ChatCommand
 {
     public static Command Create()
     {
-        var command = new Command("chat", "Open app UI and send a chat prompt through /api/chat.");
+        var command = new Command("chat", "Open app UI and send a chat prompt through the registered workflow service API.");
         var messageArgument = new Argument<string?>("message", "Prompt text to send in the app UI.");
         var portOption = new Option<int>("--port", () => 6688, "App port for local UI and health check.");
         var urlOption = new Option<string?>("--url", "Override workflow API base URL for this invocation.");
@@ -69,7 +69,7 @@ internal static class ChatCommand
     private static Command CreateSetUrlCommand()
     {
         var command = new Command("set-url", "Persist chat API base URL.");
-        var urlArgument = new Argument<string>("url", "Absolute API base URL, e.g. http://localhost:5000");
+        var urlArgument = new Argument<string>("url", "Absolute API base URL, e.g. http://localhost:5100");
         command.AddArgument(urlArgument);
         command.SetHandler((string url) => ChatCommandHandler.SetApiBaseUrl(url), urlArgument);
         return command;

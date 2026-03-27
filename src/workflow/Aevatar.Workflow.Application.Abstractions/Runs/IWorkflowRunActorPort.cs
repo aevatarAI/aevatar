@@ -42,7 +42,11 @@ public sealed record WorkflowActorBinding(
     string WorkflowName,
     string WorkflowYaml,
     IReadOnlyDictionary<string, string> InlineWorkflowYamls,
-    string ScopeId = "")
+    string ScopeId = "",
+    long SourceVersion = 0,
+    string SourceEventId = "",
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? UpdatedAt = null)
 {
     public static WorkflowActorBinding Unsupported(string actorId) =>
         new(
@@ -69,12 +73,32 @@ public sealed record WorkflowActorBinding(
                 : string.Empty;
 }
 
+public sealed record WorkflowRunBindingQuery(
+    string ScopeId,
+    IReadOnlyList<string> DefinitionActorIds,
+    int Take = 50);
+
 /// <summary>
 /// Narrow read contract for resolving workflow actor bindings without exposing raw actor state.
 /// </summary>
 public interface IWorkflowActorBindingReader
 {
     Task<WorkflowActorBinding?> GetAsync(string actorId, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Narrow read contract for resolving workflow run bindings by stable run id.
+/// </summary>
+public interface IWorkflowRunBindingReader
+{
+    Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
+        string runId,
+        int take = 20,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
+        WorkflowRunBindingQuery query,
+        CancellationToken ct = default);
 }
 
 /// <summary>

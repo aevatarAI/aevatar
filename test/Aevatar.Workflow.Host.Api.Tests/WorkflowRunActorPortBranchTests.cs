@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Abstractions.Execution;
+using Aevatar.Workflow.Application.Abstractions.Projections;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Core;
 using Aevatar.Workflow.Core.Composition;
@@ -266,6 +267,36 @@ public sealed class WorkflowRunActorPortBranchTests
     }
 
     [Fact]
+    public async Task ParseWorkflowYamlAsync_ShouldAcceptRepositoryWorkflowSamples()
+    {
+        var port = CreatePort(new RecordingActorRuntime());
+        var repositoryRoot = ResolveRepositoryRoot();
+        var workflowFiles = Directory
+            .EnumerateFiles(
+                Path.Combine(repositoryRoot, "workflows"),
+                "*.y*ml",
+                SearchOption.AllDirectories)
+            .OrderBy(static path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        workflowFiles.Should().NotBeEmpty();
+
+        var failures = new List<string>();
+        foreach (var workflowFile in workflowFiles)
+        {
+            var yaml = await File.ReadAllTextAsync(workflowFile);
+            var result = await port.ParseWorkflowYamlAsync(yaml, CancellationToken.None);
+            if (!result.Succeeded)
+            {
+                failures.Add(
+                    $"{Path.GetRelativePath(repositoryRoot, workflowFile)} => {result.Error}");
+            }
+        }
+
+        failures.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CreateRunAsync_WhenInlineDefinitionsDiffer_ShouldRebindExistingDefinitionActor()
     {
         var runtime = new RecordingActorRuntime();
@@ -315,7 +346,8 @@ public sealed class WorkflowRunActorPortBranchTests
         var runtime = new RecordingActorRuntime();
         var actor = new RecordingActor("definition-inline-bind", new WorkflowGAgent());
         runtime.StoredActors[actor.Id] = actor;
-        var port = CreatePort(runtime);
+        var bindingProjectionPort = new RecordingWorkflowBindingProjectionActivationPort();
+        var port = CreatePort(runtime, bindingProjectionPort: bindingProjectionPort);
 
         await port.BindWorkflowDefinitionAsync(
             actor,
@@ -332,6 +364,64 @@ public sealed class WorkflowRunActorPortBranchTests
         var bind = actor.LastHandledEnvelope.Payload.Unpack<BindWorkflowDefinitionEvent>();
         bind.WorkflowName.Should().Be("direct");
         bind.InlineWorkflowYamls.Should().ContainKey("child");
+        bindingProjectionPort.ActorIds.Should().ContainSingle(actor.Id);
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_ShouldActivateBindingAndExecutionProjections_BeforeDispatchingRunBinding()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-projection"] = new RecordingActor("definition-projection", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection", new StubAgent("run-projection")));
+        var bindingProjectionPort = new RecordingWorkflowBindingProjectionActivationPort();
+        var executionMaterializationPort = new RecordingWorkflowExecutionMaterializationActivationPort();
+        var port = CreatePort(
+            runtime,
+            bindingProjectionPort: bindingProjectionPort,
+            executionMaterializationPort: executionMaterializationPort);
+
+        await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-projection",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        bindingProjectionPort.ActorIds.Should().Contain("run-projection");
+        executionMaterializationPort.ActorIds.Should().ContainSingle("run-projection");
+    }
+
+    [Fact]
+    public async Task CreateRunAsync_ShouldFailFast_WhenExecutionMaterializationCannotActivate()
+    {
+        var runtime = new RecordingActorRuntime();
+        var definitionAgent = new WorkflowGAgent();
+        definitionAgent.State.WorkflowName = "direct";
+        definitionAgent.State.WorkflowYaml = "name: direct\nroles: []\nsteps: []\n";
+        runtime.StoredActors["definition-projection-fail"] = new RecordingActor("definition-projection-fail", definitionAgent);
+        runtime.ActorsToCreate.Enqueue(new RecordingActor("run-projection-fail", new StubAgent("run-projection-fail")));
+        var port = CreatePort(
+            runtime,
+            executionMaterializationPort: new RecordingWorkflowExecutionMaterializationActivationPort
+            {
+                ActivateResult = false,
+            });
+
+        var act = async () => await port.CreateRunAsync(
+            new WorkflowDefinitionBinding(
+                "definition-projection-fail",
+                "direct",
+                "name: direct\nroles: []\nsteps: []\n",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Workflow execution materialization is disabled*");
+        runtime.Destroyed.Should().Equal("run-projection-fail");
     }
 
     [Fact]
@@ -477,8 +567,30 @@ public sealed class WorkflowRunActorPortBranchTests
 
     private static WorkflowRunActorPort CreatePort(
         RecordingActorRuntime runtime,
-        IWorkflowActorBindingReader? bindingReader = null) =>
-        new(runtime, runtime, bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime), [new WorkflowCoreModulePack()]);
+        IWorkflowActorBindingReader? bindingReader = null,
+        IWorkflowBindingProjectionActivationPort? bindingProjectionPort = null,
+        IWorkflowExecutionMaterializationActivationPort? executionMaterializationPort = null) =>
+        new(
+            runtime,
+            runtime,
+            bindingReader ?? new RuntimeBackedWorkflowActorBindingReader(runtime),
+            bindingProjectionPort ?? new RecordingWorkflowBindingProjectionActivationPort(),
+            executionMaterializationPort ?? new RecordingWorkflowExecutionMaterializationActivationPort(),
+            [new WorkflowCoreModulePack()]);
+
+    private static string ResolveRepositoryRoot()
+    {
+        var current = AppContext.BaseDirectory;
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            if (File.Exists(Path.Combine(current, "aevatar.slnx")))
+                return current;
+
+            current = Path.GetDirectoryName(current) ?? string.Empty;
+        }
+
+        throw new InvalidOperationException("Could not resolve repository root.");
+    }
 
     private sealed class RecordingActorRuntime : IActorRuntime, IActorDispatchPort
     {
@@ -662,6 +774,32 @@ public sealed class WorkflowRunActorPortBranchTests
     private sealed class FakeRoleAgentTypeResolver : IRoleAgentTypeResolver
     {
         public Type ResolveRoleAgentType() => typeof(StubAgent);
+    }
+
+    private sealed class RecordingWorkflowBindingProjectionActivationPort : IWorkflowBindingProjectionActivationPort
+    {
+        public List<string> ActorIds { get; } = [];
+        public bool ActivateResult { get; set; } = true;
+
+        public Task<bool> ActivateAsync(string rootActorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ActorIds.Add(rootActorId);
+            return Task.FromResult(ActivateResult);
+        }
+    }
+
+    private sealed class RecordingWorkflowExecutionMaterializationActivationPort : IWorkflowExecutionMaterializationActivationPort
+    {
+        public List<string> ActorIds { get; } = [];
+        public bool ActivateResult { get; set; } = true;
+
+        public Task<bool> ActivateAsync(string rootActorId, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            ActorIds.Add(rootActorId);
+            return Task.FromResult(ActivateResult);
+        }
     }
 
     private sealed class FakeStepExecutorFactory : IEventModuleFactory<IWorkflowExecutionContext>

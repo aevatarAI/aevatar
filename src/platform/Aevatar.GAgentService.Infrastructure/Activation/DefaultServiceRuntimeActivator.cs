@@ -39,7 +39,11 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             ServiceDeploymentPlan.PlanSpecOneofCase.StaticPlan =>
                 await ActivateStaticAsync(request.Artifact.DeploymentPlan.StaticPlan, deploymentId, ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.ScriptingPlan =>
-                await ActivateScriptingAsync(request.Artifact.DeploymentPlan.ScriptingPlan, deploymentId, ct),
+                await ActivateScriptingAsync(
+                    request.Artifact.DeploymentPlan.ScriptingPlan,
+                    deploymentId,
+                    request.Identity?.TenantId,
+                    ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan =>
                 await ActivateWorkflowAsync(request.Artifact.DeploymentPlan.WorkflowPlan, deploymentId, ct),
             _ => throw new InvalidOperationException("Unsupported deployment plan."),
@@ -78,6 +82,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     private async Task<ServiceRuntimeActivationResult> ActivateScriptingAsync(
         ScriptingServiceDeploymentPlan plan,
         string deploymentId,
+        string? scopeId,
         CancellationToken ct)
     {
         var definitionSnapshot = await _scriptDefinitionSnapshotPort.GetRequiredAsync(
@@ -90,6 +95,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             plan.Revision,
             runtimeActorId,
             definitionSnapshot,
+            scopeId,
             ct);
         return new ServiceRuntimeActivationResult(deploymentId, actorId, "active");
     }

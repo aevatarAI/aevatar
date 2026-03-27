@@ -30,9 +30,9 @@ public sealed class ScopeWorkflowQueryApplicationService : IScopeWorkflowQueryPo
     {
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
         var services = await _serviceLifecycleQueryPort.ListServicesAsync(
-            _options.TenantId,
-            _options.AppId,
-            _options.BuildNamespace(normalizedScopeId),
+            normalizedScopeId,
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(_options.ServiceAppId, nameof(_options.ServiceAppId)),
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(_options.ServiceNamespace, nameof(_options.ServiceNamespace)),
             _options.ListTake,
             ct);
 

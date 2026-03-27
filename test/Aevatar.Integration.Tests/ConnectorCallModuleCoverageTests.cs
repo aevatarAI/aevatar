@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
@@ -19,7 +20,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenNonConnectorStep_ShouldNoop()
     {
-        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -36,7 +37,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenMissingConnectorParameter_ShouldFail()
     {
-        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -55,7 +56,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenConnectorMissingAndOptionalYes_ShouldSkip()
     {
-        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -85,7 +86,7 @@ public sealed class ConnectorCallModuleCoverageTests
         var connector = new ThrowThenSuccessConnector("retryable");
         registry.Register(connector);
 
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -119,7 +120,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         registry.Register(new DelayConnector("slow"));
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -150,7 +151,7 @@ public sealed class ConnectorCallModuleCoverageTests
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure");
         registry.Register(connector);
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
         var services = new ServiceCollection().BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
@@ -199,7 +200,7 @@ public sealed class ConnectorCallModuleCoverageTests
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure-json");
         registry.Register(connector);
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
         var services = new ServiceCollection().BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);

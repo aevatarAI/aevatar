@@ -38,6 +38,24 @@ public sealed class ServiceServingSetManagerGAgent : GAgentBase<ServiceServingSe
         });
     }
 
+    [EventHandler]
+    public async Task HandleReplaceResolvedAsync(ReplaceResolvedServiceServingTargetsCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        EnsureIdentity(command.Identity, allowInitialize: true);
+        ValidateTargets(command.Targets);
+
+        await PersistDomainEventAsync(new ServiceServingSetUpdatedEvent
+        {
+            Identity = command.Identity?.Clone(),
+            Generation = State.Generation + 1,
+            Targets = { command.Targets.Select(CloneTarget) },
+            RolloutId = command.RolloutId ?? string.Empty,
+            Reason = command.Reason ?? string.Empty,
+            UpdatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+        });
+    }
+
     protected override ServiceServingSetState TransitionState(ServiceServingSetState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)

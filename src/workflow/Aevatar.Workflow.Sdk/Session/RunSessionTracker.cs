@@ -15,12 +15,10 @@ public sealed record RunSessionSnapshot
     public string? LastSignalName { get; init; }
 
     public bool CanResume =>
-        !string.IsNullOrWhiteSpace(ActorId) &&
         !string.IsNullOrWhiteSpace(RunId) &&
         !string.IsNullOrWhiteSpace(StepId);
 
     public bool CanSignal =>
-        !string.IsNullOrWhiteSpace(ActorId) &&
         !string.IsNullOrWhiteSpace(RunId) &&
         !string.IsNullOrWhiteSpace(LastSignalName);
 }
@@ -73,15 +71,21 @@ public sealed class RunSessionTracker
     }
 
     public WorkflowResumeRequest CreateResumeRequest(
+        string scopeId,
         bool approved,
         string? userInput = null,
         IDictionary<string, string>? metadata = null,
-        string? commandId = null)
+        string? commandId = null,
+        string? serviceId = null)
     {
         EnsureResumeContext();
+        EnsureNotBlank(scopeId, "scopeId");
+        var resolvedServiceId = ResolveServiceId(serviceId);
         return new WorkflowResumeRequest
         {
-            ActorId = _actorId!,
+            ScopeId = scopeId.Trim(),
+            ServiceId = resolvedServiceId,
+            ActorId = _actorId,
             RunId = _runId!,
             StepId = _stepId!,
             Approved = approved,
@@ -92,25 +96,30 @@ public sealed class RunSessionTracker
     }
 
     public WorkflowSignalRequest CreateSignalRequest(
+        string scopeId,
         string? signalName = null,
         string? payload = null,
         string? commandId = null,
-        string? stepId = null)
+        string? stepId = null,
+        string? serviceId = null)
     {
-        EnsureNotBlank(_actorId, "actorId");
+        EnsureNotBlank(scopeId, "scopeId");
         EnsureNotBlank(_runId, "runId");
 
         var resolvedSignalName = string.IsNullOrWhiteSpace(signalName)
             ? _lastSignalName
             : signalName.Trim();
         EnsureNotBlank(resolvedSignalName, "signalName");
+        var resolvedServiceId = ResolveServiceId(serviceId);
         var resolvedStepId = string.IsNullOrWhiteSpace(stepId)
             ? _stepId
             : stepId.Trim();
 
         return new WorkflowSignalRequest
         {
-            ActorId = _actorId!,
+            ScopeId = scopeId.Trim(),
+            ServiceId = resolvedServiceId,
+            ActorId = _actorId,
             RunId = _runId!,
             SignalName = resolvedSignalName!,
             StepId = resolvedStepId,
@@ -170,9 +179,17 @@ public sealed class RunSessionTracker
 
     private void EnsureResumeContext()
     {
-        EnsureNotBlank(_actorId, "actorId");
         EnsureNotBlank(_runId, "runId");
         EnsureNotBlank(_stepId, "stepId");
+    }
+
+    private string ResolveServiceId(string? serviceId)
+    {
+        var resolvedServiceId = string.IsNullOrWhiteSpace(serviceId)
+            ? _workflowName
+            : serviceId.Trim();
+        EnsureNotBlank(resolvedServiceId, "serviceId");
+        return resolvedServiceId!;
     }
 
     private static void EnsureNotBlank(string? value, string field)

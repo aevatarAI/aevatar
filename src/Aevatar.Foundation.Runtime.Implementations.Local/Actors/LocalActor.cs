@@ -50,7 +50,16 @@ public sealed class LocalActor : IActor
             var publisherActorId = route?.PublisherActorId;
 
             if (route.IsObserverPublication())
+            {
+                if (!StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id) ||
+                    StreamForwardingRules.IsTransitOnlyForwarding(envelope))
+                {
+                    return;
+                }
+
+                await EnqueueAsync(envelope);
                 return;
+            }
 
             if (route.IsDirect())
             {
