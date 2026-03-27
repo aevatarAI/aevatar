@@ -3,7 +3,6 @@ namespace Aevatar.Studio.Application.Studio.Contracts;
 public sealed record StartExecutionRequest(
     string WorkflowName,
     string Prompt,
-    IReadOnlyList<string> WorkflowYamls,
     string? RuntimeBaseUrl = null,
     string? ScopeId = null,
     string? WorkflowId = null,

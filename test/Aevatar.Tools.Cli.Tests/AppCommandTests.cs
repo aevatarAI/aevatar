@@ -6,15 +6,12 @@ namespace Aevatar.Tools.Cli.Tests;
 public class AppCommandTests
 {
     [Fact]
-    public void Create_ShouldExposeRestartSubcommandWithPortAndApiOptions()
+    public void Create_ShouldExposeUrlAndNoBrowserOptionsOnRootCommand()
     {
         var appCommand = AppCommand.Create();
 
-        appCommand.Subcommands.Should().ContainSingle(command => command.Name == "restart");
-        var restart = appCommand.Subcommands.Single(command => command.Name == "restart");
-
-        restart.Options.Should().Contain(option => option.Aliases.Contains("--port"));
-        restart.Options.Should().Contain(option => option.Aliases.Contains("--no-browser"));
-        restart.Options.Should().Contain(option => option.Aliases.Contains("--api-base"));
+        appCommand.Subcommands.Should().BeEmpty();
+        appCommand.Options.Should().Contain(option => option.Aliases.Contains("--url"));
+        appCommand.Options.Should().Contain(option => option.Aliases.Contains("--no-browser"));
     }
 }

@@ -2,9 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Infrastructure.Storage;
 using Aevatar.Tools.Cli.Hosting;
-using Aevatar.Tools.Cli.Studio.Application.Abstractions;
-using Aevatar.Tools.Cli.Studio.Infrastructure.Storage;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
 

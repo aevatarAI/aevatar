@@ -1,4 +1,5 @@
-using Aevatar.Tools.Cli.Hosting;
+using Aevatar.Studio.Application.Scripts.Contracts;
+using Aevatar.Studio.Hosting.Endpoints;
 using FluentAssertions;
 
 namespace Aevatar.Tools.Cli.Tests;
@@ -8,7 +9,7 @@ public class AppStudioEndpointsTests
     [Fact]
     public void NormalizeStudioDocumentId_ShouldSlugifyReadableNames()
     {
-        var result = AppStudioEndpoints.NormalizeStudioDocumentId(
+        var result = StudioEndpoints.NormalizeStudioDocumentId(
             " Customer Support Workflow 2026 ",
             "workflow");
 
@@ -18,7 +19,7 @@ public class AppStudioEndpointsTests
     [Fact]
     public void NormalizeStudioDocumentId_WhenInputIsBlank_ShouldUseFallbackPrefix()
     {
-        var result = AppStudioEndpoints.NormalizeStudioDocumentId(
+        var result = StudioEndpoints.NormalizeStudioDocumentId(
             "   ",
             "script");
 

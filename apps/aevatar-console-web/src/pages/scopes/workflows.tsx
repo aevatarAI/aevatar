@@ -195,7 +195,7 @@ const ScopeWorkflowsPage: React.FC = () => {
     <PageContainer
       title="Scope Workflows"
       content="Inspect published workflow assets for a single scope. tenantId and appId stay platform-managed and hidden behind this view."
-      onBack={() => history.push(buildScopeHref("/scopes", activeDraft))}
+      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
     >
       <Row gutter={[16, 16]}>
         <Col xs={24}>

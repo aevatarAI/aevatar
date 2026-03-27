@@ -69,7 +69,7 @@ dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 Trigger request:
 
 ```bash
-curl -i -X POST "http://localhost:5000/api/chat" \
+curl -i -X POST "http://localhost:5100/api/chat" \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "hello",

@@ -441,7 +441,10 @@ Ask AI 入口是：
 
 发到：
 
-- `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+- 默认 app：
+  - `POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream`
+- 显式 app-aware：
+  - `POST /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}/runs:stream`
 
 请求体示意：
 
@@ -978,6 +981,8 @@ sequenceDiagram
 
     alt Published scope workflow
         ES->>RT: POST /api/scopes/{scopeId}/workflows/{workflowId}/runs:stream
+    else Published app-aware workflow
+        ES->>RT: POST /api/scopes/{scopeId}/apps/{appId}/workflows/{workflowId}/runs:stream
     else Draft inline workflow
         ES->>RT: POST /api/chat
     end

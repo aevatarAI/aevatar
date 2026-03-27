@@ -246,6 +246,34 @@ export const scriptsApi = {
     });
   },
 
+  runDraftScript(payload: {
+    scopeId: string;
+    scriptId?: string;
+    scriptRevision?: string;
+    source?: string;
+    input?: string;
+    definitionActorId?: string;
+    runtimeActorId?: string;
+    package?: ScriptPackage | null;
+  }): Promise<DraftRunResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(payload.scopeId)}/scripts/draft-run`,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          scriptId: payload.scriptId,
+          scriptRevision: payload.scriptRevision,
+          source: payload.source,
+          input: payload.input,
+          definitionActorId: payload.definitionActorId,
+          runtimeActorId: payload.runtimeActorId,
+          package: payload.package,
+        }),
+      },
+    );
+  },
+
   listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {
     return requestJson(`/api/app/scripts/runtimes?take=${take}`);
   },
@@ -277,22 +305,6 @@ export const scriptsApi = {
     return requestJson(
       `/api/app/scripts/evolutions/${encodeURIComponent(proposalId)}`,
     );
-  },
-
-  runDraftScript(payload: {
-    scriptId: string;
-    scriptRevision: string;
-    source?: string;
-    package?: ScriptPackage | null;
-    input?: string;
-    definitionActorId?: string;
-    runtimeActorId?: string;
-  }): Promise<DraftRunResult> {
-    return requestJson('/api/app/scripts/draft-run', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
   },
 
   async generateScript(

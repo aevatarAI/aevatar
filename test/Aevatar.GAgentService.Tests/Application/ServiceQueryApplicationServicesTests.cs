@@ -60,6 +60,121 @@ public sealed class ServiceQueryApplicationServicesTests
         catalogReader.ListCalls[0].Should().Be(("tenant", "app", "ns", 42));
     }
 
+    [Fact]
+    public async Task GetServiceAsync_ShouldReturnNull_WhenCatalogReaderReturnsNull()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var catalogReader = new RecordingCatalogReader();
+        var service = new ServiceLifecycleQueryApplicationService(
+            catalogReader,
+            new RecordingRevisionReader(),
+            new RecordingDeploymentReader());
+
+        var result = await service.GetServiceAsync(identity);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetServiceRevisionsAsync_ShouldReturnSnapshot_WhenReaderHasData()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var revisionReader = new ConfiguredRevisionReader
+        {
+            GetResult = new ServiceRevisionCatalogSnapshot(
+                "tenant:app:default:svc",
+                [
+                    new ServiceRevisionSnapshot(
+                        "r1",
+                        "Static",
+                        "Published",
+                        "abc123",
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow,
+                        null,
+                        DateTimeOffset.UtcNow,
+                        null),
+                ],
+                DateTimeOffset.UtcNow),
+        };
+        var service = new ServiceLifecycleQueryApplicationService(
+            new RecordingCatalogReader(),
+            revisionReader,
+            new RecordingDeploymentReader());
+
+        var result = await service.GetServiceRevisionsAsync(identity);
+
+        result.Should().NotBeNull();
+        result!.Revisions.Should().ContainSingle();
+        result.Revisions[0].RevisionId.Should().Be("r1");
+    }
+
+    [Fact]
+    public async Task GetServiceDeploymentsAsync_ShouldReturnSnapshot_WhenReaderHasData()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var deploymentReader = new ConfiguredDeploymentReader
+        {
+            GetResult = new ServiceDeploymentCatalogSnapshot(
+                "tenant:app:default:svc",
+                [
+                    new ServiceDeploymentSnapshot(
+                        "dep-1",
+                        "r1",
+                        "actor-1",
+                        "Active",
+                        DateTimeOffset.UtcNow,
+                        DateTimeOffset.UtcNow),
+                ],
+                DateTimeOffset.UtcNow),
+        };
+        var service = new ServiceLifecycleQueryApplicationService(
+            new RecordingCatalogReader(),
+            new RecordingRevisionReader(),
+            deploymentReader);
+
+        var result = await service.GetServiceDeploymentsAsync(identity);
+
+        result.Should().NotBeNull();
+        result!.Deployments.Should().ContainSingle();
+        result.Deployments[0].DeploymentId.Should().Be("dep-1");
+    }
+
+    [Fact]
+    public async Task ServingQueryService_ShouldReturnNull_WhenNoData()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var service = new ServiceServingQueryApplicationService(
+            new RecordingServingReader(),
+            new RecordingRolloutReader(),
+            new RecordingTrafficReader());
+
+        var servingSet = await service.GetServiceServingSetAsync(identity);
+        var rollout = await service.GetServiceRolloutAsync(identity);
+        var trafficView = await service.GetServiceTrafficViewAsync(identity);
+
+        servingSet.Should().BeNull();
+        rollout.Should().BeNull();
+        trafficView.Should().BeNull();
+    }
+
+    private sealed class ConfiguredRevisionReader : IServiceRevisionCatalogQueryReader
+    {
+        public ServiceRevisionCatalogSnapshot? GetResult { get; init; }
+
+        public Task<ServiceRevisionCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+    }
+
+    private sealed class ConfiguredDeploymentReader : IServiceDeploymentCatalogQueryReader
+    {
+        public ServiceDeploymentCatalogSnapshot? GetResult { get; init; }
+
+        public Task<ServiceDeploymentCatalogSnapshot?> GetAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult(GetResult);
+    }
+
     private sealed class RecordingCatalogReader : IServiceCatalogQueryReader
     {
         public List<ServiceIdentity> Identities { get; } = [];

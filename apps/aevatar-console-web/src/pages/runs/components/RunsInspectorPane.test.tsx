@@ -6,7 +6,7 @@ import type {
   HumanInputRecord,
   RunFocusRecord,
   RunSummaryRecord,
-  SelectedWorkflowRecord,
+  SelectedRouteRecord,
 } from "../runWorkbenchConfig";
 import RunsInspectorPane from "./RunsInspectorPane";
 
@@ -15,7 +15,7 @@ describe("RunsInspectorPane", () => {
     const onOpenInspector = jest.fn();
     const runFocus: RunFocusRecord = {
       alertType: "warning",
-      description: "Operator approval is required before the workflow can continue.",
+      description: "Operator approval is required before the run can continue.",
       label: "Awaiting approval on review-step",
       status: "human_approval",
       title: "Approval required",
@@ -25,6 +25,7 @@ describe("RunsInspectorPane", () => {
       actorId: "actor-1",
       commandId: "cmd-1",
       eventCount: 8,
+      endpointId: "chat",
       focusLabel: "Awaiting approval on review-step",
       focusStatus: "human_approval",
       lastEventAt: "2026-03-25 10:02:00",
@@ -32,7 +33,7 @@ describe("RunsInspectorPane", () => {
       runId: "run-1",
       status: "running",
       transport: "ws",
-      workflowName: "release_gate",
+      routeName: "release_gate",
     };
     const selectedTraceItem: RunEventRow = {
       agentId: "actor-1",
@@ -49,12 +50,12 @@ describe("RunsInspectorPane", () => {
       timelineLabel: "Step · review-step",
       timestamp: "2026-03-25 10:01:00",
     };
-    const selectedWorkflowRecord: SelectedWorkflowRecord = {
-      description: "A release workflow that pauses for explicit human approval.",
+    const selectedRouteRecord: SelectedRouteRecord = {
+      description: "A release bundle that pauses for explicit human approval.",
       groupLabel: "Release",
       llmStatus: "processing",
       sourceLabel: "Built-in",
-      workflowName: "release_gate",
+      routeName: "release_gate",
     };
     const actorSnapshot: WorkflowActorSnapshot = {
       actorId: "actor-1",
@@ -89,8 +90,8 @@ describe("RunsInspectorPane", () => {
         runFocus={runFocus}
         runSummaryRecord={runSummaryRecord}
         selectedTraceItem={selectedTraceItem}
-        selectedWorkflowPrimitives={["approval", "summary", "release"]}
-        selectedWorkflowRecord={selectedWorkflowRecord}
+        selectedRoutePrimitives={["approval", "summary", "release"]}
+        selectedRouteRecord={selectedRouteRecord}
       />
     );
 
@@ -99,7 +100,7 @@ describe("RunsInspectorPane", () => {
     expect(screen.getByText("Runtime sidecars")).toBeInTheDocument();
     expect(screen.getByText("Latest message")).toBeInTheDocument();
     expect(screen.getByText("Step · review-step")).toBeInTheDocument();
-    expect(screen.getByText("Workflow snapshot")).toBeInTheDocument();
+    expect(screen.getByText("Route snapshot")).toBeInTheDocument();
     expect(screen.getByText("Actor snapshot")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open inspector" }));

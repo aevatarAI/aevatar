@@ -6,17 +6,21 @@ namespace Aevatar.Workflow.Sdk.Contracts;
 public sealed record ChatRunRequest
 {
     public required string Prompt { get; init; }
+    public string? ScopeId { get; init; }
     public string? Workflow { get; init; }
     public string? AgentId { get; init; }
+    public string? SessionId { get; init; }
     public IReadOnlyList<string>? WorkflowYamls { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record WorkflowResumeRequest
 {
-    public required string ActorId { get; init; }
+    public required string ScopeId { get; init; }
+    public required string ServiceId { get; init; }
     public required string RunId { get; init; }
     public required string StepId { get; init; }
+    public string? ActorId { get; init; }
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
@@ -25,9 +29,11 @@ public sealed record WorkflowResumeRequest
 
 public sealed record WorkflowSignalRequest
 {
-    public required string ActorId { get; init; }
+    public required string ScopeId { get; init; }
+    public required string ServiceId { get; init; }
     public required string RunId { get; init; }
     public required string SignalName { get; init; }
+    public string? ActorId { get; init; }
     public string? StepId { get; init; }
     public string? CommandId { get; init; }
     public string? Payload { get; init; }

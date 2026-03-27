@@ -153,6 +153,160 @@ export interface StudioStartExecutionInput {
   readonly eventFormat?: string | null;
 }
 
+export type StudioScopeBindingImplementationKind =
+  | 'workflow'
+  | 'script'
+  | 'gagent'
+  | 'unknown';
+
+export type StudioScopeBindingTargetKind =
+  StudioScopeBindingImplementationKind;
+
+export function normalizeStudioScopeBindingImplementationKind(
+  value: string | number | null | undefined,
+): StudioScopeBindingImplementationKind {
+  if (typeof value === 'number') {
+    switch (value) {
+      case 1:
+        return 'workflow';
+      case 2:
+        return 'script';
+      case 3:
+        return 'gagent';
+      default:
+        return 'unknown';
+    }
+  }
+
+  const normalized = String(value || '').trim().toLowerCase();
+  switch (normalized) {
+    case 'workflow':
+      return 'workflow';
+    case 'script':
+    case 'scripting':
+      return 'script';
+    case 'gagent':
+      return 'gagent';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioScopeBindingImplementationKind(
+  value: StudioScopeBindingImplementationKind | string | null | undefined,
+): string {
+  switch (normalizeStudioScopeBindingImplementationKind(value)) {
+    case 'workflow':
+      return 'Workflow';
+    case 'script':
+      return 'Script';
+    case 'gagent':
+      return 'GAgent';
+    default:
+      return 'Unknown';
+  }
+}
+
+export interface StudioScopeBindingResult {
+  readonly scopeId: string;
+  readonly serviceId?: string;
+  readonly displayName: string;
+  readonly revisionId: string;
+  readonly implementationKind?: StudioScopeBindingImplementationKind;
+  readonly targetKind: StudioScopeBindingTargetKind;
+  readonly targetName: string;
+  readonly workflowName?: string;
+  readonly definitionActorIdPrefix?: string;
+  readonly expectedActorId?: string;
+  readonly workflow?: {
+    readonly workflowName: string;
+    readonly definitionActorIdPrefix: string;
+  } | null;
+  readonly script?: {
+    readonly scriptId: string;
+    readonly scriptRevision: string;
+    readonly definitionActorId: string;
+  } | null;
+  readonly gAgent?: {
+    readonly actorTypeName: string;
+    readonly preferredActorId: string;
+  } | null;
+}
+
+export interface StudioScopeBindingRevision {
+  readonly revisionId: string;
+  readonly implementationKind: StudioScopeBindingImplementationKind;
+  readonly status: string;
+  readonly artifactHash: string;
+  readonly failureReason: string;
+  readonly isDefaultServing: boolean;
+  readonly isActiveServing: boolean;
+  readonly isServingTarget: boolean;
+  readonly allocationWeight: number;
+  readonly servingState: string;
+  readonly deploymentId: string;
+  readonly primaryActorId: string;
+  readonly createdAt: string | null;
+  readonly preparedAt: string | null;
+  readonly publishedAt: string | null;
+  readonly retiredAt: string | null;
+}
+
+export interface StudioScopeBindingStatus {
+  readonly available: boolean;
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly displayName: string;
+  readonly serviceKey: string;
+  readonly defaultServingRevisionId: string;
+  readonly activeServingRevisionId: string;
+  readonly deploymentId: string;
+  readonly deploymentStatus: string;
+  readonly primaryActorId: string;
+  readonly updatedAt: string | null;
+  readonly revisions: readonly StudioScopeBindingRevision[];
+}
+
+export interface StudioScopeBindingActivationResult {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly displayName: string;
+  readonly revisionId: string;
+}
+
+export interface StudioScopeScriptBindingInput {
+  readonly scopeId: string;
+  readonly displayName?: string | null;
+  readonly scriptId: string;
+  readonly scriptRevision: string;
+  readonly revisionId?: string | null;
+}
+
+export type StudioScopeScriptBindingResult = StudioScopeBindingResult;
+export type StudioScopeScriptBindingStatus = StudioScopeBindingStatus;
+export type StudioScopeScriptBindingActivationResult =
+  StudioScopeBindingActivationResult;
+
+export interface StudioScopeGAgentEndpointInput {
+  readonly endpointId: string;
+  readonly displayName?: string | null;
+  readonly kind?: 'command' | 'chat' | null;
+  readonly requestTypeUrl?: string | null;
+  readonly responseTypeUrl?: string | null;
+  readonly description?: string | null;
+}
+
+export interface StudioScopeGAgentBindingInput {
+  readonly scopeId: string;
+  readonly displayName?: string | null;
+  readonly actorTypeName: string;
+  readonly preferredActorId?: string | null;
+  readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
+  readonly revisionId?: string | null;
+}
+
+export type StudioScopeGAgentBindingResult = StudioScopeBindingResult;
+
 export interface StudioHttpConnectorDefinition {
   readonly baseUrl: string;
   readonly allowedMethods: string[];

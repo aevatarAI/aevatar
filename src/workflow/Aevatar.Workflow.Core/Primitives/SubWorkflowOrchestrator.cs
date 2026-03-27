@@ -490,6 +490,38 @@ internal sealed class SubWorkflowOrchestrator
         return true;
     }
 
+    public Task<bool> TryHandleStoppedAsync(
+        WorkflowStoppedEvent stopped,
+        string? publisherActorId,
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(stopped);
+
+        return TryHandleStoppedChildAsync(
+            stopped.RunId,
+            stopped.Reason,
+            publisherActorId,
+            state,
+            ct);
+    }
+
+    public Task<bool> TryHandleRunStoppedAsync(
+        WorkflowRunStoppedEvent stopped,
+        string? publisherActorId,
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(stopped);
+
+        return TryHandleStoppedChildAsync(
+            stopped.RunId,
+            stopped.Reason,
+            publisherActorId,
+            state,
+            ct);
+    }
+
     public async Task CleanupPendingInvocationsForRunAsync(string runId, WorkflowRunState state, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -871,6 +903,74 @@ internal sealed class SubWorkflowOrchestrator
             Success = false,
             Error = error ?? "workflow_call invocation failed",
         }, TopologyAudience.Self, ct);
+    }
+
+    private async Task<bool> TryHandleStoppedChildAsync(
+        string? childRunId,
+        string? reason,
+        string? publisherActorId,
+        WorkflowRunState state,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        var normalizedChildRunId = childRunId?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedChildRunId))
+            return false;
+
+        if (!TryGetPendingInvocationByChildRunId(state, normalizedChildRunId, out var pending))
+            return false;
+
+        var expectedChildActorId = pending.ChildActorId?.Trim() ?? string.Empty;
+        var stoppedPublisherId = publisherActorId?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(expectedChildActorId) &&
+            !string.Equals(expectedChildActorId, stoppedPublisherId, StringComparison.Ordinal))
+        {
+            _loggerAccessor().LogWarning(
+                "Ignore workflow_call stop due to publisher mismatch. childRun={ChildRunId} expectedPublisher={ExpectedPublisherId} actualPublisher={ActualPublisherId}",
+                normalizedChildRunId,
+                expectedChildActorId,
+                stoppedPublisherId);
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(expectedChildActorId))
+        {
+            _loggerAccessor().LogWarning(
+                "workflow_call stop matched by child run only because child actor id is missing. childRun={ChildRunId} publisher={PublisherId}",
+                normalizedChildRunId,
+                stoppedPublisherId);
+        }
+
+        var stopError = string.IsNullOrWhiteSpace(reason)
+            ? "workflow_call child workflow stopped."
+            : $"workflow_call child workflow stopped: {reason.Trim()}";
+
+        await _persistDomainEventAsync(new SubWorkflowInvocationCompletedEvent
+        {
+            InvocationId = pending.InvocationId,
+            ChildRunId = normalizedChildRunId,
+            Success = false,
+            Error = stopError,
+        }, ct);
+
+        var parentCompleted = new StepCompletedEvent
+        {
+            StepId = pending.ParentStepId,
+            RunId = pending.ParentRunId,
+            Success = false,
+            Output = string.Empty,
+            Error = stopError,
+        };
+        parentCompleted.Annotations[WorkflowCallInvocationIdMetadataKey] = pending.InvocationId;
+        parentCompleted.Annotations[WorkflowCallWorkflowNameMetadataKey] = pending.WorkflowName;
+        parentCompleted.Annotations[WorkflowCallLifecycleMetadataKey] = WorkflowCallLifecycle.Normalize(pending.Lifecycle);
+        parentCompleted.Annotations[WorkflowCallChildActorIdMetadataKey] = pending.ChildActorId;
+        parentCompleted.Annotations[WorkflowCallChildRunIdMetadataKey] = normalizedChildRunId;
+
+        await _publishAsync(parentCompleted, TopologyAudience.Self, ct);
+        await TryFinalizeNonSingletonChildAsync(pending, ct);
+        return true;
     }
 
     private async Task TryFinalizeNonSingletonChildAsync(

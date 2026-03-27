@@ -1,8 +1,8 @@
 using System.Net;
 using System.Text;
-using Aevatar.Tools.Cli.Hosting;
-using Aevatar.Tools.Cli.Studio.Application.Abstractions;
-using Aevatar.Tools.Cli.Studio.Domain.Models;
+using Aevatar.Studio.Application;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Domain.Studio.Models;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 

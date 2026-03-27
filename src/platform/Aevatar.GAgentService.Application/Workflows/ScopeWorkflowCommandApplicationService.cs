@@ -37,7 +37,10 @@ public sealed class ScopeWorkflowCommandApplicationService : IScopeWorkflowComma
         var normalizedWorkflowId = ScopeWorkflowCapabilityConventions.NormalizeWorkflowId(request.WorkflowId);
         var workflowYaml = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.WorkflowYaml, nameof(request.WorkflowYaml));
         var identity = ScopeWorkflowCapabilityConventions.BuildIdentity(_options, normalizedScopeId, normalizedWorkflowId);
-        var definitionActorIdPrefix = _options.BuildDefinitionActorIdPrefix(normalizedScopeId, normalizedWorkflowId);
+        var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefinitionActorIdPrefix(
+            _options,
+            normalizedScopeId,
+            normalizedWorkflowId);
         var desiredDisplayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(request.DisplayName, normalizedWorkflowId);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
 

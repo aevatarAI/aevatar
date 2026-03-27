@@ -1032,6 +1032,49 @@ ol {
   background: #fff4f1;
 }
 
+.execution-run-card-actor {
+  min-width: 0;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #f1ece5;
+}
+
+.execution-run-card-actor-label,
+.execution-run-identity-label {
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.execution-run-card-actor-value,
+.execution-run-identity-value {
+  display: block;
+  margin-top: 6px;
+  color: #4b5563;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.execution-run-identity {
+  border: 1px solid #e8e4dd;
+  border-radius: 14px;
+  background: #fbfaf8;
+  padding: 12px 14px;
+}
+
+.execution-run-identity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .execution-log-card.tone-pending {
   border-color: rgba(47, 111, 236, 0.22);
   background: linear-gradient(
@@ -1048,6 +1091,20 @@ ol {
     rgba(18, 31, 54, 0.98) 0%,
     rgba(16, 28, 49, 0.98) 100%
   );
+}
+
+.studio-shell[data-color-mode='dark'] .execution-run-card-actor {
+  border-top-color: #223047;
+}
+
+.studio-shell[data-color-mode='dark'] .execution-run-card-actor-value,
+.studio-shell[data-color-mode='dark'] .execution-run-identity-value {
+  color: #cbd5e1;
+}
+
+.studio-shell[data-color-mode='dark'] .execution-run-identity {
+  border-color: #2a3a52;
+  background: #111b2d;
 }
 
 .execution-log-card-head {

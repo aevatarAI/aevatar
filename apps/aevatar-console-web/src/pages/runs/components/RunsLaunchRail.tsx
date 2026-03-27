@@ -7,8 +7,13 @@ import { buildRuntimeExplorerHref } from "@/shared/navigation/runtimeRoutes";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { cardStackStyle, embeddedPanelStyle, moduleCardProps, scrollPanelStyle } from "@/shared/ui/proComponents";
 import type { RunTransport } from "../runEventPresentation";
-import type { RecentRunTableRow, RunFormValues, RunPreset, SelectedWorkflowRecord } from "../runWorkbenchConfig";
-import { workbenchCardBodyStyle, workbenchCardStyle, workbenchScrollableBodyStyle } from "../runWorkbenchConfig";
+import type { RecentRunTableRow, RunFormValues, RunPreset, SelectedRouteRecord } from "../runWorkbenchConfig";
+import {
+  formatRunRouteLabel,
+  workbenchCardBodyStyle,
+  workbenchCardStyle,
+  workbenchScrollableBodyStyle,
+} from "../runWorkbenchConfig";
 
 type WorkflowOption = {
   label: string;
@@ -19,20 +24,24 @@ type RunsLaunchRailProps = {
   actorId?: string;
   catalogSearch: string;
   composerFormRef: React.RefObject<ProFormInstance<RunFormValues> | undefined>;
+  draftMode?: boolean;
+  activeEndpointId: string;
   initialFormValues: RunFormValues;
   recentRunRows: RecentRunTableRow[];
   selectedTransport: RunTransport;
-  selectedWorkflowDetailsPrimitives: string[];
-  selectedWorkflowRecord?: SelectedWorkflowRecord;
+  selectedRouteDetailsPrimitives: string[];
+  selectedRouteRecord?: SelectedRouteRecord;
   streaming: boolean;
+  submitPathLabel: string;
   transportOptions: Array<{ label: string; value: RunTransport }>;
   visiblePresets: RunPreset[];
   workflowCatalogLoading: boolean;
-  workflowOptions: WorkflowOption[];
+  routeOptions: WorkflowOption[];
   onAbortRun: () => void;
   onCatalogSearchChange: (value: string) => void;
   onClearRecentRuns: () => void;
-  onSelectWorkflowName: (value: string) => void;
+  onEndpointChange: (value: string) => void;
+  onSelectRouteName: (value: string) => void;
   onSubmitRun: (values: RunFormValues) => Promise<void>;
   onTransportChange: (value: RunTransport) => void;
   onUsePreset: (preset: RunPreset) => void;
@@ -128,16 +137,38 @@ const railDescriptionStyle: React.CSSProperties = {
   marginBottom: 0,
 };
 
-function renderWorkflowMiniCard(
-  selectedTransport: RunTransport,
-  selectedWorkflowDetailsPrimitives: string[],
-  selectedWorkflowRecord?: SelectedWorkflowRecord,
+function renderRouteMiniCard(
+  activeEndpointId: string,
+  selectedRouteDetailsPrimitives: string[],
+  selectedRouteRecord?: SelectedRouteRecord,
 ): React.ReactNode {
-  if (!selectedWorkflowRecord) {
+  if (activeEndpointId && activeEndpointId !== "chat" && !selectedRouteRecord) {
+    return (
+      <div style={embeddedPanelStyle}>
+        <Space wrap size={[6, 6]}>
+          <Tag color="geekblue">Command invoke</Tag>
+          <Tag>Scope binding</Tag>
+        </Space>
+        <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
+          {activeEndpointId}
+        </Typography.Text>
+        <Typography.Paragraph
+          style={{ margin: "6px 0 0" }}
+          type="secondary"
+        >
+          Invoke the selected endpoint with explicit protobuf bytes, or let the
+          workbench derive bytes only for StringValue and AppScriptCommand
+          payloads.
+        </Typography.Paragraph>
+      </div>
+    );
+  }
+
+  if (!selectedRouteRecord) {
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="Select a workflow to preview the target."
+        description="Select a route preview or endpoint to inspect the current route."
       />
     );
   }
@@ -145,33 +176,33 @@ function renderWorkflowMiniCard(
   return (
     <div style={embeddedPanelStyle}>
       <Space wrap size={[6, 6]}>
-        <Tag color={selectedTransport === "ws" ? "success" : "processing"}>
-          {selectedTransport === "ws" ? "WebSocket" : "SSE"}
+        <Tag color={activeEndpointId === "chat" ? "processing" : "geekblue"}>
+          {activeEndpointId === "chat" ? "Service SSE" : "Command invoke"}
         </Tag>
-        <Tag>{selectedWorkflowRecord.groupLabel}</Tag>
-        <Tag>{selectedWorkflowRecord.sourceLabel}</Tag>
-        <Tag color={selectedWorkflowRecord.llmStatus === "processing" ? "blue" : "success"}>
-          {selectedWorkflowRecord.llmStatus === "processing"
+        <Tag>{selectedRouteRecord.groupLabel}</Tag>
+        <Tag>{selectedRouteRecord.sourceLabel}</Tag>
+        <Tag color={selectedRouteRecord.llmStatus === "processing" ? "blue" : "success"}>
+          {selectedRouteRecord.llmStatus === "processing"
             ? "LLM required"
             : "LLM optional"}
         </Tag>
       </Space>
       <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
-        {selectedWorkflowRecord.workflowName}
+        {selectedRouteRecord.routeName}
       </Typography.Text>
       <Typography.Paragraph
         ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
         style={{ margin: "6px 0 0" }}
         type="secondary"
       >
-        {selectedWorkflowRecord.description || "No description provided."}
+        {selectedRouteRecord.description || "No description provided."}
       </Typography.Paragraph>
       <Space wrap size={[6, 6]}>
-        {selectedWorkflowDetailsPrimitives.slice(0, 3).map((primitive) => (
+        {selectedRouteDetailsPrimitives.slice(0, 3).map((primitive) => (
           <Tag key={primitive}>{primitive}</Tag>
         ))}
-        {selectedWorkflowDetailsPrimitives.length > 3 ? (
-          <Tag>+{selectedWorkflowDetailsPrimitives.length - 3} more</Tag>
+        {selectedRouteDetailsPrimitives.length > 3 ? (
+          <Tag>+{selectedRouteDetailsPrimitives.length - 3} more</Tag>
         ) : null}
       </Space>
     </div>
@@ -199,7 +230,7 @@ function renderRecentRunCards(
             <div style={railListHeaderStyle}>
               <div style={railListContentStyle}>
                 <Typography.Text strong style={railTitleStyle}>
-                  {record.workflowName}
+                  {formatRunRouteLabel(record.routeName, record.endpointId)}
                 </Typography.Text>
                 <div style={railMetaWrapStyle}>
                   <Tag
@@ -215,6 +246,7 @@ function renderRecentRunCards(
                   >
                     {record.statusValue}
                   </Tag>
+                  <Tag>{record.endpointId || "chat"}</Tag>
                   <Tag>{formatDateTime(record.recordedAt)}</Tag>
                   <Tag>{record.runId || "No runId"}</Tag>
                 </div>
@@ -279,7 +311,7 @@ function renderPresetCards(
                 {record.title}
               </Typography.Text>
               <div style={railMetaWrapStyle}>
-                <Tag color="processing">{record.workflow}</Tag>
+                <Tag color="processing">{record.routeName}</Tag>
                 {record.tags.slice(0, 2).map((tag) => (
                   <Tag key={`${record.key}-${tag}`}>{tag}</Tag>
                 ))}
@@ -313,62 +345,74 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   actorId,
   catalogSearch,
   composerFormRef,
+  draftMode = false,
+  activeEndpointId,
   initialFormValues,
   recentRunRows,
-  selectedTransport,
-  selectedWorkflowDetailsPrimitives,
-  selectedWorkflowRecord,
+  selectedRouteDetailsPrimitives,
+  selectedRouteRecord,
   streaming,
+  submitPathLabel,
   transportOptions,
   visiblePresets,
   workflowCatalogLoading,
-  workflowOptions,
+  routeOptions,
   onAbortRun,
   onCatalogSearchChange,
   onClearRecentRuns,
-  onSelectWorkflowName,
+  onEndpointChange,
+  onSelectRouteName,
   onSubmitRun,
   onTransportChange,
   onUsePreset,
-}) => (
-  <ProCard
-    title="Launch rail"
-    hoverable
-    {...moduleCardProps}
-    style={workbenchCardStyle}
-    bodyStyle={workbenchCardBodyStyle}
-    extra={
-      <Typography.Text type="secondary">Compose, restore, reuse</Typography.Text>
-    }
-  >
-    <div style={workbenchScrollableBodyStyle}>
-      <div style={compactStackStyle}>
-        <div style={quickGridStyle}>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Workflow</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {selectedWorkflowRecord?.workflowName || "Not selected"}
-            </Typography.Text>
+}) => {
+  const isChatEndpoint = activeEndpointId === "chat";
+
+  return (
+    <ProCard
+      title="Launch rail"
+      hoverable
+      {...moduleCardProps}
+      style={workbenchCardStyle}
+      bodyStyle={workbenchCardBodyStyle}
+      extra={
+        <Typography.Text type="secondary">Compose, restore, reuse</Typography.Text>
+      }
+    >
+      <div style={workbenchScrollableBodyStyle}>
+        <div style={compactStackStyle}>
+          <div style={quickGridStyle}>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Endpoint</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {activeEndpointId || "chat"}
+              </Typography.Text>
+            </div>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Execution</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {isChatEndpoint ? "STREAM" : "INVOKE"}
+              </Typography.Text>
+            </div>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {draftMode
+                  ? isChatEndpoint
+                    ? "Draft run"
+                    : "Prepared invoke"
+                  : actorId
+                    ? "Continue actor"
+                    : "Endpoint invoke"}
+              </Typography.Text>
+            </div>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {visiblePresets.length}
+              </Typography.Text>
+            </div>
           </div>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Transport</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {selectedTransport.toUpperCase()}
-            </Typography.Text>
-          </div>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {actorId ? "Continue actor" : "New run"}
-            </Typography.Text>
-          </div>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {visiblePresets.length}
-            </Typography.Text>
-          </div>
-        </div>
 
         <Tabs
           items={[
@@ -377,10 +421,10 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
               label: "Compose",
               children: (
                 <div style={compactStackStyle}>
-                  {renderWorkflowMiniCard(
-                    selectedTransport,
-                    selectedWorkflowDetailsPrimitives,
-                    selectedWorkflowRecord,
+                  {renderRouteMiniCard(
+                    activeEndpointId,
+                    selectedRouteDetailsPrimitives,
+                    selectedRouteRecord,
                   )}
 
                   <ProForm<RunFormValues>
@@ -388,7 +432,8 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     layout="vertical"
                     initialValues={initialFormValues}
                     onValuesChange={(_, values) => {
-                      onSelectWorkflowName(values.workflow ?? "");
+                      onSelectRouteName(values.routeName ?? "");
+                      onEndpointChange(values.endpointId || "chat");
                       if (values.transport) {
                         onTransportChange(values.transport);
                       }
@@ -429,9 +474,13 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                   >
                     <ProFormTextArea
                       name="prompt"
-                      label="Prompt"
+                      label={isChatEndpoint ? "Prompt" : "Payload text"}
                       fieldProps={{ rows: 5 }}
-                      placeholder="Describe the task for this run."
+                      placeholder={
+                        isChatEndpoint
+                          ? "Describe the task to run."
+                          : "Provide the payload text that should be encoded for this endpoint."
+                      }
                       rules={[
                         {
                           required: true,
@@ -450,33 +499,101 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         },
                       ]}
                     />
-                    <ProFormSelect
-                      name="workflow"
-                      label="Workflow"
-                      placeholder="Select a workflow"
-                      options={workflowOptions}
-                      fieldProps={{
-                        allowClear: true,
-                        showSearch: true,
-                        filterOption: false,
-                        onSearch: onCatalogSearchChange,
-                        notFoundContent: workflowCatalogLoading ? (
-                          <Typography.Text type="secondary">
-                            Loading workflows...
-                          </Typography.Text>
-                        ) : (
-                          <Empty
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description="No workflows available."
-                          />
-                        ),
-                        searchValue: catalogSearch,
-                      }}
+                    {isChatEndpoint ? (
+                      <ProFormSelect
+                        name="routeName"
+                        label={
+                          draftMode
+                            ? "Draft bundle"
+                            : "Chat route preview (optional)"
+                        }
+                        placeholder={
+                          draftMode
+                            ? "Studio draft bundle"
+                            : "Preview a chat route"
+                        }
+                        extra={
+                          draftMode
+                            ? "Draft runs execute the bundled Studio draft."
+                            : "Preview a catalog chat route for route notes and observability shortcuts. Bound scope chat runs always follow the current scope binding."
+                        }
+                        disabled={draftMode}
+                        options={routeOptions}
+                        fieldProps={{
+                          allowClear: true,
+                          showSearch: true,
+                          filterOption: false,
+                          onSearch: onCatalogSearchChange,
+                          notFoundContent: workflowCatalogLoading ? (
+                            <Typography.Text type="secondary">
+                              Loading chat routes...
+                            </Typography.Text>
+                          ) : (
+                            <Empty
+                              image={Empty.PRESENTED_IMAGE_SIMPLE}
+                              description="No chat routes available."
+                            />
+                          ),
+                          searchValue: catalogSearch,
+                        }}
+                      />
+                    ) : (
+                      <Alert
+                        showIcon
+                        type="info"
+                        title="Generic endpoint invoke"
+                        description="Use the prompt as the default payload text, or provide an explicit type URL and protobuf base64 payload."
+                      />
+                    )}
+                    <ProFormText
+                      name="scopeId"
+                      label="Scope ID"
+                      placeholder="NyxID user / scope id"
+                      rules={[
+                        {
+                          required: true,
+                          message: "Scope ID is required.",
+                        },
+                      ]}
                     />
                     <ProFormText
-                      name="actorId"
-                      label="Existing actorId"
-                      placeholder="Workflow:..."
+                      name="endpointId"
+                      label="Endpoint"
+                      placeholder="chat"
+                      disabled={draftMode}
+                      rules={[
+                        {
+                          required: !draftMode,
+                          message: "Endpoint ID is required.",
+                        },
+                      ]}
+                    />
+                    {!draftMode ? (
+                      <ProFormText
+                        name="serviceOverrideId"
+                        label="Binding override (optional)"
+                        placeholder="Leave empty to use the scope default binding."
+                      />
+                    ) : null}
+                    {isChatEndpoint ? (
+                      <ProFormText
+                        name="actorId"
+                        label="Existing actor ID"
+                        placeholder="Actor:..."
+                        disabled={draftMode}
+                      />
+                    ) : null}
+                    <ProFormText
+                      name="payloadTypeUrl"
+                      label="Payload type URL"
+                      placeholder="type.googleapis.com/google.protobuf.StringValue"
+                      extra="When payload base64 is empty, the workbench only auto-encodes StringValue and AppScriptCommand."
+                    />
+                    <ProFormTextArea
+                      name="payloadBase64"
+                      label="Payload base64 (advanced)"
+                      fieldProps={{ rows: 3 }}
+                      placeholder="Required for custom payload types; leave empty only for StringValue or AppScriptCommand."
                     />
                   </ProForm>
                 </div>
@@ -498,22 +615,20 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                   {renderPresetCards(visiblePresets, onUsePreset)}
                 </div>
               ),
+              disabled: !isChatEndpoint,
             },
           ]}
         />
 
         <Alert
           showIcon
-          type={selectedTransport === "ws" ? "success" : "info"}
-          title={
-            selectedTransport === "ws"
-              ? "Runs will stream over /api/ws/chat"
-              : "Runs will stream over /api/chat"
-          }
+          type="info"
+          title={`Runs will stream over ${submitPathLabel}`}
         />
+        </div>
       </div>
-    </div>
-  </ProCard>
-);
+    </ProCard>
+  );
+};
 
 export default RunsLaunchRail;

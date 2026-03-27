@@ -11,7 +11,7 @@ export OTEL_SERVICE_NAME=Aevatar.Workflow.Host.Api
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 
-ASPNETCORE_URLS=http://localhost:5000 \
+ASPNETCORE_URLS=http://localhost:5100 \
 dotnet run --project src/workflow/Aevatar.Workflow.Host.Api
 ```
 

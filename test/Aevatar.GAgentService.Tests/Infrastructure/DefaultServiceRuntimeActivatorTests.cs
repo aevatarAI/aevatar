@@ -114,6 +114,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
         runtimePort.Calls[0].definitionActorId.Should().Be("definition-1");
         runtimePort.Calls[0].revision.Should().Be("script-r1");
         runtimePort.Calls[0].runtimeActorId.Should().Be("gagent-service:script-runtime:deployment-actor:r1");
+        runtimePort.Calls[0].scopeId.Should().Be(GAgentServiceTestKit.CreateIdentity().TenantId);
     }
 
     [Fact]
@@ -204,6 +205,48 @@ public sealed class DefaultServiceRuntimeActivatorTests
     }
 
     [Fact]
+    public async Task ActivateAsync_ShouldPassInlineWorkflowYamlsToWorkflowBinding()
+    {
+        var runtime = new RecordingActorRuntime();
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var activator = new DefaultServiceRuntimeActivator(
+            runtime,
+            new RecordingScriptDefinitionSnapshotPort(),
+            new RecordingScriptRuntimeProvisioningPort(),
+            workflowPort);
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = GAgentServiceTestKit.CreateIdentity(),
+            RevisionId = "r1",
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            DeploymentPlan = new ServiceDeploymentPlan
+            {
+                WorkflowPlan = new WorkflowServiceDeploymentPlan
+                {
+                    WorkflowName = "workflow",
+                    WorkflowYaml = "name: workflow",
+                    DefinitionActorId = "workflow-definition-1",
+                    InlineWorkflowYamls =
+                    {
+                        ["child"] = "name: child",
+                    },
+                },
+            },
+        };
+
+        await activator.ActivateAsync(
+            new ServiceRuntimeActivationRequest(
+                GAgentServiceTestKit.CreateIdentity(),
+                artifact,
+                "r1",
+                "deployment-actor"));
+
+        workflowPort.BindCalls.Should().ContainSingle();
+        workflowPort.BindCalls[0].inlineWorkflowYamls.Should().ContainKey("child");
+        workflowPort.BindCalls[0].inlineWorkflowYamls["child"].Should().Be("name: child");
+    }
+
+    [Fact]
     public async Task ActivateAsync_ShouldRejectMissingWorkflowDefinitionActor_WhenRuntimeClaimsItExists()
     {
         var runtime = new RecordingActorRuntime();
@@ -238,6 +281,29 @@ public sealed class DefaultServiceRuntimeActivatorTests
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*was not found*");
+    }
+
+    [Fact]
+    public async Task ActivateAsync_ShouldThrow_WhenStaticActorTypeCannotBeResolved()
+    {
+        var activator = new DefaultServiceRuntimeActivator(
+            new RecordingActorRuntime(),
+            new RecordingScriptDefinitionSnapshotPort(),
+            new RecordingScriptRuntimeProvisioningPort(),
+            new RecordingWorkflowRunActorPort());
+        var artifact = GAgentServiceTestKit.CreatePreparedStaticArtifact(revisionId: "r2");
+        artifact.DeploymentPlan.StaticPlan.ActorTypeName = "Missing.StaticActor, Missing.Assembly";
+
+        var act = () => activator.ActivateAsync(
+            new ServiceRuntimeActivationRequest(
+                GAgentServiceTestKit.CreateIdentity(),
+                artifact,
+                "r2",
+                "deployment-actor"));
+
+        await act.Should().ThrowAsync<Exception>()
+            .Where(ex => ex is FileNotFoundException &&
+                         ex.Message.Contains("Missing.Assembly", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -323,7 +389,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     {
         public string RuntimeActorId { get; init; } = "script-runtime";
 
-        public List<(string definitionActorId, string revision, string? runtimeActorId, ScriptDefinitionSnapshot definitionSnapshot)> Calls { get; } = [];
+        public List<(string definitionActorId, string revision, string? runtimeActorId, ScriptDefinitionSnapshot definitionSnapshot, string? scopeId)> Calls { get; } = [];
 
         public Task<string> EnsureRuntimeAsync(
             string definitionActorId,
@@ -332,7 +398,19 @@ public sealed class DefaultServiceRuntimeActivatorTests
             ScriptDefinitionSnapshot definitionSnapshot,
             CancellationToken ct)
         {
-            Calls.Add((definitionActorId, scriptRevision, runtimeActorId, definitionSnapshot));
+            Calls.Add((definitionActorId, scriptRevision, runtimeActorId, definitionSnapshot, null));
+            return Task.FromResult(RuntimeActorId);
+        }
+
+        public Task<string> EnsureRuntimeAsync(
+            string definitionActorId,
+            string scriptRevision,
+            string? runtimeActorId,
+            ScriptDefinitionSnapshot definitionSnapshot,
+            string? scopeId,
+            CancellationToken ct)
+        {
+            Calls.Add((definitionActorId, scriptRevision, runtimeActorId, definitionSnapshot, scopeId));
             return Task.FromResult(RuntimeActorId);
         }
     }
@@ -370,7 +448,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
     private sealed class RecordingWorkflowRunActorPort : IWorkflowRunActorPort
     {
         public List<string?> CreateDefinitionCalls { get; } = [];
-        public List<(string actorId, string workflowName, string workflowYaml)> BindCalls { get; } = [];
+        public List<(string actorId, string workflowName, string workflowYaml, IReadOnlyDictionary<string, string> inlineWorkflowYamls)> BindCalls { get; } = [];
 
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default)
         {
@@ -394,7 +472,7 @@ public sealed class DefaultServiceRuntimeActivatorTests
             string? scopeId = null,
             CancellationToken ct = default)
         {
-            BindCalls.Add((actor.Id, workflowName, workflowYaml));
+            BindCalls.Add((actor.Id, workflowName, workflowYaml, inlineWorkflowYamls?.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal) ?? new Dictionary<string, string>(StringComparer.Ordinal)));
             return Task.CompletedTask;
         }
 

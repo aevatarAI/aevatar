@@ -32,7 +32,7 @@ data: {"type":"RUN_FINISHED","result":{"output":"ok"}}
         var events = new List<WorkflowEvent>();
 
         await foreach (var evt in client.StartRunStreamWithTrackingAsync(
-                           new ChatRunRequest { Prompt = "hello" },
+                           new ChatRunRequest { Prompt = "hello", ScopeId = "scope-a", Workflow = "approval" },
                            tracker,
                            CancellationToken.None))
         {
@@ -53,11 +53,11 @@ data: {"type":"RUN_FINISHED","result":{"output":"ok"}}
     {
         var httpClient = new HttpClient(new TestHttpMessageHandler(handler))
         {
-            BaseAddress = new Uri("http://localhost:5000"),
+            BaseAddress = new Uri("http://localhost:5100"),
         };
         var options = Microsoft.Extensions.Options.Options.Create(new AevatarWorkflowClientOptions
         {
-            BaseUrl = "http://localhost:5000",
+            BaseUrl = "http://localhost:5100",
         });
         return new AevatarWorkflowClient(httpClient, new SseChatTransport(), options);
     }

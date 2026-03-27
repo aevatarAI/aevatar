@@ -1,12 +1,8 @@
 using System.Text;
-using Microsoft.Extensions.Logging;
 using Aevatar.AI.Core;
-using Microsoft.Extensions.Logging;
 using Aevatar.Configuration;
-using Microsoft.Extensions.Logging;
 using Aevatar.Foundation.Core.Configurations;
 using Microsoft.Extensions.Hosting;
-
 using Microsoft.Extensions.Logging;
 using Aevatar.Studio.Application.Scripts.Contracts;
 namespace Aevatar.Studio.Hosting.Endpoints;

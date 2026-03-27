@@ -33,7 +33,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: null,
                     yes: true,
                     cancellationToken: CancellationToken.None,
@@ -44,6 +44,7 @@ public class ChatWorkflowCommandHandlerTests
             File.Exists(expectedPath).Should().BeTrue();
             File.ReadAllText(expectedPath, Encoding.UTF8).Should().Contain("name: generated_from_chat");
             client.LastRunRequest.Should().NotBeNull();
+            client.LastRunRequest!.ScopeId.Should().Be("default");
             client.LastRunRequest!.Workflow.Should().Be("auto_review");
             client.LastRunRequest.Metadata.Should().ContainKey("workflow.authoring.enabled");
             client.LastRunRequest.Metadata.Should().ContainKey("workflow.intent");
@@ -80,7 +81,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: "confirmed",
                     yes: false,
                     cancellationToken: CancellationToken.None,
@@ -120,7 +121,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: "declined",
                     yes: false,
                     cancellationToken: CancellationToken.None,
@@ -174,7 +175,7 @@ public class ChatWorkflowCommandHandlerTests
                 () => ChatCommandHandler.RunWorkflowYamlAsync(
                     message: "Generate workflow yaml",
                     readFromStdin: false,
-                    urlOverride: "http://localhost:5000",
+                    urlOverride: "http://localhost:5100",
                     filenameOverride: "preferred",
                     yes: true,
                     cancellationToken: CancellationToken.None,

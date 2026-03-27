@@ -7,17 +7,15 @@ public sealed class ScopeWorkflowCapabilityOptions
 {
     public const string SectionName = "ScopeWorkflowServices";
 
-    public string TenantId { get; set; } = "user-workflows";
+    public string ServiceAppId { get; set; } = "default";
 
-    public string AppId { get; set; } = "workflow";
+    public string ServiceNamespace { get; set; } = "default";
 
-    public string NamespacePrefix { get; set; } = "user:";
+    public string DefaultServiceId { get; set; } = "default";
 
-    public string DefinitionActorIdPrefix { get; set; } = "user-workflow";
+    public string DefinitionActorIdPrefix { get; set; } = "scope-workflow";
 
     public int ListTake { get; set; } = 200;
-
-    public string BuildNamespace(string scopeId) => $"{NamespacePrefix}{BuildOpaqueToken(scopeId)}";
 
     public string BuildDefinitionActorIdPrefix(string scopeId, string workflowId) =>
         $"{DefinitionActorIdPrefix}:{BuildOpaqueToken(scopeId)}:{BuildOpaqueToken(workflowId)}";

@@ -30,12 +30,13 @@ internal static class AppCommandHandler
 
         if (noBrowser)
         {
-            Console.WriteLine($"API URL: {baseUrl}");
+            Console.WriteLine($"Studio URL: {baseUrl}/studio");
             return;
         }
 
-        BrowserLauncher.Open(baseUrl);
-        Console.WriteLine($"Opened browser: {baseUrl}");
+        var studioUrl = $"{baseUrl}/studio";
+        BrowserLauncher.Open(studioUrl);
+        Console.WriteLine($"Opened browser: {studioUrl}");
     }
 
     private static string ResolveBaseUrl(string? cliOverride)
@@ -44,7 +45,7 @@ internal static class AppCommandHandler
             return cliOverride.Trim().TrimEnd('/');
 
         var configured = CliAppConfigStore.GetApiBaseUrl(out _);
-        return configured?.TrimEnd('/') ?? "http://localhost:6688";
+        return configured?.TrimEnd('/') ?? "http://localhost:5080";
     }
 
     private static async Task<bool> ProbeMainnetAsync(

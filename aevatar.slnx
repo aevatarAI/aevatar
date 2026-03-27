@@ -116,6 +116,7 @@
     <Project Path="test\Aevatar.Hosting.Tests\Aevatar.Hosting.Tests.csproj" />
 	    <Project Path="test\Aevatar.Integration.Tests\Aevatar.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Scripting.Core.Tests\Aevatar.Scripting.Core.Tests.csproj" />
+    <Project Path="test\Aevatar.Tools.Cli.Tests\Aevatar.Tools.Cli.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Tests\Aevatar.GAgentService.Tests.csproj" />
     <Project Path="test\Aevatar.GAgentService.Integration.Tests\Aevatar.GAgentService.Integration.Tests.csproj" />
 	    <Project Path="test\Aevatar.Workflow.Application.Tests\Aevatar.Workflow.Application.Tests.csproj" />

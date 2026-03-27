@@ -78,6 +78,17 @@ public interface IWorkflowActorBindingReader
 }
 
 /// <summary>
+/// Narrow read contract for resolving workflow run bindings by stable run id.
+/// </summary>
+public interface IWorkflowRunBindingReader
+{
+    Task<IReadOnlyList<WorkflowActorBinding>> ListByRunIdAsync(
+        string runId,
+        int take = 20,
+        CancellationToken ct = default);
+}
+
+/// <summary>
 /// Port for resolving workflow definition actors and creating workflow execution actors.
 /// Implemented by infrastructure to avoid Application depending on Workflow.Core.
 /// </summary>

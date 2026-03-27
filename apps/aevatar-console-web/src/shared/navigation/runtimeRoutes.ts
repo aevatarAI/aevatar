@@ -45,9 +45,29 @@ export function buildRuntimePrimitivesHref(options?: {
 }
 
 export function buildRuntimeRunsHref(options?: {
+  route?: string;
   workflow?: string;
+  prompt?: string;
+  scopeId?: string;
+  serviceOverrideId?: string;
+  serviceId?: string;
+  endpointId?: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
+  actorId?: string;
+  draftKey?: string;
 }): string {
-  return buildHref(runtimePaths.runs, options);
+  return buildHref(runtimePaths.runs, {
+    route: options?.route ?? options?.workflow,
+    prompt: options?.prompt,
+    scopeId: options?.scopeId,
+    serviceOverrideId: options?.serviceOverrideId ?? options?.serviceId,
+    endpointId: options?.endpointId,
+    payloadTypeUrl: options?.payloadTypeUrl,
+    payloadBase64: options?.payloadBase64,
+    actorId: options?.actorId,
+    draftKey: options?.draftKey,
+  });
 }
 
 export function buildRuntimeExplorerHref(options?: {

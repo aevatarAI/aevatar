@@ -57,6 +57,7 @@ import type {
   StudioProviderSettings,
   StudioProviderType,
   StudioRoleDefinition,
+  StudioScopeBindingStatus,
   StudioRuntimeTestResult,
   StudioWorkflowFile,
   StudioWorkflowSummary,
@@ -115,6 +116,18 @@ type DraftMode = '' | 'new';
 type LegacySource = '' | 'playground';
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
 type StudioToolDrawerMode = 'palette' | 'ask-ai';
+type StudioGAgentBindingDraft = {
+  readonly displayName: string;
+  readonly actorTypeName: string;
+  readonly preferredActorId: string;
+  readonly endpointId: string;
+  readonly endpointDisplayName: string;
+  readonly requestTypeUrl: string;
+  readonly responseTypeUrl: string;
+  readonly description: string;
+  readonly prompt: string;
+  readonly payloadBase64: string;
+};
 type StudioSelectedGraphEdge = {
   readonly edgeId: string;
   readonly sourceStepId: string;
@@ -123,6 +136,26 @@ type StudioSelectedGraphEdge = {
   readonly kind: 'next' | 'branch';
   readonly implicit: boolean;
 };
+
+const DEFAULT_GAGENT_REQUEST_TYPE_URL =
+  'type.googleapis.com/google.protobuf.StringValue';
+
+function createStudioGAgentBindingDraft(
+  displayName: string,
+): StudioGAgentBindingDraft {
+  return {
+    displayName,
+    actorTypeName: '',
+    preferredActorId: '',
+    endpointId: 'run',
+    endpointDisplayName: 'Run',
+    requestTypeUrl: DEFAULT_GAGENT_REQUEST_TYPE_URL,
+    responseTypeUrl: '',
+    description: 'Run the bound GAgent.',
+    prompt: '',
+    payloadBase64: '',
+  };
+}
 
 type StudioNoticeLike = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
@@ -799,6 +832,268 @@ const StudioSummaryMetric: React.FC<StudioSummaryMetricProps> = ({
     </Typography.Text>
   </div>
 );
+
+function getScopeBindingRevisionTone(
+  revision: StudioScopeBindingStatus['revisions'][number],
+): 'default' | 'success' | 'warning' | 'error' | 'info' {
+  const normalizedStatus = revision.status.trim().toLowerCase();
+  if (normalizedStatus === 'retired' || normalizedStatus.includes('failed')) {
+    return 'error';
+  }
+
+  if (revision.isDefaultServing || revision.isActiveServing) {
+    return 'success';
+  }
+
+  if (revision.isServingTarget) {
+    return 'info';
+  }
+
+  if (normalizedStatus === 'prepared') {
+    return 'warning';
+  }
+
+  return 'default';
+}
+
+function canActivateScopeBindingRevision(
+  binding: StudioScopeBindingStatus | undefined,
+  revision: StudioScopeBindingStatus['revisions'][number],
+): boolean {
+  if (!binding?.available) {
+    return false;
+  }
+
+  if (revision.revisionId === binding.defaultServingRevisionId) {
+    return false;
+  }
+
+  const normalizedStatus = revision.status.trim().toLowerCase();
+  return normalizedStatus === 'published' || normalizedStatus === 'prepared';
+}
+
+function formatScopeBindingRevisionTimestamp(
+  revision: StudioScopeBindingStatus['revisions'][number],
+): string {
+  return (
+    formatDateTime(revision.publishedAt) ||
+    formatDateTime(revision.preparedAt) ||
+    formatDateTime(revision.createdAt) ||
+    'n/a'
+  );
+}
+
+type StudioScopeBindingPanelProps = {
+  readonly scopeId?: string;
+  readonly binding?: StudioScopeBindingStatus;
+  readonly loading: boolean;
+  readonly error: unknown;
+  readonly pendingRevisionId: string;
+  readonly onActivateRevision: (revisionId: string) => void;
+};
+
+const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
+  scopeId,
+  binding,
+  loading,
+  error,
+  pendingRevisionId,
+  onActivateRevision,
+}) => {
+  if (!scopeId) {
+    return null;
+  }
+
+  const revisions = binding?.revisions ?? [];
+
+  return (
+    <div
+      style={{
+        ...workflowSectionShellStyle,
+        gap: 18,
+      }}
+    >
+      <div style={workflowSectionHeaderStyle}>
+        <div style={workflowDirectoryTextStackStyle}>
+          <Typography.Text style={workflowSectionHeadingStyle}>
+            Scope Binding
+          </Typography.Text>
+          <Typography.Title
+            level={5}
+            style={{ margin: 0 }}
+          >
+            {binding?.available
+              ? binding.displayName || binding.serviceId
+              : 'No active binding'}
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            {binding?.available
+              ? `Scope ${scopeId} is routed through the default service binding.`
+              : `Scope ${scopeId} has not published a service binding yet.`}
+          </Typography.Text>
+        </div>
+        <Space wrap size={[8, 8]}>
+          <Tag color="processing">{scopeId}</Tag>
+          {binding?.available ? (
+            <Tag color="success">
+              {binding.defaultServingRevisionId || 'default pending'}
+            </Tag>
+          ) : null}
+        </Space>
+      </div>
+
+      {loading ? (
+        <StudioNoticeCard
+          title="Loading scope binding"
+          description="Fetching the current revision history and serving state for this scope."
+        />
+      ) : error ? (
+        <StudioNoticeCard
+          type="error"
+          title="Failed to load scope binding"
+          description={String(error)}
+        />
+      ) : !binding?.available ? (
+        <StudioNoticeCard
+          type="info"
+          title="No published binding"
+          description="Use Bind scope to publish the current workflow as the scope's default service."
+        />
+      ) : (
+        <>
+          <div style={summaryMetricGridStyle}>
+            <StudioSummaryMetric
+              label="Revisions"
+              value={binding.revisions.length}
+            />
+            <StudioSummaryMetric
+              label="Default"
+              tone="success"
+              value={binding.defaultServingRevisionId || 'n/a'}
+            />
+            <StudioSummaryMetric
+              label="Active"
+              tone="info"
+              value={binding.activeServingRevisionId || 'n/a'}
+            />
+            <StudioSummaryMetric
+              label="Deployment"
+              value={binding.deploymentStatus || 'n/a'}
+            />
+          </div>
+
+          <div style={summaryFieldGridStyle}>
+            <StudioSummaryField
+              label="Service key"
+              copyable
+              value={binding.serviceKey}
+            />
+            <StudioSummaryField
+              label="Primary actor"
+              copyable
+              value={binding.primaryActorId}
+            />
+            <StudioSummaryField
+              label="Deployment"
+              value={binding.deploymentId}
+            />
+            <StudioSummaryField
+              label="Updated"
+              value={formatDateTime(binding.updatedAt)}
+            />
+          </div>
+
+          <div
+            style={{
+              ...cardStackStyle,
+              maxHeight: 320,
+              overflowY: 'auto',
+            }}
+          >
+            {revisions.map((revision) => {
+              const canActivate = canActivateScopeBindingRevision(
+                binding,
+                revision,
+              );
+              return (
+                <div
+                  key={revision.revisionId}
+                  style={{
+                    alignItems: 'flex-start',
+                    border: '1px solid #E6E3DE',
+                    borderRadius: 20,
+                    background: '#FFFFFF',
+                    display: 'flex',
+                    gap: 16,
+                    justifyContent: 'space-between',
+                    padding: 16,
+                  }}
+                >
+                  <div
+                    style={{
+                      ...cardStackStyle,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    <Space wrap size={[8, 8]}>
+                      <Typography.Text strong copyable>
+                        {revision.revisionId}
+                      </Typography.Text>
+                      <Tag
+                        color={
+                          getScopeBindingRevisionTone(revision) === 'default'
+                            ? 'default'
+                            : getScopeBindingRevisionTone(revision)
+                        }
+                      >
+                        {revision.status || 'unknown'}
+                      </Tag>
+                      {revision.isDefaultServing ? (
+                        <Tag color="success">default</Tag>
+                      ) : null}
+                      {revision.isActiveServing ? (
+                        <Tag color="processing">active</Tag>
+                      ) : null}
+                      {revision.isServingTarget ? (
+                        <Tag color="blue">
+                          {revision.allocationWeight}% {revision.servingState || 'serving'}
+                        </Tag>
+                      ) : null}
+                    </Space>
+                    <Typography.Text type="secondary">
+                      {revision.implementationKind || 'workflow'} · updated{' '}
+                      {formatScopeBindingRevisionTimestamp(revision)}
+                    </Typography.Text>
+                    {revision.failureReason ? (
+                      <Typography.Text type="danger">
+                        {revision.failureReason}
+                      </Typography.Text>
+                    ) : null}
+                  </div>
+
+                  <Space direction="vertical" size={8} align="end">
+                    <Typography.Text type="secondary">
+                      {revision.deploymentId || 'draft only'}
+                    </Typography.Text>
+                    <Button
+                      type={canActivate ? 'primary' : 'default'}
+                      disabled={!canActivate}
+                      loading={pendingRevisionId === revision.revisionId}
+                      onClick={() => onActivateRevision(revision.revisionId)}
+                    >
+                      {revision.isDefaultServing ? 'Serving' : 'Activate'}
+                    </Button>
+                  </Space>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 const studioPaletteCategoryIcons: Record<
   string,
@@ -1641,6 +1936,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const [copiedExecutionLogIndex, setCopiedExecutionLogIndex] =
     React.useState<number | null>(null);
   const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = React.useState(false);
+  const [copiedExecutionActorId, setCopiedExecutionActorId] =
+    React.useState<string | null>(null);
   const [executionActionInput, setExecutionActionInput] = React.useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] =
     React.useState('');
@@ -1722,6 +2019,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     : currentWorkflowExecutions.length > 0
       ? `${currentWorkflowExecutions.length} runs`
       : 'No runs';
+  const selectedExecutionActorId = selectedExecutionDetail?.actorId || null;
   const activeExecutionLog =
     executionTrace && Number.isInteger(activeExecutionLogIndex)
       ? executionTrace.logs[activeExecutionLogIndex as number] || null
@@ -1790,6 +2088,20 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     if (copied) {
       showExecutionLogCopyFeedback('all');
     }
+  };
+
+  const handleCopyExecutionActorId = async (actorId: string) => {
+    const copied = await copyText(actorId);
+    if (!copied) {
+      return;
+    }
+
+    setCopiedExecutionActorId(actorId);
+    window.setTimeout(() => {
+      setCopiedExecutionActorId((current) =>
+        current === actorId ? null : current,
+      );
+    }, 1600);
   };
 
   const handleExecutionInteraction = async (
@@ -1991,6 +2303,17 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                         execution.completedAtUtc,
                       )}
                     </div>
+                    {execution.actorId ? (
+                      <div className="execution-run-card-actor">
+                        <div className="execution-run-card-actor-label">Actor ID</div>
+                        <code
+                          className="execution-run-card-actor-value"
+                          title={execution.actorId}
+                        >
+                          {execution.actorId}
+                        </code>
+                      </div>
+                    ) : null}
                   </button>
                 ))
               )}
@@ -1998,6 +2321,36 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
             <div className="execution-log-stream">
               <div className="execution-log-list">
+                {selectedExecutionActorId ? (
+                  <div className="execution-run-identity">
+                    <div className="execution-run-identity-head">
+                      <div className="execution-run-identity-label">Actor ID</div>
+                      <button
+                        type="button"
+                        className={`panel-icon-button execution-logs-copy-action ${copiedExecutionActorId === selectedExecutionActorId ? 'active' : ''}`}
+                        title="Copy Actor ID."
+                        aria-label="Copy Actor ID."
+                        onClick={() =>
+                          void handleCopyExecutionActorId(
+                            selectedExecutionActorId,
+                          )
+                        }
+                      >
+                        {copiedExecutionActorId === selectedExecutionActorId ? (
+                          <CheckOutlined />
+                        ) : (
+                          <CopyOutlined />
+                        )}
+                      </button>
+                    </div>
+                    <code
+                      className="execution-run-identity-value"
+                      title={selectedExecutionActorId}
+                    >
+                      {selectedExecutionActorId}
+                    </code>
+                  </div>
+                ) : null}
                 {executionTrace?.logs?.length ? (
                   executionTrace.logs.map((log, index) => (
                     <button
@@ -2566,6 +2919,14 @@ export type StudioEditorPageProps = {
   readonly runPending: boolean;
   readonly canRunWorkflow: boolean;
   readonly runNotice: StudioNoticeLike | null;
+  readonly resolvedScopeId?: string;
+  readonly publishPending: boolean;
+  readonly canPublishWorkflow: boolean;
+  readonly publishNotice: StudioNoticeLike | null;
+  readonly scopeBinding?: StudioScopeBindingStatus;
+  readonly scopeBindingLoading: boolean;
+  readonly scopeBindingError: unknown;
+  readonly bindingActivationRevisionId: string;
   readonly onSwitchStudioView: (view: 'editor' | 'execution') => void;
   readonly onExportDraft: () => void;
   readonly onSelectGraphNode: (nodeId: string) => void;
@@ -2592,6 +2953,22 @@ export type StudioEditorPageProps = {
   readonly onWorkflowImportChange: React.ChangeEventHandler<HTMLInputElement>;
   readonly onResetDraft: () => void;
   readonly onSaveDraft: () => void;
+  readonly onPublishWorkflow: () => void;
+  readonly onBindGAgent: (input: {
+    displayName?: string;
+    actorTypeName: string;
+    preferredActorId?: string;
+    endpointId: string;
+    endpointDisplayName?: string;
+    requestTypeUrl?: string;
+    responseTypeUrl?: string;
+    description?: string;
+    prompt?: string;
+    payloadBase64?: string;
+  }, options?: {
+    openRuns?: boolean;
+  }) => Promise<void>;
+  readonly onActivateBindingRevision: (revisionId: string) => void;
   readonly onInspectPublishedWorkflow: () => void;
   readonly onRunInConsole: () => void;
   readonly onAskAiPromptChange: (value: string) => void;
@@ -2637,6 +3014,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   runPending,
   canRunWorkflow,
   runNotice,
+  resolvedScopeId,
+  publishPending,
+  canPublishWorkflow,
+  publishNotice,
+  scopeBinding,
+  scopeBindingLoading,
+  scopeBindingError,
+  bindingActivationRevisionId,
   onSwitchStudioView,
   onExportDraft,
   onSelectGraphNode,
@@ -2651,6 +3036,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   onSetInspectorTab,
   onWorkflowImportChange,
   onSaveDraft,
+  onPublishWorkflow,
+  onBindGAgent,
+  onActivateBindingRevision,
+  onRunInConsole,
   onAskAiPromptChange,
   onAskAiGenerate,
   onRunPromptChange,
@@ -2663,6 +3052,11 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   const [nodePaletteSection, setNodePaletteSection] = React.useState('AI');
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = React.useState(false);
   const [runModalOpen, setRunModalOpen] = React.useState(false);
+  const [gAgentModalOpen, setGAgentModalOpen] = React.useState(false);
+  const [gAgentBindingPending, setGAgentBindingPending] = React.useState(false);
+  const [gAgentDraft, setGAgentDraft] = React.useState<StudioGAgentBindingDraft>(
+    () => createStudioGAgentBindingDraft(draftWorkflowName || templateWorkflowName || ''),
+  );
   const [descriptionEditorOpen, setDescriptionEditorOpen] = React.useState(false);
   const [descriptionDraft, setDescriptionDraft] = React.useState(activeWorkflowDescription);
   const [pendingAddPosition, setPendingAddPosition] = React.useState({
@@ -2726,6 +3120,40 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   const closeToolDrawer = () => {
     setToolDrawerMode(null);
   };
+
+  const openGAgentModal = React.useCallback(() => {
+    setGAgentDraft((current) => ({
+      ...current,
+      displayName: current.displayName || draftWorkflowName || templateWorkflowName || '',
+    }));
+    setGAgentModalOpen(true);
+  }, [draftWorkflowName, templateWorkflowName]);
+
+  const submitGAgentBinding = React.useCallback(async (openRuns: boolean) => {
+    setGAgentBindingPending(true);
+    try {
+      await onBindGAgent(
+        {
+          displayName: gAgentDraft.displayName,
+          actorTypeName: gAgentDraft.actorTypeName,
+          preferredActorId: gAgentDraft.preferredActorId,
+          endpointId: gAgentDraft.endpointId,
+          endpointDisplayName: gAgentDraft.endpointDisplayName,
+          requestTypeUrl: gAgentDraft.requestTypeUrl,
+          responseTypeUrl: gAgentDraft.responseTypeUrl,
+          description: gAgentDraft.description,
+          prompt: gAgentDraft.prompt,
+          payloadBase64: gAgentDraft.payloadBase64,
+        },
+        {
+          openRuns,
+        },
+      );
+      setGAgentModalOpen(false);
+    } finally {
+      setGAgentBindingPending(false);
+    }
+  }, [gAgentDraft, onBindGAgent]);
 
   const activeDirectoryLabel =
     workspaceSettings.data?.directories.find(
@@ -3064,10 +3492,25 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         type={runNotice.type}
         title={
           runNotice.type === 'success'
-            ? 'Studio execution started'
-            : 'Studio execution failed'
+            ? 'Draft run ready'
+            : 'Draft run failed'
         }
         description={runNotice.message}
+      />,
+    );
+  }
+
+  if (publishNotice) {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="publish-notice"
+        type={publishNotice.type}
+        title={
+          publishNotice.type === 'error'
+            ? 'Scope binding failed'
+            : 'Scope binding updated'
+        }
+        description={publishNotice.message}
       />,
     );
   }
@@ -3093,6 +3536,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       {editorStatusItems.length > 0 ? (
         <div style={studioNoticeStripStyle}>{editorStatusItems}</div>
       ) : null}
+
+      <StudioScopeBindingPanel
+        scopeId={resolvedScopeId}
+        binding={scopeBinding}
+        loading={scopeBindingLoading}
+        error={scopeBindingError}
+        pendingRevisionId={bindingActivationRevisionId}
+        onActivateRevision={onActivateBindingRevision}
+      />
 
       {editorFatalNotice ? (
         <div style={studioNoticeStripStyle}>{editorFatalNotice}</div>
@@ -3221,6 +3673,28 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   onClick={() => setToolDrawerMode('ask-ai')}
                 >
                   Ask AI
+                </Button>
+                <Button
+                  icon={<BarsOutlined />}
+                  onClick={onRunInConsole}
+                  disabled={!resolvedScopeId}
+                >
+                  Open runs
+                </Button>
+                <Button
+                  icon={<RobotOutlined />}
+                  onClick={openGAgentModal}
+                  disabled={!resolvedScopeId}
+                >
+                  GAgent service
+                </Button>
+                <Button
+                  icon={<SafetyCertificateOutlined />}
+                  loading={publishPending}
+                  disabled={!canPublishWorkflow}
+                  onClick={onPublishWorkflow}
+                >
+                  Bind scope
                 </Button>
                 <Button
                   type="text"
@@ -3483,14 +3957,166 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           </Drawer>
 
           <Modal
+            open={gAgentModalOpen}
+            title="Bind GAgent service"
+            onCancel={() => setGAgentModalOpen(false)}
+            footer={[
+              <Button
+                key="cancel"
+                onClick={() => setGAgentModalOpen(false)}
+                disabled={gAgentBindingPending}
+              >
+                Cancel
+              </Button>,
+              <Button
+                key="bind"
+                onClick={() => void submitGAgentBinding(false)}
+                loading={gAgentBindingPending}
+                disabled={!resolvedScopeId}
+              >
+                Bind
+              </Button>,
+              <Button
+                key="bind-open-runs"
+                type="primary"
+                onClick={() => void submitGAgentBinding(true)}
+                loading={gAgentBindingPending}
+                disabled={!resolvedScopeId}
+              >
+                Bind + Open Runs
+              </Button>,
+            ]}
+          >
+            <div style={cardStackStyle}>
+              <Typography.Text type="secondary">
+                Bind the scope default service directly to a static GAgent and optionally open the runtime runs workbench for the configured endpoint.
+              </Typography.Text>
+              <Input
+                aria-label="GAgent display name"
+                placeholder="Display name"
+                value={gAgentDraft.displayName}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    displayName: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent actor type name"
+                placeholder="Assembly-qualified actor type name"
+                value={gAgentDraft.actorTypeName}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    actorTypeName: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent preferred actor id"
+                placeholder="Preferred actor id (optional)"
+                value={gAgentDraft.preferredActorId}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    preferredActorId: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent endpoint id"
+                placeholder="Endpoint ID"
+                value={gAgentDraft.endpointId}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    endpointId: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent endpoint display name"
+                placeholder="Endpoint display name"
+                value={gAgentDraft.endpointDisplayName}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    endpointDisplayName: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent request type URL"
+                placeholder="Request type URL"
+                value={gAgentDraft.requestTypeUrl}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    requestTypeUrl: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent response type URL"
+                placeholder="Response type URL (optional)"
+                value={gAgentDraft.responseTypeUrl}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    responseTypeUrl: event.target.value,
+                  }))
+                }
+              />
+              <Input.TextArea
+                aria-label="GAgent endpoint description"
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder="Endpoint description"
+                value={gAgentDraft.description}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    description: event.target.value,
+                  }))
+                }
+              />
+              <Divider style={{ marginBlock: 8 }} />
+              <Input.TextArea
+                aria-label="GAgent run prompt"
+                autoSize={{ minRows: 4, maxRows: 8 }}
+                placeholder="Prompt for the runtime runs console"
+                value={gAgentDraft.prompt}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    prompt: event.target.value,
+                  }))
+                }
+              />
+              <Input.TextArea
+                aria-label="GAgent payload base64"
+                autoSize={{ minRows: 3, maxRows: 6 }}
+                placeholder="Payload base64 for custom request types (optional)"
+                value={gAgentDraft.payloadBase64}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    payloadBase64: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </Modal>
+
+          <Modal
             open={runModalOpen}
-            title="Run"
+            title="Test run"
             onCancel={() => setRunModalOpen(false)}
             onOk={() => {
               void onStartExecution();
               setRunModalOpen(false);
             }}
-            okText="Run"
+            okText="Open runtime runs"
             okButtonProps={{
               disabled: !canRunWorkflow,
               loading: runPending,
@@ -3499,7 +4125,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           >
             <div style={cardStackStyle}>
               <Typography.Text type="secondary">
-                Optional input will be passed into the workflow as <Typography.Text code>$input</Typography.Text>.
+                Studio will open the runtime runs console and execute this draft through <Typography.Text code>/api/scopes/{'{scopeId}'}/draft-run</Typography.Text>.
               </Typography.Text>
               <Input.TextArea
                 aria-label="Studio execution prompt"

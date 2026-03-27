@@ -1,11 +1,6 @@
-using Microsoft.AspNetCore.Http;
-using Aevatar.Studio.Application;
-using Microsoft.AspNetCore.Http;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
-using Microsoft.AspNetCore.Http;
 using Aevatar.Studio.Application.Studio.Contracts;
-using Microsoft.AspNetCore.Http;
 using Aevatar.Studio.Application.Studio.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Aevatar.Studio.Hosting.Controllers;

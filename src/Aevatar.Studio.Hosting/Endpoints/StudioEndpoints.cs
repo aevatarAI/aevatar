@@ -16,8 +16,6 @@ using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
-
-using Aevatar.Studio.Application.Scripts.Contracts;
 namespace Aevatar.Studio.Hosting.Endpoints;
 
 internal static class StudioEndpoints
@@ -89,12 +87,13 @@ internal static class StudioEndpoints
             CancellationToken ct) =>
             HandleGetAppScriptReadModelAsync(actorId, services, ct));
 
-        app.MapPost("/api/app/scripts/draft-run", (
+        app.MapPost("/api/scopes/{scopeId}/scripts/draft-run", (
             HttpContext http,
+            string scopeId,
             AppScriptDraftRunRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
-            HandleRunDraftScriptAsync(http, request, services, embeddedWorkflowMode, ct));
+            HandleRunDraftScriptAsync(http, scopeId, request, services, embeddedWorkflowMode, ct));
     }
 
     internal static string NormalizeStudioDocumentId(string? rawValue, string fallbackPrefix)
@@ -197,6 +196,7 @@ internal static class StudioEndpoints
 
     private static async Task<IResult> HandleRunDraftScriptAsync(
         HttpContext http,
+        string scopeId,
         AppScriptDraftRunRequest request,
         IServiceProvider services,
         bool embeddedWorkflowMode,
@@ -209,6 +209,35 @@ internal static class StudioEndpoints
                 code = "SCRIPT_DRAFT_RUN_UNAVAILABLE",
                 message = "Script draft run is only available in embedded mode.",
             });
+        }
+
+        var normalizedScopeId = scopeId?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedScopeId))
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script draft run requires a resolved scope id.",
+            });
+        }
+
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script draft run requires a resolved scope id.",
+            });
+        }
+
+        if (!string.Equals(scopeContext.ScopeId?.Trim(), normalizedScopeId, StringComparison.Ordinal))
+        {
+            return Results.Json(new
+            {
+                code = "SCOPE_ACCESS_DENIED",
+                message = "Resolved scope does not match requested scope.",
+            }, statusCode: StatusCodes.Status403Forbidden);
         }
 
         var definitionPort = services.GetService<IScriptDefinitionCommandPort>();
@@ -235,10 +264,7 @@ internal static class StudioEndpoints
 
         var scriptId = NormalizeStudioDocumentId(request.ScriptId, "script");
         var revision = NormalizeStudioDocumentId(request.ScriptRevision, "draft");
-        var scopeId = services.GetService<IAppScopeResolver>()?.Resolve(http)?.ScopeId;
-        var scopeToken = string.IsNullOrWhiteSpace(scopeId)
-            ? "local"
-            : NormalizeStudioDocumentId(scopeId, "scope");
+        var scopeToken = NormalizeStudioDocumentId(normalizedScopeId, "scope");
         var definitionActorId = string.IsNullOrWhiteSpace(request.DefinitionActorId)
             ? $"app-script-definition:{scopeToken}:{scriptId}:{revision}"
             : request.DefinitionActorId.Trim();
@@ -255,7 +281,7 @@ internal static class StudioEndpoints
                 source,
                 sourceHash,
                 definitionActorId,
-                scopeId,
+                normalizedScopeId,
                 ct);
 
             var resolvedRuntimeActorId = await runtimeProvisioningPort.EnsureRuntimeAsync(
@@ -263,7 +289,7 @@ internal static class StudioEndpoints
                 revision,
                 runtimeActorId,
                 upsert.Snapshot,
-                scopeId,
+                normalizedScopeId,
                 ct);
 
             var runId = Guid.NewGuid().ToString("N");
@@ -278,13 +304,13 @@ internal static class StudioEndpoints
                 revision,
                 upsert.ActorId,
                 payload.TypeUrl,
-                scopeId,
+                normalizedScopeId,
                 ct);
 
             return Results.Ok(new
             {
                 accepted = true,
-                scopeId,
+                scopeId = normalizedScopeId,
                 scriptId,
                 scriptRevision = revision,
                 definitionActorId = upsert.ActorId,

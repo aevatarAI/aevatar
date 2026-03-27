@@ -1,3 +1,4 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Projection.Orchestration;
 using Aevatar.Workflow.Projection.ReadModels;
@@ -124,11 +125,23 @@ public sealed class ProjectionWorkflowActorBindingReaderTests
 
     private static ProjectionWorkflowActorBindingReader CreateReader(
         Func<string, CancellationToken, Task<WorkflowActorBindingDocument?>>? getDocumentAsync = null,
+        Func<ProjectionDocumentQuery, CancellationToken, Task<ProjectionDocumentQueryResult<WorkflowActorBindingDocument>>>? queryDocumentsAsync = null,
         Func<string, Task<bool>>? existsAsync = null,
         Func<string, Type, CancellationToken, Task<bool>>? isExpectedAsync = null)
     {
+        var queryAsync = queryDocumentsAsync;
+        if (queryAsync == null)
+        {
+            queryAsync = static (_, _) =>
+                Task.FromResult(new ProjectionDocumentQueryResult<WorkflowActorBindingDocument>
+                {
+                    Items = [],
+                });
+        }
+
         return new ProjectionWorkflowActorBindingReader(
             getDocumentAsync ?? ((_, _) => Task.FromResult<WorkflowActorBindingDocument?>(null)),
+            queryAsync,
             existsAsync ?? (_ => Task.FromResult(true)),
             isExpectedAsync ?? ((_, _, _) => Task.FromResult(false)));
     }

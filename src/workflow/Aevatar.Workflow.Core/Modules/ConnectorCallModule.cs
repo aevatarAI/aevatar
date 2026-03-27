@@ -6,6 +6,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Microsoft.Extensions.Logging;
 
@@ -17,11 +18,11 @@ namespace Aevatar.Workflow.Core.Modules;
 /// </summary>
 public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutionContext>
 {
-    private readonly IConnectorRegistry _registry;
+    private readonly IWorkflowConnectorResolver _connectorResolver;
 
-    public ConnectorCallModule(IConnectorRegistry registry)
+    public ConnectorCallModule(IWorkflowConnectorResolver connectorResolver)
     {
-        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        _connectorResolver = connectorResolver ?? throw new ArgumentNullException(nameof(connectorResolver));
     }
 
     public string Name => "connector_call";
@@ -86,7 +87,8 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
             return;
         }
 
-        if (!_registry.TryGet(connectorName, out var connector) || connector == null)
+        var connector = await _connectorResolver.ResolveAsync(ctx, connectorName, ct);
+        if (connector == null)
         {
             if (optional || string.Equals(onMissing, "skip", StringComparison.OrdinalIgnoreCase))
             {
