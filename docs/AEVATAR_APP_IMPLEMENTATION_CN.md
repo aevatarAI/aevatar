@@ -106,7 +106,7 @@
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR
   A["CLI: aevatar app"] --> B["AppCommandHandler"]
-  B --> C["探测 /api/app/health"]
+  B --> C["探测 /api/health"]
   C --> D["已有健康 App: 直接打开浏览器"]
   C --> E["端口被其他服务占用: 退出并提示 restart"]
   C --> F["无服务: 启动 AppToolHost"]
@@ -127,7 +127,7 @@ flowchart LR
 
 `AppCommandHandler.RunAsync()` 会先请求：
 
-- `GET /api/app/health`
+- `GET /api/health`
 
 根据返回值分三种处理：
 
@@ -194,7 +194,7 @@ App 的认证由 `NyxIdAppAuthentication` 提供，默认是：
 - `ResolveIsEnabled()` 当前实现是 “默认开启”，除非显式配置 `Cli:App:NyxId:Enabled=false`
 - 认证保护的是 `/api/**`
 - 匿名例外只有：
-  - `/api/app/health`
+  - `/api/health`
   - `/api/auth/me`
 - 静态页面本身不需要登录，因此未登录时浏览器仍能拿到前端壳，但前端会显示登录门面
 
@@ -789,7 +789,7 @@ sequenceDiagram
     U->>CLI: aevatar app --port 6688
     CLI->>ACH: RunAsync(port, apiBase, noBrowser)
     ACH->>ACH: Resolve sdkBaseUrl
-    ACH->>H: GET /api/app/health
+    ACH->>H: GET /api/health
 
     alt Healthy aevatar app already exists
         H-->>ACH: { ok: true, service: "aevatar.app" }

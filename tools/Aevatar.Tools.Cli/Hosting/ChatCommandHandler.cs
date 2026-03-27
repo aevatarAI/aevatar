@@ -574,7 +574,7 @@ internal static class ChatCommandHandler
         {
             using var http = new HttpClient { Timeout = HealthProbeTimeout };
             using var response = await http.GetAsync(
-                $"{localBaseUrl.TrimEnd('/')}/api/app/health",
+                $"{localBaseUrl.TrimEnd('/')}/api/health",
                 cancellationToken);
             var payload = await response.Content.ReadAsStringAsync(cancellationToken);
             if (!response.IsSuccessStatusCode)

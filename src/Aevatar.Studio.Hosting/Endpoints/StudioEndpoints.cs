@@ -13,6 +13,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.Hosting;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
 using System.Text.Json;
@@ -22,9 +23,17 @@ internal static class StudioEndpoints
 {
     public static void Map(IEndpointRouteBuilder app, bool embeddedWorkflowMode)
     {
-        app.MapGet("/api/auth/me", HandleGetAuthMeAsync);
+        app.MapGet("/api/auth/me", HandleGetAuthMeAsync)
+            .Produces<AppAuthMeResponse>(StatusCodes.Status200OK);
+        app.MapGet("/api/health", HandleGetHealthAsync)
+            .WithTags("Health")
+            .WithName("GetAppHealth")
+            .WithSummary("Get readiness status for the current app-facing API surface.")
+            .Produces<AevatarHealthResponse>(StatusCodes.Status200OK)
+            .Produces<AevatarHealthResponse>(StatusCodes.Status503ServiceUnavailable);
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
-            HandleGetContext(http, services, embeddedWorkflowMode));
+            HandleGetContext(http, services, embeddedWorkflowMode))
+            .Produces<AppContextResponse>(StatusCodes.Status200OK);
         app.MapPost("/api/app/workflow-generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
@@ -134,7 +143,7 @@ internal static class StudioEndpoints
         return $"{prefix}-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}";
     }
 
-    private static async Task<IResult> HandleGetAuthMeAsync(HttpContext http, CancellationToken ct)
+    private static async Task<AppAuthMeResponse> HandleGetAuthMeAsync(HttpContext http, CancellationToken ct)
     {
         var user = http.User;
         var isAuthenticated = user?.Identity?.IsAuthenticated == true;
@@ -145,18 +154,21 @@ internal static class StudioEndpoints
                           (await schemeProvider.GetAllSchemesAsync())
                           .Any(static scheme => !string.IsNullOrWhiteSpace(scheme.Name));
 
-        return Results.Json(new
-        {
-            enabled = authEnabled,
-            authenticated = isAuthenticated,
-            name = user?.Identity?.Name,
-            email = user?.FindFirst("email")?.Value,
-            scopeId = scope?.ScopeId,
-            scopeSource = scope?.Source,
-        });
+        return new AppAuthMeResponse(
+            Enabled: authEnabled,
+            Authenticated: isAuthenticated,
+            Name: user?.Identity?.Name,
+            Email: user?.FindFirst("email")?.Value,
+            ScopeId: scope?.ScopeId,
+            ScopeSource: scope?.Source);
     }
 
-    private static IResult HandleGetContext(HttpContext http, IServiceProvider services, bool embeddedWorkflowMode)
+    private static async Task<IResult> HandleGetHealthAsync(
+        AevatarHostHealthService healthService,
+        CancellationToken ct)
+        => (await healthService.GetReadinessAsync(ct)).ToHttpResult();
+
+    private static AppContextResponse HandleGetContext(HttpContext http, IServiceProvider services, bool embeddedWorkflowMode)
     {
         var publishedWorkflows = !embeddedWorkflowMode || services.GetService<IScopeWorkflowQueryPort>() != null;
         var scripts = services.GetService<AppScopedScriptService>() != null ||
@@ -166,32 +178,26 @@ internal static class StudioEndpoints
                        services.GetService<IScriptRuntimeCommandPort>() != null);
         var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
 
-        return Results.Json(new
-        {
-            mode = embeddedWorkflowMode ? "embedded" : "proxy",
-            scopeId = scopeContext?.ScopeId,
-            scopeResolved = scopeContext != null,
-            scopeSource = scopeContext?.Source,
-            workflowStorageMode = scopeContext == null ? "workspace" : "scope",
-            scriptStorageMode = scopeContext == null ? "draft" : "scope",
-            features = new
-            {
-                publishedWorkflows,
-                scripts,
-            },
-            scriptContract = new
-            {
-                inputType = Any.Pack(new AppScriptCommand()).TypeUrl,
-                readModelFields = new[]
-                {
+        return new AppContextResponse(
+            Mode: embeddedWorkflowMode ? "embedded" : "proxy",
+            ScopeId: scopeContext?.ScopeId,
+            ScopeResolved: scopeContext != null,
+            ScopeSource: scopeContext?.Source,
+            WorkflowStorageMode: scopeContext == null ? "workspace" : "scope",
+            ScriptStorageMode: scopeContext == null ? "draft" : "scope",
+            Features: new AppContextFeaturesResponse(
+                PublishedWorkflows: publishedWorkflows,
+                Scripts: scripts),
+            ScriptContract: new AppScriptContractResponse(
+                InputType: Any.Pack(new AppScriptCommand()).TypeUrl,
+                ReadModelFields:
+                [
                     AppScriptProtocol.InputField,
                     AppScriptProtocol.OutputField,
                     AppScriptProtocol.StatusField,
                     AppScriptProtocol.LastCommandIdField,
                     AppScriptProtocol.NotesField,
-                },
-            },
-        });
+                ]));
     }
 
     private static async Task<IResult> HandleRunDraftScriptAsync(
@@ -997,3 +1003,29 @@ internal static class StudioEndpoints
         string? CurrentFilePath,
         IReadOnlyDictionary<string, string>? Metadata);
 }
+
+public sealed record AppAuthMeResponse(
+    bool Enabled,
+    bool Authenticated,
+    string? Name,
+    string? Email,
+    string? ScopeId,
+    string? ScopeSource);
+
+public sealed record AppContextResponse(
+    string Mode,
+    string? ScopeId,
+    bool ScopeResolved,
+    string? ScopeSource,
+    string WorkflowStorageMode,
+    string ScriptStorageMode,
+    AppContextFeaturesResponse Features,
+    AppScriptContractResponse ScriptContract);
+
+public sealed record AppContextFeaturesResponse(
+    bool PublishedWorkflows,
+    bool Scripts);
+
+public sealed record AppScriptContractResponse(
+    string InputType,
+    IReadOnlyList<string> ReadModelFields);

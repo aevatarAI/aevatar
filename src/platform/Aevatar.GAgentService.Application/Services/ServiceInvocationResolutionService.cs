@@ -41,7 +41,7 @@ public sealed class ServiceInvocationResolutionService
         if (endpointView == null || endpointView.Targets.Count == 0)
             throw new InvalidOperationException($"Endpoint '{request.EndpointId}' has no serving target on service '{serviceKey}'.");
 
-        var selectedTarget = SelectTarget(endpointView.Targets, request);
+        var selectedTarget = SelectTarget(endpointView.Targets, request, serviceKey);
         var artifact = await _artifactStore.GetAsync(serviceKey, selectedTarget.RevisionId, ct)
             ?? throw new InvalidOperationException(
                 $"Prepared artifact for '{serviceKey}' revision '{selectedTarget.RevisionId}' was not found.");
@@ -64,13 +64,36 @@ public sealed class ServiceInvocationResolutionService
 
     private static ServiceTrafficTargetSnapshot SelectTarget(
         IReadOnlyList<ServiceTrafficTargetSnapshot> targets,
-        ServiceInvocationRequest request)
+        ServiceInvocationRequest request,
+        string serviceKey)
     {
-        var activeTargets = targets
+        var requestedRevisionId = request.RevisionId?.Trim() ?? string.Empty;
+        var selectedCandidates = targets;
+        if (!string.IsNullOrWhiteSpace(requestedRevisionId))
+        {
+            selectedCandidates = targets
+                .Where(x => string.Equals(x.RevisionId, requestedRevisionId, StringComparison.Ordinal))
+                .ToList();
+            if (selectedCandidates.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{requestedRevisionId}' has no serving target on service '{serviceKey}'.");
+            }
+        }
+
+        var activeTargets = selectedCandidates
             .Where(x => x.AllocationWeight > 0 && string.Equals(x.ServingState, ServiceServingState.Active.ToString(), StringComparison.Ordinal))
             .ToList();
         if (activeTargets.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedRevisionId))
+            {
+                throw new InvalidOperationException(
+                    $"Revision '{requestedRevisionId}' is not active on service '{serviceKey}'.");
+            }
+
             throw new InvalidOperationException("No active serving targets are available.");
+        }
 
         var totalWeight = activeTargets.Sum(x => x.AllocationWeight);
         var seed = request.CommandId;

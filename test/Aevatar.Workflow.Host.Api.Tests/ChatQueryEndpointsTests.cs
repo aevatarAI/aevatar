@@ -242,6 +242,7 @@ public sealed class ChatQueryEndpointsTests
         public WorkflowCatalogItemDetail? WorkflowDetail { get; init; }
         public WorkflowCapabilitiesDocument Capabilities { get; init; } = new();
         public WorkflowActorSnapshot? Snapshot { get; init; }
+        public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowActorGraphEdge> GraphEdges { get; init; } = [];
         public WorkflowActorGraphSubgraph GraphSubgraph { get; init; } = new();
@@ -281,6 +282,12 @@ public sealed class ChatQueryEndpointsTests
         {
             Calls.Add($"GetActorSnapshot:{actorId}");
             return Task.FromResult(Snapshot);
+        }
+
+        public Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default)
+        {
+            Calls.Add($"GetActorReport:{actorId}");
+            return Task.FromResult(Report);
         }
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)

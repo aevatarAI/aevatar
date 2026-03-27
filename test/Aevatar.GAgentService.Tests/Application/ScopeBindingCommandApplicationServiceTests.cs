@@ -878,6 +878,12 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             return Task.FromResult(DefaultReceipt);
         }
 
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default)
+        {
+            Calls.Add(new CommandCall("RetireRevisionAsync", command));
+            return Task.FromResult(DefaultReceipt);
+        }
+
         public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)
         {
             Calls.Add(new CommandCall("SetDefaultServingRevisionAsync", command));

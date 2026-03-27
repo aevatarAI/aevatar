@@ -1478,14 +1478,15 @@ const StudioPage: React.FC = () => {
     Boolean(draftWorkflowName.trim()) &&
     Boolean(draftDirectoryId) &&
     !savePending;
-  const canRunWorkflow =
+  const canOpenRunWorkflow =
     Boolean(draftYaml.trim()) &&
     Boolean(activeWorkflowName.trim()) &&
     Boolean(resolvedStudioScopeId) &&
-    Boolean(runPrompt.trim()) &&
     !runPending &&
     !parseYamlQuery.isLoading &&
     !hasValidationError(activeWorkflowFindings);
+  const canRunWorkflow =
+    canOpenRunWorkflow && Boolean(runPrompt.trim());
   const canPublishWorkflow =
     Boolean(draftYaml.trim()) &&
     Boolean(activeWorkflowName.trim()) &&
@@ -3963,6 +3964,7 @@ const StudioPage: React.FC = () => {
           savePending={savePending}
           canSaveWorkflow={canSaveWorkflow}
           runPending={runPending}
+          canOpenRunWorkflow={canOpenRunWorkflow}
           canRunWorkflow={canRunWorkflow}
           executionCanStop={executionCanStop}
           executionStopPending={executionStopPending}
@@ -4023,6 +4025,7 @@ const StudioPage: React.FC = () => {
           recentPromptHistory={recentPromptHistory}
           promptHistoryCount={promptHistory.length}
           runPending={runPending}
+          canOpenRunWorkflow={canOpenRunWorkflow}
           canRunWorkflow={canRunWorkflow}
           runNotice={runNotice}
           resolvedScopeId={resolvedStudioScopeId || undefined}

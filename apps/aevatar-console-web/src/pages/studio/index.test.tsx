@@ -890,6 +890,14 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           "Run started",
           "Run failed"
         ),
+        React.createElement(
+          "div",
+          {
+            key: "run-prompt-state",
+            "data-testid": "studio-run-prompt-state",
+          },
+          props.runPrompt ?? ""
+        ),
         renderNoticeTitle(
           "ask-ai-notice",
           props.askAiNotice,
@@ -963,6 +971,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           {
             key: "run-toggle",
             type: "button",
+            disabled: !props.canOpenRunWorkflow,
             onClick: () => setRunOpen(true),
           },
           "Run"
@@ -1055,6 +1064,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 {
                   key: "run-submit",
                   type: "button",
+                  disabled: !props.canRunWorkflow,
                   onClick: () => props.onStartExecution?.(),
                 },
                 "Run"
@@ -1548,6 +1558,11 @@ describe("StudioPage", () => {
   });
 
   it("hydrates the Studio execution prompt from the route query", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
     renderStudioPage(
       "/studio?template=published-demo&prompt=Continue%20this%20workflow%20in%20Studio"
     );
@@ -1558,16 +1573,50 @@ describe("StudioPage", () => {
       );
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByTestId("studio-run-prompt-state")).toHaveTextContent(
+      "Continue this workflow in Studio"
+    );
+  });
 
-    expect(
-      (await screen.findByLabelText(
-        "Studio execution prompt"
-      )) as HTMLTextAreaElement
-    ).toHaveValue("Continue this workflow in Studio");
+  it("opens the Studio run dialog for a valid draft before the execution prompt is filled", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
+      target: {
+        value: "name: workspace-demo\nsteps:\n  - id: review_step\n",
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(screen.getAllByRole("button", { name: "Run" }).at(-1)).toBeDisabled();
+
+    fireEvent.change(await screen.findByLabelText("Studio execution prompt"), {
+      target: {
+        value: "Run the active draft from Studio.",
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Run" }).at(-1)).toBeEnabled();
+    });
   });
 
   it("reuses legacy prompt history inside Studio", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
     window.localStorage.setItem(
       PROMPT_HISTORY_STORAGE_KEY,
       JSON.stringify([
@@ -1585,13 +1634,10 @@ describe("StudioPage", () => {
     expect(await screen.findByText("Recent prompts")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Reuse prompt" }));
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-    expect(
-      (await screen.findByLabelText(
-        "Studio execution prompt"
-      )) as HTMLTextAreaElement
-    ).toHaveValue("Review the current draft carefully.");
+    expect(await screen.findByTestId("studio-run-prompt-state")).toHaveTextContent(
+      "Review the current draft carefully."
+    );
   });
 
   it("opens runtime runs in draft mode from the active draft", async () => {

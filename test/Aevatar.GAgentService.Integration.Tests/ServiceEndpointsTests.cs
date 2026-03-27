@@ -135,6 +135,9 @@ public sealed class ServiceEndpointsTests
         var publishResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders/revisions/rev-1:publish",
             new ServiceEndpoints.ServiceIdentityHttpRequest("tenant", "app", "ns"));
+        var retireResponse = await host.Client.PostAsJsonAsync(
+            "/api/services/orders/revisions/rev-1:retire",
+            new ServiceEndpoints.ServiceIdentityHttpRequest("tenant", "app", "ns"));
         var defaultResponse = await host.Client.PostAsJsonAsync(
             "/api/services/orders:default-serving",
             new ServiceEndpoints.SetDefaultServingRevisionHttpRequest("tenant", "app", "ns", "rev-1"));
@@ -144,11 +147,13 @@ public sealed class ServiceEndpointsTests
 
         prepareResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         publishResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        retireResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         defaultResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
         activateResponse.StatusCode.Should().Be(HttpStatusCode.Accepted);
 
         host.CommandPort.PrepareRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.PublishRevisionCommand!.RevisionId.Should().Be("rev-1");
+        host.CommandPort.RetireServiceRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.SetDefaultServingRevisionCommand!.RevisionId.Should().Be("rev-1");
         host.CommandPort.ActivateServiceRevisionCommand!.RevisionId.Should().Be("rev-1");
     }
@@ -816,6 +821,8 @@ public sealed class ServiceEndpointsTests
 
         public PublishServiceRevisionCommand? PublishRevisionCommand { get; private set; }
 
+        public RetireServiceRevisionCommand? RetireServiceRevisionCommand { get; private set; }
+
         public SetDefaultServingRevisionCommand? SetDefaultServingRevisionCommand { get; private set; }
 
         public ActivateServiceRevisionCommand? ActivateServiceRevisionCommand { get; private set; }
@@ -859,6 +866,12 @@ public sealed class ServiceEndpointsTests
         {
             PublishRevisionCommand = command;
             return Task.FromResult(new ServiceCommandAcceptedReceipt("revision-actor", "cmd-publish-revision", "corr-publish-revision"));
+        }
+
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default)
+        {
+            RetireServiceRevisionCommand = command;
+            return Task.FromResult(new ServiceCommandAcceptedReceipt("revision-actor", "cmd-retire-revision", "corr-retire-revision"));
         }
 
         public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default)

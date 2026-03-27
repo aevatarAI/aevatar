@@ -194,9 +194,16 @@ public sealed class WorkflowExecutionQueryApplicationServiceTests
     private sealed class FakeArtifactQueryPort(List<string> calls) : IWorkflowExecutionArtifactQueryPort
     {
         public bool EnableActorQueryEndpoints { get; set; }
+        public WorkflowRunReport? Report { get; init; }
         public IReadOnlyList<WorkflowActorTimelineItem> Timeline { get; init; } = [];
         public IReadOnlyList<WorkflowActorGraphEdge> Edges { get; init; } = [];
         public WorkflowActorGraphSubgraph Subgraph { get; init; } = new();
+
+        public Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default)
+        {
+            calls.Add($"GetActorReport:{actorId}");
+            return Task.FromResult(Report);
+        }
 
         public Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(string actorId, int take = 200, CancellationToken ct = default)
         {

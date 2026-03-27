@@ -30,7 +30,7 @@
 ## Test Plan
 - [x] `dotnet test test/Aevatar.Tools.Cli.Tests/Aevatar.Tools.Cli.Tests.csproj --nologo`
 - [x] `dotnet test test/Aevatar.Workflow.Host.Api.Tests/Aevatar.Workflow.Host.Api.Tests.csproj --nologo`
-- [ ] Manual smoke: `aevatar app` startup + `/api/app/health`
+- [ ] Manual smoke: `aevatar app` startup + `/api/health`
 - [ ] Manual smoke: `aevatar app restart --port <port>`
 - [ ] Manual smoke: run bundled `telegram_openclaw_bridge_chat` with `telegram_user` connector config
 

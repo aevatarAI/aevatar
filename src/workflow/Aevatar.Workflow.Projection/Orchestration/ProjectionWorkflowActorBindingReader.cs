@@ -111,6 +111,94 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
         return bindings;
     }
 
+    public async Task<IReadOnlyList<WorkflowActorBinding>> QueryAsync(
+        WorkflowRunBindingQuery query,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ct.ThrowIfCancellationRequested();
+
+        var normalizedScopeId = (query.ScopeId ?? string.Empty).Trim();
+        var definitionActorIds = (query.DefinitionActorIds ?? [])
+            .Select(x => x?.Trim() ?? string.Empty)
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (definitionActorIds.Length == 0)
+            return [];
+
+        var boundedTake = Math.Clamp(query.Take, 1, 200);
+        var filters = new List<ProjectionDocumentFilter>
+        {
+            new()
+            {
+                FieldPath = nameof(WorkflowActorBindingDocument.ActorKindValue),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromInt64((int)WorkflowActorKind.Run),
+            },
+        };
+        if (!string.IsNullOrWhiteSpace(normalizedScopeId))
+        {
+            filters.Add(new ProjectionDocumentFilter
+            {
+                FieldPath = nameof(WorkflowActorBindingDocument.ScopeId),
+                Operator = ProjectionDocumentFilterOperator.Eq,
+                Value = ProjectionDocumentValue.FromString(normalizedScopeId),
+            });
+        }
+
+        filters.Add(new ProjectionDocumentFilter
+        {
+            FieldPath = nameof(WorkflowActorBindingDocument.DefinitionActorId),
+            Operator = definitionActorIds.Length == 1
+                ? ProjectionDocumentFilterOperator.Eq
+                : ProjectionDocumentFilterOperator.In,
+            Value = definitionActorIds.Length == 1
+                ? ProjectionDocumentValue.FromString(definitionActorIds[0])
+                : ProjectionDocumentValue.FromStrings(definitionActorIds),
+        });
+
+        var result = await _queryDocumentsAsync(
+            new ProjectionDocumentQuery
+            {
+                Take = boundedTake,
+                Filters = filters,
+                Sorts =
+                [
+                    new ProjectionDocumentSort
+                    {
+                        FieldPath = nameof(WorkflowActorBindingDocument.UpdatedAt),
+                        Direction = ProjectionDocumentSortDirection.Desc,
+                    },
+                    new ProjectionDocumentSort
+                    {
+                        FieldPath = nameof(WorkflowActorBindingDocument.ActorId),
+                        Direction = ProjectionDocumentSortDirection.Asc,
+                    },
+                ],
+            },
+            ct);
+
+        if (result.Items.Count == 0)
+            return [];
+
+        var bindings = new List<WorkflowActorBinding>(result.Items.Count);
+        foreach (var document in result.Items)
+        {
+            var actorId = document.ActorId?.Trim();
+            if (string.IsNullOrWhiteSpace(actorId) ||
+                !await _existsAsync(actorId) ||
+                !await _isExpectedAsync(actorId, typeof(WorkflowRunGAgent), ct))
+            {
+                continue;
+            }
+
+            bindings.Add(MapDocument(document, actorId, WorkflowActorKind.Run));
+        }
+
+        return bindings;
+    }
+
     private async Task<WorkflowActorKind> ResolveActorKindAsync(string actorId, CancellationToken ct)
     {
         if (await _isExpectedAsync(actorId, typeof(WorkflowGAgent), ct))
@@ -157,6 +245,10 @@ internal sealed class ProjectionWorkflowActorBindingReader : IWorkflowActorBindi
             document.WorkflowName ?? string.Empty,
             document.WorkflowYaml ?? string.Empty,
             new Dictionary<string, string>(document.InlineWorkflowYamls, StringComparer.OrdinalIgnoreCase),
-            document.ScopeId ?? string.Empty);
+            document.ScopeId ?? string.Empty,
+            document.StateVersion,
+            document.LastEventId ?? string.Empty,
+            document.CreatedAt,
+            document.UpdatedAt);
     }
 }
