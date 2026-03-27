@@ -12,7 +12,6 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
 import {
-  buildRuntimeObservabilityHref,
   buildRuntimeRunsHref,
   buildRuntimeWorkflowsHref,
 } from "@/shared/navigation/runtimeRoutes";
@@ -30,7 +29,10 @@ import {
   Typography,
 } from "antd";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
+import {
+  runtimeActorsApi,
+  type ActorGraphDirection,
+} from "@/shared/api/runtimeActorsApi";
 import type {
   WorkflowActorGraphEdge,
   WorkflowActorGraphNode,
@@ -40,10 +42,6 @@ import type {
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { buildActorGraphElements } from "@/shared/graphs/buildGraphElements";
 import GraphCanvas from "@/shared/graphs/GraphCanvas";
-import {
-  type ActorGraphDirection,
-  loadConsolePreferences,
-} from "@/shared/preferences/consolePreferences";
 import { loadRecentRuns } from "@/shared/runs/recentRuns";
 import {
   codeBlockStyle,
@@ -62,6 +60,7 @@ import {
   summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
+import { describeError } from "@/shared/ui/errorText";
 import {
   type ActorTimelineFilters,
   type ActorTimelineRow,
@@ -112,6 +111,11 @@ type ActorEdgeDetailRecord = WorkflowActorGraphEdge & {
 type GraphControlValues = {
   graphViewMode: ActorGraphViewMode;
 };
+
+const defaultActorTimelineTake = 50;
+const defaultActorGraphDepth = 3;
+const defaultActorGraphTake = 100;
+const defaultActorGraphDirection: ActorGraphDirection = "Both";
 
 type SummaryFieldProps = {
   copyable?: boolean;
@@ -373,14 +377,13 @@ function parseGraphViewMode(value: string | null): ActorGraphViewMode {
 }
 
 function readStateFromUrl(): ActorPageState {
-  const preferences = loadConsolePreferences();
   if (typeof window === "undefined") {
     return {
       actorId: "",
-      timelineTake: preferences.actorTimelineTake,
-      graphDepth: preferences.actorGraphDepth,
-      graphTake: preferences.actorGraphTake,
-      graphDirection: preferences.actorGraphDirection,
+      timelineTake: defaultActorTimelineTake,
+      graphDepth: defaultActorGraphDepth,
+      graphTake: defaultActorGraphTake,
+      graphDirection: defaultActorGraphDirection,
       edgeTypes: [],
     };
   }
@@ -390,19 +393,19 @@ function readStateFromUrl(): ActorPageState {
     actorId: params.get("actorId") ?? "",
     timelineTake: parsePositiveInt(
       params.get("timelineTake"),
-      preferences.actorTimelineTake
+      defaultActorTimelineTake
     ),
     graphDepth: parsePositiveInt(
       params.get("graphDepth"),
-      preferences.actorGraphDepth
+      defaultActorGraphDepth
     ),
     graphTake: parsePositiveInt(
       params.get("graphTake"),
-      preferences.actorGraphTake
+      defaultActorGraphTake
     ),
     graphDirection: parseDirection(
       params.get("graphDirection"),
-      preferences.actorGraphDirection
+      defaultActorGraphDirection
     ),
     edgeTypes: params
       .getAll("edgeTypes")
@@ -848,17 +851,6 @@ const ActorsPage: React.FC = () => {
             <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
               Open Runtime Workflows
             </Button>
-            <Button
-              onClick={() =>
-                history.push(
-                  buildRuntimeObservabilityHref({
-                    actorId: filters.actorId,
-                  })
-                )
-              }
-            >
-              Open observability
-            </Button>
           </Space>
         }
       >
@@ -1149,7 +1141,7 @@ const ActorsPage: React.FC = () => {
                             showIcon
                             type="error"
                             title="Failed to load timeline"
-                            description={String(timelineQuery.error)}
+                            description={describeError(timelineQuery.error)}
                           />
                         ) : null}
 
@@ -1274,7 +1266,7 @@ const ActorsPage: React.FC = () => {
                             showIcon
                             type="error"
                             title="Failed to load graph topology"
-                            description={String(currentGraphError)}
+                            description={describeError(currentGraphError)}
                           />
                         ) : currentGraph && currentGraph.nodes.length > 0 ? (
                           <div style={graphCanvasShellStyle}>
@@ -1337,7 +1329,7 @@ const ActorsPage: React.FC = () => {
                         showIcon
                         type="error"
                         title="Failed to load actor"
-                        description={String(snapshotQuery.error)}
+                        description={describeError(snapshotQuery.error)}
                       />
                     ) : snapshotRecord ? (
                       <>
@@ -1561,7 +1553,7 @@ const ActorsPage: React.FC = () => {
                             showIcon
                             type="error"
                             title="Failed to load graph view"
-                            description={String(currentGraphError)}
+                            description={describeError(currentGraphError)}
                           />
                         ) : graphSummary ? (
                           <>

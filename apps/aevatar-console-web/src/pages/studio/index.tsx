@@ -23,12 +23,6 @@ import { ensureActiveAuthSession } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { sanitizeReturnTo } from '@/shared/auth/session';
 import {
-  CONSOLE_PREFERENCES_UPDATED_EVENT,
-  loadConsolePreferences,
-  type StudioAppearanceTheme,
-  type StudioColorMode,
-} from '@/shared/preferences/consolePreferences';
-import {
   clearPlaygroundPromptHistory,
   loadPlaygroundPromptHistory,
   savePlaygroundPromptHistoryEntry,
@@ -163,9 +157,17 @@ type StudioSettingsDraft = {
   readonly providers: StudioProviderSettings[];
 };
 
+type StudioAppearanceTheme = 'blue' | 'coral' | 'forest';
+type StudioColorMode = 'light' | 'dark';
+
 type StudioAppearancePreferences = {
   readonly appearanceTheme: StudioAppearanceTheme;
   readonly colorMode: StudioColorMode;
+};
+
+const defaultStudioAppearance: StudioAppearancePreferences = {
+  appearanceTheme: 'blue',
+  colorMode: 'light',
 };
 
 let studioLocalKeyCounter = 0;
@@ -790,14 +792,6 @@ function createProviderDraft(
   };
 }
 
-function readStudioAppearancePreferences(): StudioAppearancePreferences {
-  const preferences = loadConsolePreferences();
-  return {
-    appearanceTheme: preferences.studioAppearanceTheme,
-    colorMode: preferences.studioColorMode,
-  };
-}
-
 function isExecutionStopAllowed(status: string | undefined): boolean {
   const normalized = status?.trim().toLowerCase() ?? '';
   return !['completed', 'failed', 'stopped', 'cancelled'].includes(normalized);
@@ -1001,8 +995,6 @@ const StudioPage: React.FC = () => {
   const [selectedProviderName, setSelectedProviderName] = useState('');
   const [settingsPending, setSettingsPending] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<StudioNotice | null>(null);
-  const [studioAppearance, setStudioAppearance] =
-    useState<StudioAppearancePreferences>(() => readStudioAppearancePreferences());
   const [runtimeTestPending, setRuntimeTestPending] = useState(false);
   const [runtimeTestResult, setRuntimeTestResult] =
     useState<StudioRuntimeTestResult | null>(null);
@@ -1034,6 +1026,7 @@ const StudioPage: React.FC = () => {
     Boolean(authSessionQuery.data?.authenticated);
   const studioHostReady =
     studioHostAccessResolved && studioHostAuthenticated;
+  const studioAppearance = defaultStudioAppearance;
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1280,30 +1273,6 @@ const StudioPage: React.FC = () => {
         availableStepTypes,
       }),
   });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return undefined;
-    }
-
-    const syncStudioAppearance = () => {
-      setStudioAppearance(readStudioAppearancePreferences());
-    };
-
-    window.addEventListener(
-      CONSOLE_PREFERENCES_UPDATED_EVENT,
-      syncStudioAppearance,
-    );
-    window.addEventListener('storage', syncStudioAppearance);
-
-    return () => {
-      window.removeEventListener(
-        CONSOLE_PREFERENCES_UPDATED_EVENT,
-        syncStudioAppearance,
-      );
-      window.removeEventListener('storage', syncStudioAppearance);
-    };
-  }, []);
 
   useEffect(() => {
     if (

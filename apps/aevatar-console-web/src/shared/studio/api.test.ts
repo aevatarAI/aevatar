@@ -108,6 +108,28 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('collapses HTML error pages into a compact HTTP error message', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      text: async () => `<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <title>aevatar.ai | 502: Bad gateway</title>
+  </head>
+  <body>
+    <h1>Bad gateway</h1>
+  </body>
+</html>`,
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getAuthSession()).rejects.toThrow(
+      'HTTP 502 Bad Gateway',
+    );
+  });
+
   it('sends available step types when parsing workflow yaml', async () => {
     persistAuthSession({
       tokens: {

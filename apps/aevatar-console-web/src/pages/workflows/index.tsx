@@ -65,6 +65,7 @@ import {
   tallScrollPanelStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
+import { describeError } from "@/shared/ui/errorText";
 import WorkflowYamlViewer from "./WorkflowYamlViewer";
 import {
   buildStepRows,
@@ -1602,7 +1603,7 @@ const WorkflowsPage: React.FC = () => {
                     showIcon
                     type="error"
                     title="Failed to load workflow catalog"
-                    description={String(catalogQuery.error)}
+                    description={describeError(catalogQuery.error)}
                   />
                 ) : null}
 
@@ -1658,7 +1659,7 @@ const WorkflowsPage: React.FC = () => {
                 showIcon
                 type="error"
                 title="Failed to load workflow detail"
-                description={String(detailQuery.error)}
+                description={describeError(detailQuery.error)}
               />
             ) : detailQuery.data ? (
               <div style={cardStackStyle}>

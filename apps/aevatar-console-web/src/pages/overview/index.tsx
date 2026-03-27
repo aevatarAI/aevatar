@@ -13,7 +13,6 @@ import React, { useMemo } from "react";
 import { history } from "@/shared/navigation/history";
 import {
   buildRuntimeExplorerHref,
-  buildRuntimeObservabilityHref,
   buildRuntimePrimitivesHref,
   buildRuntimeRunsHref,
   buildRuntimeWorkflowsHref,
@@ -24,8 +23,6 @@ import {
   cardListHeaderStyle,
   cardListItemStyle,
   cardListMainStyle,
-  cardListStyle,
-  cardListUrlStyle,
   cardStackStyle,
   embeddedPanelStyle,
   fillCardStyle,
@@ -38,7 +35,7 @@ import {
   summaryMetricValueStyle,
   stretchColumnStyle,
 } from "@/shared/ui/proComponents";
-import type { ObservabilityOverviewItem } from "./useOverviewData";
+import { describeError } from "@/shared/ui/errorText";
 import { useOverviewData } from "./useOverviewData";
 
 type CapabilitySurfaceItem = {
@@ -111,89 +108,12 @@ const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
   </div>
 );
 
-function renderObservabilityTargetCards(
-  observabilityTargets: ObservabilityOverviewItem[],
-  preferredWorkflow: string,
-): React.ReactNode {
-  if (observabilityTargets.length === 0) {
-    return (
-      <Typography.Text type="secondary">
-        No observability targets configured.
-      </Typography.Text>
-    );
-  }
-
-  return (
-    <div style={cardListStyle}>
-      {observabilityTargets.map((record) => (
-        <div key={record.id} style={cardListItemStyle}>
-          <div style={cardListHeaderStyle}>
-            <div style={cardListMainStyle}>
-              <Space wrap size={[8, 8]}>
-                <Typography.Text strong>{record.label}</Typography.Text>
-                <Tag color={record.status === "configured" ? "success" : "default"}>
-                  {record.status}
-                </Tag>
-              </Space>
-              <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-                {record.description}
-              </Typography.Paragraph>
-            </div>
-          </div>
-
-          {record.homeUrl ? (
-            <Typography.Paragraph
-              copyable={{ text: record.homeUrl }}
-              ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
-              style={cardListUrlStyle}
-              type="secondary"
-            >
-              {record.homeUrl}
-            </Typography.Paragraph>
-          ) : (
-            <Typography.Text type="secondary">No URL configured.</Typography.Text>
-          )}
-
-          <div style={cardListActionStyle}>
-            <Button
-              type="link"
-              onClick={() =>
-                history.push(
-                  buildRuntimeObservabilityHref({
-                    workflow: preferredWorkflow,
-                  })
-                )
-              }
-            >
-              Open hub
-            </Button>
-            <Button
-              type="link"
-              disabled={record.status !== "configured"}
-              href={record.homeUrl || undefined}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open
-            </Button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 const OverviewPage: React.FC = () => {
   const {
     agentsQuery,
     capabilitiesQuery,
-    configuredObservabilityCount,
-    grafanaBaseUrl,
     humanFocusedWorkflows,
     liveActors,
-    observabilityTargets,
-    preferences,
-    profileData,
     visibleCatalogItems,
     workflowsQuery,
     capabilityConnectorSummary,
@@ -241,20 +161,6 @@ const OverviewPage: React.FC = () => {
         onOpen: () => history.push(buildRuntimeExplorerHref()),
       },
       {
-        id: "surface-observability",
-        title: "Observability",
-        summary: `${configuredObservabilityCount}/${observabilityTargets.length} targets configured`,
-        description:
-          "Drive Grafana, Jaeger, Loki, and other external tools with the current runtime context.",
-        actionLabel: "Open Runtime Observability",
-        onOpen: () =>
-          history.push(
-            buildRuntimeObservabilityHref({
-              workflow: preferences.preferredWorkflow,
-            })
-          ),
-      },
-      {
         id: "surface-scopes",
         title: "Scope assets",
         summary: "Published workflows and scripts",
@@ -284,9 +190,6 @@ const OverviewPage: React.FC = () => {
     ],
     [
       agentsQuery.data?.length,
-      configuredObservabilityCount,
-      observabilityTargets.length,
-      preferences.preferredWorkflow,
       capabilitiesQuery.data?.primitives.length,
       visibleCatalogItems.length,
     ]
@@ -294,15 +197,10 @@ const OverviewPage: React.FC = () => {
   const platformQuickActions = useMemo<QuickActionItem[]>(
     () => [
       {
-        id: "quick-start-preferred",
-        label: "Start preferred workflow",
+        id: "quick-start-direct",
+        label: "Start direct workflow",
         primary: true,
-        onOpen: () =>
-          history.push(
-            buildRuntimeRunsHref({
-              workflow: preferences.preferredWorkflow,
-            })
-          ),
+        onOpen: () => history.push(buildRuntimeRunsHref({ workflow: "direct" })),
       },
       {
         id: "quick-workflows",
@@ -325,16 +223,6 @@ const OverviewPage: React.FC = () => {
         onOpen: () => history.push(buildRuntimeExplorerHref()),
       },
       {
-        id: "quick-observability",
-        label: "Open Runtime Observability",
-        onOpen: () =>
-          history.push(
-            buildRuntimeObservabilityHref({
-              workflow: preferences.preferredWorkflow,
-            })
-          ),
-      },
-      {
         id: "quick-scopes",
         label: "Open scopes",
         onOpen: () => history.push("/scopes"),
@@ -350,33 +238,23 @@ const OverviewPage: React.FC = () => {
         onOpen: () => history.push("/governance"),
       },
     ],
-    [preferences.preferredWorkflow]
+    []
   );
   const localQuickActions = useMemo<QuickActionItem[]>(
-    () =>
-      [
-        {
-          id: "quick-console-settings",
-          label: "Open console settings",
-          onOpen: () => history.push("/settings/console"),
-        },
-        grafanaBaseUrl
-          ? {
-              id: "quick-grafana-explore",
-              label: "Open Grafana Explore",
-              href: `${grafanaBaseUrl}/explore`,
-              target: "_blank",
-              rel: "noreferrer",
-            }
-          : null,
-      ].filter(Boolean) as QuickActionItem[],
-    [grafanaBaseUrl]
+    () => [
+      {
+        id: "quick-console-settings",
+        label: "Open settings",
+        onOpen: () => history.push("/settings"),
+      },
+    ],
+    []
   );
 
   return (
     <PageContainer
       title="Overview"
-      content="Overview of runtime workflows, scope assets, raw platform services, platform governance, actors, and observability."
+      content="Overview of runtime workflows, scope assets, raw platform services, platform governance, and actors."
     >
       <Row gutter={[16, 16]} align="stretch">
         <Col xs={24} lg={8} style={stretchColumnStyle}>
@@ -409,34 +287,6 @@ const OverviewPage: React.FC = () => {
               title="Library workflows"
               value={visibleCatalogItems.length}
             />
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Space direction="vertical" size={8}>
-              <Typography.Text strong>Preferred workflow</Typography.Text>
-              <Tag color="processing">{preferences.preferredWorkflow}</Tag>
-            </Space>
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Space direction="vertical" size={8}>
-              <Typography.Text strong>Observability</Typography.Text>
-              {grafanaBaseUrl ? (
-                <Button
-                  type="link"
-                  href={grafanaBaseUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ paddingInline: 0 }}
-                >
-                  Open Grafana
-                </Button>
-              ) : (
-                <Tag>Not configured</Tag>
-              )}
-            </Space>
           </ProCard>
         </Col>
       </Row>
@@ -476,8 +326,7 @@ const OverviewPage: React.FC = () => {
                     type="secondary"
                     style={{ display: "block", marginTop: 4 }}
                   >
-                    Jump into browser-level preferences, local runtime
-                    configuration, and external observability tools.
+                    Jump into account settings and local console entry points.
                   </Typography.Text>
                 </div>
                 <Space wrap size={[8, 8]}>
@@ -543,39 +392,21 @@ const OverviewPage: React.FC = () => {
           <ProCard title="Console profile" {...moduleCardProps} style={fillCardStyle}>
             <div style={cardStackStyle}>
               <div style={quickActionSectionStyle}>
-                <Space wrap size={[8, 8]}>
-                  <Tag color="processing">{profileData.preferredWorkflow}</Tag>
-                  <Tag>{profileData.observability}</Tag>
-                </Space>
-
                 <div style={summaryFieldGridStyle}>
-                  <SummaryField
-                    label="Preferred workflow"
-                    value={preferences.preferredWorkflow}
-                  />
-                  <SummaryField
-                    label="Observability"
-                    value={grafanaBaseUrl ? "Configured" : "Not configured"}
-                  />
                   <SummaryField
                     label="Library workflows"
                     value={visibleCatalogItems.length}
                   />
+                  <SummaryField
+                    label="Live actors"
+                    value={agentsQuery.data?.length ?? 0}
+                  />
                 </div>
 
                 <Space wrap size={[8, 8]}>
-                  <Button onClick={() => history.push("/settings/console")}>
-                    Open console settings
+                  <Button onClick={() => history.push("/settings")}>
+                    Open settings
                   </Button>
-                  {grafanaBaseUrl ? (
-                    <Button
-                      href={grafanaBaseUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open Grafana
-                    </Button>
-                  ) : null}
                 </Space>
               </div>
 
@@ -664,7 +495,7 @@ const OverviewPage: React.FC = () => {
                 showIcon
                 type="error"
                 title="Failed to load capability digest"
-                description={String(capabilitiesQuery.error)}
+                description={describeError(capabilitiesQuery.error)}
               />
             ) : (
               <div style={cardStackStyle}>
@@ -744,20 +575,6 @@ const OverviewPage: React.FC = () => {
         </Col>
       </Row>
 
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
-        <Col xs={24} style={stretchColumnStyle}>
-          <ProCard
-            title="Observability targets"
-            {...moduleCardProps}
-            style={fillCardStyle}
-          >
-            {renderObservabilityTargetCards(
-              observabilityTargets,
-              preferences.preferredWorkflow,
-            )}
-          </ProCard>
-        </Col>
-      </Row>
     </PageContainer>
   );
 };

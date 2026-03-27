@@ -1,5 +1,6 @@
 import { Tag, Typography } from 'antd';
 import React from 'react';
+import { describeError } from '@/shared/ui/errorText';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
 
 type StudioBootstrapGateProps = {
@@ -32,6 +33,15 @@ const studioBootstrapNoticeCardStyle: React.CSSProperties = {
   gap: 8,
   minWidth: 0,
   padding: '12px 14px',
+};
+
+const studioBootstrapNoticeDescriptionStyle: React.CSSProperties = {
+  margin: 0,
+  display: '-webkit-box',
+  overflow: 'hidden',
+  wordBreak: 'break-word',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 2,
 };
 
 function getStudioBootstrapNoticeAccent(
@@ -76,7 +86,11 @@ const StudioBootstrapNotice: React.FC<StudioBootstrapNoticeProps> = ({
     >
       <Tag color={type}>{accent.label}</Tag>
       <Typography.Text strong>{title}</Typography.Text>
-      <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+      <Typography.Paragraph
+        style={studioBootstrapNoticeDescriptionStyle}
+        title={description}
+        type="secondary"
+      >
         {description}
       </Typography.Paragraph>
     </div>
@@ -84,7 +98,7 @@ const StudioBootstrapNotice: React.FC<StudioBootstrapNoticeProps> = ({
 };
 
 function renderErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return describeError(error);
 }
 
 const StudioBootstrapGate: React.FC<StudioBootstrapGateProps> = ({

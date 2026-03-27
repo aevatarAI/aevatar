@@ -100,10 +100,6 @@ export default [
     redirect: "/runtime/explorer",
   },
   {
-    path: "/observability",
-    redirect: "/runtime/observability",
-  },
-  {
     name: "Runtime",
     icon: "deploymentUnit",
     path: "/runtime",
@@ -132,22 +128,13 @@ export default [
         name: "Explorer",
         component: "./actors",
       },
-      {
-        path: "observability",
-        name: "Observability",
-        component: "./observability",
-      },
     ],
   },
   {
     path: "/settings",
     name: "Settings",
     icon: "setting",
-    redirect: "/settings/console",
-  },
-  {
-    path: "/settings/console",
-    component: "./settings/console",
+    component: "./settings/account",
   },
   {
     path: "/",
