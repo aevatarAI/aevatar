@@ -246,6 +246,22 @@ export const scriptsApi = {
     });
   },
 
+  runDraftScript(payload: {
+    scriptId?: string;
+    scriptRevision?: string;
+    source?: string;
+    input?: string;
+    definitionActorId?: string;
+    runtimeActorId?: string;
+    package?: ScriptPackage | null;
+  }): Promise<DraftRunResult> {
+    return requestJson('/api/app/scripts/draft-run', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+  },
+
   listRuntimes(take = 24): Promise<ScriptReadModelSnapshot[]> {
     return requestJson(`/api/app/scripts/runtimes?take=${take}`);
   },
@@ -277,22 +293,6 @@ export const scriptsApi = {
     return requestJson(
       `/api/app/scripts/evolutions/${encodeURIComponent(proposalId)}`,
     );
-  },
-
-  runDraftScript(payload: {
-    scriptId: string;
-    scriptRevision: string;
-    source?: string;
-    package?: ScriptPackage | null;
-    input?: string;
-    definitionActorId?: string;
-    runtimeActorId?: string;
-  }): Promise<DraftRunResult> {
-    return requestJson('/api/app/scripts/draft-run', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(payload),
-    });
   },
 
   async generateScript(

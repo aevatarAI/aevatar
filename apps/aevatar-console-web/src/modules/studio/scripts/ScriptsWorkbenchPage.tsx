@@ -40,7 +40,6 @@ import {
 } from '@/shared/studio/scriptPackage';
 import {
   formatStudioHostModeLabel,
-  getEmbeddedOnlyUnavailableMessage,
   getStudioHostModeTooltip,
 } from '@/shared/studio/scriptHostCapabilities';
 import { formatScriptDateTime, isScopeDetailDirty } from '@/shared/studio/scriptUtils';
@@ -255,6 +254,13 @@ function normalizeStudioId(value: string, fallbackPrefix: string): string {
     .toISOString()
     .replace(/[-:.TZ]/g, '')
     .slice(0, 14)}`;
+}
+
+function buildScopeScriptBindingRevisionId(
+  scriptId: string,
+  scriptRevision: string,
+): string {
+  return normalizeStudioId(`${scriptId}-${scriptRevision}`, 'rev');
 }
 
 function createStarterPackage(): ScriptPackage {
@@ -723,8 +729,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
   const isEmbeddedMode = appContext.mode === 'embedded';
   const resolvedScopeId = appContext.scopeId?.trim() || '';
-  const draftRunUnavailableMessage = getEmbeddedOnlyUnavailableMessage('draft-run');
-  const askAiUnavailableMessage = getEmbeddedOnlyUnavailableMessage('ask-ai');
+  const askAiUnavailableMessage = 'Ask AI requires an embedded host.';
   const headerHostLabel = formatStudioHostModeLabel(appContext.mode);
   const headerHostTooltip = getStudioHostModeTooltip(appContext.mode);
 
@@ -1403,7 +1408,15 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     await queryClient.invalidateQueries({
       queryKey: ['studio-scripts-catalogs', appContext.scopeId],
     });
-  }, [appContext.scopeId, queryClient]);
+    const bindingScopeIds = Array.from(
+      new Set([appContext.scopeId, resolvedScopeId].filter(Boolean)),
+    );
+    for (const scopeId of bindingScopeIds) {
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+    }
+  }, [appContext.scopeId, queryClient, resolvedScopeId]);
 
   const refreshRuntimeSnapshots = React.useCallback(async () => {
     await queryClient.invalidateQueries({
@@ -1489,55 +1502,57 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     }
   }, [openWorkspaceSection, selectedDraft]);
 
-  const handleSave = React.useCallback(async () => {
+  const saveCurrentDraftToScope = React.useCallback(async () => {
     if (!selectedDraft) {
-      return;
+      throw new Error('Select a script draft before saving.');
     }
 
     if (!scopeBacked) {
-      setNotice({
-        type: 'warning',
-        message: 'Save is only available after Studio resolves the current scope.',
-      });
-      return;
+      throw new Error('Save is only available after Studio resolves the current scope.');
     }
 
+    const response = await scriptsApi.saveScript({
+      scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
+      revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
+      expectedBaseRevision: selectedDraft.baseRevision || undefined,
+      sourceText: serializePersistedSource(selectedDraft.package),
+      package: selectedDraft.package,
+    });
+
+    updateSelectedDraft((draft) => ({
+      ...draft,
+      scriptId: response.script?.scriptId || draft.scriptId,
+      revision:
+        response.script?.activeRevision || response.source?.revision || draft.revision,
+      baseRevision:
+        response.script?.activeRevision || response.source?.revision || draft.baseRevision,
+      definitionActorId:
+        response.script?.definitionActorId ||
+        response.source?.definitionActorId ||
+        draft.definitionActorId,
+      lastSourceHash:
+        response.source?.sourceHash ||
+        response.script?.activeSourceHash ||
+        draft.lastSourceHash,
+      scopeDetail: response,
+    }));
+    onSelectScriptId?.(response.script?.scriptId || selectedDraft.scriptId);
+
+    return response;
+  }, [onSelectScriptId, scopeBacked, selectedDraft, updateSelectedDraft]);
+
+  const handleSave = React.useCallback(async () => {
     setSavePending(true);
     setNotice(null);
     try {
-      const response = await scriptsApi.saveScript({
-        scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
-        revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
-        expectedBaseRevision: selectedDraft.baseRevision || undefined,
-        sourceText: serializePersistedSource(selectedDraft.package),
-        package: selectedDraft.package,
-      });
-
-      updateSelectedDraft((draft) => ({
-        ...draft,
-        scriptId: response.script?.scriptId || draft.scriptId,
-        revision:
-          response.script?.activeRevision || response.source?.revision || draft.revision,
-        baseRevision:
-          response.script?.activeRevision || response.source?.revision || draft.baseRevision,
-        definitionActorId:
-          response.script?.definitionActorId ||
-          response.source?.definitionActorId ||
-          draft.definitionActorId,
-        lastSourceHash:
-          response.source?.sourceHash ||
-          response.script?.activeSourceHash ||
-          draft.lastSourceHash,
-        scopeDetail: response,
-      }));
+      const response = await saveCurrentDraftToScope();
       await refreshScopeScripts();
       setActiveResultTab('save');
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `Saved ${response.script?.scriptId || selectedDraft.scriptId} into current scope ${response.scopeId}.`,
+        message: `Saved ${response.script?.scriptId || selectedDraft?.scriptId || 'script'} into current scope ${response.scopeId}.`,
       });
-      onSelectScriptId?.(response.script?.scriptId || selectedDraft.scriptId);
     } catch (error) {
       setNotice({
         type: 'error',
@@ -1546,7 +1561,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     } finally {
       setSavePending(false);
     }
-  }, [onSelectScriptId, openWorkspaceSection, refreshScopeScripts, scopeBacked, selectedDraft, updateSelectedDraft]);
+  }, [openWorkspaceSection, refreshScopeScripts, saveCurrentDraftToScope, selectedDraft?.scriptId]);
 
   const handleOpenBindScope = React.useCallback(() => {
     const scopeScript = selectedDraft?.scopeDetail?.script;
@@ -1569,16 +1584,20 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       scopeScript.activeRevision || selectedDraft.revision,
       'rev',
     );
+    const bindingRevisionId = buildScopeScriptBindingRevisionId(
+      scriptId,
+      scriptRevision,
+    );
 
     setBindPending(true);
     setNotice(null);
     try {
       await studioApi.bindScopeScript({
         scopeId: resolvedScopeId,
-        displayName: trimOptional(bindDisplayNameDraft) || scriptId,
+        displayName: bindDisplayNameDraft.trim() || scriptId,
         scriptId,
         scriptRevision,
-        revisionId: scriptRevision,
+        revisionId: bindingRevisionId,
       });
 
       setBindModalOpen(false);
@@ -1620,7 +1639,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!isEmbeddedMode) {
       setNotice({
         type: 'warning',
-        message: draftRunUnavailableMessage,
+        message: 'Test Run requires an embedded Studio host.',
       });
       return;
     }
@@ -1628,7 +1647,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setRunPending(true);
     setNotice(null);
     try {
-      const response = await scriptsApi.runDraftScript({
+      const result = await scriptsApi.runDraftScript({
         scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
         scriptRevision: normalizeStudioId(selectedDraft.revision, 'draft'),
         source: serializePersistedSource(selectedDraft.package),
@@ -1640,38 +1659,45 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
       updateSelectedDraft((draft) => ({
         ...draft,
-        scriptId: response.scriptId || draft.scriptId,
-        revision: response.scriptRevision || draft.revision,
-        baseRevision: draft.baseRevision || response.scriptRevision || '',
         input: runInputDraft,
-        definitionActorId: response.definitionActorId || draft.definitionActorId,
-        runtimeActorId: response.runtimeActorId || draft.runtimeActorId,
-        lastSourceHash: response.sourceHash || draft.lastSourceHash,
-        lastRun: response,
+        runtimeActorId: result.runtimeActorId || draft.runtimeActorId,
+        definitionActorId: result.definitionActorId || draft.definitionActorId,
+        revision: result.scriptRevision || draft.revision,
+        lastSourceHash: result.sourceHash || draft.lastSourceHash,
+        lastRun: result,
       }));
-      setSelectedRuntimeActorId(response.runtimeActorId);
+      setSelectedRuntimeActorId(result.runtimeActorId || '');
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scripts-runtimes'],
+      });
+      if (result.runtimeActorId) {
+        await queryClient.invalidateQueries({
+          queryKey: ['studio-scripts-runtime', result.runtimeActorId],
+        });
+      }
+
       setRunModalOpen(false);
       setActiveResultTab('runtime');
       openWorkspaceSection('activity');
-      await refreshRuntimeSnapshots();
       setNotice({
         type: 'success',
-        message: `Started draft run ${response.runId} for ${response.scriptId}.`,
+        message: `Started draft run ${result.runId} on runtime ${result.runtimeActorId}.`,
       });
     } catch (error) {
       setNotice({
         type: 'error',
         message:
-          error instanceof Error ? error.message : 'Failed to run the active draft.',
+          error instanceof Error
+            ? error.message
+            : 'Failed to start the script draft run.',
       });
     } finally {
       setRunPending(false);
     }
   }, [
-    draftRunUnavailableMessage,
     isEmbeddedMode,
     openWorkspaceSection,
-    refreshRuntimeSnapshots,
+    queryClient,
     runInputDraft,
     selectedDraft,
     updateSelectedDraft,
@@ -2173,33 +2199,16 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         setPromotionModalOpen(true);
       },
     },
-    ...(isEmbeddedMode
-      ? [
-          {
-            key: 'draft-run',
-            label: 'Draft Run',
-            icon: <PlayCircleOutlined />,
-            disabled: !canRun,
-            onClick: () => {
-              setRunInputDraft(selectedDraft?.input || '');
-              setRunModalOpen(true);
-            },
-          },
-        ]
-      : [
-          {
-            type: 'divider' as const,
-          },
-          {
-            key: 'embedded-host-note',
-            disabled: true,
-            label: (
-              <span className="console-scripts-menu-note">
-                Draft Run and Ask AI require an embedded host.
-              </span>
-            ),
-          },
-        ]),
+    {
+      key: 'test-run',
+      label: 'Test Run',
+      icon: <PlayCircleOutlined />,
+      disabled: !canRun,
+      onClick: () => {
+        setRunInputDraft(selectedDraft?.input || '');
+        setRunModalOpen(true);
+      },
+    },
   ];
   const surfaceActionClass = (active = false) =>
     `console-scripts-surface-action ${active ? 'active' : ''}`;
@@ -2209,7 +2218,6 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       return;
     }
 
-    setRunModalOpen(false);
     setAskAiOpen(false);
   }, [isEmbeddedMode]);
 
@@ -2824,7 +2832,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         <ScriptsStudioModal
           open={runModalOpen}
           eyebrow="Runtime"
-          title="Draft Run"
+          title="Test Run"
           onClose={() => setRunModalOpen(false)}
           actions={
             <>
@@ -2841,16 +2849,18 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 className="console-scripts-solid-action"
                 disabled={runPending}
               >
-                {runPending ? 'Running' : 'Run'}
+                {runPending ? 'Running' : 'Run draft'}
               </button>
             </>
           }
         >
           <div className="console-scripts-detail-copy">
-            Draft run sends the current draft package to the existing embedded
-            script host.
+            Test Run executes the current draft directly through
+            <code style={{ marginInline: 4 }}>/api/app/scripts/draft-run</code>
+            without rebinding the scope default service.
           </div>
           <textarea
+            aria-label="Script test run input"
             rows={5}
             className="console-scripts-textarea"
             value={runInputDraft}
@@ -2885,7 +2895,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           }
         >
           <div className="console-scripts-detail-copy">
-            Promotion keeps draft-run separate from scope rollout. The current
+            Promotion keeps test-run iteration separate from scope rollout. The current
             scope revision is used as the base.
           </div>
           <textarea

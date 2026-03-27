@@ -71,7 +71,10 @@ internal static class ScopeEndpointAccess
             .Distinct(StringComparer.Ordinal)
             .ToList();
         if (claimedScopeIds.Count == 0)
-            return false;
+        {
+            message = "Authenticated scope is missing.";
+            return true;
+        }
 
         if (claimedScopeIds.Count > 1)
         {

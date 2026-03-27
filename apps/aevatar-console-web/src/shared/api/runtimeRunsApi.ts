@@ -11,6 +11,13 @@ import {
   decodeWorkflowSignalResponseBody,
 } from "./runtimeDecoders";
 import { requestJson } from "./http/client";
+import {
+  encodeAppScriptCommandBase64,
+  encodeStringValueBase64,
+  getAppScriptCommandEndpointId,
+  getAppScriptCommandTypeUrl,
+  getStringValueTypeUrl,
+} from "@/shared/runs/protobufPayload";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -60,6 +67,17 @@ function buildScopedServicePath(scopeId: string, serviceId: string): string {
   )}`;
 }
 
+function buildInvokeEndpointPath(
+  scopeId: string,
+  endpointId: string,
+  serviceId?: string
+): string {
+  const encodedEndpointId = encodeSegment(endpointId);
+  return serviceId?.trim()
+    ? `${buildScopedServicePath(scopeId, serviceId)}/invoke/${encodedEndpointId}`
+    : `${buildScopePath(scopeId)}/invoke/${encodedEndpointId}`;
+}
+
 function buildInvokeChatStreamPath(
   scopeId: string,
   serviceId?: string
@@ -81,6 +99,22 @@ function buildRunControlPath(
     : `${buildScopePath(scopeId)}/runs/${encodedRunId}:${action}`;
 }
 
+function createClientCommandId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function inferPayloadTypeUrl(endpointId: string, requestedTypeUrl?: string): string {
+  if (requestedTypeUrl?.trim()) {
+    return requestedTypeUrl.trim();
+  }
+
+  return endpointId.trim() === getAppScriptCommandEndpointId()
+    ? getAppScriptCommandTypeUrl()
+    : getStringValueTypeUrl();
+}
+
 export type WorkflowStopRequest = {
   actorId?: string;
   runId: string;
@@ -95,6 +129,15 @@ export type WorkflowStopResponse = {
   commandId?: string;
   correlationId?: string;
   reason?: string;
+};
+
+export type EndpointInvokeRequest = {
+  endpointId: string;
+  prompt?: string;
+  commandId?: string;
+  correlationId?: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
 };
 
 export const runtimeRunsApi = {
@@ -166,6 +209,52 @@ export const runtimeRunsApi = {
     }
 
     return response;
+  },
+
+  invokeEndpoint(
+    scopeId: string,
+    request: EndpointInvokeRequest,
+    options?: {
+      serviceId?: string;
+    }
+  ): Promise<Record<string, unknown>> {
+    const normalizedPrompt = request.prompt?.trim() ?? "";
+    const payloadTypeUrl = inferPayloadTypeUrl(
+      request.endpointId,
+      request.payloadTypeUrl
+    );
+    const resolvedCommandId =
+      trimOptional(request.commandId) ||
+      (payloadTypeUrl === getAppScriptCommandTypeUrl()
+        ? createClientCommandId()
+        : undefined);
+    const payloadBase64 =
+      trimOptional(request.payloadBase64) ||
+      (payloadTypeUrl === getAppScriptCommandTypeUrl()
+        ? encodeAppScriptCommandBase64({
+            commandId: resolvedCommandId ?? createClientCommandId(),
+            input: normalizedPrompt,
+          })
+        : encodeStringValueBase64(normalizedPrompt));
+    const correlationId =
+      trimOptional(request.correlationId) || resolvedCommandId;
+
+    return requestJson(
+      buildInvokeEndpointPath(scopeId, request.endpointId, options?.serviceId),
+      (value) => value as Record<string, unknown>,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            commandId: resolvedCommandId,
+            correlationId,
+            payloadTypeUrl,
+            payloadBase64,
+          })
+        ),
+      }
+    );
   },
 
   resume(

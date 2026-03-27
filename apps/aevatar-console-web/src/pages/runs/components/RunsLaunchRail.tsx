@@ -20,6 +20,7 @@ type RunsLaunchRailProps = {
   catalogSearch: string;
   composerFormRef: React.RefObject<ProFormInstance<RunFormValues> | undefined>;
   draftMode?: boolean;
+  activeEndpointId: string;
   initialFormValues: RunFormValues;
   recentRunRows: RecentRunTableRow[];
   selectedTransport: RunTransport;
@@ -34,6 +35,7 @@ type RunsLaunchRailProps = {
   onAbortRun: () => void;
   onCatalogSearchChange: (value: string) => void;
   onClearRecentRuns: () => void;
+  onEndpointChange: (value: string) => void;
   onSelectWorkflowName: (value: string) => void;
   onSubmitRun: (values: RunFormValues) => Promise<void>;
   onTransportChange: (value: RunTransport) => void;
@@ -131,15 +133,36 @@ const railDescriptionStyle: React.CSSProperties = {
 };
 
 function renderWorkflowMiniCard(
-  selectedTransport: RunTransport,
+  activeEndpointId: string,
   selectedWorkflowDetailsPrimitives: string[],
   selectedWorkflowRecord?: SelectedWorkflowRecord,
 ): React.ReactNode {
+  if (activeEndpointId && activeEndpointId !== "chat" && !selectedWorkflowRecord) {
+    return (
+      <div style={embeddedPanelStyle}>
+        <Space wrap size={[6, 6]}>
+          <Tag color="geekblue">Command invoke</Tag>
+          <Tag>Scope default service</Tag>
+        </Space>
+        <Typography.Text strong style={{ display: "block", marginTop: 10 }}>
+          {activeEndpointId}
+        </Typography.Text>
+        <Typography.Paragraph
+          style={{ margin: "6px 0 0" }}
+          type="secondary"
+        >
+          Invoke the selected service endpoint with either an explicit protobuf
+          payload or the default StringValue payload derived from the prompt.
+        </Typography.Paragraph>
+      </div>
+    );
+  }
+
   if (!selectedWorkflowRecord) {
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="Select a workflow to preview the target."
+        description="Select a workflow or service endpoint to preview the target."
       />
     );
   }
@@ -147,7 +170,9 @@ function renderWorkflowMiniCard(
   return (
     <div style={embeddedPanelStyle}>
       <Space wrap size={[6, 6]}>
-        <Tag color="processing">Service SSE</Tag>
+        <Tag color={activeEndpointId === "chat" ? "processing" : "geekblue"}>
+          {activeEndpointId === "chat" ? "Service SSE" : "Command invoke"}
+        </Tag>
         <Tag>{selectedWorkflowRecord.groupLabel}</Tag>
         <Tag>{selectedWorkflowRecord.sourceLabel}</Tag>
         <Tag color={selectedWorkflowRecord.llmStatus === "processing" ? "blue" : "success"}>
@@ -199,7 +224,7 @@ function renderRecentRunCards(
             <div style={railListHeaderStyle}>
               <div style={railListContentStyle}>
                 <Typography.Text strong style={railTitleStyle}>
-                  {record.workflowName}
+                  {record.workflowName || record.endpointId || "n/a"}
                 </Typography.Text>
                 <div style={railMetaWrapStyle}>
                   <Tag
@@ -215,6 +240,7 @@ function renderRecentRunCards(
                   >
                     {record.statusValue}
                   </Tag>
+                  <Tag>{record.endpointId || "chat"}</Tag>
                   <Tag>{formatDateTime(record.recordedAt)}</Tag>
                   <Tag>{record.runId || "No runId"}</Tag>
                 </div>
@@ -314,9 +340,9 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   catalogSearch,
   composerFormRef,
   draftMode = false,
+  activeEndpointId,
   initialFormValues,
   recentRunRows,
-  selectedTransport,
   selectedWorkflowDetailsPrimitives,
   selectedWorkflowRecord,
   streaming,
@@ -328,53 +354,59 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   onAbortRun,
   onCatalogSearchChange,
   onClearRecentRuns,
+  onEndpointChange,
   onSelectWorkflowName,
   onSubmitRun,
   onTransportChange,
   onUsePreset,
-}) => (
-  <ProCard
-    title="Launch rail"
-    hoverable
-    {...moduleCardProps}
-    style={workbenchCardStyle}
-    bodyStyle={workbenchCardBodyStyle}
-    extra={
-      <Typography.Text type="secondary">Compose, restore, reuse</Typography.Text>
-    }
-  >
-    <div style={workbenchScrollableBodyStyle}>
-      <div style={compactStackStyle}>
-        <div style={quickGridStyle}>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Workflow</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {selectedWorkflowRecord?.workflowName || "Not selected"}
-            </Typography.Text>
+}) => {
+  const isChatEndpoint = activeEndpointId === "chat";
+
+  return (
+    <ProCard
+      title="Launch rail"
+      hoverable
+      {...moduleCardProps}
+      style={workbenchCardStyle}
+      bodyStyle={workbenchCardBodyStyle}
+      extra={
+        <Typography.Text type="secondary">Compose, restore, reuse</Typography.Text>
+      }
+    >
+      <div style={workbenchScrollableBodyStyle}>
+        <div style={compactStackStyle}>
+          <div style={quickGridStyle}>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Endpoint</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {activeEndpointId || "chat"}
+              </Typography.Text>
+            </div>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Execution</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {isChatEndpoint ? "STREAM" : "INVOKE"}
+              </Typography.Text>
+            </div>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {draftMode
+                  ? isChatEndpoint
+                    ? "Draft run"
+                    : "Prepared invoke"
+                  : actorId
+                    ? "Continue actor"
+                    : "Endpoint invoke"}
+              </Typography.Text>
+            </div>
+            <div style={quickMetricStyle}>
+              <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
+              <Typography.Text style={quickMetricValueStyle}>
+                {visiblePresets.length}
+              </Typography.Text>
+            </div>
           </div>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Transport</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              SERVICE SSE
-            </Typography.Text>
-          </div>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Mode</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {draftMode
-                ? "Draft run"
-                : actorId
-                  ? "Continue actor"
-                  : "New run"}
-            </Typography.Text>
-          </div>
-          <div style={quickMetricStyle}>
-            <Typography.Text style={quickMetricLabelStyle}>Presets</Typography.Text>
-            <Typography.Text style={quickMetricValueStyle}>
-              {visiblePresets.length}
-            </Typography.Text>
-          </div>
-        </div>
 
         <Tabs
           items={[
@@ -384,7 +416,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
               children: (
                 <div style={compactStackStyle}>
                   {renderWorkflowMiniCard(
-                    selectedTransport,
+                    activeEndpointId,
                     selectedWorkflowDetailsPrimitives,
                     selectedWorkflowRecord,
                   )}
@@ -395,6 +427,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     initialValues={initialFormValues}
                     onValuesChange={(_, values) => {
                       onSelectWorkflowName(values.workflow ?? "");
+                      onEndpointChange(values.endpointId || "chat");
                       if (values.transport) {
                         onTransportChange(values.transport);
                       }
@@ -435,9 +468,13 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                   >
                     <ProFormTextArea
                       name="prompt"
-                      label="Prompt"
+                      label={isChatEndpoint ? "Prompt" : "Payload text"}
                       fieldProps={{ rows: 5 }}
-                      placeholder="Describe the task for this run."
+                      placeholder={
+                        isChatEndpoint
+                          ? "Describe the task to run."
+                          : "Provide the payload text that should be encoded for this endpoint."
+                      }
                       rules={[
                         {
                           required: true,
@@ -456,30 +493,39 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         },
                       ]}
                     />
-                    <ProFormSelect
-                      name="workflow"
-                      label="Workflow"
-                      placeholder="Select a workflow"
-                      disabled={draftMode}
-                      options={workflowOptions}
-                      fieldProps={{
-                        allowClear: true,
-                        showSearch: true,
-                        filterOption: false,
-                        onSearch: onCatalogSearchChange,
-                        notFoundContent: workflowCatalogLoading ? (
-                          <Typography.Text type="secondary">
-                            Loading workflows...
-                          </Typography.Text>
-                        ) : (
-                          <Empty
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description="No workflows available."
-                          />
-                        ),
-                        searchValue: catalogSearch,
-                      }}
-                    />
+                    {isChatEndpoint ? (
+                      <ProFormSelect
+                        name="workflow"
+                        label="Workflow bundle (optional)"
+                        placeholder="Select a workflow bundle"
+                        disabled={draftMode}
+                        options={workflowOptions}
+                        fieldProps={{
+                          allowClear: true,
+                          showSearch: true,
+                          filterOption: false,
+                          onSearch: onCatalogSearchChange,
+                          notFoundContent: workflowCatalogLoading ? (
+                            <Typography.Text type="secondary">
+                              Loading workflows...
+                            </Typography.Text>
+                          ) : (
+                            <Empty
+                              image={Empty.PRESENTED_IMAGE_SIMPLE}
+                              description="No workflows available."
+                            />
+                          ),
+                          searchValue: catalogSearch,
+                        }}
+                      />
+                    ) : (
+                      <Alert
+                        showIcon
+                        type="info"
+                        title="Generic endpoint invoke"
+                        description="Use the prompt as the default payload text, or provide an explicit type URL and protobuf base64 payload."
+                      />
+                    )}
                     <ProFormText
                       name="scopeId"
                       label="Scope ID"
@@ -488,6 +534,18 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         {
                           required: true,
                           message: "Scope ID is required.",
+                        },
+                      ]}
+                    />
+                    <ProFormText
+                      name="endpointId"
+                      label="Endpoint ID"
+                      placeholder="chat"
+                      disabled={draftMode}
+                      rules={[
+                        {
+                          required: !draftMode,
+                          message: "Endpoint ID is required.",
                         },
                       ]}
                     />
@@ -501,11 +559,25 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                       }
                       disabled={draftMode}
                     />
+                    {isChatEndpoint ? (
+                      <ProFormText
+                        name="actorId"
+                        label="Existing actorId"
+                        placeholder="Workflow:..."
+                        disabled={draftMode}
+                      />
+                    ) : null}
                     <ProFormText
-                      name="actorId"
-                      label="Existing actorId"
-                      placeholder="Workflow:..."
-                      disabled={draftMode}
+                      name="payloadTypeUrl"
+                      label="Payload type URL"
+                      placeholder="type.googleapis.com/google.protobuf.StringValue"
+                      extra="When payload base64 is empty, the workbench derives protobuf bytes from the payload text."
+                    />
+                    <ProFormTextArea
+                      name="payloadBase64"
+                      label="Payload base64 (advanced)"
+                      fieldProps={{ rows: 3 }}
+                      placeholder="Leave empty to let the workbench derive the payload from the prompt."
                     />
                   </ProForm>
                 </div>
@@ -527,6 +599,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                   {renderPresetCards(visiblePresets, onUsePreset)}
                 </div>
               ),
+              disabled: !isChatEndpoint,
             },
           ]}
         />
@@ -536,9 +609,10 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
           type="info"
           title={`Runs will stream over ${submitPathLabel}`}
         />
+        </div>
       </div>
-    </div>
-  </ProCard>
-);
+    </ProCard>
+  );
+};
 
 export default RunsLaunchRail;

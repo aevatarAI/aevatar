@@ -49,6 +49,10 @@ export function buildRuntimeRunsHref(options?: {
   prompt?: string;
   scopeId?: string;
   serviceId?: string;
+  endpointId?: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
+  actorId?: string;
   draftKey?: string;
 }): string {
   return buildHref(runtimePaths.runs, options);

@@ -70,10 +70,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var revisionId = ScopeWorkflowCapabilityConventions.ResolveRevisionId(request.RevisionId);
         var revisionSpec = desiredBinding.BuildRevision(identity, revisionId);
 
-        await _serviceCommandPort.CreateRevisionAsync(new CreateServiceRevisionCommand
+        if (await ShouldCreateRevisionAsync(request, identity, revisionId, ct))
         {
-            Spec = revisionSpec,
-        }, ct);
+            await _serviceCommandPort.CreateRevisionAsync(new CreateServiceRevisionCommand
+            {
+                Spec = revisionSpec,
+            }, ct);
+        }
         await _serviceCommandPort.PrepareRevisionAsync(new PrepareServiceRevisionCommand
         {
             Identity = identity.Clone(),
@@ -99,6 +102,40 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         return desiredBinding.BuildResult(normalizedScopeId, identity.ServiceId, revisionId, expectedDeploymentId);
     }
 
+    private async Task<bool> ShouldCreateRevisionAsync(
+        ScopeBindingUpsertRequest request,
+        ServiceIdentity identity,
+        string revisionId,
+        CancellationToken ct)
+    {
+        if (request.ImplementationKind != ScopeBindingImplementationKind.Scripting)
+            return true;
+
+        var requestedRevisionId = ScopeWorkflowCapabilityConventions.NormalizeOptional(request.RevisionId);
+        if (string.IsNullOrWhiteSpace(requestedRevisionId))
+            return true;
+
+        var revisions = await _serviceLifecycleQueryPort.GetServiceRevisionsAsync(identity, ct);
+        var existingRevision = revisions?.Revisions.FirstOrDefault(x =>
+            string.Equals(x.RevisionId, revisionId, StringComparison.Ordinal));
+        if (existingRevision == null)
+            return true;
+
+        if (!string.Equals(existingRevision.ImplementationKind, ServiceImplementationKind.Scripting.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' with implementation '{existingRevision.ImplementationKind}'.");
+        }
+
+        if (string.Equals(existingRevision.Status, ServiceRevisionStatus.Retired.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Revision '{revisionId}' already exists for service '{ServiceKeys.Build(identity)}' but has been retired.");
+        }
+
+        return false;
+    }
+
     private async Task<DesiredScopeBinding> ResolveDesiredBindingAsync(
         ScopeBindingUpsertRequest request,
         string normalizedScopeId,
@@ -109,7 +146,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             ScopeBindingImplementationKind.Workflow =>
                 await BuildWorkflowBindingAsync(request, normalizedScopeId, identity, ct),
-            ScopeBindingImplementationKind.Script =>
+            ScopeBindingImplementationKind.Scripting =>
                 await BuildScriptBindingAsync(request, normalizedScopeId, identity, ct),
             ScopeBindingImplementationKind.GAgent =>
                 BuildGAgentBinding(request, identity),
@@ -123,7 +160,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ServiceIdentity identity,
         CancellationToken ct)
     {
-        var workflowBundle = await ParseWorkflowBundleAsync(request.WorkflowYamls, ct);
+        var workflowBundle = await ParseWorkflowBundleAsync(request.Workflow?.WorkflowYamls, ct);
         var definitionActorIdPrefix = ScopeWorkflowCapabilityConventions.BuildDefaultDefinitionActorIdPrefix(_options, normalizedScopeId);
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
@@ -164,6 +201,8 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     revisionId,
                     ScopeBindingImplementationKind.Workflow,
                     $"{definitionActorIdPrefix}:{expectedDeploymentId}",
+                    WorkflowName: workflowBundle.EntryWorkflowName,
+                    DefinitionActorIdPrefix: definitionActorIdPrefix,
                     Workflow: new ScopeBindingWorkflowResult(
                         workflowBundle.EntryWorkflowName,
                         definitionActorIdPrefix)));
@@ -176,7 +215,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         CancellationToken ct)
     {
         var script = request.Script
-            ?? throw new InvalidOperationException("script is required for implementationKind 'script'.");
+            ?? throw new InvalidOperationException("script is required for implementationKind 'scripting'.");
         var normalizedScriptId = ScopeWorkflowCapabilityOptions.NormalizeRequired(script.ScriptId, nameof(script.ScriptId));
         var scriptSummary = await _scopeScriptQueryPort.GetByScriptIdAsync(normalizedScopeId, normalizedScriptId, ct)
             ?? throw new InvalidOperationException(
@@ -226,7 +265,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     serviceId,
                     displayName,
                     revisionId,
-                    ScopeBindingImplementationKind.Script,
+                    ScopeBindingImplementationKind.Scripting,
                     $"gagent-service:script-runtime:{expectedDeploymentId}",
                     Script: new ScopeBindingScriptResult(
                         scriptSummary.ScriptId,
@@ -356,7 +395,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         {
             if (!string.Equals(existingEndpoints[index].EndpointId, desiredEndpoints[index].EndpointId, StringComparison.Ordinal) ||
                 !string.Equals(existingEndpoints[index].DisplayName, desiredEndpoints[index].DisplayName, StringComparison.Ordinal) ||
-                existingEndpoints[index].Kind != desiredEndpoints[index].Kind ||
+                !string.Equals(existingEndpoints[index].Kind, desiredEndpoints[index].Kind.ToString(), StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(existingEndpoints[index].RequestTypeUrl, desiredEndpoints[index].RequestTypeUrl, StringComparison.Ordinal) ||
                 !string.Equals(existingEndpoints[index].ResponseTypeUrl, desiredEndpoints[index].ResponseTypeUrl, StringComparison.Ordinal) ||
                 !string.Equals(existingEndpoints[index].Description, desiredEndpoints[index].Description, StringComparison.Ordinal))

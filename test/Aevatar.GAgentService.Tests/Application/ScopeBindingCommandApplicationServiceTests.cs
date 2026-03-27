@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Bindings;
 using Aevatar.GAgentService.Application.Workflows;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgentService.Tests.TestSupport;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
@@ -36,10 +37,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
                 "name: child\nsteps:\n  - run: echo child",
-            ]));
+            ])));
 
         commandPort.Calls.Should().HaveCount(6);
         commandPort.Calls[0].Method.Should().Be("CreateServiceAsync");
@@ -78,11 +79,11 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: root_flow\nsteps:\n  - run: echo root",
                 "name: sub_a\nsteps:\n  - run: echo a",
                 "name: sub_b\nsteps:\n  - run: echo b",
-            ],
+            ]),
             DisplayName: "My App"));
 
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
@@ -120,7 +121,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
-            ScopeBindingImplementationKind.Script,
+            ScopeBindingImplementationKind.Scripting,
             Script: new ScopeBindingScriptSpec("script-a"),
             DisplayName: "Orders Script"));
 
@@ -131,10 +132,194 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         revisionCommand.Spec.ScriptingSpec!.ScriptId.Should().Be("script-a");
         revisionCommand.Spec.ScriptingSpec.Revision.Should().Be("script-rev-1");
         revisionCommand.Spec.ScriptingSpec.DefinitionActorId.Should().Be("definition-script-1");
-        result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Script);
+        result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
         result.Script.Should().NotBeNull();
         result.Script!.ScriptId.Should().Be("script-a");
         result.Script.ScriptRevision.Should().Be("script-rev-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldReuseExistingScriptingRevision_WhenExplicitRevisionAlreadyExists()
+    {
+        const string revisionId = "script-a-script-rev-1";
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(
+            new ServiceCatalogSnapshot(
+                "scope-a:default:default:default",
+                ScopeId,
+                DefaultOptions.ServiceAppId,
+                DefaultOptions.ServiceNamespace,
+                DefaultOptions.DefaultServiceId,
+                "Orders Script",
+                revisionId,
+                revisionId,
+                "dep-1",
+                "actor-1",
+                "Active",
+                [
+                    new ServiceEndpointSnapshot(
+                        "google.protobuf.StringValue",
+                        "google.protobuf.StringValue",
+                        ServiceEndpointKind.Command.ToString(),
+                        "type.googleapis.com/google.protobuf.StringValue",
+                        string.Empty,
+                        "Scripting command endpoint for google.protobuf.StringValue."),
+                ],
+                [],
+                DateTimeOffset.UtcNow),
+            new ServiceRevisionCatalogSnapshot(
+                "scope-a:default:default:default",
+                [
+                    new ServiceRevisionSnapshot(
+                        revisionId,
+                        ServiceImplementationKind.Scripting.ToString(),
+                        ServiceRevisionStatus.Published.ToString(),
+                        "hash-script-1",
+                        string.Empty,
+                        [],
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        DateTimeOffset.UtcNow.AddHours(-1),
+                        null),
+                ],
+                DateTimeOffset.UtcNow));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort
+        {
+            Script = new ScopeScriptSummary(
+                ScopeId,
+                "script-a",
+                "catalog-1",
+                "definition-script-1",
+                "script-rev-1",
+                "hash-script-1",
+                DateTimeOffset.UtcNow),
+        };
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort
+        {
+            Snapshot = CreateScriptDefinitionSnapshot("script-a", "script-rev-1", "definition-script-1"),
+        };
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting,
+            Script: new ScopeBindingScriptSpec("script-a"),
+            DisplayName: "Orders Script",
+            RevisionId: revisionId));
+
+        commandPort.Calls.Should().HaveCount(4);
+        commandPort.Calls.Should().NotContain(call => call.Method == "CreateRevisionAsync");
+        commandPort.Calls[0].Method.Should().Be("PrepareRevisionAsync");
+        result.RevisionId.Should().Be(revisionId);
+        result.Script.Should().NotBeNull();
+        result.Script!.ScriptRevision.Should().Be("script-rev-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectScriptingBinding_WhenScriptSpecIsMissing()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*script is required*");
+        commandPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectScriptingBinding_WhenRequestedRevisionDiffersFromActiveRevision()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort
+        {
+            Script = new ScopeScriptSummary(
+                ScopeId,
+                "script-a",
+                "catalog-1",
+                "definition-script-1",
+                "script-rev-1",
+                "hash-script-1",
+                DateTimeOffset.UtcNow),
+        };
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting,
+            Script: new ScopeBindingScriptSpec("script-a", "script-rev-2")));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*currently at revision*");
+        commandPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectScriptingBinding_WhenScopeScriptIsMissing()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting,
+            Script: new ScopeBindingScriptSpec("script-missing")));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not have an active script*");
+        commandPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectScriptingBinding_WhenScriptDeclaresNoCommandEndpoints()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort
+        {
+            Script = new ScopeScriptSummary(
+                ScopeId,
+                "script-a",
+                "catalog-1",
+                "definition-script-1",
+                "script-rev-1",
+                "hash-script-1",
+                DateTimeOffset.UtcNow),
+        };
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort
+        {
+            Snapshot = CreateScriptDefinitionSnapshot(
+                "script-a",
+                "script-rev-1",
+                "definition-script-1",
+                ScriptMessageKind.InternalSignal),
+        };
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting,
+            Script: new ScopeBindingScriptSpec("script-a")));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*does not declare command endpoints*");
+        commandPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -149,9 +334,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
-            ScopeBindingImplementationKind.GAgent,
-            GAgent: new ScopeBindingGAgentSpec(
-                typeof(TestStaticAgent).AssemblyQualifiedName!,
+                ScopeBindingImplementationKind.GAgent,
+                GAgent: new ScopeBindingGAgentSpec(
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
                 "gagent-orders",
                 [
                     new ScopeBindingGAgentEndpoint(
@@ -171,11 +356,34 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
-        revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticAgent).AssemblyQualifiedName);
+        revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
         revisionCommand.Spec.StaticSpec.PreferredActorId.Should().Be("gagent-orders");
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         result.GAgent.Should().NotBeNull();
         result.GAgent!.PreferredActorId.Should().Be("gagent-orders");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldRejectGAgentBinding_WhenEndpointsAreMissing()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.GAgent,
+            GAgent: new ScopeBindingGAgentSpec(
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                "gagent-orders",
+                [])));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("gagent endpoints are required.");
+        commandPort.Calls.Should().BeEmpty();
     }
 
     [Fact]
@@ -205,9 +413,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
-            ],
+            ]),
             DisplayName: "Orders App"));
 
         commandPort.Calls.Should().HaveCount(6);
@@ -215,6 +423,50 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         commandPort.Calls.Should().NotContain(call => call.Method == "CreateServiceAsync");
         var updateCommand = commandPort.Calls[0].Command.Should().BeOfType<UpdateServiceDefinitionCommand>().Subject;
         updateCommand.Spec.DisplayName.Should().Be("Orders App");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldPreserveExistingPolicyIds_WhenUpdatingServiceDefinitionForEndpointDrift()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(new ServiceCatalogSnapshot(
+            "scope-a:default:default:default",
+            ScopeId,
+            DefaultOptions.ServiceAppId,
+            DefaultOptions.ServiceNamespace,
+            DefaultOptions.DefaultServiceId,
+            "main",
+            "rev-old",
+            "rev-old",
+            "dep-old",
+            "actor-old",
+            "Active",
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Command.ToString(),
+                    "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                    "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                    "Old workflow endpoint contract."),
+            ],
+            ["policy-a", "policy-b"],
+            DateTimeOffset.UtcNow));
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            DisplayName: "Orders App"));
+
+        var updateCommand = commandPort.Calls[0].Command.Should().BeOfType<UpdateServiceDefinitionCommand>().Subject;
+        updateCommand.Spec.PolicyIds.Should().Equal("policy-a", "policy-b");
     }
 
     [Fact]
@@ -233,7 +485,15 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             "dep-old",
             "actor-old",
             "Active",
-            [],
+            [
+                new ServiceEndpointSnapshot(
+                    "chat",
+                    "chat",
+                    ServiceEndpointKind.Chat.ToString(),
+                    "type.googleapis.com/aevatar.ai.ChatRequestEvent",
+                    "type.googleapis.com/aevatar.ai.ChatResponseEvent",
+                    "Workflow chat endpoint."),
+            ],
             [],
             DateTimeOffset.UtcNow));
         var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
@@ -244,9 +504,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
-            ]));
+            ])));
 
         commandPort.Calls.Should().HaveCount(5);
         commandPort.Calls.Should().NotContain(call =>
@@ -268,9 +528,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var result = await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
-            ],
+            ]),
             DisplayName: "Orders App",
             RevisionId: "rev-explicit"));
 
@@ -292,10 +552,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: repeat\nsteps:\n  - run: echo root",
                 "name: repeat\nsteps:\n  - run: echo child",
-            ]));
+            ])));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Duplicate workflow name*");
@@ -314,9 +574,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             (ScopeBindingImplementationKind)99,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
-            ]));
+            ])));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Unsupported implementationKind*");
@@ -335,13 +595,59 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.Workflow,
-            [
+            Workflow: new ScopeBindingWorkflowSpec([
                 "name: main\nsteps:\n  - run: echo hello",
                 "   ",
-            ]));
+            ])));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*must not contain empty YAML entries*");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldThrow_WhenWorkflowYamlParsingFails()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        actorPort.ParseResultsByYaml["workflow: invalid"] = WorkflowYamlParseResult.Invalid("Workflow YAML is invalid.");
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "workflow: invalid",
+            ])));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Workflow YAML is invalid.");
+        commandPort.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldThrow_WhenParsedWorkflowNameIsBlank()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        actorPort.ParseResultsByYaml["name: blank"] = WorkflowYamlParseResult.Success(string.Empty);
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: blank",
+            ])));
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*must define a workflow name*");
+        commandPort.Calls.Should().BeEmpty();
     }
 
     private static ScopeBindingCommandApplicationService CreateService(
@@ -361,7 +667,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     private static ScriptDefinitionSnapshot CreateScriptDefinitionSnapshot(
         string scriptId,
         string revision,
-        string definitionActorId) =>
+        string definitionActorId,
+        ScriptMessageKind messageKind = ScriptMessageKind.Command) =>
         new(
             scriptId,
             revision,
@@ -379,7 +686,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                     {
                         TypeUrl = "type.googleapis.com/google.protobuf.StringValue",
                         DescriptorFullName = "google.protobuf.StringValue",
-                        Kind = ScriptMessageKind.Command,
+                        Kind = messageKind,
                     },
                 },
             },
@@ -462,10 +769,14 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
     {
         private readonly ServiceCatalogSnapshot? _getResult;
+        private readonly ServiceRevisionCatalogSnapshot? _revisions;
 
-        public FakeServiceLifecycleQueryPort(ServiceCatalogSnapshot? getResult)
+        public FakeServiceLifecycleQueryPort(
+            ServiceCatalogSnapshot? getResult,
+            ServiceRevisionCatalogSnapshot? revisions = null)
         {
             _getResult = getResult;
+            _revisions = revisions;
         }
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default) =>
@@ -475,7 +786,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             Task.FromResult<IReadOnlyList<ServiceCatalogSnapshot>>([]);
 
         public Task<ServiceRevisionCatalogSnapshot?> GetServiceRevisionsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
-            Task.FromResult<ServiceRevisionCatalogSnapshot?>(null);
+            Task.FromResult(_revisions);
 
         public Task<ServiceDeploymentCatalogSnapshot?> GetServiceDeploymentsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
             Task.FromResult<ServiceDeploymentCatalogSnapshot?>(null);
@@ -483,6 +794,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
     private sealed class FakeWorkflowRunActorPort : IWorkflowRunActorPort
     {
+        public Dictionary<string, WorkflowYamlParseResult> ParseResultsByYaml { get; } =
+            new(StringComparer.Ordinal);
+
         public Task<IActor> CreateDefinitionAsync(string? actorId = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
@@ -510,6 +824,9 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         public Task<WorkflowYamlParseResult> ParseWorkflowYamlAsync(string workflowYaml, CancellationToken ct = default)
         {
+            if (ParseResultsByYaml.TryGetValue(workflowYaml, out var parseResult))
+                return Task.FromResult(parseResult);
+
             var line = (workflowYaml ?? string.Empty)
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault(static value => value.StartsWith("name:", StringComparison.OrdinalIgnoreCase));
@@ -558,9 +875,5 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
             return Task.FromResult(Snapshot);
         }
-    }
-
-    private sealed class TestStaticAgent : AgentBase
-    {
     }
 }

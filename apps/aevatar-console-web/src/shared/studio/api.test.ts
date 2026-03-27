@@ -155,8 +155,78 @@ describe('studioApi host-session requests', () => {
     expect(JSON.parse(String(init?.body))).toEqual({
       implementationKind: 'script',
       displayName: 'script-1',
-      scriptId: 'script-1',
-      scriptRevision: 'rev-1',
+      script: {
+        scriptId: 'script-1',
+        scriptRevision: 'rev-1',
+      },
+      revisionId: 'rev-1',
+    });
+  });
+
+  it('binds a GAgent to the default service using the scope binding endpoint', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        displayName: 'orders-gagent',
+        revisionId: 'rev-1',
+        expectedActorId: 'orders-gagent:dep-1',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.bindScopeGAgent({
+      scopeId: 'scope-1',
+      displayName: 'orders-gagent',
+      actorTypeName: 'Tests.OrdersGAgent, Tests',
+      preferredActorId: 'orders-gagent',
+      revisionId: 'rev-1',
+      endpoints: [
+        {
+          endpointId: 'run',
+          displayName: 'Run',
+          kind: 'command',
+          requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+          description: 'Run the bound gagent.',
+        },
+      ],
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/scopes/scope-1/binding');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      implementationKind: 'gagent',
+      displayName: 'orders-gagent',
+      gagent: {
+        actorTypeName: 'Tests.OrdersGAgent, Tests',
+        preferredActorId: 'orders-gagent',
+        endpoints: [
+          {
+            endpointId: 'run',
+            displayName: 'Run',
+            kind: 'command',
+            requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+            description: 'Run the bound gagent.',
+          },
+        ],
+      },
       revisionId: 'rev-1',
     });
   });

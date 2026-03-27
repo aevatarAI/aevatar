@@ -15,6 +15,9 @@ export type RunFormValues = {
   workflow?: string;
   scopeId?: string;
   serviceId?: string;
+  endpointId?: string;
+  payloadTypeUrl?: string;
+  payloadBase64?: string;
   actorId?: string;
   transport: RunTransport;
 };
@@ -69,6 +72,7 @@ export type RunSummaryRecord = {
   status: RunStatus;
   transport: RunTransport;
   workflowName: string;
+  endpointId: string;
   actorId: string;
   commandId: string;
   runId: string;
@@ -187,9 +191,17 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
     valueEnum: transportValueEnum,
   },
   {
-    title: "Workflow",
+    title: "Endpoint",
+    dataIndex: "endpointId",
+    render: (_, record) => record.endpointId || "chat",
+  },
+  {
+    title: "Target",
     dataIndex: "workflowName",
-    render: (_, record) => record.workflowName || "n/a",
+    render: (_, record) =>
+      record.endpointId === "chat"
+        ? record.workflowName || "chat"
+        : record.endpointId || record.workflowName || "n/a",
   },
   {
     title: "Actor",
@@ -283,7 +295,7 @@ export const humanInputColumns: ProDescriptionsItemProps<HumanInputRecord>[] = [
 export const workflowDescriptionColumns: ProDescriptionsItemProps<SelectedWorkflowRecord>[] =
   [
     {
-      title: "Workflow",
+      title: "Target",
       dataIndex: "workflowName",
       render: (_, record) => (
         <Tag color="processing">{record.workflowName}</Tag>
@@ -523,9 +535,19 @@ export const workbenchEventRowStyle = {
 
 export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
   {
-    title: "Workflow",
+    title: "Target",
     dataIndex: "workflowName",
     ellipsis: true,
+    render: (_, record) =>
+      record.endpointId === "chat"
+        ? record.workflowName || "chat"
+        : record.endpointId || record.workflowName || "n/a",
+  },
+  {
+    title: "Endpoint",
+    dataIndex: "endpointId",
+    ellipsis: true,
+    render: (_, record) => record.endpointId || "chat",
   },
   {
     title: "Status",
@@ -633,6 +655,9 @@ export function readInitialRunFormValues(
       workflow: preferredWorkflow,
       scopeId: defaultScopeId,
       serviceId: undefined,
+      endpointId: "chat",
+      payloadTypeUrl: undefined,
+      payloadBase64: undefined,
       actorId: undefined,
       transport: "sse",
     };
@@ -644,6 +669,9 @@ export function readInitialRunFormValues(
     workflow: trimOptional(params.get("workflow")) ?? preferredWorkflow,
     scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
     serviceId: trimOptional(params.get("serviceId")),
+    endpointId: trimOptional(params.get("endpointId")) ?? "chat",
+    payloadTypeUrl: trimOptional(params.get("payloadTypeUrl")),
+    payloadBase64: trimOptional(params.get("payloadBase64")),
     actorId: trimOptional(params.get("actorId")),
     transport: "sse",
   };

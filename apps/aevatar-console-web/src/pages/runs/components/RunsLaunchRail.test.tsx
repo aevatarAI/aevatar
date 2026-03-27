@@ -25,9 +25,11 @@ describe("RunsLaunchRail", () => {
     render(
       <RunsLaunchRail
         catalogSearch=""
+        activeEndpointId="chat"
         composerFormRef={composerFormRef}
         initialFormValues={{
           prompt: "",
+          endpointId: "chat",
           scopeId: "scope-1",
           serviceId: "service-1",
           transport: "sse",
@@ -45,6 +47,7 @@ describe("RunsLaunchRail", () => {
         onAbortRun={jest.fn()}
         onCatalogSearchChange={jest.fn()}
         onClearRecentRuns={jest.fn()}
+        onEndpointChange={jest.fn()}
         onSelectWorkflowName={jest.fn()}
         onSubmitRun={async () => {}}
         onTransportChange={jest.fn()}
@@ -52,6 +55,7 @@ describe("RunsLaunchRail", () => {
       />
     );
 
+    expect(screen.getByLabelText("Endpoint ID")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Presets (1)" }));
 
     expect(screen.getByText("Direct chat")).toBeInTheDocument();

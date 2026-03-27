@@ -37,7 +37,11 @@ export default [
     path: "/scopes",
     name: "Scopes",
     icon: "cluster",
-    redirect: "/scopes/workflows",
+    redirect: "/scopes/overview",
+  },
+  {
+    path: "/scopes/overview",
+    component: "./scopes/overview",
   },
   {
     path: "/scopes/workflows",

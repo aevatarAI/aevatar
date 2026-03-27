@@ -116,6 +116,18 @@ type DraftMode = '' | 'new';
 type LegacySource = '' | 'playground';
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
 type StudioToolDrawerMode = 'palette' | 'ask-ai';
+type StudioGAgentBindingDraft = {
+  readonly displayName: string;
+  readonly actorTypeName: string;
+  readonly preferredActorId: string;
+  readonly endpointId: string;
+  readonly endpointDisplayName: string;
+  readonly requestTypeUrl: string;
+  readonly responseTypeUrl: string;
+  readonly description: string;
+  readonly prompt: string;
+  readonly payloadBase64: string;
+};
 type StudioSelectedGraphEdge = {
   readonly edgeId: string;
   readonly sourceStepId: string;
@@ -124,6 +136,26 @@ type StudioSelectedGraphEdge = {
   readonly kind: 'next' | 'branch';
   readonly implicit: boolean;
 };
+
+const DEFAULT_GAGENT_REQUEST_TYPE_URL =
+  'type.googleapis.com/google.protobuf.StringValue';
+
+function createStudioGAgentBindingDraft(
+  displayName: string,
+): StudioGAgentBindingDraft {
+  return {
+    displayName,
+    actorTypeName: '',
+    preferredActorId: '',
+    endpointId: 'run',
+    endpointDisplayName: 'Run',
+    requestTypeUrl: DEFAULT_GAGENT_REQUEST_TYPE_URL,
+    responseTypeUrl: '',
+    description: 'Run the bound GAgent.',
+    prompt: '',
+    payloadBase64: '',
+  };
+}
 
 type StudioNoticeLike = {
   readonly type: 'success' | 'info' | 'warning' | 'error';
@@ -2864,6 +2896,20 @@ export type StudioEditorPageProps = {
   readonly onResetDraft: () => void;
   readonly onSaveDraft: () => void;
   readonly onPublishWorkflow: () => void;
+  readonly onBindGAgent: (input: {
+    displayName?: string;
+    actorTypeName: string;
+    preferredActorId?: string;
+    endpointId: string;
+    endpointDisplayName?: string;
+    requestTypeUrl?: string;
+    responseTypeUrl?: string;
+    description?: string;
+    prompt?: string;
+    payloadBase64?: string;
+  }, options?: {
+    openRuns?: boolean;
+  }) => Promise<void>;
   readonly onActivateBindingRevision: (revisionId: string) => void;
   readonly onInspectPublishedWorkflow: () => void;
   readonly onRunInConsole: () => void;
@@ -2933,6 +2979,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   onWorkflowImportChange,
   onSaveDraft,
   onPublishWorkflow,
+  onBindGAgent,
   onActivateBindingRevision,
   onRunInConsole,
   onAskAiPromptChange,
@@ -2947,6 +2994,11 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   const [nodePaletteSection, setNodePaletteSection] = React.useState('AI');
   const [inspectorDrawerOpen, setInspectorDrawerOpen] = React.useState(false);
   const [runModalOpen, setRunModalOpen] = React.useState(false);
+  const [gAgentModalOpen, setGAgentModalOpen] = React.useState(false);
+  const [gAgentBindingPending, setGAgentBindingPending] = React.useState(false);
+  const [gAgentDraft, setGAgentDraft] = React.useState<StudioGAgentBindingDraft>(
+    () => createStudioGAgentBindingDraft(draftWorkflowName || templateWorkflowName || ''),
+  );
   const [descriptionEditorOpen, setDescriptionEditorOpen] = React.useState(false);
   const [descriptionDraft, setDescriptionDraft] = React.useState(activeWorkflowDescription);
   const [pendingAddPosition, setPendingAddPosition] = React.useState({
@@ -3010,6 +3062,40 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   const closeToolDrawer = () => {
     setToolDrawerMode(null);
   };
+
+  const openGAgentModal = React.useCallback(() => {
+    setGAgentDraft((current) => ({
+      ...current,
+      displayName: current.displayName || draftWorkflowName || templateWorkflowName || '',
+    }));
+    setGAgentModalOpen(true);
+  }, [draftWorkflowName, templateWorkflowName]);
+
+  const submitGAgentBinding = React.useCallback(async (openRuns: boolean) => {
+    setGAgentBindingPending(true);
+    try {
+      await onBindGAgent(
+        {
+          displayName: gAgentDraft.displayName,
+          actorTypeName: gAgentDraft.actorTypeName,
+          preferredActorId: gAgentDraft.preferredActorId,
+          endpointId: gAgentDraft.endpointId,
+          endpointDisplayName: gAgentDraft.endpointDisplayName,
+          requestTypeUrl: gAgentDraft.requestTypeUrl,
+          responseTypeUrl: gAgentDraft.responseTypeUrl,
+          description: gAgentDraft.description,
+          prompt: gAgentDraft.prompt,
+          payloadBase64: gAgentDraft.payloadBase64,
+        },
+        {
+          openRuns,
+        },
+      );
+      setGAgentModalOpen(false);
+    } finally {
+      setGAgentBindingPending(false);
+    }
+  }, [gAgentDraft, onBindGAgent]);
 
   const activeDirectoryLabel =
     workspaceSettings.data?.directories.find(
@@ -3538,6 +3624,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   Open runs
                 </Button>
                 <Button
+                  icon={<RobotOutlined />}
+                  onClick={openGAgentModal}
+                  disabled={!resolvedScopeId}
+                >
+                  GAgent service
+                </Button>
+                <Button
                   icon={<SafetyCertificateOutlined />}
                   loading={publishPending}
                   disabled={!canPublishWorkflow}
@@ -3804,6 +3897,158 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               {inspectorContent}
             </div>
           </Drawer>
+
+          <Modal
+            open={gAgentModalOpen}
+            title="Bind GAgent service"
+            onCancel={() => setGAgentModalOpen(false)}
+            footer={[
+              <Button
+                key="cancel"
+                onClick={() => setGAgentModalOpen(false)}
+                disabled={gAgentBindingPending}
+              >
+                Cancel
+              </Button>,
+              <Button
+                key="bind"
+                onClick={() => void submitGAgentBinding(false)}
+                loading={gAgentBindingPending}
+                disabled={!resolvedScopeId}
+              >
+                Bind
+              </Button>,
+              <Button
+                key="bind-open-runs"
+                type="primary"
+                onClick={() => void submitGAgentBinding(true)}
+                loading={gAgentBindingPending}
+                disabled={!resolvedScopeId}
+              >
+                Bind + Open Runs
+              </Button>,
+            ]}
+          >
+            <div style={cardStackStyle}>
+              <Typography.Text type="secondary">
+                Bind the scope default service directly to a static GAgent and optionally open the runtime runs workbench for the configured endpoint.
+              </Typography.Text>
+              <Input
+                aria-label="GAgent display name"
+                placeholder="Display name"
+                value={gAgentDraft.displayName}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    displayName: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent actor type name"
+                placeholder="Assembly-qualified actor type name"
+                value={gAgentDraft.actorTypeName}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    actorTypeName: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent preferred actor id"
+                placeholder="Preferred actor id (optional)"
+                value={gAgentDraft.preferredActorId}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    preferredActorId: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent endpoint id"
+                placeholder="Endpoint ID"
+                value={gAgentDraft.endpointId}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    endpointId: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent endpoint display name"
+                placeholder="Endpoint display name"
+                value={gAgentDraft.endpointDisplayName}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    endpointDisplayName: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent request type URL"
+                placeholder="Request type URL"
+                value={gAgentDraft.requestTypeUrl}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    requestTypeUrl: event.target.value,
+                  }))
+                }
+              />
+              <Input
+                aria-label="GAgent response type URL"
+                placeholder="Response type URL (optional)"
+                value={gAgentDraft.responseTypeUrl}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    responseTypeUrl: event.target.value,
+                  }))
+                }
+              />
+              <Input.TextArea
+                aria-label="GAgent endpoint description"
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder="Endpoint description"
+                value={gAgentDraft.description}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    description: event.target.value,
+                  }))
+                }
+              />
+              <Divider style={{ marginBlock: 8 }} />
+              <Input.TextArea
+                aria-label="GAgent run prompt"
+                autoSize={{ minRows: 4, maxRows: 8 }}
+                placeholder="Prompt for the runtime runs console"
+                value={gAgentDraft.prompt}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    prompt: event.target.value,
+                  }))
+                }
+              />
+              <Input.TextArea
+                aria-label="GAgent payload base64"
+                autoSize={{ minRows: 3, maxRows: 6 }}
+                placeholder="Payload base64 for custom request types (optional)"
+                value={gAgentDraft.payloadBase64}
+                onChange={(event) =>
+                  setGAgentDraft((current) => ({
+                    ...current,
+                    payloadBase64: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </Modal>
 
           <Modal
             open={runModalOpen}

@@ -104,7 +104,7 @@ public static class ScopeServiceEndpoints
                 new ScopeBindingUpsertRequest(
                     scopeId,
                     ParseScopeBindingImplementationKind(request.ImplementationKind),
-                    request.WorkflowYamls,
+                    ToWorkflowSpec(request),
                     request.Script == null
                         ? null
                         : new ScopeBindingScriptSpec(
@@ -956,10 +956,17 @@ public static class ScopeServiceEndpoints
         return rawValue?.Trim().ToLowerInvariant() switch
         {
             "workflow" => ScopeBindingImplementationKind.Workflow,
-            "script" => ScopeBindingImplementationKind.Script,
+            "script" => ScopeBindingImplementationKind.Scripting,
+            "scripting" => ScopeBindingImplementationKind.Scripting,
             "gagent" => ScopeBindingImplementationKind.GAgent,
             _ => throw new InvalidOperationException($"Unsupported implementationKind '{rawValue}'."),
         };
+    }
+
+    private static ScopeBindingWorkflowSpec? ToWorkflowSpec(UpsertScopeBindingHttpRequest request)
+    {
+        var workflowYamls = request.Workflow?.WorkflowYamls ?? request.WorkflowYamls;
+        return workflowYamls == null ? null : new ScopeBindingWorkflowSpec(workflowYamls);
     }
 
     private static string? NormalizeOptional(string? value)
@@ -1000,11 +1007,15 @@ public static class ScopeServiceEndpoints
 
     public sealed record UpsertScopeBindingHttpRequest(
         string ImplementationKind,
-        IReadOnlyList<string>? WorkflowYamls,
+        IReadOnlyList<string>? WorkflowYamls = null,
+        ScopeBindingWorkflowHttpRequest? Workflow = null,
         ScopeBindingScriptHttpRequest? Script = null,
         ScopeBindingGAgentHttpRequest? GAgent = null,
         string? DisplayName = null,
         string? RevisionId = null);
+
+    public sealed record ScopeBindingWorkflowHttpRequest(
+        IReadOnlyList<string>? WorkflowYamls);
 
     public sealed record ScopeBindingScriptHttpRequest(
         string ScriptId,
@@ -1013,7 +1024,7 @@ public static class ScopeServiceEndpoints
     public sealed record ScopeBindingGAgentHttpRequest(
         string ActorTypeName,
         string? PreferredActorId,
-        IReadOnlyList<ServiceEndpointHttpRequest>? Endpoints);
+        IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints);
 
     public sealed record StreamScopeServiceHttpRequest(
         string Prompt,

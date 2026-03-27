@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
@@ -47,7 +48,121 @@ public sealed class ScopeServiceEndpointsTests
         host.ScopeBindingPort.LastRequest.Should().NotBeNull();
         host.ScopeBindingPort.LastRequest!.ScopeId.Should().Be("scope-a");
         host.ScopeBindingPort.LastRequest.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Workflow);
-        host.ScopeBindingPort.LastRequest.WorkflowYamls.Should().HaveCount(2);
+        host.ScopeBindingPort.LastRequest.Workflow.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest.Workflow!.WorkflowYamls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldBindScriptingToActiveScopeScript()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
+        {
+            implementationKind = "scripting",
+            script = new
+            {
+                scriptId = "script-a",
+                scriptRevision = "script-rev-1",
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.Scripting);
+        host.ScopeBindingPort.LastRequest.Script.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest.Script!.ScriptId.Should().Be("script-a");
+        host.ScopeBindingPort.LastRequest.Script.ScriptRevision.Should().Be("script-rev-1");
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldReturnForbidden_WhenAuthenticatedScopeClaimIsMissing()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Put,
+            "/api/scopes/scope-a/binding",
+            new
+            {
+                implementationKind = "workflow",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                },
+            });
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_ACCESS_DENIED");
+        body["message"].Should().Be("Authenticated scope is missing.");
+        host.ScopeBindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldReturnForbidden_WhenAuthenticatedScopeClaimDoesNotMatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        using var request = CreateAuthenticatedJsonRequest(
+            HttpMethod.Put,
+            "/api/scopes/scope-a/binding",
+            new
+            {
+                implementationKind = "workflow",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                },
+            },
+            "scope-b");
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_ACCESS_DENIED");
+        body["message"].Should().Be("Authenticated scope does not match requested scope.");
+        host.ScopeBindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScopeBindingEndpoint_ShouldBindGAgentEndpoints()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
+        {
+            implementationKind = "gagent",
+            gagent = new
+            {
+                actorTypeName = "Tests.DemoActor, Tests",
+                preferredActorId = "orders-gagent",
+                endpoints = new[]
+                {
+                    new
+                    {
+                        endpointId = "run",
+                        displayName = "Run",
+                        kind = "command",
+                        requestTypeUrl = "type.googleapis.com/google.protobuf.StringValue",
+                        responseTypeUrl = "",
+                        description = "Run command",
+                    },
+                },
+            },
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        host.ScopeBindingPort.LastRequest.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest!.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
+        host.ScopeBindingPort.LastRequest.GAgent.Should().NotBeNull();
+        host.ScopeBindingPort.LastRequest.GAgent!.Endpoints.Should().ContainSingle();
+        host.ScopeBindingPort.LastRequest.GAgent.Endpoints[0].EndpointId.Should().Be("run");
     }
 
     [Fact]
@@ -57,11 +172,7 @@ public sealed class ScopeServiceEndpointsTests
 
         var response = await host.Client.PutAsJsonAsync("/api/scopes/scope-a/binding", new
         {
-            implementationKind = "script",
-            workflowYamls = new[]
-            {
-                "name: main\nsteps:\n  - run: echo hello",
-            },
+            implementationKind = "unknown",
         });
 
         var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
@@ -740,6 +851,29 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task DefaultInvokeEndpoint_ShouldMapScopeToDefaultServiceIdentity()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/run", new
+        {
+            payloadTypeUrl = "type.googleapis.com/google.protobuf.Empty",
+            payloadBase64 = "",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        host.InvocationPort.LastRequest.Should().NotBeNull();
+        host.InvocationPort.LastRequest!.Identity.Should().BeEquivalentTo(new ServiceIdentity
+        {
+            TenantId = "scope-a",
+            AppId = "default",
+            Namespace = "default",
+            ServiceId = "default",
+        });
+        host.InvocationPort.LastRequest.EndpointId.Should().Be("run");
+    }
+
+    [Fact]
     public async Task ResumeRunEndpoint_ShouldResolveRunFromServiceAndDispatch()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -908,6 +1042,25 @@ public sealed class ScopeServiceEndpointsTests
             ],
             DateTimeOffset.UtcNow);
 
+    private static HttpRequestMessage CreateAuthenticatedJsonRequest(
+        HttpMethod method,
+        string requestUri,
+        object body,
+        params string[] claimedScopeIds)
+    {
+        var request = new HttpRequestMessage(method, requestUri)
+        {
+            Content = JsonContent.Create(body),
+        };
+        request.Headers.Add("X-Test-Authenticated", "true");
+        foreach (var claimedScopeId in claimedScopeIds)
+        {
+            request.Headers.Add("X-Test-Scope-Id", claimedScopeId);
+        }
+
+        return request;
+    }
+
     private sealed class ScopeServiceEndpointTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
@@ -1031,6 +1184,27 @@ public sealed class ScopeServiceEndpointsTests
                 }));
 
             var app = builder.Build();
+            app.Use(async (http, next) =>
+            {
+                if (bool.TryParse(http.Request.Headers["X-Test-Authenticated"], out var authenticated) && authenticated)
+                {
+                    var claims = new List<Claim>();
+                    if (http.Request.Headers.TryGetValue("X-Test-Scope-Id", out var claimedScopeValues))
+                    {
+                        var claimedScopeIds = claimedScopeValues
+                            .ToString()
+                            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        foreach (var claimedScopeId in claimedScopeIds)
+                        {
+                            claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, claimedScopeId));
+                        }
+                    }
+
+                    http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
+                }
+
+                await next();
+            });
             app.MapScopeServiceEndpoints();
             await app.StartAsync();
 
@@ -1080,11 +1254,31 @@ public sealed class ScopeServiceEndpointsTests
             LastRequest = request;
             return Task.FromResult(new ScopeBindingUpsertResult(
                 request.ScopeId,
+                "default",
                 request.DisplayName?.Trim() ?? "main",
                 request.RevisionId?.Trim() ?? "rev-1",
-                "main",
-                "scope-workflow:scope-a:default",
-                "scope-workflow:scope-a:default:dep-1"));
+                request.ImplementationKind,
+                "scope-binding:expected-actor",
+                WorkflowName: request.Workflow?.WorkflowYamls.FirstOrDefault() is { } firstWorkflowYaml && firstWorkflowYaml.Contains("name:", StringComparison.Ordinal)
+                    ? "main"
+                    : string.Empty,
+                DefinitionActorIdPrefix: request.ImplementationKind == ScopeBindingImplementationKind.Workflow
+                    ? "scope-workflow:scope-a:default"
+                    : string.Empty,
+                Workflow: request.ImplementationKind == ScopeBindingImplementationKind.Workflow
+                    ? new ScopeBindingWorkflowResult("main", "scope-workflow:scope-a:default")
+                    : null,
+                Script: request.Script == null
+                    ? null
+                    : new ScopeBindingScriptResult(
+                        request.Script.ScriptId,
+                        request.Script.ScriptRevision ?? "script-rev-1",
+                        "definition-script-1"),
+                GAgent: request.GAgent == null
+                    ? null
+                    : new ScopeBindingGAgentResult(
+                        request.GAgent.ActorTypeName,
+                        request.GAgent.PreferredActorId ?? string.Empty)));
         }
     }
 

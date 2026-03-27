@@ -25,6 +25,7 @@ describe("RunsInspectorPane", () => {
       actorId: "actor-1",
       commandId: "cmd-1",
       eventCount: 8,
+      endpointId: "chat",
       focusLabel: "Awaiting approval on review-step",
       focusStatus: "human_approval",
       lastEventAt: "2026-03-25 10:02:00",

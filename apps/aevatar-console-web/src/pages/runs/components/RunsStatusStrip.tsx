@@ -15,6 +15,7 @@ type RunsStatusStripProps = {
   runStatusLabel: string;
   statusTone: "success" | "processing" | "error" | "default";
   transport: RunTransport;
+  endpointId: string;
   workflowName: string;
 };
 
@@ -86,9 +87,14 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
   runStatusLabel,
   statusTone,
   transport,
+  endpointId,
   workflowName,
-}) => (
-  <div style={stripStyle}>
+}) => {
+  const transportLabel =
+    endpointId && endpointId !== "chat" ? "INVOKE" : transport.toUpperCase();
+
+  return (
+    <div style={stripStyle}>
     <div style={metricsWrapStyle}>
       <div style={metricPillStyle}>
         <Typography.Text style={metricLabelStyle}>Status</Typography.Text>
@@ -113,16 +119,16 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
       </div>
 
       <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Workflow</Typography.Text>
+        <Typography.Text style={metricLabelStyle}>Endpoint</Typography.Text>
         <Typography.Text style={metricValueStyle}>
-          {workflowName || "n/a"}
+          {endpointId || "chat"}
         </Typography.Text>
       </div>
 
       <div style={metricPillStyle}>
         <Typography.Text style={metricLabelStyle}>Transport</Typography.Text>
         <Tag color="processing">
-          {transport.toUpperCase()}
+          {transportLabel}
         </Tag>
       </div>
 
@@ -145,7 +151,8 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
         Abort
       </Button>
     </div>
-  </div>
-);
+    </div>
+  );
+};
 
 export default RunsStatusStrip;

@@ -432,6 +432,25 @@ jest.mock("@/shared/studio/api", () => ({
       definitionActorIdPrefix: "scope-workflow:scope-1:default",
       expectedActorId: "scope-workflow:scope-1:default:dep-1",
     })),
+    bindScopeGAgent: jest.fn(async (input: {
+      scopeId: string;
+      displayName?: string;
+      actorTypeName: string;
+      preferredActorId?: string;
+      endpoints: Array<{
+        endpointId: string;
+        displayName?: string;
+        kind?: string;
+        requestTypeUrl?: string;
+        responseTypeUrl?: string;
+        description?: string;
+      }>;
+    }) => ({
+      scopeId: input.scopeId,
+      displayName: input.displayName || "orders-gagent",
+      revisionId: "rev-gagent-1",
+      expectedActorId: "scope-gagent:scope-1:default:dep-1",
+    })),
     getScopeBinding: jest.fn(async () => ({
       available: true,
       scopeId: "scope-1",
@@ -952,6 +971,51 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             onClick: () => props.onPublishWorkflow?.(),
           },
           "Bind scope"
+        ),
+        React.createElement(
+          "button",
+          {
+            key: "bind-gagent",
+            type: "button",
+            onClick: () =>
+              props.onBindGAgent?.({
+                displayName: "orders-gagent",
+                actorTypeName: "Tests.OrdersGAgent, Tests",
+                preferredActorId: "orders-gagent",
+                endpointId: "run",
+                endpointDisplayName: "Run",
+                requestTypeUrl:
+                  "type.googleapis.com/google.protobuf.StringValue",
+                responseTypeUrl: "type.googleapis.com/example.RunResult",
+                description: "Run the bound gagent.",
+                prompt: "Run the orders gagent",
+              }),
+          },
+          "Bind GAgent"
+        ),
+        React.createElement(
+          "button",
+          {
+            key: "bind-gagent-runs",
+            type: "button",
+            onClick: () =>
+              props.onBindGAgent?.(
+                {
+                  displayName: "orders-gagent",
+                  actorTypeName: "Tests.OrdersGAgent, Tests",
+                  preferredActorId: "orders-gagent",
+                  endpointId: "run",
+                  endpointDisplayName: "Run",
+                  requestTypeUrl:
+                    "type.googleapis.com/google.protobuf.StringValue",
+                  responseTypeUrl: "type.googleapis.com/example.RunResult",
+                  description: "Run the bound gagent.",
+                  prompt: "Run the orders gagent",
+                },
+                { openRuns: true }
+              ),
+          },
+          "Bind GAgent + Runs"
         ),
         React.createElement(
           "button",
@@ -1581,6 +1645,61 @@ describe("StudioPage", () => {
         })
       );
     });
+  });
+
+  it("binds a GAgent service and opens runtime runs with a draft payload", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Bind GAgent + Runs" }));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        displayName: "orders-gagent",
+        actorTypeName: "Tests.OrdersGAgent, Tests",
+        preferredActorId: "orders-gagent",
+        endpoints: [
+          {
+            endpointId: "run",
+            displayName: "Run",
+            kind: "command",
+            requestTypeUrl:
+              "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/example.RunResult",
+            description: "Run the bound gagent.",
+          },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
+      "scope-1"
+    );
+    expect(new URLSearchParams(window.location.search).get("endpointId")).toBe(
+      "run"
+    );
+    expect(new URLSearchParams(window.location.search).get("prompt")).toBe(
+      "Run the orders gagent"
+    );
+
+    const draftKey = new URLSearchParams(window.location.search).get("draftKey");
+    expect(draftKey).toBeTruthy();
+    expect(loadDraftRunPayload(draftKey)).toEqual(
+      expect.objectContaining({
+        kind: "service_invocation",
+        endpointId: "run",
+        prompt: "Run the orders gagent",
+        payloadTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+      })
+    );
   });
 
   it("activates a historical scope binding revision from Studio", async () => {

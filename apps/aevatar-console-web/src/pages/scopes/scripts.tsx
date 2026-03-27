@@ -207,7 +207,7 @@ const ScopeScriptsPage: React.FC = () => {
     <PageContainer
       title="Scope Scripts"
       content="Inspect script catalog state and source material for a single scope. tenantId and appId stay platform-managed and hidden behind this view."
-      onBack={() => history.push(buildScopeHref("/scopes", activeDraft))}
+      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
     >
       <Row gutter={[16, 16]}>
         <Col xs={24}>

@@ -3,6 +3,9 @@ export interface RecentRunEntry {
   recordedAt: string;
   scopeId: string;
   serviceId: string;
+  endpointId: string;
+  payloadTypeUrl: string;
+  payloadBase64: string;
   workflowName: string;
   prompt: string;
   actorId: string;
@@ -26,6 +29,9 @@ function sanitizeEntry(value: Partial<RecentRunEntry>): RecentRunEntry | null {
     recordedAt: value.recordedAt?.trim() || new Date().toISOString(),
     scopeId: value.scopeId?.trim() || "",
     serviceId: value.serviceId?.trim() || "",
+    endpointId: value.endpointId?.trim() || "",
+    payloadTypeUrl: value.payloadTypeUrl?.trim() || "",
+    payloadBase64: value.payloadBase64?.trim() || "",
     workflowName: value.workflowName?.trim() || 'unknown',
     prompt: value.prompt?.trim() || '',
     actorId: value.actorId?.trim() || '',

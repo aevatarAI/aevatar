@@ -35,7 +35,11 @@ import {
   type PlaygroundPromptHistoryEntry,
 } from '@/shared/playground/promptHistory';
 import { loadPlaygroundDraft } from '@/shared/playground/playgroundDraft';
-import { saveDraftRunPayload } from '@/shared/runs/draftRunSession';
+import {
+  saveDraftRunPayload,
+  saveServiceInvocationDraftPayload,
+} from '@/shared/runs/draftRunSession';
+import { getStringValueTypeUrl } from '@/shared/runs/protobufPayload';
 import {
   applyRoleInspectorDraft,
   applyStepInspectorDraft,
@@ -2057,6 +2061,126 @@ const StudioPage: React.FC = () => {
     }
   };
 
+  const handleBindGAgent = async (input: {
+    displayName?: string;
+    actorTypeName: string;
+    preferredActorId?: string;
+    endpointId: string;
+    endpointDisplayName?: string;
+    requestTypeUrl?: string;
+    responseTypeUrl?: string;
+    description?: string;
+    prompt?: string;
+    payloadBase64?: string;
+  }, options?: {
+    openRuns?: boolean;
+  }) => {
+    const scopeId = resolvedStudioScopeId;
+    const actorTypeName = input.actorTypeName.trim();
+    const endpointId = input.endpointId.trim();
+    const payloadTypeUrl =
+      input.requestTypeUrl?.trim() || getStringValueTypeUrl();
+
+    if (!scopeId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope before binding a GAgent service.',
+      });
+      return;
+    }
+
+    if (!actorTypeName) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Actor type name is required before binding a GAgent service.',
+      });
+      return;
+    }
+
+    if (!endpointId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Endpoint ID is required before opening GAgent runs.',
+      });
+      return;
+    }
+
+    if (
+      options?.openRuns &&
+      payloadTypeUrl !== getStringValueTypeUrl() &&
+      !input.payloadBase64?.trim()
+    ) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Custom request payload types require payload base64 before opening Runs.',
+      });
+      return;
+    }
+
+    setPublishPending(true);
+    setPublishNotice(null);
+
+    try {
+      const result = await studioApi.bindScopeGAgent({
+        scopeId,
+        displayName: input.displayName?.trim() || endpointId,
+        actorTypeName,
+        preferredActorId: input.preferredActorId?.trim() || undefined,
+        endpoints: [
+          {
+            endpointId,
+            displayName: input.endpointDisplayName?.trim() || endpointId,
+            kind: 'command',
+            requestTypeUrl: payloadTypeUrl,
+            responseTypeUrl: input.responseTypeUrl?.trim() || undefined,
+            description: input.description?.trim() || undefined,
+          },
+        ],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+
+      if (options?.openRuns) {
+        const draftKey = saveServiceInvocationDraftPayload({
+          endpointId,
+          prompt: input.prompt?.trim() || '',
+          payloadTypeUrl,
+          payloadBase64: input.payloadBase64?.trim() || undefined,
+        });
+        if (!draftKey) {
+          throw new Error('Failed to prepare the GAgent run draft.');
+        }
+
+        history.push(
+          buildRuntimeRunsHref({
+            scopeId,
+            endpointId,
+            prompt: input.prompt?.trim() || undefined,
+            draftKey,
+          }),
+        );
+      }
+
+      setPublishNotice({
+        type: 'success',
+        message: options?.openRuns
+          ? `Bound scope ${result.scopeId} to GAgent ${actorTypeName} and opened Runs for ${endpointId}.`
+          : `Bound scope ${result.scopeId} to GAgent ${actorTypeName} on revision ${result.revisionId}.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to bind the current scope to the GAgent service.',
+      });
+    } finally {
+      setPublishPending(false);
+    }
+  };
+
   const handleActivateBindingRevision = async (revisionId: string) => {
     const scopeId = resolvedStudioScopeId;
     const normalizedRevisionId = revisionId.trim();
@@ -3933,6 +4057,9 @@ const StudioPage: React.FC = () => {
           onResetDraft={resetDraftFromSource}
           onSaveDraft={() => void handleSaveDraft()}
           onPublishWorkflow={() => void handlePublishWorkflow()}
+          onBindGAgent={(input, options) =>
+            handleBindGAgent(input, options)
+          }
           onActivateBindingRevision={(revisionId) =>
             void handleActivateBindingRevision(revisionId)
           }

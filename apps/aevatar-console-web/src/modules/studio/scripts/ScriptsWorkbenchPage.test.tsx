@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
+import { history } from '@/shared/navigation/history';
 import { studioApi } from '@/shared/studio/api';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import {
@@ -30,7 +31,13 @@ jest.mock('@/shared/studio/api', () => ({
   },
 }));
 
-const mockedScriptsApi = scriptsApi as {
+jest.mock('@/shared/navigation/history', () => ({
+  history: {
+    push: jest.fn(),
+  },
+}));
+
+const mockedScriptsApi = scriptsApi as unknown as {
   validateDraft: jest.Mock;
   listScripts: jest.Mock;
   getScript: jest.Mock;
@@ -44,8 +51,12 @@ const mockedScriptsApi = scriptsApi as {
   generateScript: jest.Mock;
 };
 
-const mockedStudioApi = studioApi as {
+const mockedStudioApi = studioApi as unknown as {
   bindScopeScript: jest.Mock;
+};
+
+const mockedHistory = history as unknown as {
+  push: jest.Mock;
 };
 
 const appContext = {
@@ -60,7 +71,7 @@ const appContext = {
     scripts: true,
   },
   scriptContract: {
-    inputType: 'type.googleapis.com/example.Command',
+    inputType: 'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
     readModelFields: ['input', 'output'],
   },
 } as const;
@@ -114,6 +125,17 @@ describe('ScriptsWorkbenchPage', () => {
     mockedScriptsApi.validateDraft.mockResolvedValue(validationResult);
     mockedScriptsApi.listScripts.mockResolvedValue([]);
     mockedScriptsApi.listRuntimes.mockResolvedValue([]);
+    mockedScriptsApi.getRuntimeReadModel.mockResolvedValue({
+      actorId: 'runtime-1',
+      scriptId: 'script-1',
+      definitionActorId: 'definition-1',
+      revision: 'draft-1',
+      readModelTypeUrl: 'type.googleapis.com/example.ReadModel',
+      readModelPayloadJson: '{"status":"ok"}',
+      stateVersion: 1,
+      lastEventId: 'event-1',
+      updatedAt: '2026-03-24T00:00:00Z',
+    });
     mockedScriptsApi.getScriptCatalog.mockResolvedValue({
       scriptId: 'script-1',
       activeRevision: 'rev-1',
@@ -146,13 +168,13 @@ describe('ScriptsWorkbenchPage', () => {
       accepted: true,
       scopeId: 'scope-1',
       scriptId: 'script-1',
-      scriptRevision: 'rev-1',
+      scriptRevision: 'draft-1',
       definitionActorId: 'definition-1',
       runtimeActorId: 'runtime-1',
       runId: 'run-1',
       sourceHash: 'hash-1',
-      commandTypeUrl: 'type.googleapis.com/example.Command',
-      readModelUrl: 'type.googleapis.com/example.ReadModel',
+      commandTypeUrl: 'type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand',
+      readModelUrl: '/api/app/scripts/runtimes/runtime-1/readmodel',
     });
     mockedScriptsApi.proposeEvolution.mockResolvedValue({
       accepted: true,
@@ -302,10 +324,10 @@ describe('ScriptsWorkbenchPage', () => {
 
     expect(await screen.findByText('Validate')).toBeTruthy();
     expect(screen.getByText('Promote')).toBeTruthy();
-    expect(screen.getByText('Draft Run')).toBeTruthy();
+    expect(screen.getByText('Test Run')).toBeTruthy();
   });
 
-  it('gates embedded-only actions when running in proxy mode', async () => {
+  it('keeps Test Run available in proxy mode while gating Ask AI', async () => {
     renderPage({
       mode: 'proxy',
     });
@@ -321,10 +343,7 @@ describe('ScriptsWorkbenchPage', () => {
 
     expect(await screen.findByText('Validate')).toBeTruthy();
     expect(screen.getByText('Promote')).toBeTruthy();
-    expect(screen.queryByText('Draft Run')).toBeNull();
-    expect(
-      screen.getByText('Draft Run and Ask AI require an embedded host.'),
-    ).toBeTruthy();
+    expect(screen.getByText('Test Run')).toBeTruthy();
   });
 
   it('cancels Ask AI generation from the floating panel', async () => {
@@ -396,8 +415,53 @@ describe('ScriptsWorkbenchPage', () => {
         displayName: 'script-1',
         scriptId: 'script-1',
         scriptRevision: 'rev-1',
-        revisionId: 'rev-1',
+        revisionId: 'script-1-rev-1',
       });
     });
+  });
+
+  it('runs the current script draft without rebinding the scope service', async () => {
+    renderPage({
+      mode: 'embedded',
+      scopeId: 'scope-1',
+    });
+
+    await screen.findByLabelText('Script ID');
+    await waitFor(() => {
+      expect(screen.queryAllByText('Checking')).toHaveLength(0);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
+    const testRunItem = await screen.findByRole('menuitem', {
+      name: /Test Run/,
+    });
+    await waitFor(() => {
+      expect(testRunItem).toHaveAttribute('aria-disabled', 'false');
+    });
+    fireEvent.click(testRunItem);
+    fireEvent.change(await screen.findByLabelText('Script test run input'), {
+      target: {
+        value: 'hello from draft run',
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Run draft' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.runDraftScript).toHaveBeenCalledWith({
+        scriptId: 'script-1',
+        scriptRevision: expect.stringMatching(/^draft-/),
+        source: expect.any(String),
+        package: expect.objectContaining({
+          format: 'aevatar.scripting.package.v1',
+          entrySourcePath: 'Behavior.cs',
+        }),
+        input: 'hello from draft run',
+        definitionActorId: undefined,
+        runtimeActorId: undefined,
+      });
+      expect(mockedStudioApi.bindScopeScript).not.toHaveBeenCalled();
+      expect(mockedHistory.push).not.toHaveBeenCalled();
+    });
+    expect(await screen.findByText(/Started draft run run-1 on runtime runtime-1/)).toBeTruthy();
   });
 });

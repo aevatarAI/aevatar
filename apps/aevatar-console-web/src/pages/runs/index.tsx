@@ -61,6 +61,11 @@ import {
   saveRecentRun,
 } from "@/shared/runs/recentRuns";
 import {
+  isServiceInvocationDraftPayload,
+  isWorkflowDraftRunPayload,
+  loadDraftRunPayload as loadQueuedDraftRunPayload,
+} from "@/shared/runs/draftRunSession";
+import {
   buildWorkflowCatalogOptions,
   findWorkflowCatalogItem,
   listVisibleWorkflowCatalogItems,
@@ -118,7 +123,6 @@ import {
   workbenchMessageListStyle,
   workbenchOverviewGridStyle,
 } from "./runWorkbenchConfig";
-import { loadDraftRunPayload as loadQueuedDraftRunPayload } from "@/shared/runs/draftRunSession";
 
 const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
   alignItems: "center",
@@ -150,7 +154,7 @@ const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
 const RunsPage: React.FC = () => {
   const preferences = useMemo(() => loadConsolePreferences(), []);
   const [messageApi, messageContextHolder] = message.useMessage();
-  const initialFormValues = useMemo(
+  const urlInitialFormValues = useMemo(
     () => readInitialRunFormValues(preferences.preferredWorkflow),
     [preferences.preferredWorkflow]
   );
@@ -165,6 +169,41 @@ const RunsPage: React.FC = () => {
     () => loadQueuedDraftRunPayload(draftRunKey),
     [draftRunKey]
   );
+  const workflowDraftPayload = useMemo(
+    () =>
+      isWorkflowDraftRunPayload(draftRunPayload) ? draftRunPayload : undefined,
+    [draftRunPayload]
+  );
+  const serviceInvocationDraftPayload = useMemo(
+    () =>
+      isServiceInvocationDraftPayload(draftRunPayload)
+        ? draftRunPayload
+        : undefined,
+    [draftRunPayload]
+  );
+  const initialFormValues = useMemo(
+    () => ({
+      ...urlInitialFormValues,
+      workflow: serviceInvocationDraftPayload
+        ? undefined
+        : urlInitialFormValues.workflow,
+      prompt:
+        serviceInvocationDraftPayload?.prompt ?? urlInitialFormValues.prompt,
+      serviceId:
+        serviceInvocationDraftPayload?.serviceId ??
+        urlInitialFormValues.serviceId,
+      endpointId:
+        serviceInvocationDraftPayload?.endpointId ??
+        urlInitialFormValues.endpointId,
+      payloadTypeUrl:
+        serviceInvocationDraftPayload?.payloadTypeUrl ??
+        urlInitialFormValues.payloadTypeUrl,
+      payloadBase64:
+        serviceInvocationDraftPayload?.payloadBase64 ??
+        urlInitialFormValues.payloadBase64,
+    }),
+    [serviceInvocationDraftPayload, urlInitialFormValues]
+  );
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
     undefined
   );
@@ -177,7 +216,8 @@ const RunsPage: React.FC = () => {
   );
   const [catalogSearch, setCatalogSearch] = useState("");
   const [selectedWorkflowName, setSelectedWorkflowName] = useState(
-    draftRunPayload?.workflowName ??
+    workflowDraftPayload?.workflowName ??
+      (serviceInvocationDraftPayload ? "" : undefined) ??
       initialFormValues.workflow ??
       preferences.preferredWorkflow
   );
@@ -207,6 +247,9 @@ const RunsPage: React.FC = () => {
   );
   const [activeServiceId, setActiveServiceId] = useState(
     initialFormValues.serviceId ?? ""
+  );
+  const [activeEndpointId, setActiveEndpointId] = useState(
+    initialFormValues.endpointId ?? "chat"
   );
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
 
@@ -241,12 +284,11 @@ const RunsPage: React.FC = () => {
   const sendRun = useCallback(
     async (
       scopeId: string,
-      serviceId: string,
-      request: ChatRunRequest,
-      transport: RunTransport
+      request: RunFormValues
     ) => {
       const normalizedScopeId = scopeId.trim();
-      const normalizedServiceId = serviceId.trim();
+      const normalizedServiceId = request.serviceId?.trim() ?? "";
+      const normalizedEndpointId = request.endpointId?.trim() || "chat";
       if (!normalizedScopeId) {
         throw new Error("Scope ID is required.");
       }
@@ -254,9 +296,10 @@ const RunsPage: React.FC = () => {
       abortRun();
       reset();
       setTransportIssue(undefined);
-      setActiveTransport(transport);
+      setActiveTransport(request.transport);
       setActiveScopeId(normalizedScopeId);
       setActiveServiceId(normalizedServiceId);
+      setActiveEndpointId(normalizedEndpointId);
       setRunStartedAtMs(Date.now());
       setStreaming(true);
 
@@ -264,31 +307,95 @@ const RunsPage: React.FC = () => {
         const controller = new AbortController();
         stopActiveRunRef.current = () => controller.abort();
 
-        const response = draftRunPayload
+        const response = workflowDraftPayload
           ? await runtimeRunsApi.streamDraftRun(
               normalizedScopeId,
               {
-                ...request,
-                workflowYamls: draftRunPayload.workflowYamls,
+                prompt: request.prompt,
+                workflow: request.workflow,
+                agentId: request.actorId,
+                workflowYamls: workflowDraftPayload.workflowYamls,
               },
               controller.signal
             )
-          : await runtimeRunsApi.streamChat(
-              normalizedScopeId,
-              request,
-              controller.signal,
-              {
-                serviceId: normalizedServiceId || undefined,
-              }
-            );
-        for await (const event of parseSSEStream(response, {
-          signal: controller.signal,
-        })) {
-          if (controller.signal.aborted) {
-            break;
-          }
+          : normalizedEndpointId === "chat" &&
+              !request.payloadTypeUrl?.trim() &&
+              !request.payloadBase64?.trim()
+            ? await runtimeRunsApi.streamChat(
+                normalizedScopeId,
+                {
+                  prompt: request.prompt,
+                  workflow: request.workflow,
+                  agentId: request.actorId,
+                  workflowYamls: undefined,
+                  metadata: undefined,
+                },
+                controller.signal,
+                {
+                  serviceId: normalizedServiceId || undefined,
+                }
+              )
+            : null;
 
-          dispatch(event);
+        if (response) {
+          for await (const event of parseSSEStream(response, {
+            signal: controller.signal,
+          })) {
+            if (controller.signal.aborted) {
+              break;
+            }
+
+            dispatch(event);
+          }
+        } else {
+          const receipt = await runtimeRunsApi.invokeEndpoint(
+            normalizedScopeId,
+            {
+              endpointId: normalizedEndpointId,
+              prompt: request.prompt,
+              commandId: undefined,
+              payloadTypeUrl: request.payloadTypeUrl || undefined,
+              payloadBase64: request.payloadBase64 || undefined,
+            },
+            {
+              serviceId: normalizedServiceId || undefined,
+            }
+          );
+          const receiptRunId =
+            String(receipt.request_id ?? receipt.requestId ?? receipt.commandId ?? "").trim() ||
+            `${normalizedEndpointId}-${Date.now().toString(36)}`;
+          const receiptActorId =
+            String(
+              receipt.target_actor_id ?? receipt.targetActorId ?? receipt.actorId ?? ""
+            ).trim();
+          const receiptCorrelationId =
+            String(receipt.correlation_id ?? receipt.correlationId ?? receiptRunId).trim() ||
+            receiptRunId;
+
+          dispatch({
+            type: AGUIEventType.RUN_STARTED,
+            threadId: receiptCorrelationId,
+            runId: receiptRunId,
+          });
+          dispatch({
+            type: AGUIEventType.CUSTOM,
+            name: CustomEventName.RunContext,
+            value: {
+              actorId: receiptActorId || undefined,
+              workflowName: normalizedEndpointId,
+              commandId:
+                String(receipt.command_id ?? receipt.commandId ?? "").trim() || undefined,
+            },
+          });
+          dispatch({
+            type: AGUIEventType.RUN_FINISHED,
+            threadId: receiptCorrelationId,
+            runId: receiptRunId,
+            result: receipt,
+          });
+          messageApi.success(
+            `Endpoint ${normalizedEndpointId} accepted with run ${receiptRunId}.`
+          );
         }
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
@@ -302,7 +409,14 @@ const RunsPage: React.FC = () => {
         setStreaming(false);
       }
     },
-    [abortRun, dispatch, draftRunPayload, reportTransportError, reset]
+    [
+      abortRun,
+      dispatch,
+      messageApi,
+      reportTransportError,
+      reset,
+      workflowDraftPayload,
+    ]
   );
 
   const resolveRunScopeId = useCallback(() => {
@@ -320,6 +434,14 @@ const RunsPage: React.FC = () => {
       ""
     );
   }, [activeServiceId]);
+
+  const resolveRunEndpointId = useCallback(() => {
+    return (
+      activeEndpointId.trim() ||
+      composerFormRef.current?.getFieldValue("endpointId")?.trim?.() ||
+      "chat"
+    );
+  }, [activeEndpointId]);
 
   const resizeComposerRail = useCallback((clientX: number) => {
     const containerRect = runsWorkbenchMainRef.current?.getBoundingClientRect();
@@ -425,6 +547,14 @@ const RunsPage: React.FC = () => {
     "";
   const actorId = session.context?.actorId;
   const commandId = session.context?.commandId ?? "";
+  const endpointName =
+    activeEndpointId ||
+    composerFormRef.current?.getFieldValue("endpointId")?.trim?.() ||
+    "chat";
+  const payloadTypeUrl =
+    composerFormRef.current?.getFieldValue("payloadTypeUrl")?.trim?.() ||
+    initialFormValues.payloadTypeUrl ||
+    "";
 
   const waitingSignal = useMemo(
     () =>
@@ -494,17 +624,33 @@ const RunsPage: React.FC = () => {
     SelectedWorkflowRecord | undefined
   >(() => {
     if (!selectedWorkflowDetails) {
-      if (!draftRunPayload) {
+      if (workflowDraftPayload) {
+        return {
+          workflowName: workflowDraftPayload.workflowName,
+          groupLabel: "Studio",
+          sourceLabel: "Draft bundle",
+          llmStatus: "success",
+          description:
+            "Executing the current Studio draft bundle through the scope draft-run endpoint.",
+        };
+      }
+
+      if (!endpointName || endpointName === "chat") {
         return undefined;
       }
 
       return {
-        workflowName: draftRunPayload.workflowName,
-        groupLabel: "Studio",
-        sourceLabel: "Draft bundle",
+        workflowName: endpointName,
+        groupLabel: serviceInvocationDraftPayload ? "Scope" : "Scope service",
+        sourceLabel: serviceInvocationDraftPayload
+          ? "Invocation draft"
+          : payloadTypeUrl
+          ? "Typed payload"
+          : "StringValue default",
         llmStatus: "success",
-        description:
-          "Executing the current Studio draft bundle through the scope draft-run endpoint.",
+        description: serviceInvocationDraftPayload
+          ? "Invoking the scoped service endpoint with a prepared protobuf payload."
+          : `Invoking the scoped service endpoint '${endpointName}' through the generic service invoke path.`,
       };
     }
 
@@ -517,7 +663,13 @@ const RunsPage: React.FC = () => {
         : "success",
       description: selectedWorkflowDetails.description,
     };
-  }, [draftRunPayload, selectedWorkflowDetails]);
+  }, [
+    endpointName,
+    payloadTypeUrl,
+    selectedWorkflowDetails,
+    serviceInvocationDraftPayload,
+    workflowDraftPayload,
+  ]);
 
   const visiblePresets = useMemo(() => {
     const available = new Set(
@@ -546,15 +698,21 @@ const RunsPage: React.FC = () => {
           ? (entry.status as RunStatusValue)
           : "unknown",
         onRestore: () => {
+          const isChatEndpoint =
+            !entry.endpointId || entry.endpointId === "chat";
           composerFormRef.current?.setFieldsValue({
             prompt: entry.prompt,
-            workflow: entry.workflowName,
+            workflow: isChatEndpoint ? entry.workflowName : undefined,
             scopeId: entry.scopeId || undefined,
             serviceId: entry.serviceId || undefined,
+            endpointId: entry.endpointId || "chat",
+            payloadTypeUrl: entry.payloadTypeUrl || undefined,
+            payloadBase64: entry.payloadBase64 || undefined,
             actorId: entry.actorId || undefined,
             transport: selectedTransport,
           });
-          setSelectedWorkflowName(entry.workflowName);
+          setSelectedWorkflowName(isChatEndpoint ? entry.workflowName : "");
+          setActiveEndpointId(entry.endpointId || "chat");
         },
         onOpenActor: entry.actorId
           ? () =>
@@ -703,7 +861,8 @@ const RunsPage: React.FC = () => {
       label: "Ready to start a run",
       alertType: "info" as const,
       title: "Idle",
-      description: "Compose a prompt and start a workflow run.",
+      description:
+        "Compose a prompt or payload and start a service endpoint invocation.",
     };
   }, [
     activeTransport,
@@ -772,6 +931,7 @@ const RunsPage: React.FC = () => {
       status: session.status,
       transport: activeTransport,
       workflowName,
+      endpointId: endpointName,
       actorId: actorId ?? "",
       commandId,
       runId: session.runId ?? "",
@@ -794,12 +954,17 @@ const RunsPage: React.FC = () => {
       session.messages.length,
       session.runId,
       session.status,
+      endpointName,
       workflowName,
     ]
   );
 
   useEffect(() => {
     const prompt = composerFormRef.current?.getFieldValue("prompt") ?? "";
+    const currentPayloadTypeUrl =
+      composerFormRef.current?.getFieldValue("payloadTypeUrl") ?? "";
+    const currentPayloadBase64 =
+      composerFormRef.current?.getFieldValue("payloadBase64") ?? "";
     const candidateId =
       commandId ??
       session.runId ??
@@ -814,6 +979,9 @@ const RunsPage: React.FC = () => {
         id: candidateId,
         scopeId: resolveRunScopeId(),
         serviceId: resolveRunServiceId(),
+        endpointId: resolveRunEndpointId(),
+        payloadTypeUrl: currentPayloadTypeUrl,
+        payloadBase64: currentPayloadBase64,
         workflowName,
         prompt,
         actorId: actorId ?? "",
@@ -827,8 +995,10 @@ const RunsPage: React.FC = () => {
     actorId,
     commandId,
     latestMessagePreview,
+    payloadTypeUrl,
     resolveRunScopeId,
     resolveRunServiceId,
+    resolveRunEndpointId,
     session.runId,
     session.status,
     workflowName,
@@ -867,11 +1037,15 @@ const RunsPage: React.FC = () => {
     session.runId,
   ]);
 
-  const submitPathLabel = draftRunPayload
+  const submitPathLabel = workflowDraftPayload
     ? "/api/scopes/{scopeId}/draft-run"
-    : (activeServiceId.trim() || initialFormValues.serviceId?.trim())
-      ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
-      : "/api/scopes/{scopeId}/invoke/chat:stream";
+    : endpointName === "chat"
+      ? (activeServiceId.trim() || initialFormValues.serviceId?.trim())
+        ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
+        : "/api/scopes/{scopeId}/invoke/chat:stream"
+      : (activeServiceId.trim() || initialFormValues.serviceId?.trim())
+        ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
+        : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
   const messageConsoleView = (
     <div style={workbenchConsoleSurfaceStyle}>
@@ -1032,7 +1206,7 @@ const RunsPage: React.FC = () => {
         <div style={runsWorkbenchHeaderBarStyle}>
           <div style={runsWorkbenchHeaderTitleStyle}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              Runtime run console
+              Runtime service endpoint console
             </Typography.Title>
             <Popover
               content={
@@ -1040,12 +1214,13 @@ const RunsPage: React.FC = () => {
                   style={{ margin: 0, maxWidth: 360 }}
                   type="secondary"
                 >
-                  Drive scoped workflow services over{" "}
+                  Drive scoped service endpoints over{" "}
                   <Typography.Text code>
                     {submitPathLabel}
                   </Typography.Text>
-                  , monitor the live event stream, and jump into adjacent
-                  runtime surfaces directly from the runtime console.
+                  , monitor the live event stream when the endpoint is streamed,
+                  and jump into adjacent runtime surfaces directly from the
+                  runtime console.
                 </Typography.Paragraph>
               }
               placement="bottomLeft"
@@ -1106,6 +1281,7 @@ const RunsPage: React.FC = () => {
           runStatusLabel={runStatusText}
           statusTone={runStatusTone}
           transport={activeTransport}
+          endpointId={endpointName}
           workflowName={workflowName || "n/a"}
         />
 
@@ -1121,6 +1297,7 @@ const RunsPage: React.FC = () => {
           >
             <RunsLaunchRail
               actorId={actorId ?? undefined}
+              activeEndpointId={endpointName}
               catalogSearch={catalogSearch}
               composerFormRef={composerFormRef}
               draftMode={Boolean(draftRunPayload)}
@@ -1142,39 +1319,35 @@ const RunsPage: React.FC = () => {
               onAbortRun={abortRun}
               onCatalogSearchChange={setCatalogSearch}
               onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
+              onEndpointChange={setActiveEndpointId}
               onSelectWorkflowName={setSelectedWorkflowName}
               onSubmitRun={async (values) => {
-                await sendRun(
-                  values.scopeId ?? "",
-                  values.serviceId ?? "",
-                  {
-                    prompt: values.prompt,
-                    workflow: values.workflow,
-                    agentId: values.actorId,
-                  },
-                  values.transport
-                );
+                await sendRun(values.scopeId ?? "", values);
               }}
               onTransportChange={setSelectedTransport}
               onUsePreset={(record) => {
                 composerFormRef.current?.setFieldsValue({
                   prompt: record.prompt,
-                  workflow: draftRunPayload?.workflowName ?? record.workflow,
+                  workflow: workflowDraftPayload?.workflowName ?? record.workflow,
                   scopeId:
                     composerFormRef.current?.getFieldValue("scopeId") ??
                     initialFormValues.scopeId,
-                  serviceId: draftRunPayload
+                  serviceId: workflowDraftPayload
                     ? undefined
                     : (
                     composerFormRef.current?.getFieldValue("serviceId") ??
                     initialFormValues.serviceId
                   ),
+                  endpointId: "chat",
+                  payloadTypeUrl: undefined,
+                  payloadBase64: undefined,
                   actorId: undefined,
                   transport: selectedTransport,
                 });
                 setSelectedWorkflowName(
-                  draftRunPayload?.workflowName ?? record.workflow
+                  workflowDraftPayload?.workflowName ?? record.workflow
                 );
+                setActiveEndpointId("chat");
                 setCatalogSearch("");
               }}
             />

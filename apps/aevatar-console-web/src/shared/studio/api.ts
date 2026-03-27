@@ -6,6 +6,7 @@ import type {
   StudioConnectorDraftResponse,
   StudioScopeBindingActivationResult,
   StudioScopeBindingRevision,
+  StudioScopeGAgentBindingInput,
   StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
@@ -16,6 +17,7 @@ import type {
   StudioScopeScriptBindingActivationResult,
   StudioScopeScriptBindingInput,
   StudioScopeBindingResult,
+  StudioScopeGAgentBindingResult,
   StudioScopeScriptBindingResult,
   StudioScopeScriptBindingStatus,
   StudioRuntimeTestResult,
@@ -557,8 +559,45 @@ export const studioApi = {
           compactObject({
             implementationKind: "script",
             displayName: trimOptional(input.displayName),
-            scriptId: input.scriptId.trim(),
-            scriptRevision: input.scriptRevision.trim(),
+            script: compactObject({
+              scriptId: input.scriptId.trim(),
+              scriptRevision: input.scriptRevision.trim(),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindScopeGAgent(
+    input: StudioScopeGAgentBindingInput
+  ): Promise<StudioScopeGAgentBindingResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "gagent",
+            displayName: trimOptional(input.displayName),
+            gagent: compactObject({
+              actorTypeName: input.actorTypeName.trim(),
+              preferredActorId: trimOptional(input.preferredActorId),
+              endpoints: input.endpoints.map((endpoint) =>
+                compactObject({
+                  endpointId: endpoint.endpointId.trim(),
+                  displayName:
+                    trimOptional(endpoint.displayName) ||
+                    endpoint.endpointId.trim(),
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
+                  responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
+                  description: trimOptional(endpoint.description),
+                })
+              ),
+            }),
             revisionId: trimOptional(input.revisionId),
           })
         ),
