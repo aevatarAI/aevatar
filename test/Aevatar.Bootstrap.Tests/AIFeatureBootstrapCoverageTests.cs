@@ -35,8 +35,9 @@ public class AIFeatureBootstrapCoverageTests
         {
             ["LLMProviders:Providers:deepseek:ApiKey"] = "deepseek-key",
         });
+        var configuration = new ConfigurationBuilder().Build();
 
-        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, options);
+        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, configuration, options);
 
         configuredProviders.Should().ContainSingle();
         var provider = configuredProviders[0];
@@ -44,6 +45,35 @@ public class AIFeatureBootstrapCoverageTests
         ReadConfiguredProviderString(provider, "ProviderType").Should().Be("deepseek");
         ReadConfiguredProviderString(provider, "Model").Should().Be("deepseek-default");
         ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://api.deepseek.com/v1");
+    }
+
+    [Fact]
+    public void ReadConfiguredProviders_WhenNyxIdAuthorityConfigured_ShouldResolveGatewayEndpoint()
+    {
+        var options = new AevatarAIFeatureOptions
+        {
+            OpenAIModel = "gpt-4o-mini",
+            DefaultProvider = "nyxid",
+        };
+        var secretsStore = new InMemorySecretsStore(new Dictionary<string, string>
+        {
+            ["LLMProviders:Providers:nyx-main:ApiKey"] = "nyx-token",
+            ["LLMProviders:Providers:nyx-main:ProviderType"] = "nyxid",
+            ["LLMProviders:Providers:nyx-main:Model"] = "claude-sonnet-4-5-20250929",
+        });
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+            })
+            .Build();
+
+        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, configuration, options);
+
+        configuredProviders.Should().ContainSingle();
+        var provider = configuredProviders[0];
+        ReadConfiguredProviderString(provider, "ProviderType").Should().Be("nyxid");
+        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
     }
 
     [Fact]
@@ -240,6 +270,37 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenOnlyNyxIdProviderConfigured_ShouldRegisterNyxIdDefaultProvider()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+            })
+            .Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = true;
+            options.EnableMEAIToTornadoFailover = false;
+            options.SecretsStore = new InMemorySecretsStore(new Dictionary<string, string>
+            {
+                ["LLMProviders:Providers:nyx-main:ApiKey"] = "nyx-token",
+                ["LLMProviders:Providers:nyx-main:ProviderType"] = "nyxid",
+                ["LLMProviders:Providers:nyx-main:Model"] = "claude-sonnet-4-5-20250929",
+                ["LLMProviders:Default"] = "nyx-main",
+            });
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("nyx-main");
+        llmFactory.GetDefault().Name.Should().Be("nyx-main");
+    }
+
+    [Fact]
     public async Task AddAevatarAIFeatures_WhenMCPEnabledAndConfigured_ShouldRegisterMCPToolSourceAndConnectorBuilder()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-mcp-{Guid.NewGuid():N}");
@@ -330,6 +391,7 @@ public class AIFeatureBootstrapCoverageTests
 
     private static IReadOnlyList<object> InvokeReadConfiguredProviders(
         IAevatarSecretsStore secretsStore,
+        IConfiguration configuration,
         AevatarAIFeatureOptions options)
     {
         var method = typeof(global::Aevatar.Bootstrap.Extensions.AI.ServiceCollectionExtensions).GetMethod(
@@ -337,7 +399,7 @@ public class AIFeatureBootstrapCoverageTests
             BindingFlags.NonPublic | BindingFlags.Static);
         method.Should().NotBeNull();
 
-        var result = method!.Invoke(null, [secretsStore, options]);
+        var result = method!.Invoke(null, [secretsStore, configuration, options]);
         result.Should().NotBeNull();
         return ((IEnumerable)result!).Cast<object>().ToList();
     }

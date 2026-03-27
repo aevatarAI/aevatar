@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
+import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -245,10 +246,36 @@ jest.mock("@/shared/auth/client", () => ({
   ensureActiveAuthSession: jest.fn(async () => null),
 }));
 
+jest.mock("@/shared/api/runtimeQueryApi", () => ({
+  runtimeQueryApi: {
+    listPrimitives: jest.fn(async () => [
+      {
+        name: "llm_call",
+        aliases: [],
+        category: "core",
+        description: "LLM call",
+        parameters: [],
+        exampleWorkflows: [],
+      },
+      {
+        name: "demo_template",
+        aliases: ["render_template"],
+        category: "demo",
+        description: "Demo template primitive",
+        parameters: [],
+        exampleWorkflows: ["demo_template"],
+      },
+    ]),
+  },
+}));
+
 const mockEnsureActiveAuthSession =
   ensureActiveAuthSession as jest.MockedFunction<
     (_config?: unknown) => Promise<Record<string, unknown> | null>
   >;
+const mockRuntimeQueryApi = runtimeQueryApi as unknown as {
+  listPrimitives: jest.Mock;
+};
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
@@ -1386,6 +1413,24 @@ describe("StudioPage", () => {
     jest.clearAllMocks();
     mockEnsureActiveAuthSession.mockReset();
     mockEnsureActiveAuthSession.mockResolvedValue(null);
+    mockRuntimeQueryApi.listPrimitives.mockResolvedValue([
+      {
+        name: "llm_call",
+        aliases: [],
+        category: "core",
+        description: "LLM call",
+        parameters: [],
+        exampleWorkflows: [],
+      },
+      {
+        name: "demo_template",
+        aliases: ["render_template"],
+        category: "demo",
+        description: "Demo template primitive",
+        parameters: [],
+        exampleWorkflows: ["demo_template"],
+      },
+    ]);
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       enabled: false,
       authenticated: false,
@@ -2094,6 +2139,11 @@ describe("StudioPage", () => {
       expect(studioApi.parseYaml).toHaveBeenCalledWith(
         expect.objectContaining({
           yaml: expect.stringContaining("name: workspace-demo"),
+          availableStepTypes: expect.arrayContaining([
+            "llm_call",
+            "demo_template",
+            "render_template",
+          ]),
         })
       );
     });
@@ -2109,6 +2159,11 @@ describe("StudioPage", () => {
               }),
             ]),
           }),
+          availableStepTypes: expect.arrayContaining([
+            "llm_call",
+            "demo_template",
+            "render_template",
+          ]),
         })
       );
     });

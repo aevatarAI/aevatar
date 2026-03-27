@@ -101,7 +101,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
-                TargetRole = request.TargetRole ?? string.Empty,
+                TargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
+                    workflow: null,
+                    configuredTargetRole: request.TargetRole,
+                    stepType: request.StepType,
+                    parameters: request.Parameters),
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchDedupId = BuildDispatchDedupId(sessionId),
@@ -117,26 +121,15 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         WorkflowStepTargetAgentResolution target;
-        if (!HasNonEmptyParameter(request.Parameters, "agent_type"))
+        try
         {
-            target = string.IsNullOrWhiteSpace(request.TargetRole)
-                ? WorkflowStepTargetAgentResolution.Self(ctx.AgentId)
-                : WorkflowStepTargetAgentResolution.Actor(
-                    WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, request.TargetRole),
-                    $"target_role:{request.TargetRole}");
+            target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
         }
-        else
+        catch (Exception ex)
         {
-            try
-            {
-                target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
-            }
-            catch (Exception ex)
-            {
-                ctx.Logger.LogWarning(ex, "LLMCallModule: target resolution failed for step={StepId}", stepId);
-                await FailPendingAsync(sessionId, $"LLM target resolution failed: {ex.Message}", ctx.AgentId, ctx, ct);
-                return;
-            }
+            ctx.Logger.LogWarning(ex, "LLMCallModule: target resolution failed for step={StepId}", stepId);
+            await FailPendingAsync(sessionId, $"LLM target resolution failed: {ex.Message}", ctx.AgentId, ctx, ct);
+            return;
         }
 
         try
@@ -351,23 +344,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
             metadata[key.Trim()] = value.Trim();
         }
-    }
-
-    private static bool HasNonEmptyParameter(MapField<string, string> parameters, string key)
-    {
-        if (parameters.TryGetValue(key, out var direct) && !string.IsNullOrWhiteSpace(direct))
-            return true;
-
-        foreach (var (existingKey, value) in parameters)
-        {
-            if (string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)

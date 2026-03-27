@@ -83,6 +83,70 @@ public sealed class AppStudioScriptDraftRunEndpointTests
     }
 
     [Fact]
+    public async Task ScriptDraftRunEndpoint_ShouldReturnBadRequest_WhenScopeCannotBeResolved()
+    {
+        await using var host = await StudioScriptDraftRunTestHost.StartAsync(
+            embeddedWorkflowMode: true,
+            resolvedScopeId: null);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/scripts/draft-run", new
+        {
+            scriptId = "Orders Script",
+            source = "public sealed class DemoScript {}",
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        var payload = JsonDocument.Parse(body);
+        payload.RootElement.GetProperty("code").GetString().Should().Be("APP_SCOPE_REQUIRED");
+        host.DefinitionPort.LastCall.Should().BeNull();
+        host.RuntimeProvisioningPort.LastCall.Should().BeNull();
+        host.RuntimeCommandPort.LastCall.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ScriptDraftRunEndpoint_ShouldReturnBadRequest_WhenRuntimeServicesAreMissing()
+    {
+        await using var host = await StudioScriptDraftRunTestHost.StartAsync(
+            embeddedWorkflowMode: true,
+            resolvedScopeId: "scope-a",
+            registerRuntimePorts: false);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/scripts/draft-run", new
+        {
+            scriptId = "Orders Script",
+            source = "public sealed class DemoScript {}",
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        var payload = JsonDocument.Parse(body);
+        payload.RootElement.GetProperty("code").GetString().Should().Be("SCRIPT_RUNTIME_UNAVAILABLE");
+    }
+
+    [Fact]
+    public async Task ScriptDraftRunEndpoint_ShouldReturnBadRequest_WhenSourceIsMissing()
+    {
+        await using var host = await StudioScriptDraftRunTestHost.StartAsync(
+            embeddedWorkflowMode: true,
+            resolvedScopeId: "scope-a");
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/scripts/draft-run", new
+        {
+            scriptId = "Orders Script",
+            source = "",
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        var payload = JsonDocument.Parse(body);
+        payload.RootElement.GetProperty("code").GetString().Should().Be("SCRIPT_SOURCE_REQUIRED");
+        host.DefinitionPort.LastCall.Should().BeNull();
+        host.RuntimeProvisioningPort.LastCall.Should().BeNull();
+        host.RuntimeCommandPort.LastCall.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScriptDraftRunEndpoint_ShouldReturnForbidden_WhenResolvedScopeDoesNotMatchRequest()
     {
         await using var host = await StudioScriptDraftRunTestHost.StartAsync(
@@ -130,7 +194,10 @@ public sealed class AppStudioScriptDraftRunEndpointTests
 
         public RecordingScriptRuntimeCommandPort RuntimeCommandPort { get; }
 
-        public static async Task<StudioScriptDraftRunTestHost> StartAsync(bool embeddedWorkflowMode, string resolvedScopeId)
+        public static async Task<StudioScriptDraftRunTestHost> StartAsync(
+            bool embeddedWorkflowMode,
+            string? resolvedScopeId,
+            bool registerRuntimePorts = true)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -143,9 +210,12 @@ public sealed class AppStudioScriptDraftRunEndpointTests
             var runtimeCommandPort = new RecordingScriptRuntimeCommandPort();
 
             builder.Services.AddSingleton<IAppScopeResolver>(new StubAppScopeResolver(resolvedScopeId));
-            builder.Services.AddSingleton<IScriptDefinitionCommandPort>(definitionPort);
-            builder.Services.AddSingleton<IScriptRuntimeProvisioningPort>(runtimeProvisioningPort);
-            builder.Services.AddSingleton<IScriptRuntimeCommandPort>(runtimeCommandPort);
+            if (registerRuntimePorts)
+            {
+                builder.Services.AddSingleton<IScriptDefinitionCommandPort>(definitionPort);
+                builder.Services.AddSingleton<IScriptRuntimeProvisioningPort>(runtimeProvisioningPort);
+                builder.Services.AddSingleton<IScriptRuntimeCommandPort>(runtimeCommandPort);
+            }
             builder.Services.AddSingleton(new AevatarHostMetadata
             {
                 ServiceName = "test-studio",
@@ -155,9 +225,12 @@ public sealed class AppStudioScriptDraftRunEndpointTests
             var app = builder.Build();
             app.Use(async (http, next) =>
             {
-                http.User = new ClaimsPrincipal(new ClaimsIdentity(
-                    [new Claim("scope_id", resolvedScopeId)],
-                    authenticationType: "Test"));
+                if (!string.IsNullOrWhiteSpace(resolvedScopeId))
+                {
+                    http.User = new ClaimsPrincipal(new ClaimsIdentity(
+                        [new Claim("scope_id", resolvedScopeId)],
+                        authenticationType: "Test"));
+                }
                 await next();
             });
             StudioEndpoints.Map(app, embeddedWorkflowMode);
@@ -190,11 +263,12 @@ public sealed class AppStudioScriptDraftRunEndpointTests
 
     private sealed class StubAppScopeResolver : IAppScopeResolver
     {
-        private readonly AppScopeContext _context;
+        private readonly AppScopeContext? _context;
 
-        public StubAppScopeResolver(string scopeId)
+        public StubAppScopeResolver(string? scopeId)
         {
-            _context = new AppScopeContext(scopeId, "test");
+            if (!string.IsNullOrWhiteSpace(scopeId))
+                _context = new AppScopeContext(scopeId, "test");
         }
 
         public AppScopeContext? Resolve(Microsoft.AspNetCore.Http.HttpContext? httpContext = null) => _context;

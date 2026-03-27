@@ -784,6 +784,76 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldEmitAguiEvents_WhenRequested()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        host.InteractionService.ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+        {
+            var receipt = new WorkflowChatRunAcceptedReceipt("run-actor-1", "main", "cmd-1", "corr-1");
+            if (onAcceptedAsync != null)
+                await onAcceptedAsync(receipt, ct);
+
+            await emitAsync(new WorkflowRunEventEnvelope
+            {
+                Custom = new WorkflowCustomEventPayload
+                {
+                    Name = "aevatar.human_input.request",
+                    Payload = Any.Pack(new WorkflowHumanInputRequestCustomPayload
+                    {
+                        StepId = "approve",
+                        RunId = "run-1",
+                        SuspensionType = "human_input",
+                        Prompt = "Need approval",
+                        TimeoutSeconds = 30,
+                        VariableName = "decision",
+                    }),
+                },
+            }, ct);
+
+            return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+        };
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+            },
+            eventFormat = "agui",
+        });
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().Contain("\"humanInputRequest\"");
+        body.Should().Contain("aevatar.run.context");
+        host.InteractionService.LastRequest.Should().NotBeNull();
+        host.InteractionService.LastRequest!.WorkflowYamls.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task ScopeDraftRunEndpoint_ShouldReturnBadRequest_WhenEventFormatIsInvalid()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/draft-run", new
+        {
+            prompt = "run the draft",
+            workflowYamls = new[]
+            {
+                "name: main\nroles:\n  - id: assistant\n    name: Assistant\nsteps:\n  - id: reply\n    type: llm_call\n    target_role: assistant",
+            },
+            eventFormat = "invalid",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SCOPE_DRAFT_RUN_REQUEST");
+    }
+
+    [Fact]
     public async Task ScopeDraftRunEndpoint_ShouldReturnBadRequest_WhenWorkflowYamlsAreMissing()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();

@@ -325,17 +325,14 @@ public static class ScopeWorkflowEndpoints
             ct);
     }
 
-    private static async Task HandleAguiStreamAsync(
+    internal static async Task HandleAguiStreamAsync(
         HttpContext http,
-        string scopeId,
-        ScopeWorkflowSummary workflow,
-        string prompt,
-        string? sessionId,
-        IReadOnlyDictionary<string, string>? headers,
+        WorkflowChatRunRequest request,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
-        prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(request);
 
         var started = false;
 
@@ -358,14 +355,7 @@ public static class ScopeWorkflowEndpoints
         try
         {
             var result = await chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(
-                    prompt,
-                    workflow.WorkflowName,
-                    workflow.ActorId,
-                    sessionId,
-                    WorkflowYamls: null,
-                    Metadata: BuildScopedHeaders(scopeId, headers),
-                    ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
+                request,
                 async (frame, token) =>
                 {
                     if (!ScopeWorkflowAguiEventMapper.TryMap(frame, out var aguiEvent) || aguiEvent == null)
@@ -408,6 +398,31 @@ public static class ScopeWorkflowEndpoints
 
             await writer.WriteAsync(ScopeWorkflowAguiEventMapper.BuildRunErrorEvent(ex), CancellationToken.None);
         }
+    }
+
+    private static async Task HandleAguiStreamAsync(
+        HttpContext http,
+        string scopeId,
+        ScopeWorkflowSummary workflow,
+        string prompt,
+        string? sessionId,
+        IReadOnlyDictionary<string, string>? headers,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        CancellationToken ct)
+    {
+        prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
+        await HandleAguiStreamAsync(
+            http,
+            new WorkflowChatRunRequest(
+                prompt,
+                workflow.WorkflowName,
+                workflow.ActorId,
+                sessionId,
+                WorkflowYamls: null,
+                Metadata: BuildScopedHeaders(scopeId, headers),
+                ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
+            chatRunService,
+            ct);
     }
 
     private static async Task<ScopeWorkflowDetail> BuildWorkflowDetailAsync(
@@ -464,7 +479,7 @@ public static class ScopeWorkflowEndpoints
     private static string BuildWorkflowActorNotFoundMessage(string scopeId) =>
         $"Workflow actor was not found for scope '{scopeId}'.";
 
-    private static bool TryParseEventFormat(
+    internal static bool TryParseEventFormat(
         string? rawValue,
         out ScopeWorkflowStreamEventFormat eventFormat)
     {
@@ -502,7 +517,7 @@ public static class ScopeWorkflowEndpoints
         return scopedHeaders;
     }
 
-    private static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
+    internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
     {
         return error switch
         {
@@ -561,7 +576,7 @@ public static class ScopeWorkflowEndpoints
         Dictionary<string, string>? Headers = null,
         string? EventFormat = null);
 
-    private enum ScopeWorkflowStreamEventFormat
+    internal enum ScopeWorkflowStreamEventFormat
     {
         Workflow = 0,
         Agui = 1,

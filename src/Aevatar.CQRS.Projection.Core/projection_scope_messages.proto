@@ -55,10 +55,6 @@ message ReplayProjectionFailuresCommand {
   int32 max_items = 1;
 }
 
-message ProjectionObservationArrivedSignal {
-  aevatar.EventEnvelope envelope = 1;
-}
-
 message ProjectionScopeStartedEvent {
   string root_actor_id = 1;
   string projection_kind = 2;

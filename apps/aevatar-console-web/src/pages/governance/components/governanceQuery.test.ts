@@ -13,11 +13,10 @@ describe('governanceQuery', () => {
   it('reads governance filters from the query string', () => {
     expect(
       readGovernanceDraft(
-        '?tenantId=t1&appId=a1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
+        '?tenantId=t1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
       ),
     ).toEqual({
       tenantId: 't1',
-      appId: 'a1',
       namespace: 'n1',
       serviceId: 'svc-1',
       revisionId: 'rev-2',
@@ -27,7 +26,6 @@ describe('governanceQuery', () => {
   it('normalizes service identity query and full governance draft separately', () => {
     const draft = {
       tenantId: ' t1 ',
-      appId: ' a1 ',
       namespace: ' n1 ',
       serviceId: ' svc-1 ',
       revisionId: ' rev-2 ',
@@ -35,12 +33,10 @@ describe('governanceQuery', () => {
 
     expect(normalizeGovernanceQuery(draft)).toEqual({
       tenantId: 't1',
-      appId: 'a1',
       namespace: 'n1',
     });
     expect(normalizeGovernanceDraft(draft)).toEqual({
       tenantId: 't1',
-      appId: 'a1',
       namespace: 'n1',
       serviceId: 'svc-1',
       revisionId: 'rev-2',
@@ -51,13 +47,12 @@ describe('governanceQuery', () => {
     expect(
       buildGovernanceHref('/governance/activation', {
         tenantId: 't1',
-        appId: 'a1',
         namespace: 'n1',
         serviceId: 'svc-1',
         revisionId: 'rev-2',
       }),
     ).toBe(
-      '/governance/activation?tenantId=t1&appId=a1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
+      '/governance/activation?tenantId=t1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
     );
   });
 
@@ -83,10 +78,9 @@ describe('governanceQuery', () => {
 
     expect(options).toEqual([
       {
-        label: 'Payments (t1/a1/n1/svc-1)',
+        label: 'Payments (t1/n1/svc-1)',
         value: 't1/a1/n1/svc-1',
         tenantId: 't1',
-        appId: 'a1',
         namespace: 'n1',
         serviceId: 'svc-1',
       },
@@ -94,7 +88,6 @@ describe('governanceQuery', () => {
 
     const selectedOption = findGovernanceServiceOption(options, {
       tenantId: '',
-      appId: '',
       namespace: '',
       serviceId: 'svc-1',
       revisionId: '',
@@ -105,7 +98,6 @@ describe('governanceQuery', () => {
       applyGovernanceServiceSelection(
         {
           tenantId: '',
-          appId: '',
           namespace: '',
           serviceId: 'svc-1',
           revisionId: 'rev-2',
@@ -114,7 +106,6 @@ describe('governanceQuery', () => {
       ),
     ).toEqual({
       tenantId: 't1',
-      appId: 'a1',
       namespace: 'n1',
       serviceId: 'svc-1',
       revisionId: 'rev-2',
@@ -125,7 +116,6 @@ describe('governanceQuery', () => {
     expect(
       hasGovernanceScope({
         tenantId: 't1',
-        appId: 'a1',
         namespace: 'n1',
         serviceId: '',
         revisionId: '',
@@ -135,8 +125,7 @@ describe('governanceQuery', () => {
     expect(
       hasGovernanceScope({
         tenantId: 't1',
-        appId: '',
-        namespace: 'n1',
+        namespace: '',
         serviceId: '',
         revisionId: '',
       }),

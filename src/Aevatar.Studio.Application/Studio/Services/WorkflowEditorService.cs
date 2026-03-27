@@ -37,7 +37,10 @@ public sealed class WorkflowEditorService
 
         var findings = MergeFindings(
             parse.Findings,
-            ValidateDocument(parse.Document, request.AvailableWorkflowNames));
+            ValidateDocument(
+                parse.Document,
+                request.AvailableWorkflowNames,
+                request.AvailableStepTypes));
 
         return new ParseYamlResponse(
             parse.Document,
@@ -48,19 +51,28 @@ public sealed class WorkflowEditorService
     public SerializeYamlResponse SerializeYaml(SerializeYamlRequest request)
     {
         var normalized = _normalizer.NormalizeForExport(request.Document);
-        var findings = ValidateDocument(normalized, request.AvailableWorkflowNames);
+        var findings = ValidateDocument(
+            normalized,
+            request.AvailableWorkflowNames,
+            request.AvailableStepTypes);
         var yaml = _yamlDocumentService.Serialize(normalized);
 
         return new SerializeYamlResponse(yaml, normalized, findings);
     }
 
     public ValidateWorkflowResponse Validate(ValidateWorkflowRequest request) =>
-        new(ValidateDocument(request.Document, request.AvailableWorkflowNames));
+        new(ValidateDocument(
+            request.Document,
+            request.AvailableWorkflowNames,
+            request.AvailableStepTypes));
 
     public NormalizeWorkflowResponse Normalize(NormalizeWorkflowRequest request)
     {
         var normalized = _normalizer.NormalizeForExport(request.Document);
-        var findings = ValidateDocument(normalized, request.AvailableWorkflowNames);
+        var findings = ValidateDocument(
+            normalized,
+            request.AvailableWorkflowNames,
+            request.AvailableStepTypes);
         var yaml = _yamlDocumentService.Serialize(normalized);
 
         return new NormalizeWorkflowResponse(normalized, yaml, findings);
@@ -71,17 +83,22 @@ public sealed class WorkflowEditorService
 
     internal IReadOnlyList<ValidationFinding> ValidateDocument(
         WorkflowDocument document,
-        IReadOnlyCollection<string>? availableWorkflowNames)
+        IReadOnlyCollection<string>? availableWorkflowNames,
+        IReadOnlyCollection<string>? availableStepTypes = null)
     {
         var workflowNames = availableWorkflowNames is null
             ? null
             : availableWorkflowNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var stepTypes = availableStepTypes is null
+            ? null
+            : availableStepTypes.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return _validator.Validate(
             document,
             new WorkflowValidationOptions
             {
                 AvailableWorkflowNames = workflowNames,
+                AvailableStepTypes = stepTypes,
             });
     }
 

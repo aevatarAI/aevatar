@@ -9,6 +9,7 @@
     <RootNamespace>Aevatar.GAgentService.Integration.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Application\Aevatar.GAgentService.Application.csproj" />
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Projection\Aevatar.GAgentService.Projection.csproj" />
@@ -17,6 +18,7 @@
     <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Governance.Projection\Aevatar.GAgentService.Governance.Projection.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime\Aevatar.Foundation.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Foundation.Runtime.Implementations.Local\Aevatar.Foundation.Runtime.Implementations.Local.csproj" />
+    <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

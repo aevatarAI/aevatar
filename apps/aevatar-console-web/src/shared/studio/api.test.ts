@@ -130,6 +130,54 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('sends available step types when parsing workflow yaml', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        document: {
+          name: 'demo_template',
+          description: '',
+          roles: [],
+          steps: [],
+        },
+        graph: null,
+        findings: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.parseYaml({
+      yaml: 'name: demo_template\nsteps:\n  - id: step_1\n    type: demo_template\n',
+      availableWorkflowNames: ['workspace-demo'],
+      availableStepTypes: ['demo_template', 'llm_call'],
+    });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/editor/parse-yaml');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      yaml: 'name: demo_template\nsteps:\n  - id: step_1\n    type: demo_template\n',
+      availableWorkflowNames: ['workspace-demo'],
+      availableStepTypes: ['demo_template', 'llm_call'],
+    });
+  });
+
   it('binds a saved script to the default service using the scope binding endpoint', async () => {
     persistAuthSession({
       tokens: {

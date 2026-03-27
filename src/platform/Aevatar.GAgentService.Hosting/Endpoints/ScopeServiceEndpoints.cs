@@ -77,13 +77,43 @@ public static class ScopeServiceEndpoints
                 throw new InvalidOperationException("workflowYamls is required.");
 
             var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
+            if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
+            {
+                await WriteJsonErrorResponseAsync(
+                    http,
+                    StatusCodes.Status400BadRequest,
+                    "INVALID_SCOPE_DRAFT_RUN_REQUEST",
+                    "eventFormat must be either 'workflow' or 'agui'.",
+                    ct);
+                return;
+            }
+
+            var chatRequest = new WorkflowChatRunRequest(
+                Prompt: request.Prompt?.Trim() ?? string.Empty,
+                WorkflowName: null,
+                ActorId: null,
+                SessionId: request.SessionId,
+                WorkflowYamls: request.WorkflowYamls,
+                Metadata: scopedHeaders,
+                ScopeId: scopeId);
+
+            if (eventFormat == ScopeWorkflowEndpoints.ScopeWorkflowStreamEventFormat.Agui)
+            {
+                await ScopeWorkflowEndpoints.HandleAguiStreamAsync(
+                    http,
+                    chatRequest,
+                    chatRunService,
+                    ct);
+                return;
+            }
+
             await WorkflowCapabilityEndpoints.HandleChat(
                 http,
                 new ChatInput
                 {
-                    Prompt = request.Prompt?.Trim() ?? string.Empty,
-                    WorkflowYamls = request.WorkflowYamls,
-                    SessionId = request.SessionId,
+                    Prompt = chatRequest.Prompt,
+                    WorkflowYamls = chatRequest.WorkflowYamls,
+                    SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
                     Metadata = scopedHeaders,
                 },
@@ -1601,7 +1631,8 @@ public static class ScopeServiceEndpoints
         string Prompt,
         IReadOnlyList<string>? WorkflowYamls,
         string? SessionId = null,
-        Dictionary<string, string>? Headers = null);
+        Dictionary<string, string>? Headers = null,
+        string? EventFormat = null);
 
     public sealed record UpsertScopeBindingHttpRequest(
         string ImplementationKind,

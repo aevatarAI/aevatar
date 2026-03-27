@@ -14,7 +14,6 @@ describe('GovernanceResultPanels', () => {
         description="Inspect raw binding targets and attached policies."
         draft={{
           tenantId: 'tenant-a',
-          appId: 'app-a',
           namespace: 'ops',
           serviceId: 'svc-payments',
           revisionId: '',

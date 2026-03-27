@@ -12,6 +12,8 @@ public sealed record WorkflowValidationOptions
     public bool? ForceClosedWorldMode { get; init; }
 
     public IReadOnlySet<string>? AvailableWorkflowNames { get; init; }
+
+    public IReadOnlySet<string>? AvailableStepTypes { get; init; }
 }
 
 public sealed class WorkflowValidator
@@ -77,7 +79,13 @@ public sealed class WorkflowValidator
 
         foreach (var visit in stepVisits)
         {
-            ValidateStep(visit, roleIds, stepIds, options.AvailableWorkflowNames, findings);
+            ValidateStep(
+                visit,
+                roleIds,
+                stepIds,
+                options.AvailableWorkflowNames,
+                options.AvailableStepTypes,
+                findings);
         }
 
         return findings;
@@ -88,13 +96,14 @@ public sealed class WorkflowValidator
         IReadOnlySet<string> roleIds,
         IReadOnlySet<string> stepIds,
         IReadOnlySet<string>? availableWorkflowNames,
+        IReadOnlySet<string>? availableStepTypes,
         ICollection<ValidationFinding> findings)
     {
         var step = visit.Step;
         var stepPath = visit.Path;
         var canonicalType = _profile.ToCanonicalType(step.Type);
 
-        if (!_profile.IsKnownStepType(canonicalType))
+        if (!IsKnownStepType(step.Type, canonicalType, availableStepTypes))
         {
             findings.Add(ValidationFinding.Error(
                 $"{stepPath}/type",
@@ -180,7 +189,7 @@ public sealed class WorkflowValidator
             }
         }
 
-        ValidateStepTypeParameters(step, stepPath, findings);
+        ValidateStepTypeParameters(step, stepPath, availableStepTypes, findings);
         ValidateTypeSpecificRules(step, stepPath, stepIds, availableWorkflowNames, findings);
 
         if (visit.Index < visit.SiblingCount - 1 && string.IsNullOrWhiteSpace(step.Next) && step.Branches.Count == 0)
@@ -192,7 +201,11 @@ public sealed class WorkflowValidator
         }
     }
 
-    private void ValidateStepTypeParameters(StepModel step, string stepPath, ICollection<ValidationFinding> findings)
+    private void ValidateStepTypeParameters(
+        StepModel step,
+        string stepPath,
+        IReadOnlySet<string>? availableStepTypes,
+        ICollection<ValidationFinding> findings)
     {
         foreach (var (key, value) in step.Parameters)
         {
@@ -212,7 +225,7 @@ public sealed class WorkflowValidator
             }
 
             var canonical = _profile.ToCanonicalType(parameterValue);
-            if (!_profile.IsKnownStepType(canonical))
+            if (!IsKnownStepType(parameterValue, canonical, availableStepTypes))
             {
                 findings.Add(ValidationFinding.Error(
                     $"{stepPath}/parameters/{key}",
@@ -220,6 +233,28 @@ public sealed class WorkflowValidator
                     code: "unknown_parameter_step_type"));
             }
         }
+    }
+
+    private bool IsKnownStepType(
+        string? rawValue,
+        string canonicalValue,
+        IReadOnlySet<string>? availableStepTypes)
+    {
+        if (_profile.IsKnownStepType(canonicalValue))
+        {
+            return true;
+        }
+
+        if (availableStepTypes == null || availableStepTypes.Count == 0)
+        {
+            return false;
+        }
+
+        var normalizedRawValue = rawValue?.Trim();
+        return (!string.IsNullOrWhiteSpace(normalizedRawValue) &&
+                availableStepTypes.Contains(normalizedRawValue)) ||
+               (!string.IsNullOrWhiteSpace(canonicalValue) &&
+                availableStepTypes.Contains(canonicalValue));
     }
 
     private void ValidateTypeSpecificRules(

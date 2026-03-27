@@ -17,12 +17,38 @@ public sealed class RolesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<RoleCatalogResponse>> Get(CancellationToken cancellationToken) =>
-        Ok(await _roleCatalogService.GetCatalogAsync(cancellationToken));
+    public async Task<ActionResult<RoleCatalogResponse>> Get(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _roleCatalogService.GetCatalogAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
+    }
 
     [HttpGet("draft")]
-    public async Task<ActionResult<RoleDraftResponse>> GetDraft(CancellationToken cancellationToken) =>
-        Ok(await _roleCatalogService.GetDraftAsync(cancellationToken));
+    public async Task<ActionResult<RoleDraftResponse>> GetDraft(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _roleCatalogService.GetDraftAsync(cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
+    }
 
     [HttpPut]
     public async Task<ActionResult<RoleCatalogResponse>> Save(
@@ -36,6 +62,10 @@ public sealed class RolesController : ControllerBase
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
         }
     }
 
@@ -63,13 +93,37 @@ public sealed class RolesController : ControllerBase
     [HttpPut("draft")]
     public async Task<ActionResult<RoleDraftResponse>> SaveDraft(
         [FromBody] SaveRoleDraftRequest request,
-        CancellationToken cancellationToken) =>
-        Ok(await _roleCatalogService.SaveDraftAsync(request, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _roleCatalogService.SaveDraftAsync(request, cancellationToken));
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
+    }
 
     [HttpDelete("draft")]
     public async Task<IActionResult> DeleteDraft(CancellationToken cancellationToken)
     {
-        await _roleCatalogService.DeleteDraftAsync(cancellationToken);
-        return NoContent();
+        try
+        {
+            await _roleCatalogService.DeleteDraftAsync(cancellationToken);
+            return NoContent();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return BadRequest(new { message = exception.Message });
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { message = exception.Message });
+        }
     }
 }

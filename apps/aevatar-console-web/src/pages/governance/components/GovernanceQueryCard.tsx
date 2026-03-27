@@ -41,7 +41,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
     }
 
     const hasIncompleteIdentity =
-      !draft.tenantId.trim() || !draft.appId.trim() || !draft.namespace.trim();
+      !draft.tenantId.trim() || !draft.namespace.trim();
     if (!hasIncompleteIdentity) {
       return;
     }
@@ -49,7 +49,6 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
     const nextDraft = applyGovernanceServiceSelection(draft, selectedServiceOption);
     if (
       nextDraft.tenantId === draft.tenantId &&
-      nextDraft.appId === draft.appId &&
       nextDraft.namespace === draft.namespace &&
       nextDraft.serviceId === draft.serviceId
     ) {
@@ -63,24 +62,13 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
     <ProCard {...moduleCardProps}>
       <Space wrap>
         <Input
-          placeholder="platform tenantId"
-          style={{ width: 180 }}
+          placeholder="tenantId (scopeId)"
+          style={{ width: 200 }}
           value={draft.tenantId}
           onChange={(event) =>
             onChange({
               ...draft,
               tenantId: event.target.value,
-            })
-          }
-        />
-        <Input
-          placeholder="platform appId"
-          style={{ width: 180 }}
-          value={draft.appId}
-          onChange={(event) =>
-            onChange({
-              ...draft,
-              appId: event.target.value,
             })
           }
         />
@@ -100,7 +88,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
           placeholder={
             serviceSearchEnabled
               ? 'Search platform service'
-              : 'Enter platform tenantId, appId, namespace first'
+              : 'Enter tenantId and namespace first'
           }
           showSearch
           style={{ minWidth: 260 }}
@@ -117,7 +105,6 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
               option?.label,
               option?.serviceId,
               option?.tenantId,
-              option?.appId,
               option?.namespace,
             ]
               .map((value) => String(value ?? '').toLowerCase())
@@ -158,8 +145,8 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
         style={{ display: 'block', marginTop: 12 }}
       >
         {serviceSearchEnabled
-          ? 'Select a service to hydrate the platform tenantId, appId, and namespace for this raw governance view.'
-          : 'This raw governance view needs platform tenantId, appId, and namespace first. Most user flows should stay on Scopes or open this page from Platform Services.'}
+          ? 'Select a service to hydrate the identity fields for this raw governance view.'
+          : 'This raw governance view needs tenantId and namespace first. Most user flows should stay on Scopes or open this page from Platform Services.'}
       </Typography.Text>
     </ProCard>
   );

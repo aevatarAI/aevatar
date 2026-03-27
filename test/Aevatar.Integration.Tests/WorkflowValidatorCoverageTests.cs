@@ -449,6 +449,27 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
+    public void Validate_WhenLlmCallMissingTargetRoleAndAgentType_ShouldAllowImplicitAssistantRole()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s-llm",
+                    Type = "llm_call",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Validate_WhenAgentTypePresent_ShouldSkipMissingTargetRoleValidation()
     {
         var wf = new WorkflowDefinition

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf.WellKnownTypes;
@@ -12,7 +13,6 @@ public abstract class ProjectionScopeGAgentBase<TContext>
     : GAgentBase<ProjectionScopeState>
     where TContext : class, IProjectionMaterializationContext
 {
-    private readonly ProjectionObservationSubscriber _subscriber = new();
     private ILogger _logger = NullLogger.Instance;
     private ProjectionScopeFailureTracker? _failureTracker;
 
@@ -30,13 +30,12 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         if (!State.Active || State.Released)
             return Task.CompletedTask;
 
-        var streamProvider = Services.GetRequiredService<IStreamProvider>();
-        return _subscriber.EnsureAttachedAsync(streamProvider, State.RootActorId, ForwardObservationAsync, ct);
+        return EnsureObservationRelayAsync(State.RootActorId, ct);
     }
 
     protected override async Task OnDeactivateAsync(CancellationToken ct)
     {
-        await _subscriber.DetachAsync(ct);
+        await RemoveObservationRelayAsync(State.RootActorId, ct);
         await base.OnDeactivateAsync(ct);
     }
 
@@ -57,10 +56,8 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             });
         }
 
-        var streamProvider = Services.GetRequiredService<IStreamProvider>();
-        var attached = await _subscriber.EnsureAttachedAsync(
-            streamProvider, State.RootActorId, ForwardObservationAsync, CancellationToken.None);
-        if (attached && !State.ObservationAttached)
+        await EnsureObservationRelayAsync(command.RootActorId, CancellationToken.None);
+        if (!State.ObservationAttached)
         {
             await PersistDomainEventAsync(new ProjectionObservationAttachmentUpdatedEvent
             {
@@ -92,7 +89,7 @@ public abstract class ProjectionScopeGAgentBase<TContext>
             });
         }
 
-        await _subscriber.DetachAsync(CancellationToken.None);
+        await RemoveObservationRelayAsync(State.RootActorId, CancellationToken.None);
     }
 
     [EventHandler]
@@ -106,17 +103,24 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         await _failureTracker!.ReplayAsync(State, command.MaxItems, DispatchObservationAsync);
     }
 
-    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
-    public async Task HandleObservationAsync(ProjectionObservationArrivedSignal signal)
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleObservedEnvelopeAsync(EventEnvelope envelope)
     {
-        ArgumentNullException.ThrowIfNull(signal);
+        ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!State.Active || State.Released || signal.Envelope == null)
+        if (!State.Active || State.Released)
+            return;
+
+        if (!envelope.Route.IsObserverPublication())
+            return;
+
+        if (!StreamForwardingRules.IsForwardedEnvelopeForTarget(envelope, Id) ||
+            StreamForwardingRules.IsTransitOnlyForwarding(envelope))
             return;
 
         try
         {
-            await DispatchObservationAsync(signal.Envelope, CancellationToken.None);
+            await DispatchObservationAsync(envelope, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -176,25 +180,42 @@ public abstract class ProjectionScopeGAgentBase<TContext>
         return factory(BuildScopeKey());
     }
 
-    private async Task ForwardObservationAsync(EventEnvelope envelope)
+    private Task EnsureObservationRelayAsync(string? rootActorId, CancellationToken ct)
     {
-        try
+        if (string.IsNullOrWhiteSpace(rootActorId))
+            return Task.CompletedTask;
+
+        return Services
+            .GetRequiredService<IStreamProvider>()
+            .GetStream(rootActorId)
+            .UpsertRelayAsync(BuildObservationRelayBinding(rootActorId), ct);
+    }
+
+    private Task RemoveObservationRelayAsync(string? rootActorId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(rootActorId))
+            return Task.CompletedTask;
+
+        return Services
+            .GetRequiredService<IStreamProvider>()
+            .GetStream(rootActorId)
+            .RemoveRelayAsync(Id, ct);
+    }
+
+    private StreamForwardingBinding BuildObservationRelayBinding(string rootActorId)
+    {
+        var typeUrl = $"type.googleapis.com/{CommittedStateEventPublished.Descriptor.FullName}";
+        return new StreamForwardingBinding
         {
-            await PublishAsync(
-                new ProjectionObservationArrivedSignal
-                {
-                    Envelope = envelope.Clone(),
-                },
-                TopologyAudience.Self,
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Projection scope failed to forward observation to self. actorId={ActorId}",
-                Id);
-        }
+            SourceStreamId = rootActorId,
+            TargetStreamId = Id,
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = [],
+            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal)
+            {
+                typeUrl,
+            },
+        };
     }
 
     protected ValueTask RecordDispatchFailureAsync(

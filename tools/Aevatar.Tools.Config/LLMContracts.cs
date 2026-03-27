@@ -33,6 +33,7 @@ enum LLMProviderKind
     OpenRouter = 11,
     DeepInfra = 12,
     Together = 13,
+    NyxId = 14,
 }
 
 sealed record ProviderTypeItem(

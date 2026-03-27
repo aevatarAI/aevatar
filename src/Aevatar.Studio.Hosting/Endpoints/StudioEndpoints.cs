@@ -34,22 +34,45 @@ internal static class StudioEndpoints
         app.MapGet("/api/app/context", (HttpContext http, IServiceProvider services) =>
             HandleGetContext(http, services, embeddedWorkflowMode))
             .Produces<AppContextResponse>(StatusCodes.Status200OK);
+        app.MapGet("/api/studio/context", (HttpContext http, IServiceProvider services) =>
+            HandleGetContext(http, services, embeddedWorkflowMode))
+            .WithTags("Studio")
+            .Produces<AppContextResponse>(StatusCodes.Status200OK);
         app.MapPost("/api/app/workflow-generator", (
             HttpContext http,
             AppWorkflowGenerateRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct));
+        app.MapPost("/api/workflows/generator", (
+            HttpContext http,
+            AppWorkflowGenerateRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGenerateWorkflowAsync(http, request, services, embeddedWorkflowMode, ct))
+            .WithTags("Workflows");
         app.MapPost("/api/app/scripts/generator", (
             HttpContext http,
             AppScriptGenerateRequest request,
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGenerateScriptAsync(http, request, services, embeddedWorkflowMode, ct));
+        app.MapPost("/api/scripts/generator", (
+            HttpContext http,
+            AppScriptGenerateRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleGenerateScriptAsync(http, request, services, embeddedWorkflowMode, ct))
+            .WithTags("Scripts");
         app.MapPost("/api/app/scripts/validate", (
             AppScriptValidateRequest request,
             IServiceProvider services) =>
             HandleValidateScript(request, services));
+        app.MapPost("/api/scripts/validate", (
+            AppScriptValidateRequest request,
+            IServiceProvider services) =>
+            HandleValidateScript(request, services))
+            .WithTags("Scripts");
         app.MapGet("/api/app/scripts", (
             HttpContext http,
             IServiceProvider services,

@@ -247,3 +247,34 @@ wait_neo4j_bolt() {
 
   wait_tcp_endpoint "${host}" "${port}" "Neo4j bolt endpoint" "${attempts}" "${sleep_seconds}"
 }
+
+wait_neo4j_query_auth() {
+  local endpoint="${1:-http://127.0.0.1:7474}"
+  local username="${2:-neo4j}"
+  local password="${3:-password}"
+  local attempts="${4:-90}"
+  local sleep_seconds="${5:-2}"
+  local try=0
+
+  while (( try < attempts )); do
+    local response
+    response="$(
+      curl --max-time 5 -s \
+        -u "${username}:${password}" \
+        -H 'Content-Type: application/json' \
+        -d '{"statement":"RETURN 1 AS ok"}' \
+        "${endpoint}/db/neo4j/query/v2" || true
+    )"
+    if [[ "${response}" == *'"values":[[1]]'* ]]; then
+      echo "Neo4j query endpoint is ready with configured credentials."
+      return 0
+    fi
+
+    echo "Waiting for Neo4j query auth on ${endpoint}..."
+    sleep "${sleep_seconds}"
+    try=$((try + 1))
+  done
+
+  echo "Neo4j query auth failed with the configured credentials."
+  return 1
+}
