@@ -76,6 +76,33 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
+    public async Task ScopeBindingEndpoint_ShouldReturnForbidden_WhenAuthenticationIsMissing()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+
+        using var request = CreateUnauthenticatedJsonRequest(
+            HttpMethod.Put,
+            "/api/scopes/scope-a/binding",
+            new
+            {
+                implementationKind = "workflow",
+                workflowYamls = new[]
+                {
+                    "name: main\nsteps:\n  - run: echo hello",
+                },
+            });
+
+        var response = await host.Client.SendAsync(request);
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("SCOPE_ACCESS_DENIED");
+        body["message"].Should().Be("Authentication is required.");
+        host.ScopeBindingPort.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ScopeBindingEndpoint_ShouldReturnForbidden_WhenAuthenticatedScopeClaimIsMissing()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
@@ -1168,6 +1195,19 @@ public sealed class ScopeServiceEndpointsTests
         return request;
     }
 
+    private static HttpRequestMessage CreateUnauthenticatedJsonRequest(
+        HttpMethod method,
+        string requestUri,
+        object body)
+    {
+        var request = new HttpRequestMessage(method, requestUri)
+        {
+            Content = JsonContent.Create(body),
+        };
+        request.Headers.Add("X-Test-Authenticated", "false");
+        return request;
+    }
+
     private sealed class ScopeServiceEndpointTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
@@ -1293,7 +1333,10 @@ public sealed class ScopeServiceEndpointsTests
             var app = builder.Build();
             app.Use(async (http, next) =>
             {
-                if (bool.TryParse(http.Request.Headers["X-Test-Authenticated"], out var authenticated) && authenticated)
+                var hasExplicitAuthenticationHeader = http.Request.Headers.TryGetValue("X-Test-Authenticated", out var authenticatedValues);
+                var shouldAuthenticate = !hasExplicitAuthenticationHeader ||
+                    (bool.TryParse(authenticatedValues, out var authenticated) && authenticated);
+                if (shouldAuthenticate)
                 {
                     var claims = new List<Claim>();
                     if (http.Request.Headers.TryGetValue("X-Test-Scope-Id", out var claimedScopeValues))
@@ -1305,6 +1348,11 @@ public sealed class ScopeServiceEndpointsTests
                         {
                             claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, claimedScopeId));
                         }
+                    }
+                    else if (!hasExplicitAuthenticationHeader &&
+                        TryGetRequestedScopeId(http.Request.Path.Value, out var requestedScopeId))
+                    {
+                        claims.Add(new Claim(WorkflowRunCommandMetadataKeys.ScopeId, requestedScopeId));
                     }
 
                     http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, authenticationType: "Test"));
@@ -1343,6 +1391,23 @@ public sealed class ScopeServiceEndpointsTests
                 resumeDispatchService,
                 signalDispatchService,
                 stopDispatchService);
+        }
+
+        private static bool TryGetRequestedScopeId(string? path, out string scopeId)
+        {
+            var segments = path?
+                .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (segments is { Length: >= 3 } &&
+                string.Equals(segments[0], "api", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(segments[1], "scopes", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(segments[2]))
+            {
+                scopeId = segments[2];
+                return true;
+            }
+
+            scopeId = string.Empty;
+            return false;
         }
 
         public async ValueTask DisposeAsync()

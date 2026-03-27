@@ -61,7 +61,10 @@ internal static class ScopeEndpointAccess
 
         message = string.Empty;
         if (http.User?.Identity?.IsAuthenticated != true)
-            return false;
+        {
+            message = "Authentication is required.";
+            return true;
+        }
 
         var normalizedRequestedScopeId = NormalizeRequired(requestedScopeId, nameof(requestedScopeId));
         var claimedScopeIds = http.User.Claims

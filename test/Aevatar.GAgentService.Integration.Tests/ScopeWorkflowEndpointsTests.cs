@@ -77,6 +77,48 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
+    public async Task HandleRunWorkflowStreamAsync_ShouldReturnForbidden_WhenAuthenticationIsMissing()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        var interactionService = new FakeCommandInteractionService();
+        var http = CreateAnonymousHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("definition-actor-1", "hello"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        body.Should().Contain("Authentication is required.");
+        interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HandleGetWorkflowDetailAsync_ShouldPreferWorkflowBindingSource_WhenBindingExists()
     {
         var http = CreateHttpContext();
@@ -482,54 +524,6 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
-    public async Task HandleRunWorkflowStreamAsync_ShouldSucceed_WhenNoAuthenticationConfigured()
-    {
-        var queryPort = new FakeServiceLifecycleQueryPort
-        {
-            ListServicesResult =
-            [
-                new ServiceCatalogSnapshot(
-                    "tenant-a:workflow-app:user:token:approval",
-                    "tenant-a",
-                    "workflow-app",
-                    "user:user-1-token",
-                    "approval",
-                    "Approval",
-                    "rev-1",
-                    "rev-1",
-                    "dep-1",
-                    "definition-actor-1",
-                    "active",
-                    [],
-                    [],
-                    DateTimeOffset.UtcNow),
-            ],
-        };
-        var interactionService = new FakeCommandInteractionService
-        {
-            ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
-            {
-                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-1");
-                if (onAcceptedAsync != null)
-                    await onAcceptedAsync(receipt, ct);
-                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
-                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
-            },
-        };
-        var http = CreateHttpContext();
-
-        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
-            http,
-            "user-1",
-            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("definition-actor-1", "hello"),
-            BuildQueryPort(queryPort: queryPort),
-            interactionService,
-            CancellationToken.None);
-
-        http.Response.StatusCode.Should().NotBe(StatusCodes.Status403Forbidden);
-    }
-
-    [Fact]
     public async Task HandleListWorkflowsAsync_ShouldReturnEmptyArray_WhenNoWorkflows()
     {
         var http = CreateHttpContext();
@@ -649,7 +643,7 @@ public sealed class ScopeWorkflowEndpointsTests
             }));
     }
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(string scopeId = "user-1")
     {
         var http = new DefaultHttpContext
         {
@@ -659,16 +653,25 @@ public sealed class ScopeWorkflowEndpointsTests
                 .BuildServiceProvider(),
         };
         http.Response.Body = new MemoryStream();
-        return http;
-    }
-
-    private static DefaultHttpContext CreateAuthenticatedHttpContext(string scopeId)
-    {
-        var http = CreateHttpContext();
         http.User = new ClaimsPrincipal(
             new ClaimsIdentity(
                 [new Claim("scope_id", scopeId)],
                 authenticationType: "test"));
+        return http;
+    }
+
+    private static DefaultHttpContext CreateAuthenticatedHttpContext(string scopeId) => CreateHttpContext(scopeId);
+
+    private static DefaultHttpContext CreateAnonymousHttpContext()
+    {
+        var http = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddOptions()
+                .BuildServiceProvider(),
+        };
+        http.Response.Body = new MemoryStream();
         return http;
     }
 

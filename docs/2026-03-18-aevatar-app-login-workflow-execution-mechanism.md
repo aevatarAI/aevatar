@@ -206,7 +206,7 @@ sequenceDiagram
 
 `UseNyxIdAppProtection()` 会保护绝大多数 `/api/**` 路径，匿名例外只有：
 
-- `/api/app/health`
+- `/api/health`
 - `/api/auth/me`
 
 ### 5.2 登录流程

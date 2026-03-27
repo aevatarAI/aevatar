@@ -96,7 +96,7 @@ public sealed class SettingsService
         var candidates = new[]
         {
             runtimeBaseUrl,
-            new Uri(runtimeUri, "openapi/v1.json").ToString(),
+            new Uri(runtimeUri, "api/openapi.json").ToString(),
         };
 
         Exception? lastError = null;
