@@ -91,8 +91,39 @@ async function readError(response: Response): Promise<string> {
       message?: string;
       error?: string;
       code?: string;
+      detail?: string;
+      title?: string;
+      status?: number;
     };
-    return payload.message || payload.error || payload.code || text;
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message.trim();
+    }
+
+    if (typeof payload.error === "string" && payload.error.trim()) {
+      return payload.error.trim();
+    }
+
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      if (typeof payload.title === "string" && payload.title.trim()) {
+        return `${payload.title.trim()}: ${payload.detail.trim()}`;
+      }
+
+      return payload.detail.trim();
+    }
+
+    if (typeof payload.title === "string" && payload.title.trim()) {
+      return payload.title.trim();
+    }
+
+    if (typeof payload.code === "string" && payload.code.trim()) {
+      return payload.code.trim();
+    }
+
+    if (typeof payload.status === "number" && Number.isFinite(payload.status)) {
+      return `HTTP ${payload.status}`;
+    }
+
+    return text;
   } catch {
     return text;
   }

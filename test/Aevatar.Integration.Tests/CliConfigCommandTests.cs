@@ -97,6 +97,26 @@ public sealed class CliConfigCommandTests
     }
 
     [Fact]
+    public async Task ConfigLlmInstancesGet_NyxIdWithoutSecretEndpoint_ShouldResolveGatewayEndpointFromAuthority()
+    {
+        await WithTempHomeAsync(async _ =>
+        {
+            var authorityResult = await InvokeCliAsync(["config", "config-json", "set", "Cli:App:NyxId:Authority", "https://nyx.example.com", "--json"]);
+            authorityResult.ExitCode.Should().Be(0);
+
+            var getResult = await InvokeCliAsync(["config", "llm", "instances", "get", "nyxid", "--json"]);
+            getResult.ExitCode.Should().Be(0);
+
+            using var getDoc = ParseJson(getResult.StdOut);
+            var data = getDoc.RootElement.GetProperty("data");
+            data.GetProperty("providerName").GetString().Should().Be("nyxid");
+            data.GetProperty("providerType").GetString().Should().Be("nyxid");
+            data.GetProperty("endpoint").GetString().Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
+            data.GetProperty("endpointSource").GetString().Should().Be("config");
+        });
+    }
+
+    [Fact]
     public async Task ConfigLlmInstancesUpsert_NyxIdWithoutEndpoint_ShouldDeriveGatewayEndpointFromAuthority()
     {
         await WithTempHomeAsync(async _ =>
@@ -105,7 +125,7 @@ public sealed class CliConfigCommandTests
             authorityResult.ExitCode.Should().Be(0);
 
             var upsertResult = await InvokeCliAsync([
-                "config", "llm", "instances", "upsert", "nyx-main",
+                "config", "llm", "instances", "upsert", "nyxid",
                 "--provider-type", "nyxid",
                 "--model", "claude-sonnet-4-5-20250929",
                 "--api-key", "nyx-token",

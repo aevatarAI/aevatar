@@ -9,15 +9,26 @@ public sealed class ServiceInvocationResolutionService
 {
     private readonly IServiceCatalogQueryReader _catalogQueryReader;
     private readonly IServiceTrafficViewQueryReader _trafficViewQueryReader;
+    private readonly IServiceServingSetQueryReader? _servingSetQueryReader;
     private readonly IServiceRevisionArtifactStore _artifactStore;
 
     public ServiceInvocationResolutionService(
         IServiceCatalogQueryReader catalogQueryReader,
         IServiceTrafficViewQueryReader trafficViewQueryReader,
         IServiceRevisionArtifactStore artifactStore)
+        : this(catalogQueryReader, trafficViewQueryReader, null, artifactStore)
+    {
+    }
+
+    public ServiceInvocationResolutionService(
+        IServiceCatalogQueryReader catalogQueryReader,
+        IServiceTrafficViewQueryReader trafficViewQueryReader,
+        IServiceServingSetQueryReader? servingSetQueryReader,
+        IServiceRevisionArtifactStore artifactStore)
     {
         _catalogQueryReader = catalogQueryReader ?? throw new ArgumentNullException(nameof(catalogQueryReader));
         _trafficViewQueryReader = trafficViewQueryReader ?? throw new ArgumentNullException(nameof(trafficViewQueryReader));
+        _servingSetQueryReader = servingSetQueryReader;
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
     }
 
@@ -34,10 +45,13 @@ public sealed class ServiceInvocationResolutionService
         var serviceKey = ServiceKeys.Build(request.Identity);
         var definition = await _catalogQueryReader.GetAsync(request.Identity, ct)
             ?? throw new InvalidOperationException($"Service '{serviceKey}' was not found.");
-        var trafficView = await _trafficViewQueryReader.GetAsync(request.Identity, ct)
-            ?? throw new InvalidOperationException($"Service '{serviceKey}' has no serving traffic view.");
-        var endpointView = trafficView.Endpoints.FirstOrDefault(x =>
+        var trafficView = await _trafficViewQueryReader.GetAsync(request.Identity, ct);
+        var endpointView = trafficView?.Endpoints.FirstOrDefault(x =>
             string.Equals(x.EndpointId, request.EndpointId, StringComparison.Ordinal));
+        if (endpointView == null || endpointView.Targets.Count == 0)
+        {
+            endpointView = await BuildFallbackEndpointViewAsync(request, trafficView != null, ct);
+        }
         if (endpointView == null || endpointView.Targets.Count == 0)
             throw new InvalidOperationException($"Endpoint '{request.EndpointId}' has no serving target on service '{serviceKey}'.");
 
@@ -60,6 +74,49 @@ public sealed class ServiceInvocationResolutionService
                 definition.PolicyIds),
             artifact,
             endpoint);
+    }
+
+    private async Task<ServiceTrafficEndpointSnapshot?> BuildFallbackEndpointViewAsync(
+        ServiceInvocationRequest request,
+        bool hasTrafficView,
+        CancellationToken ct)
+    {
+        if (_servingSetQueryReader == null)
+        {
+            if (hasTrafficView)
+                return null;
+
+            throw new InvalidOperationException($"Service '{ServiceKeys.Build(request.Identity!)}' has no serving traffic view.");
+        }
+
+        var servingSet = await _servingSetQueryReader.GetAsync(request.Identity!, ct);
+        if (servingSet == null)
+        {
+            if (hasTrafficView)
+                return null;
+
+            throw new InvalidOperationException($"Service '{ServiceKeys.Build(request.Identity!)}' has no serving traffic view.");
+        }
+
+        var targets = servingSet.Targets
+            .Where(x => IsEndpointEnabled(x, request.EndpointId))
+            .Select(x => new ServiceTrafficTargetSnapshot(
+                x.DeploymentId,
+                x.RevisionId,
+                x.PrimaryActorId,
+                x.AllocationWeight,
+                x.ServingState))
+            .ToList();
+
+        return new ServiceTrafficEndpointSnapshot(request.EndpointId, targets);
+    }
+
+    private static bool IsEndpointEnabled(ServiceServingTargetSnapshot target, string endpointId)
+    {
+        if (target.EnabledEndpointIds.Count == 0)
+            return true;
+
+        return target.EnabledEndpointIds.Any(x => string.Equals(x, endpointId, StringComparison.Ordinal));
     }
 
     private static ServiceTrafficTargetSnapshot SelectTarget(

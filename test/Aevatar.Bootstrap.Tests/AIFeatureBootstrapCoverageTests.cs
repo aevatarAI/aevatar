@@ -57,9 +57,9 @@ public class AIFeatureBootstrapCoverageTests
         };
         var secretsStore = new InMemorySecretsStore(new Dictionary<string, string>
         {
-            ["LLMProviders:Providers:nyx-main:ApiKey"] = "nyx-token",
-            ["LLMProviders:Providers:nyx-main:ProviderType"] = "nyxid",
-            ["LLMProviders:Providers:nyx-main:Model"] = "claude-sonnet-4-5-20250929",
+            ["LLMProviders:Providers:nyxid:ApiKey"] = "nyx-token",
+            ["LLMProviders:Providers:nyxid:ProviderType"] = "nyxid",
+            ["LLMProviders:Providers:nyxid:Model"] = "claude-sonnet-4-5-20250929",
         });
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -286,18 +286,18 @@ public class AIFeatureBootstrapCoverageTests
             options.EnableMEAIToTornadoFailover = false;
             options.SecretsStore = new InMemorySecretsStore(new Dictionary<string, string>
             {
-                ["LLMProviders:Providers:nyx-main:ApiKey"] = "nyx-token",
-                ["LLMProviders:Providers:nyx-main:ProviderType"] = "nyxid",
-                ["LLMProviders:Providers:nyx-main:Model"] = "claude-sonnet-4-5-20250929",
-                ["LLMProviders:Default"] = "nyx-main",
+                ["LLMProviders:Providers:nyxid:ApiKey"] = "nyx-token",
+                ["LLMProviders:Providers:nyxid:ProviderType"] = "nyxid",
+                ["LLMProviders:Providers:nyxid:Model"] = "claude-sonnet-4-5-20250929",
+                ["LLMProviders:Default"] = "nyxid",
             });
         });
 
         using var provider = services.BuildServiceProvider();
         var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
 
-        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("nyx-main");
-        llmFactory.GetDefault().Name.Should().Be("nyx-main");
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("nyxid");
+        llmFactory.GetDefault().Name.Should().Be("nyxid");
     }
 
     [Fact]

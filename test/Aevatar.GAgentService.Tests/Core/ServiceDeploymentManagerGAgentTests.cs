@@ -1,3 +1,4 @@
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Runtime.Persistence;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -47,6 +48,72 @@ public sealed class ServiceDeploymentManagerGAgentTests
         await replayed.ActivateAsync();
         replayed.State.Deployments.Should().ContainKey("dep-r1");
         replayed.State.Deployments["dep-r1"].PrimaryActorId.Should().Be("actor-r1");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldDispatchResolvedServingTargetsAfterActivation()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity), dispatchPort);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        dispatchPort.Commands.Should().ContainSingle();
+        dispatchPort.Commands[0].actorId.Should().Be(ServiceActorIds.ServingSet(identity));
+        dispatchPort.Commands[0].command.Targets.Should().ContainSingle();
+        dispatchPort.Commands[0].command.Targets[0].DeploymentId.Should().Be("dep-r1");
+        dispatchPort.Commands[0].command.Targets[0].RevisionId.Should().Be("r1");
+        dispatchPort.Commands[0].command.Targets[0].PrimaryActorId.Should().Be("actor-r1");
+        dispatchPort.Commands[0].command.Targets[0].EnabledEndpointIds.Should().Equal("chat");
+    }
+
+    [Fact]
+    public async Task HandleActivateAsync_ShouldDispatchResolvedServingTargets_WhenRevisionIsAlreadyActive()
+    {
+        var identity = GAgentServiceTestKit.CreateIdentity();
+        var artifactStore = new ConfiguredServiceRevisionArtifactStore();
+        await artifactStore.SaveAsync(
+            ServiceKeys.Build(identity),
+            "r1",
+            GAgentServiceTestKit.CreatePreparedStaticArtifact(
+                identity,
+                "r1",
+                GAgentServiceTestKit.CreateEndpointDescriptor(endpointId: "chat")));
+        var activator = new RecordingRuntimeActivator();
+        activator.ActivationResults.Enqueue(new ServiceRuntimeActivationResult("dep-r1", "actor-r1", "active"));
+        var dispatchPort = new RecordingDispatchPort();
+        var agent = CreateAgent(new InMemoryEventStore(), artifactStore, activator, ServiceActorIds.Deployment(identity), dispatchPort);
+        await agent.ActivateAsync();
+
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+        await agent.HandleActivateAsync(new ActivateServiceRevisionCommand
+        {
+            Identity = identity.Clone(),
+            RevisionId = "r1",
+        });
+
+        activator.ActivationRequests.Should().ContainSingle();
+        dispatchPort.Commands.Should().HaveCount(2);
     }
 
     [Fact]
@@ -254,16 +321,29 @@ public sealed class ServiceDeploymentManagerGAgentTests
         InMemoryEventStore eventStore,
         ConfiguredServiceRevisionArtifactStore artifactStore,
         RecordingRuntimeActivator activator,
-        string actorId)
+        string actorId,
+        RecordingDispatchPort? dispatchPort = null)
     {
         return GAgentServiceTestKit.CreateStatefulAgent<ServiceDeploymentManagerGAgent, ServiceDeploymentState>(
             eventStore,
             actorId,
             () => new ServiceDeploymentManagerGAgent(
+                dispatchPort ?? new RecordingDispatchPort(),
                 artifactStore,
                 new AlwaysReadyCapabilityViewReader(),
                 new AllowActivationAdmissionEvaluator(),
                 activator));
+    }
+
+    private sealed class RecordingDispatchPort : IActorDispatchPort
+    {
+        public List<(string actorId, ReplaceResolvedServiceServingTargetsCommand command)> Commands { get; } = [];
+
+        public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Commands.Add((actorId, envelope.Payload.Unpack<ReplaceResolvedServiceServingTargetsCommand>()));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class AlwaysReadyCapabilityViewReader : IActivationCapabilityViewReader

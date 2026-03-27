@@ -116,6 +116,7 @@ describe('ScopeOverviewPage', () => {
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
     expect(await screen.findByText('script-alpha')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open Runs' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Invoke Services' })).toBeTruthy();
   });
 
   it('activates a historical revision from the overview page', async () => {

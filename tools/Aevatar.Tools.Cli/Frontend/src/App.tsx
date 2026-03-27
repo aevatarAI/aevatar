@@ -645,6 +645,14 @@ function createProviderDraft(
   };
 }
 
+function getFixedProviderName(providerType: string) {
+  return providerType.trim().toLowerCase() === 'nyxid' ? 'nyxid' : '';
+}
+
+function usesFixedProviderName(providerType: string) {
+  return Boolean(getFixedProviderName(providerType));
+}
+
 function toProviderDraft(item: any, providerTypes: ProviderTypeOption[]): ProviderDraft {
   const profile = providerTypes.find(option => option.id === item?.providerType) || null;
   return {
@@ -662,6 +670,11 @@ function toProviderDraft(item: any, providerTypes: ProviderTypeOption[]): Provid
 }
 
 function createUniqueProviderName(providerType: string, providers: ProviderDraft[]) {
+  const fixed = getFixedProviderName(providerType);
+  if (fixed) {
+    return fixed;
+  }
+
   const normalizedBase = (providerType || 'provider').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
   const used = new Set(providers.map(provider => provider.providerName.trim().toLowerCase()));
   let index = 1;
@@ -671,6 +684,41 @@ function createUniqueProviderName(providerType: string, providers: ProviderDraft
     candidate = `${normalizedBase}-${index}`;
   }
   return candidate;
+}
+
+function resolveProviderNameForType(
+  providerType: string,
+  currentProviderKey: string,
+  currentProviderName: string,
+  providers: ProviderDraft[],
+) {
+  const fixed = getFixedProviderName(providerType);
+  if (!fixed) {
+    return currentProviderName;
+  }
+
+  const occupied = providers.some(provider =>
+    provider.key !== currentProviderKey
+    && provider.providerName.trim().toLowerCase() === fixed);
+
+  return occupied ? currentProviderName : fixed;
+}
+
+function getFeaturedProviderTypes(providerTypes: ProviderTypeOption[]) {
+  const seen = new Set<string>();
+  return providerTypes.filter(type => {
+    if (!type.recommended && !usesFixedProviderName(type.id)) {
+      return false;
+    }
+
+    const normalizedId = type.id.trim().toLowerCase();
+    if (seen.has(normalizedId)) {
+      return false;
+    }
+
+    seen.add(normalizedId);
+    return true;
+  });
 }
 
 function createUniqueRoleId(existingRoles: RoleState[], base = 'role') {
@@ -2767,6 +2815,17 @@ function App() {
 
   function handleCreateProvider(providerTypeId?: string) {
     const type = providerTypeId || settingsState.providerTypes.find(item => item.recommended)?.id || settingsState.providerTypes[0]?.id || 'openai';
+    const fixedName = getFixedProviderName(type);
+    if (fixedName) {
+      const existing = settingsState.providers.find(provider =>
+        provider.providerName.trim().toLowerCase() === fixedName);
+      if (existing) {
+        setSelectedProviderKey(existing.key);
+        openSettingsPage('llm');
+        return;
+      }
+    }
+
     const provider = createProviderDraft(type, settingsState.providerTypes, settingsState.providers);
     setSettingsState(prev => ({
       ...prev,
@@ -4265,7 +4324,7 @@ function App() {
                             onChange={event => setProviderSearch(event.target.value)}
                           />
                         </div>
-                        {settingsState.providerTypes.filter(type => type.recommended).slice(0, 4).map(type => (
+                        {getFeaturedProviderTypes(settingsState.providerTypes).slice(0, 5).map(type => (
                           <button
                             key={type.id}
                             onClick={() => handleCreateProvider(type.id)}
@@ -4319,6 +4378,7 @@ function App() {
                             <InputField
                               label="Instance name"
                               value={selectedProvider.providerName}
+                              disabled={usesFixedProviderName(selectedProvider.providerType)}
                               onChange={value => {
                                 const previousName = selectedProvider.providerName;
                                 updateProvider(selectedProvider.key, provider => ({
@@ -4331,6 +4391,11 @@ function App() {
                                 }));
                               }}
                             />
+                            {usesFixedProviderName(selectedProvider.providerType) ? (
+                              <div className="text-[11px] text-gray-400 -mt-1">
+                                NyxID uses the fixed provider name <code>nyxid</code>.
+                              </div>
+                            ) : null}
 
                             <div>
                               <label className="field-label">Provider type</label>
@@ -4339,13 +4404,21 @@ function App() {
                                 value={selectedProvider.providerType}
                                 onChange={event => {
                                   const nextType = event.target.value;
+                                  const previousName = selectedProvider.providerName;
                                   updateProvider(selectedProvider.key, provider => {
                                     const previousType = providerTypeMap.get(provider.providerType);
                                     const nextProfile = providerTypeMap.get(nextType);
                                     const shouldReplaceEndpoint = !provider.endpoint || provider.endpoint === (previousType?.defaultEndpoint || '');
                                     const shouldReplaceModel = !provider.model || provider.model === (previousType?.defaultModel || '');
+                                    const nextProviderName = resolveProviderNameForType(
+                                      nextType,
+                                      provider.key,
+                                      provider.providerName,
+                                      settingsState.providers,
+                                    );
                                     return {
                                       ...provider,
+                                      providerName: nextProviderName,
                                       providerType: nextType,
                                       displayName: nextProfile?.displayName || nextType,
                                       category: nextProfile?.category || 'configured',
@@ -4354,6 +4427,16 @@ function App() {
                                       model: shouldReplaceModel ? (nextProfile?.defaultModel || '') : provider.model,
                                     };
                                   });
+                                  const nextProviderName = resolveProviderNameForType(
+                                    nextType,
+                                    selectedProvider.key,
+                                    selectedProvider.providerName,
+                                    settingsState.providers,
+                                  );
+                                  setSettingsState(prev => ({
+                                    ...prev,
+                                    defaultProviderName: prev.defaultProviderName === previousName ? nextProviderName : prev.defaultProviderName,
+                                  }));
                                 }}
                               >
                                 {settingsState.providerTypes.map(type => (
@@ -5956,12 +6039,13 @@ function DrawerIconButton(props: { active: boolean; label: string; icon: ReactNo
   );
 }
 
-function InputField(props: { label: string; value: string; onChange: (value: string) => void }) {
+function InputField(props: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
   return (
     <div>
       <label className="field-label">{props.label}</label>
       <input
         className="panel-input mt-1"
+        disabled={props.disabled}
         value={props.value}
         onChange={event => props.onChange(event.target.value)}
       />

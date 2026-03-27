@@ -428,6 +428,17 @@ const ScopeOverviewPage: React.FC = () => {
                     <Button
                       onClick={() =>
                         history.push(
+                          buildScopeHref('/scopes/invoke', activeDraft, {
+                            serviceId: binding?.serviceId ?? '',
+                          }),
+                        )
+                      }
+                    >
+                      Invoke Services
+                    </Button>
+                    <Button
+                      onClick={() =>
+                        history.push(
                           buildScopeHref('/scopes/workflows', activeDraft),
                         )
                       }

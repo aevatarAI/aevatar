@@ -108,6 +108,37 @@ describe('studioApi host-session requests', () => {
     );
   });
 
+  it('surfaces RFC 9110 problem details as a readable Studio error', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () =>
+        JSON.stringify({
+          type: 'https://tools.ietf.org/html/rfc9110#section-15.5.5',
+          title: 'Not Found',
+          status: 404,
+          traceId: '00-trace',
+        }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getWorkflow('missing-workflow')).rejects.toThrow(
+      'Not Found',
+    );
+  });
+
   it('sends available step types when parsing workflow yaml', async () => {
     persistAuthSession({
       tokens: {

@@ -102,12 +102,16 @@ public sealed class ServiceCommandApplicationServiceTests
         var provisioner = new RecordingCommandTargetProvisioner();
         var dispatchPort = new RecordingActorDispatchPort();
         var deploymentProjectionPort = new RecordingProjectionPort();
+        var servingProjectionPort = new RecordingProjectionPort();
+        var trafficProjectionPort = new RecordingProjectionPort();
         var service = CreateService(
             provisioner,
             dispatchPort,
             new RecordingCatalogProjectionPort(),
             new RecordingRevisionProjectionPort(),
-            deploymentProjectionPort: deploymentProjectionPort);
+            deploymentProjectionPort: deploymentProjectionPort,
+            servingProjectionPort: servingProjectionPort,
+            trafficProjectionPort: trafficProjectionPort);
 
         var receipt = await service.ActivateServiceRevisionAsync(new ActivateServiceRevisionCommand
         {
@@ -117,7 +121,10 @@ public sealed class ServiceCommandApplicationServiceTests
 
         receipt.TargetActorId.Should().Be(ServiceActorIds.Deployment(identity));
         provisioner.DeploymentRequests.Should().ContainSingle();
+        provisioner.ServingSetRequests.Should().ContainSingle();
         deploymentProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.Deployment(identity));
+        servingProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
+        trafficProjectionPort.ActorIds.Should().ContainSingle(ServiceActorIds.ServingSet(identity));
         dispatchPort.Calls.Should().ContainSingle(x => x.actorId == ServiceActorIds.Deployment(identity));
     }
 

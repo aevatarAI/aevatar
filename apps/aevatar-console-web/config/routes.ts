@@ -52,6 +52,10 @@ export default [
     component: "./scopes/scripts",
   },
   {
+    path: "/scopes/invoke",
+    component: "./scopes/invoke",
+  },
+  {
     path: "/services",
     name: "Platform Services",
     icon: "api",
