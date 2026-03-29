@@ -168,7 +168,8 @@ public static class ScopeServiceEndpoints
                                 endpoint.Description))
                             .ToArray()),
                     request.DisplayName,
-                    request.RevisionId),
+                    request.RevisionId,
+                    request.AppId),
                 ct);
             return Results.Ok(result);
         }
@@ -185,6 +186,7 @@ public static class ScopeServiceEndpoints
     private static async Task<IResult> HandleGetBindingAsync(
         HttpContext http,
         string scopeId,
+        string? appId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceServingQueryPort servingQueryPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -197,7 +199,8 @@ public static class ScopeServiceEndpoints
         var identity = BuildScopeServiceIdentity(
             options.Value,
             normalizedScopeId,
-            ResolveDefaultScopeServiceId(options.Value));
+            ResolveDefaultScopeServiceId(options.Value),
+            appId);
         var service = await lifecycleQueryPort.GetServiceAsync(identity, ct);
         if (service == null)
         {
@@ -227,6 +230,7 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         string scopeId,
         string revisionId,
+        string? appId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceCommandPort commandPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -242,7 +246,8 @@ public static class ScopeServiceEndpoints
             var identity = BuildScopeServiceIdentity(
                 options.Value,
                 normalizedScopeId,
-                ResolveDefaultScopeServiceId(options.Value));
+                ResolveDefaultScopeServiceId(options.Value),
+                appId);
             var service = await lifecycleQueryPort.GetServiceAsync(identity, ct);
             if (service == null)
             {
@@ -304,6 +309,7 @@ public static class ScopeServiceEndpoints
     private static Task<IResult> HandleGetDefaultServiceRevisionsAsync(
         HttpContext http,
         string scopeId,
+        string? appId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceServingQueryPort servingQueryPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -315,12 +321,14 @@ public static class ScopeServiceEndpoints
             lifecycleQueryPort,
             servingQueryPort,
             options,
-            ct);
+            ct,
+            appId);
 
     private static Task<IResult> HandleGetDefaultServiceRevisionAsync(
         HttpContext http,
         string scopeId,
         string revisionId,
+        string? appId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceServingQueryPort servingQueryPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -333,12 +341,14 @@ public static class ScopeServiceEndpoints
             lifecycleQueryPort,
             servingQueryPort,
             options,
-            ct);
+            ct,
+            appId);
 
     private static Task<IResult> HandleRetireBindingRevisionAsync(
         HttpContext http,
         string scopeId,
         string revisionId,
+        string? appId,
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceCommandPort commandPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
@@ -351,7 +361,8 @@ public static class ScopeServiceEndpoints
             lifecycleQueryPort,
             commandPort,
             options,
-            ct);
+            ct,
+            appId);
 
     private static async Task<IResult> HandleGetServiceRevisionsAsync(
         HttpContext http,
@@ -360,9 +371,10 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceServingQueryPort servingQueryPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? appId = null)
     {
-        var resolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+        var resolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct, appId);
         if (resolution.Failure != null)
             return resolution.Failure;
 
@@ -379,9 +391,10 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceServingQueryPort servingQueryPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? appId = null)
     {
-        var resolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+        var resolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct, appId);
         if (resolution.Failure != null)
             return resolution.Failure;
 
@@ -409,11 +422,12 @@ public static class ScopeServiceEndpoints
         [FromServices] IServiceLifecycleQueryPort lifecycleQueryPort,
         [FromServices] IServiceCommandPort commandPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? appId = null)
     {
         try
         {
-            var resolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct);
+            var resolution = await ResolveScopeServiceAsync(http, scopeId, serviceId, lifecycleQueryPort, options.Value, ct, appId);
             if (resolution.Failure != null)
                 return resolution.Failure;
 
@@ -467,6 +481,7 @@ public static class ScopeServiceEndpoints
             ResolveDefaultScopeServiceId(options.Value),
             "chat",
             request,
+            appId: null,
             resolutionService,
             admissionAuthorizer,
             chatRunService,
@@ -487,6 +502,7 @@ public static class ScopeServiceEndpoints
             ResolveDefaultScopeServiceId(options.Value),
             endpointId,
             request,
+            appId: null,
             invocationPort,
             options,
             ct);
@@ -752,6 +768,7 @@ public static class ScopeServiceEndpoints
         string serviceId,
         string endpointId,
         StreamScopeServiceHttpRequest request,
+        string? appId,
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
@@ -772,7 +789,8 @@ public static class ScopeServiceEndpoints
                 endpointId,
                 normalizedPrompt,
                 scopedHeaders,
-                request.RevisionId);
+                request.RevisionId,
+                appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
             EnsureWorkflowStreamTarget(target, invocationRequest);
             await admissionAuthorizer.AuthorizeAsync(
@@ -813,6 +831,7 @@ public static class ScopeServiceEndpoints
         string serviceId,
         string endpointId,
         InvokeScopeServiceHttpRequest request,
+        string? appId,
         [FromServices] IServiceInvocationPort invocationPort,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
@@ -822,7 +841,7 @@ public static class ScopeServiceEndpoints
             if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
-            var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId);
+            var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId, appId);
             var receipt = await invocationPort.InvokeAsync(new ServiceInvocationRequest
             {
                 Identity = identity,
@@ -1046,12 +1065,13 @@ public static class ScopeServiceEndpoints
         string serviceId,
         IServiceLifecycleQueryPort lifecycleQueryPort,
         ScopeWorkflowCapabilityOptions options,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? appId = null)
     {
         if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
             return new ScopeServiceResolution(null, null, null, denied);
 
-        var identity = BuildScopeServiceIdentity(options, scopeId, serviceId);
+        var identity = BuildScopeServiceIdentity(options, scopeId, serviceId, appId);
         var service = await lifecycleQueryPort.GetServiceAsync(identity, ct);
         if (service == null)
         {
@@ -1393,7 +1413,8 @@ public static class ScopeServiceEndpoints
         string endpointId,
         string prompt,
         IReadOnlyDictionary<string, string>? headers,
-        string? revisionId)
+        string? revisionId,
+        string? appId = null)
     {
         var payload = new ChatRequestEvent
         {
@@ -1408,7 +1429,7 @@ public static class ScopeServiceEndpoints
 
         return new ServiceInvocationRequest
         {
-            Identity = BuildScopeServiceIdentity(options, scopeId, serviceId),
+            Identity = BuildScopeServiceIdentity(options, scopeId, serviceId, appId),
             EndpointId = endpointId?.Trim() ?? string.Empty,
             RevisionId = revisionId?.Trim() ?? string.Empty,
             Payload = Any.Pack(payload),
@@ -1563,13 +1584,17 @@ public static class ScopeServiceEndpoints
     private static ServiceIdentity BuildScopeServiceIdentity(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,
-        string serviceId)
+        string serviceId,
+        string? appId = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var normalizedAppId = appId?.Trim() ?? string.Empty;
         return new ServiceIdentity
         {
             TenantId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId)),
-            AppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceAppId, nameof(options.ServiceAppId)),
+            AppId = string.IsNullOrWhiteSpace(normalizedAppId)
+                ? ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceAppId, nameof(options.ServiceAppId))
+                : normalizedAppId,
             Namespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceNamespace, nameof(options.ServiceNamespace)),
             ServiceId = ScopeWorkflowCapabilityOptions.NormalizeRequired(serviceId, nameof(serviceId)),
         };
@@ -1641,7 +1666,8 @@ public static class ScopeServiceEndpoints
         ScopeBindingScriptHttpRequest? Script = null,
         ScopeBindingGAgentHttpRequest? GAgent = null,
         string? DisplayName = null,
-        string? RevisionId = null);
+        string? RevisionId = null,
+        string? AppId = null);
 
     public sealed record ScopeBindingWorkflowHttpRequest(
         IReadOnlyList<string>? WorkflowYamls);

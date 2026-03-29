@@ -1,5 +1,4 @@
 using System.CommandLine;
-using Aevatar.Tools.Cli.Hosting;
 
 namespace Aevatar.Tools.Cli.Commands;
 
@@ -7,22 +6,17 @@ internal static class AppCommand
 {
     public static Command Create()
     {
-        var command = new Command("app", "Open the aevatar app UI (requires a running Mainnet host).");
+        var command = new Command("app", "Aevatar app commands — draft-run, services, bindings, invoke, logs.");
+
         var urlOption = new Option<string?>(
             "--url",
-            "Mainnet API base URL. Reads from ~/.aevatar/config.json if not specified.");
-        var noBrowserOption = new Option<bool>(
-            "--no-browser",
-            "Do not auto-open browser.");
+            "API base URL. Reads from ~/.aevatar/config.json if not specified.");
 
-        command.AddOption(urlOption);
-        command.AddOption(noBrowserOption);
-
-        command.SetHandler(
-            (string? url, bool noBrowser) =>
-                AppCommandHandler.RunAsync(url, noBrowser, CancellationToken.None),
-            urlOption,
-            noBrowserOption);
+        command.AddCommand(AppDraftRunCommand.Create(urlOption));
+        command.AddCommand(AppServicesCommand.Create(urlOption));
+        command.AddCommand(AppBindingsCommand.Create(urlOption));
+        command.AddCommand(AppInvokeCommand.Create(urlOption));
+        command.AddCommand(AppLogsCommand.Create(urlOption));
 
         return command;
     }

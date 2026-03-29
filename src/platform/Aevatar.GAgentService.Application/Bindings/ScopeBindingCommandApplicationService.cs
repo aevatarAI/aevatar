@@ -56,7 +56,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(request.ScopeId, nameof(request.ScopeId));
-        var identity = ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId);
+        var identity = ScopeWorkflowCapabilityConventions.BuildDefaultServiceIdentity(_options, normalizedScopeId, request.AppId);
         var desiredBinding = await ResolveDesiredBindingAsync(request, normalizedScopeId, identity, ct);
         var existingService = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
 
