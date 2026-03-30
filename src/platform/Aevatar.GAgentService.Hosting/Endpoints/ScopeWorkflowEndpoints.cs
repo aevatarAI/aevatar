@@ -15,7 +15,7 @@ public static class ScopeWorkflowEndpoints
 {
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/scopes").WithTags("ScopeWorkflows");
+        var group = app.MapGroup("/api/scopes").WithTags("ScopeWorkflows").RequireAuthorization();
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
             .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);

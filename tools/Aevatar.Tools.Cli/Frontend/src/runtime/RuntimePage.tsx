@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import * as nyxid from '../auth/nyxid';
 import DraftRunTab from './DraftRunTab';
 import ServicesTab from './ServicesTab';
 import InvokeTab from './InvokeTab';
@@ -15,7 +16,7 @@ const TABS: { key: RuntimeTab; label: string }[] = [
 
 export default function RuntimePage() {
   const [tab, setTab] = useState<RuntimeTab>('draft-run');
-  const [scopeId, setScopeId] = useState('default');
+  const scopeId = nyxid.loadSession()?.user.sub || '';
 
   return (
     <>
@@ -26,12 +27,9 @@ export default function RuntimePage() {
         </div>
         <div className="flex items-center gap-3">
           <label className="text-[12px] font-semibold text-gray-500">Scope</label>
-          <input
-            className="rounded-lg border border-[#E6E3DE] bg-white px-3 py-1.5 text-[13px] w-48 focus:outline-none focus:ring-2 focus:ring-blue-400"
-            value={scopeId}
-            onChange={e => setScopeId(e.target.value)}
-            placeholder="Scope ID"
-          />
+          <span className="rounded-lg border border-[#E6E3DE] bg-gray-50 px-3 py-1.5 text-[13px] w-48 truncate text-gray-600">
+            {scopeId || <span className="text-amber-600">Not logged in</span>}
+          </span>
         </div>
       </header>
 

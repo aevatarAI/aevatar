@@ -23,7 +23,7 @@ internal sealed class AppApiClient : IDisposable
         if (workflowYamls is { Length: > 0 })
             body["workflowYamls"] = workflowYamls;
 
-        var path = $"api/scopes/{Uri.EscapeDataString(scopeId)}/draft-run";
+        var path = $"api/scopes/{Uri.EscapeDataString(scopeId)}/workflow/draft-run";
         return await PostSseAsync(path, body, ct);
     }
 

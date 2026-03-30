@@ -419,7 +419,7 @@ export const scope = {
       }),
     }),
 
-  /** POST /api/scopes/{scopeId}/draft-run — draft run with inline bundle, SSE */
+  /** POST /api/scopes/{scopeId}/workflow/draft-run — draft run with inline bundle, SSE */
   streamDraftRun: (
     scopeId: string,
     prompt: string,
@@ -429,7 +429,7 @@ export const scope = {
   ) => {
     const body: any = { prompt };
     if (workflowYamls?.length) body.workflowYamls = workflowYamls;
-    return streamSse(`/scopes/${enc(scopeId)}/draft-run`, body, onFrame ?? (() => {}), signal);
+    return streamSse(`/scopes/${enc(scopeId)}/workflow/draft-run`, body, onFrame ?? (() => {}), signal);
   },
 
   /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream — service invoke, SSE */

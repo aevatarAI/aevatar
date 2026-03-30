@@ -27,8 +27,8 @@ public static class ScopeServiceEndpoints
 {
     public static IEndpointRouteBuilder MapScopeServiceEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/scopes").WithTags("ScopeServices");
-        group.MapPost("/{scopeId}/draft-run", HandleDraftRunAsync);
+        var group = app.MapGroup("/api/scopes").WithTags("ScopeServices").RequireAuthorization();
+        group.MapPost("/{scopeId}/workflow/draft-run", HandleDraftRunAsync);
         group.MapPut("/{scopeId}/binding", HandleUpsertBindingAsync);
         group.MapGet("/{scopeId}/binding", HandleGetBindingAsync);
         group.MapPost("/{scopeId}/binding/revisions/{revisionId}:activate", HandleActivateBindingRevisionAsync);

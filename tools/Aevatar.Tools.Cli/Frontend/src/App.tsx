@@ -5792,7 +5792,7 @@ function App() {
       >
         <div className="space-y-3">
           <div className="text-[12px] text-gray-500">
-            Sends the current workflow YAML as an inline bundle to <code>/api/scopes/{'{scopeId}'}/draft-run</code>.
+            Sends the current workflow YAML as an inline bundle to <code>/api/scopes/{'{scopeId}'}/workflow/draft-run</code>.
             {runScopeId ? <span> Scope: <strong>{runScopeId}</strong></span> : <span className="text-amber-600"> Not logged in — scope unavailable.</span>}
           </div>
           <textarea

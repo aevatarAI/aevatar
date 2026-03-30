@@ -4130,7 +4130,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           >
             <div style={cardStackStyle}>
               <Typography.Text type="secondary">
-                Studio will open the runtime runs console and execute this draft through <Typography.Text code>/api/scopes/{'{scopeId}'}/draft-run</Typography.Text>.
+                Studio will open the runtime runs console and execute this draft through <Typography.Text code>/api/scopes/{'{scopeId}'}/workflow/draft-run</Typography.Text>.
               </Typography.Text>
               <Input.TextArea
                 aria-label="Studio execution prompt"

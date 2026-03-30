@@ -202,7 +202,7 @@ describe("runtimeRunsApi", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/scopes/scope-1/draft-run",
+      "/api/scopes/scope-1/workflow/draft-run",
       expect.objectContaining({
         method: "POST",
       })

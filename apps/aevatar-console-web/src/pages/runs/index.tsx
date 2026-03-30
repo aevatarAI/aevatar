@@ -1264,7 +1264,7 @@ const RunsPage: React.FC = () => {
   ]);
 
   const submitPathLabel = scopeDraftPayload
-    ? "/api/scopes/{scopeId}/draft-run"
+    ? "/api/scopes/{scopeId}/workflow/draft-run"
     : endpointName === "chat"
       ? resolveRequestedServiceId(
           {
