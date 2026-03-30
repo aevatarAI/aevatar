@@ -463,6 +463,32 @@ export const scope = {
 // Keep legacy alias for backward compat in App.tsx
 export const runtime = scope;
 
+/* ─── NyxID Chat APIs ─── */
+export const nyxidChat = {
+  createConversation: (scopeId: string) =>
+    request<{ actorId: string; createdAt: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
+
+  listConversations: (scopeId: string) =>
+    request<Array<{ actorId: string; createdAt: string }>>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`),
+
+  streamMessage: (
+    scopeId: string,
+    actorId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}:stream`,
+      { prompt },
+      onFrame ?? (() => {}),
+      signal,
+    ),
+
+  deleteConversation: (scopeId: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
+};
+
 function enc(value: string) {
   return encodeURIComponent(value.trim());
 }
