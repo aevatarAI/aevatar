@@ -182,7 +182,7 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
         };
     }
 
-    private static bool IsKeywordFieldMapping(object? mapping)
+    internal static bool IsKeywordFieldMapping(object? mapping)
     {
         if (mapping is not IReadOnlyDictionary<string, object?> mappingObject)
             return false;
@@ -190,5 +190,64 @@ internal static class ElasticsearchProjectionDocumentStoreMetadataSupport
         return mappingObject.TryGetValue("type", out var typeValue) &&
                typeValue is string typeName &&
                string.Equals(typeName, "keyword", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool HasKeywordMultiField(object? mapping)
+    {
+        if (mapping is not IReadOnlyDictionary<string, object?> mappingObject)
+            return false;
+
+        if (!mappingObject.TryGetValue("fields", out var fieldsValue) ||
+            fieldsValue is not IReadOnlyDictionary<string, object?> fields)
+        {
+            return false;
+        }
+
+        return fields.TryGetValue("keyword", out var keywordMapping) &&
+               IsKeywordFieldMapping(keywordMapping);
+    }
+
+    internal static bool TryGetFieldMapping(
+        IReadOnlyDictionary<string, object?> mappings,
+        string fieldPath,
+        out IReadOnlyDictionary<string, object?>? fieldMapping)
+    {
+        fieldMapping = null;
+        if (string.IsNullOrWhiteSpace(fieldPath))
+            return false;
+
+        if (!mappings.TryGetValue("properties", out var propertiesValue) ||
+            propertiesValue is not IReadOnlyDictionary<string, object?> properties)
+        {
+            return false;
+        }
+
+        IReadOnlyDictionary<string, object?> currentProperties = properties;
+        var segments = fieldPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            if (!currentProperties.TryGetValue(segment, out var segmentValue) ||
+                segmentValue is not IReadOnlyDictionary<string, object?> segmentMapping)
+            {
+                return false;
+            }
+
+            if (index == segments.Length - 1)
+            {
+                fieldMapping = segmentMapping;
+                return true;
+            }
+
+            if (!segmentMapping.TryGetValue("properties", out var nestedPropertiesValue) ||
+                nestedPropertiesValue is not IReadOnlyDictionary<string, object?> nestedProperties)
+            {
+                return false;
+            }
+
+            currentProperties = nestedProperties;
+        }
+
+        return false;
     }
 }

@@ -15,13 +15,17 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
     internal static string BuildQueryPayloadJson(
         ProjectionDocumentQuery query,
         string defaultSortField,
-        int size)
+        int size,
+        Func<string, string>? fieldPathResolver = null,
+        Func<ProjectionDocumentFilter, string, string>? exactMatchFieldPathResolver = null)
     {
+        fieldPathResolver ??= static fieldPath => fieldPath;
+        exactMatchFieldPathResolver ??= static (_, resolvedFieldPath) => resolvedFieldPath;
         var root = new Dictionary<string, object?>
         {
             ["size"] = size,
-            ["sort"] = BuildSortSpec(query, defaultSortField),
-            ["query"] = BuildFilterSpec(query),
+            ["sort"] = BuildSortSpec(query, defaultSortField, fieldPathResolver),
+            ["query"] = BuildFilterSpec(query, fieldPathResolver, exactMatchFieldPathResolver),
         };
 
         var searchAfter = DecodeCursor(query.Cursor);
@@ -97,7 +101,10 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         return JsonSerializer.Serialize(root);
     }
 
-    private static object BuildFilterSpec(ProjectionDocumentQuery query)
+    private static object BuildFilterSpec(
+        ProjectionDocumentQuery query,
+        Func<string, string> fieldPathResolver,
+        Func<ProjectionDocumentFilter, string, string> exactMatchFieldPathResolver)
     {
         if (query.Filters.Count == 0)
         {
@@ -111,34 +118,41 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         {
             ["bool"] = new Dictionary<string, object?>
             {
-                ["filter"] = query.Filters.Select(BuildSingleFilterSpec).ToArray(),
+                ["filter"] = query.Filters
+                    .Select(filter => BuildSingleFilterSpec(filter, fieldPathResolver, exactMatchFieldPathResolver))
+                    .ToArray(),
             },
         };
     }
 
-    private static object BuildSingleFilterSpec(ProjectionDocumentFilter filter)
+    private static object BuildSingleFilterSpec(
+        ProjectionDocumentFilter filter,
+        Func<string, string> fieldPathResolver,
+        Func<ProjectionDocumentFilter, string, string> exactMatchFieldPathResolver)
     {
+        var resolvedFieldPath = fieldPathResolver(filter.FieldPath);
+        var exactMatchFieldPath = exactMatchFieldPathResolver(filter, resolvedFieldPath);
         return filter.Operator switch
         {
             ProjectionDocumentFilterOperator.Exists => new Dictionary<string, object?>
             {
                 ["exists"] = new Dictionary<string, object?>
                 {
-                    ["field"] = filter.FieldPath,
+                    ["field"] = resolvedFieldPath,
                 },
             },
             ProjectionDocumentFilterOperator.Eq => new Dictionary<string, object?>
             {
                 ["term"] = new Dictionary<string, object?>
                 {
-                    [filter.FieldPath] = ConvertScalarValue(filter.Value),
+                    [exactMatchFieldPath] = ConvertScalarValue(filter.Value),
                 },
             },
             ProjectionDocumentFilterOperator.In => new Dictionary<string, object?>
             {
                 ["terms"] = new Dictionary<string, object?>
                 {
-                    [filter.FieldPath] = ConvertCollectionValue(filter.Value),
+                    [exactMatchFieldPath] = ConvertCollectionValue(filter.Value),
                 },
             },
             ProjectionDocumentFilterOperator.Gt or
@@ -148,7 +162,7 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
             {
                 ["range"] = new Dictionary<string, object?>
                 {
-                    [filter.FieldPath] = new Dictionary<string, object?>
+                    [resolvedFieldPath] = new Dictionary<string, object?>
                     {
                         [ResolveRangeOperator(filter.Operator)] = ConvertScalarValue(filter.Value),
                     },
@@ -159,13 +173,16 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         };
     }
 
-    private static object[] BuildSortSpec(ProjectionDocumentQuery query, string defaultSortField)
+    private static object[] BuildSortSpec(
+        ProjectionDocumentQuery query,
+        string defaultSortField,
+        Func<string, string> fieldPathResolver)
     {
         if (query.Sorts.Count == 0)
         {
             var primarySortField = string.IsNullOrWhiteSpace(defaultSortField)
                 ? DefaultQueryPrimarySortField
-                : defaultSortField.Trim();
+                : fieldPathResolver(defaultSortField.Trim());
             var defaultClauses = new List<object>
             {
                 BuildSortClause(primarySortField, ProjectionDocumentSortDirection.Desc, includeMissingHints: true),
@@ -175,7 +192,10 @@ internal static class ElasticsearchProjectionDocumentStorePayloadSupport
         }
 
         var clauses = query.Sorts
-            .Select(sort => BuildSortClause(sort.FieldPath, sort.Direction, includeMissingHints: false))
+            .Select(sort => BuildSortClause(
+                fieldPathResolver(sort.FieldPath),
+                sort.Direction,
+                includeMissingHints: false))
             .ToList();
         clauses.AddRange(BuildTiebreakSortClauses());
         return clauses.ToArray();
