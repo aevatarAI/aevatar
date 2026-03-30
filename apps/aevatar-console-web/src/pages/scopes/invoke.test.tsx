@@ -97,6 +97,7 @@ describe('ScopeInvokePage', () => {
         namespace: 'default',
       });
     });
+    expect(screen.queryByRole('button', { name: 'Open Runs Workbench' })).toBeNull();
     expect(await screen.findByRole('button', { name: 'Invoke endpoint' })).toBeTruthy();
     fireEvent.change(
       screen.getByPlaceholderText('Describe the request or payload text.'),
