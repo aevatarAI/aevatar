@@ -126,7 +126,8 @@ public sealed record StoredHttpConnectorConfig(
     IReadOnlyList<string> AllowedMethods,
     IReadOnlyList<string> AllowedPaths,
     IReadOnlyList<string> AllowedInputKeys,
-    IReadOnlyDictionary<string, string> DefaultHeaders);
+    IReadOnlyDictionary<string, string> DefaultHeaders,
+    StoredConnectorAuthConfig Auth);
 
 public sealed record StoredCliConnectorConfig(
     string Command,
@@ -139,11 +140,21 @@ public sealed record StoredCliConnectorConfig(
 public sealed record StoredMcpConnectorConfig(
     string ServerName,
     string Command,
+    string Url,
     IReadOnlyList<string> Arguments,
     IReadOnlyDictionary<string, string> Environment,
+    IReadOnlyDictionary<string, string> AdditionalHeaders,
+    StoredConnectorAuthConfig Auth,
     string DefaultTool,
     IReadOnlyList<string> AllowedTools,
     IReadOnlyList<string> AllowedInputKeys);
+
+public sealed record StoredConnectorAuthConfig(
+    string Type,
+    string TokenUrl,
+    string ClientId,
+    string ClientSecret,
+    string Scope);
 
 public sealed record StoredRoleDefinition(
     string Id,

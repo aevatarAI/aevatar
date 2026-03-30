@@ -72,10 +72,13 @@ connectors:
 ### 配置文件位置与格式
 
 - **默认路径**：`~/.aevatar/connectors.json`
-- **支持三种 JSON 形状**（任选其一）：
+- **支持四种 JSON 形状**（任选其一）：
   1. `{ "connectors": [ { "name": "...", "type": "...", ... } ] }` — 数组
   2. `{ "connectors": { "my_connector": { "type": "...", ... } } }` — 对象，key 为 name
   3. `{ "connectors": { "definitions": [ ... ] } }` — 对象内 definitions 数组
+  4. `{ "my_connector": { "type": "...", ... } }` — 直接以根对象声明命名 connector
+
+- 字符串字段支持环境变量占位符：`${ENV_NAME}`。
 
 每条 connector 需包含：
 
@@ -104,15 +107,24 @@ connectors:
         "allowedMethods": ["POST", "GET"],
         "allowedPaths": ["/v1/process", "/v1/status"],
         "allowedInputKeys": ["text", "options"],
-        "defaultHeaders": { "X-Api-Version": "1" }
+        "defaultHeaders": { "X-Api-Version": "1" },
+        "auth": {
+          "type": "client_credentials",
+          "tokenUrl": "https://auth.example.com/oauth/token",
+          "clientId": "${API_CLIENT_ID}",
+          "clientSecret": "${API_CLIENT_SECRET}",
+          "scope": "api.read api.write"
+        }
       }
     }
   ]
 }
 ```
 
-- workflow 里可传 `parameters.path` 或 `parameters.operation` 指定路径（必须在 `allowedPaths` 内，或允许 `"/"` 表示任意）。
+- workflow 里可传 `parameters.path` 或 `parameters.operation` 指定路径；若两者同时存在，优先使用 `parameters.path`。
+- `allowedPaths` 支持精确路径、`"/"` 全放开，以及 `*` 通配模式（如 `/api/v1/proxy/s/chrono-graph/*`、`/validate/*`）。
 - 请求体来自上一步输出；若配置了 `allowedInputKeys`，则只允许 JSON 中出现这些 key。
+- 若配置 `http.auth.type = "client_credentials"`，运行时会先取 token，再自动把 Bearer Token 注入目标请求。
 
 #### CLI Connector
 
@@ -150,9 +162,15 @@ connectors:
       "timeoutMs": 15000,
       "mcp": {
         "serverName": "my_mcp",
-        "command": "npx",
-        "arguments": ["-y", "my-mcp-server"],
-        "environment": {},
+        "url": "https://mcp.example.com",
+        "additionalHeaders": { "x-tenant": "demo" },
+        "auth": {
+          "type": "client_credentials",
+          "tokenUrl": "https://auth.example.com/oauth/token",
+          "clientId": "${MCP_CLIENT_ID}",
+          "clientSecret": "${MCP_CLIENT_SECRET}",
+          "scope": "proxy:*"
+        },
         "defaultTool": "process",
         "allowedTools": ["process", "validate"],
         "allowedInputKeys": ["input"]
@@ -162,6 +180,7 @@ connectors:
 }
 ```
 
+- `mcp` 现在支持两种接入方式：本地 `command + arguments`，或远程 `url`。
 - 通过 `allowedTools` 限制可调用的 MCP 工具；未配置则按实现行为（如仅 defaultTool 或全部允许）。
 
 ### 在 Workflow YAML 里使用 Connector

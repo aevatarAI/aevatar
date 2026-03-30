@@ -74,6 +74,31 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
     }
 
     [Fact]
+    public async Task SaveAndGetCatalogAsync_WhenRemoteEnabled_ShouldPreserveNyxidRemoteMcpFields()
+    {
+        using var workspaceRoot = new TemporaryDirectory();
+        var storageServer = new InMemoryChronoStorageServer();
+        var store = CreateStore(
+            new InMemoryStudioWorkspaceStore(),
+            new StubAppScopeResolver("scope-nyxid"),
+            storageServer.CreateHttpClientFactory(),
+            workspaceRoot.Path);
+        var catalog = new StoredConnectorCatalog(
+            HomeDirectory: string.Empty,
+            FilePath: string.Empty,
+            FileExists: false,
+            Connectors:
+            [
+                CreateRemoteMcpConnector(),
+            ]);
+
+        await store.SaveConnectorCatalogAsync(catalog);
+        var loaded = await store.GetConnectorCatalogAsync();
+
+        loaded.Connectors.Should().BeEquivalentTo(catalog.Connectors);
+    }
+
+    [Fact]
     public async Task DraftOperations_WhenRemoteEnabled_ShouldUseScopeScopedRemoteDraftFiles()
     {
         using var workspaceRoot = new TemporaryDirectory();
@@ -198,7 +223,13 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
                 DefaultHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["Authorization"] = "Bearer demo",
-                }),
+                },
+                Auth: new StoredConnectorAuthConfig(
+                    Type: "client_credentials",
+                    TokenUrl: "https://auth.example.com/oauth/token",
+                    ClientId: "http-client",
+                    ClientSecret: "http-secret",
+                    Scope: "proxy:*")),
             Cli: new StoredCliConnectorConfig(
                 Command: string.Empty,
                 FixedArguments: [],
@@ -209,11 +240,55 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             Mcp: new StoredMcpConnectorConfig(
                 ServerName: string.Empty,
                 Command: string.Empty,
+                Url: string.Empty,
                 Arguments: [],
                 Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                AdditionalHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Auth: new StoredConnectorAuthConfig(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty),
                 DefaultTool: string.Empty,
                 AllowedTools: [],
                 AllowedInputKeys: []));
+
+    private static StoredConnectorDefinition CreateRemoteMcpConnector() =>
+        new(
+            Name: "nyxid_mcp",
+            Type: "mcp",
+            Enabled: true,
+            TimeoutMs: 60_000,
+            Retry: 1,
+            Http: new StoredHttpConnectorConfig(
+                BaseUrl: string.Empty,
+                AllowedMethods: [],
+                AllowedPaths: [],
+                AllowedInputKeys: [],
+                DefaultHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Auth: new StoredConnectorAuthConfig(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty)),
+            Cli: new StoredCliConnectorConfig(
+                Command: string.Empty,
+                FixedArguments: [],
+                AllowedOperations: [],
+                AllowedInputKeys: [],
+                WorkingDirectory: string.Empty,
+                Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)),
+            Mcp: new StoredMcpConnectorConfig(
+                ServerName: "nyxid",
+                Command: string.Empty,
+                Url: "https://nyxid.example.com/mcp",
+                Arguments: [],
+                Environment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                AdditionalHeaders: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["x-tenant"] = "demo",
+                },
+                Auth: new StoredConnectorAuthConfig(
+                    Type: "client_credentials",
+                    TokenUrl: "https://auth.example.com/oauth/token",
+                    ClientId: "mcp-client",
+                    ClientSecret: "mcp-secret",
+                    Scope: "proxy:*"),
+                DefaultTool: "chrono-graph__query",
+                AllowedTools: ["chrono-graph__query"],
+                AllowedInputKeys: ["query"]));
 
     private sealed class StubAppScopeResolver : IAppScopeResolver
     {

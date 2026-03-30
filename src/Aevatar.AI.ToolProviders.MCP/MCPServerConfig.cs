@@ -11,13 +11,22 @@ public sealed class MCPServerConfig
     public required string Name { get; init; }
 
     /// <summary>启动命令（如 "npx" 或 "/path/to/server"）。</summary>
-    public required string Command { get; init; }
+    public string Command { get; init; } = "";
+
+    /// <summary>远程 MCP HTTP 端点。</summary>
+    public string Url { get; init; } = "";
 
     /// <summary>命令参数。</summary>
     public string[] Arguments { get; init; } = [];
 
     /// <summary>环境变量。</summary>
     public Dictionary<string, string> Environment { get; init; } = [];
+
+    /// <summary>远程 MCP 静态请求头。</summary>
+    public Dictionary<string, string> AdditionalHeaders { get; init; } = [];
+
+    /// <summary>可选的远程 MCP 专用 HttpClient。</summary>
+    public HttpClient? HttpClient { get; init; }
 }
 
 /// <summary>MCP Tools 选项。</summary>

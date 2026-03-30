@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Aevatar.Configuration;
 
@@ -26,6 +27,7 @@ public sealed class HttpConnectorConfig
     public string[] AllowedPaths { get; init; } = ["/"];
     public string[] AllowedInputKeys { get; init; } = [];
     public Dictionary<string, string> DefaultHeaders { get; init; } = [];
+    public ConnectorAuthConfig Auth { get; init; } = new();
 }
 
 /// <summary>CLI connector policy settings.</summary>
@@ -44,11 +46,24 @@ public sealed class MCPConnectorConfig
 {
     public string ServerName { get; init; } = "";
     public string Command { get; init; } = "";
+    public string Url { get; init; } = "";
     public string[] Arguments { get; init; } = [];
     public Dictionary<string, string> Environment { get; init; } = [];
     public string DefaultTool { get; init; } = "";
     public string[] AllowedTools { get; init; } = [];
     public string[] AllowedInputKeys { get; init; } = [];
+    public Dictionary<string, string> AdditionalHeaders { get; init; } = [];
+    public ConnectorAuthConfig Auth { get; init; } = new();
+}
+
+/// <summary>Connector authentication policy settings.</summary>
+public sealed class ConnectorAuthConfig
+{
+    public string Type { get; init; } = "";
+    public string TokenUrl { get; init; } = "";
+    public string ClientId { get; init; } = "";
+    public string ClientSecret { get; init; } = "";
+    public string Scope { get; init; } = "";
 }
 
 /// <summary>Telegram user-account connector settings (MTProto client).</summary>
@@ -75,7 +90,7 @@ public sealed class TelegramUserConnectorConfig
 /// 2) { "connectors": { "my_name": { ... } } }
 /// 3) { "connectors": { "definitions": [ ... ] } }
 /// </summary>
-public static class AevatarConnectorConfig
+public static partial class AevatarConnectorConfig
 {
     public static IReadOnlyList<ConnectorConfigEntry> LoadConnectors(string? filePath = null)
     {
@@ -86,8 +101,9 @@ public static class AevatarConnectorConfig
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             var root = doc.RootElement;
-            if (!TryGetPropertyIgnoreCase(root, "connectors", out var connectorsNode))
-                return [];
+            var connectorsNode = TryGetPropertyIgnoreCase(root, "connectors", out var configuredNode)
+                ? configuredNode
+                : root;
 
             var entries = ParseConnectorsNode(connectorsNode);
             return entries
@@ -190,6 +206,9 @@ public static class AevatarConnectorConfig
             AllowedPaths = ReadStringArray(obj, "allowedPaths"),
             AllowedInputKeys = ReadStringArray(obj, "allowedInputKeys"),
             DefaultHeaders = ReadStringMap(obj, "defaultHeaders"),
+            Auth = TryGetPropertyIgnoreCase(obj, "auth", out var authNode)
+                ? ParseAuth(authNode)
+                : new ConnectorAuthConfig(),
         };
     }
 
@@ -214,11 +233,31 @@ public static class AevatarConnectorConfig
         {
             ServerName = ReadString(obj, "serverName"),
             Command = ReadString(obj, "command"),
+            Url = ReadString(obj, "url"),
             Arguments = ReadStringArray(obj, "arguments"),
             Environment = ReadStringMap(obj, "environment"),
             DefaultTool = ReadString(obj, "defaultTool"),
             AllowedTools = ReadStringArray(obj, "allowedTools"),
             AllowedInputKeys = ReadStringArray(obj, "allowedInputKeys"),
+            AdditionalHeaders = ReadStringMap(obj, "additionalHeaders"),
+            Auth = TryGetPropertyIgnoreCase(obj, "auth", out var authNode)
+                ? ParseAuth(authNode)
+                : new ConnectorAuthConfig(),
+        };
+    }
+
+    private static ConnectorAuthConfig ParseAuth(JsonElement obj)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return new ConnectorAuthConfig();
+
+        return new ConnectorAuthConfig
+        {
+            Type = ReadString(obj, "type"),
+            TokenUrl = ReadString(obj, "tokenUrl"),
+            ClientId = ReadString(obj, "clientId"),
+            ClientSecret = ReadString(obj, "clientSecret"),
+            Scope = ReadString(obj, "scope"),
         };
     }
 
@@ -265,7 +304,7 @@ public static class AevatarConnectorConfig
 
     private static string ReadString(JsonElement obj, string name) =>
         TryGetPropertyIgnoreCase(obj, name, out var val) && val.ValueKind == JsonValueKind.String
-            ? val.GetString() ?? ""
+            ? ExpandEnvironmentPlaceholders(val.GetString() ?? "")
             : "";
 
     private static int ReadInt(JsonElement obj, string name, int fallback)
@@ -289,7 +328,7 @@ public static class AevatarConnectorConfig
     {
         if (!TryGetPropertyIgnoreCase(obj, name, out var val) || val.ValueKind != JsonValueKind.Array) return [];
         return val.EnumerateArray()
-            .Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : "")
+            .Select(x => x.ValueKind == JsonValueKind.String ? ExpandEnvironmentPlaceholders(x.GetString() ?? "") : "")
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .ToArray();
     }
@@ -300,8 +339,24 @@ public static class AevatarConnectorConfig
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var prop in val.EnumerateObject())
         {
-            map[prop.Name] = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() ?? "" : prop.Value.ToString();
+            map[prop.Name] = ExpandEnvironmentPlaceholders(prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() ?? "" : prop.Value.ToString());
         }
         return map;
     }
+
+    private static string ExpandEnvironmentPlaceholders(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+
+        return EnvironmentPlaceholderPattern().Replace(value, match =>
+        {
+            var variableName = match.Groups[1].Value;
+            var envValue = Environment.GetEnvironmentVariable(variableName);
+            return envValue ?? match.Value;
+        });
+    }
+
+    [GeneratedRegex(@"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", RegexOptions.Compiled)]
+    private static partial Regex EnvironmentPlaceholderPattern();
 }

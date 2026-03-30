@@ -28,6 +28,11 @@ public sealed class HttpConnectorBuilder : IConnectorBuilder
             return false;
         }
 
+        var httpClientName = BuildHttpClientName(entry.Name);
+        var authorizationProvider = ClientCredentialsConnectorAuthorizationProvider.IsConfigured(entry.Http.Auth)
+            ? new ClientCredentialsConnectorAuthorizationProvider(entry.Http.Auth, _httpClientFactory, httpClientName)
+            : null;
+
         connector = new HttpConnector(
             entry.Name,
             entry.Http.BaseUrl,
@@ -37,7 +42,8 @@ public sealed class HttpConnectorBuilder : IConnectorBuilder
             entry.Http.DefaultHeaders,
             entry.TimeoutMs,
             _httpClientFactory,
-            BuildHttpClientName(entry.Name));
+            httpClientName,
+            authorizationProvider);
         return true;
     }
 

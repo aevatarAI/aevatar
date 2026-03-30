@@ -168,12 +168,22 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         sw.Stop();
         if (response is { Success: true })
         {
+            var resolvedOutput = response.Output ?? string.Empty;
+            if (!TryAssertResponseOutput(request.Parameters, resolvedOutput, out var assertionError))
+            {
+                await PublishFailureAsync(ctx, request, assertionError, ct);
+                return;
+            }
+
+            if (ParseBool(request.Parameters.GetValueOrDefault("pass_through_input", "false")))
+                resolvedOutput = request.Input ?? string.Empty;
+
             var ok = new StepCompletedEvent
             {
                 StepId = request.StepId,
                 RunId = request.RunId,
                 Success = true,
-                Output = response.Output ?? "",
+                Output = resolvedOutput,
             };
             AppendBaseMetadata(ok, connector, connectorName, operation, attempts, timeoutMs, sw.Elapsed.TotalMilliseconds);
             foreach (var (key, value) in response.Metadata)
@@ -366,6 +376,100 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         evt.Annotations["connector.attempts"] = attempts.ToString();
         evt.Annotations["connector.timeout_ms"] = timeoutMs.ToString();
         evt.Annotations["connector.duration_ms"] = durationMs.ToString("F2");
+    }
+
+    private static bool TryAssertResponseOutput(
+        IReadOnlyDictionary<string, string> parameters,
+        string responseOutput,
+        out string error)
+    {
+        error = string.Empty;
+        var responsePath = WorkflowParameterValueParser.GetString(
+            parameters,
+            string.Empty,
+            "assert_response_path");
+        if (string.IsNullOrWhiteSpace(responsePath))
+            return true;
+
+        if (string.IsNullOrWhiteSpace(responseOutput))
+        {
+            error = $"connector_call assertion failed: response path '{responsePath}' is missing";
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(responseOutput);
+            if (!TryResolveJsonPath(document.RootElement, responsePath, out var value))
+            {
+                error = $"connector_call assertion failed: response path '{responsePath}' is missing";
+                return false;
+            }
+
+            if (!IsTruthy(value))
+            {
+                error = $"connector_call assertion failed: response path '{responsePath}' was not truthy";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            error = $"connector_call assertion failed: response output is not valid JSON for path '{responsePath}'";
+            return false;
+        }
+    }
+
+    private static bool TryResolveJsonPath(JsonElement current, string path, out JsonElement value)
+    {
+        var normalizedSegments = path
+            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (normalizedSegments.Length == 0)
+        {
+            value = current;
+            return true;
+        }
+
+        foreach (var segment in normalizedSegments)
+        {
+            if (current.ValueKind == JsonValueKind.Object &&
+                current.TryGetProperty(segment, out var property))
+            {
+                current = property;
+                continue;
+            }
+
+            if (current.ValueKind == JsonValueKind.Array &&
+                int.TryParse(segment, out var index) &&
+                index >= 0 &&
+                index < current.GetArrayLength())
+            {
+                current = current[index];
+                continue;
+            }
+
+            value = default;
+            return false;
+        }
+
+        value = current;
+        return true;
+    }
+
+    private static bool IsTruthy(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number => !string.Equals(value.GetRawText(), "0", StringComparison.Ordinal),
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(value.GetString()) &&
+                                    !string.Equals(value.GetString(), "false", StringComparison.OrdinalIgnoreCase),
+            JsonValueKind.Null => false,
+            JsonValueKind.Undefined => false,
+            _ => true,
+        };
     }
 
     private static int ParseBoundedInt(string raw, int min, int max, int fallback)
