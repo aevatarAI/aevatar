@@ -115,8 +115,14 @@ describe('ScopeOverviewPage', () => {
     expect(screen.getByText('Revision Rollout')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
     expect(await screen.findByText('script-alpha')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open Runs' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Invoke Services' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Studio' })).toBeTruthy();
+    expect(screen.getByText('Project views')).toBeTruthy();
+    expect(screen.getByText('Workflows')).toBeTruthy();
+    expect(screen.getByText('Scripts')).toBeTruthy();
+    expect(screen.getByText('Invoke')).toBeTruthy();
+    expect(screen.getByText('Runs')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open Runs' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
   });
 
   it('activates a historical revision from the overview page', async () => {

@@ -33,20 +33,18 @@ describe("OverviewPage", () => {
 
     expect(container.textContent).toContain("Overview");
     expect(container.textContent).toContain(
-      "Overview of runtime workflows, scope assets, raw platform services, platform governance, and actors."
+      "Start from the current project for scope-first workflow, script, and binding flows. Runtime and platform diagnostics stay grouped under Operator Tools."
     );
-    expect(container.textContent).toContain("Quick actions");
-    expect(container.textContent).toContain("Platform entry points");
-    expect(container.textContent).toContain("Local console tools");
-    expect(container.textContent).toContain("Capability surfaces");
-    expect(container.textContent).toContain("Platform services");
-    expect(container.textContent).toContain("Platform governance");
-    expect(container.textContent).toContain("Open Runtime Explorer");
-    expect(container.textContent).toContain("Start direct workflow");
+    expect(container.textContent).toContain("Current project");
+    expect(container.textContent).toContain("Operator Tools");
+    expect(container.textContent).toContain("Enter Current Project");
+    expect(container.textContent).toContain("Open Studio");
+    expect(container.textContent).toContain("Runtime tools");
+    expect(container.textContent).toContain("Platform operator views");
     expect(container.textContent).not.toContain("Start preferred workflow");
     expect(container.textContent).not.toContain("Preferred workflow");
     expect(container.textContent).not.toContain("Open Runtime Observability");
-    expect(container.textContent).not.toContain("Open Studio");
+    expect(container.textContent).not.toContain("Capability surfaces");
     await waitFor(() => {
       expect(runtimeCatalogApi.listWorkflowNames).toHaveBeenCalled();
       expect(runtimeQueryApi.listAgents).toHaveBeenCalled();
