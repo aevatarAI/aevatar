@@ -58,6 +58,8 @@ import {
 } from 'lucide-react';
 import * as api from './api';
 import ScriptsStudio from './ScriptsStudio';
+import * as nyxid from './auth/nyxid';
+import ScopePage from './runtime/ScopePage';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -137,7 +139,7 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'settings';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'scope' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'llm' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
@@ -146,7 +148,7 @@ type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'settings'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'settings'];
 const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors'];
 
 type AppContextState = {
@@ -925,6 +927,14 @@ function App() {
   const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = useState(false);
   const [executionPrompt, setExecutionPrompt] = useState('');
   const [runModalOpen, setRunModalOpen] = useState(false);
+  const [runScopeId, setRunScopeId] = useState(() => nyxid.loadSession()?.user.sub || '');
+  const [_runServiceId, _setRunServiceId] = useState('');
+  const [bindScopeModalOpen, setBindScopeModalOpen] = useState(false);
+  const [bindScopePending, setBindScopePending] = useState(false);
+  const [_draftRunEvents, setDraftRunEvents] = useState<any[]>([]);
+  const [_draftRunText, setDraftRunText] = useState('');
+  const [draftRunning, setDraftRunning] = useState(false);
+  const draftRunAbortRef = useRef<AbortController | null>(null);
   const [executionActionInput, setExecutionActionInput] = useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] = useState('');
   const [executionStopPending, setExecutionStopPending] = useState(false);
@@ -1356,22 +1366,68 @@ function App() {
 
   async function bootstrap() {
     try {
-      const session = await api.auth.getSession();
+      // Handle OAuth callback if we're returning from NyxID.
+      if (nyxid.isAuthCallback()) {
+        try {
+          const { session: oauthSession, returnTo } = await nyxid.handleCallback();
+          setAuthSession({
+            loading: false,
+            enabled: true,
+            authenticated: true,
+            providerDisplayName: 'NyxID',
+            loginUrl: '',
+            logoutUrl: '',
+            name: oauthSession.user.name || '',
+            email: oauthSession.user.email || '',
+            picture: oauthSession.user.picture || '',
+            errorMessage: '',
+          });
+          // Update scope ID from NyxID user.
+          if (oauthSession.user.sub) setRunScopeId(oauthSession.user.sub);
+          // Clean up callback URL params.
+          window.history.replaceState({}, '', returnTo || '/');
+        } catch (err: any) {
+          setAuthSession(prev => ({
+            ...prev,
+            loading: false,
+            enabled: true,
+            authenticated: false,
+            errorMessage: err?.message || 'OAuth callback failed.',
+          }));
+          window.history.replaceState({}, '', '/');
+          return;
+        }
+      }
+
+      // Check for existing NyxID session in localStorage.
+      let localSession = nyxid.loadSession();
+      if (localSession && !nyxid.getActiveSession()) {
+        // Token expired but refresh token available.
+        localSession = await nyxid.refreshSession(localSession);
+      }
+
+      // Also check backend auth status (for scope resolution).
+      let backendSession: any = null;
+      try {
+        backendSession = await api.auth.getSession();
+      } catch { /* backend may not have auth endpoint */ }
+
+      const isAuthenticated = Boolean(localSession) || Boolean(backendSession?.authenticated);
       const nextAuthSession: AuthSessionState = {
         loading: false,
-        enabled: session?.enabled !== false,
-        authenticated: Boolean(session?.authenticated),
-        providerDisplayName: session?.providerDisplayName || 'NyxID',
-        loginUrl: session?.loginUrl || '/auth/login',
-        logoutUrl: session?.logoutUrl || '/auth/logout',
-        name: session?.name || '',
-        email: session?.email || '',
-        picture: session?.picture || '',
-        errorMessage: session?.errorMessage || '',
+        enabled: true,
+        authenticated: isAuthenticated,
+        providerDisplayName: 'NyxID',
+        loginUrl: '',
+        logoutUrl: '',
+        name: localSession?.user.name || backendSession?.name || '',
+        email: localSession?.user.email || backendSession?.email || '',
+        picture: localSession?.user.picture || '',
+        errorMessage: '',
       };
       setAuthSession(nextAuthSession);
 
-      if (nextAuthSession.enabled && !nextAuthSession.authenticated) {
+      if (!isAuthenticated) {
         return;
       }
 
@@ -1838,19 +1894,6 @@ function App() {
     setWorkflowList(Array.isArray(workflows) ? workflows : []);
   }
 
-  async function loadExecutions(preferredExecutionId?: string | null) {
-    const executionList = await api.executions.list();
-    const nextExecutions = Array.isArray(executionList) ? executionList : [];
-    setExecutions(nextExecutions);
-
-    const preferred = preferredExecutionId
-      ? nextExecutions.find(item => item.executionId === preferredExecutionId)
-      : null;
-    if (preferred?.executionId) {
-      await openExecution(preferred.executionId);
-    }
-  }
-
   async function loadWorkspaceSettings() {
     const [context, settings] = await Promise.all([
       api.app.getContext(),
@@ -2245,6 +2288,34 @@ function App() {
     setRunModalOpen(true);
   }
 
+  function handleBindScope() {
+    setBindScopeModalOpen(true);
+  }
+
+  async function handleConfirmBindScope() {
+    const scopeId = runScopeId.trim() || nyxid.loadSession()?.user.sub || '';
+    if (!scopeId) {
+      flash('Not logged in — scope ID unavailable', 'error');
+      return;
+    }
+    try {
+      setBindScopePending(true);
+      const serialized = await serializeCurrentWorkflow();
+      const yamlContent = serialized?.yaml || workflowMeta.yaml;
+      if (!yamlContent?.trim()) {
+        flash('No workflow YAML to bind', 'error');
+        return;
+      }
+      const result = await api.scope.bindWorkflow(scopeId, [yamlContent], workflowMeta.name.trim() || undefined);
+      setBindScopeModalOpen(false);
+      flash(`Scope bound: serviceId=${result?.serviceId || 'default'}, revision=${result?.revisionId || 'latest'}`, 'success');
+    } catch (error: any) {
+      flash(error?.message || 'Bind scope failed', 'error');
+    } finally {
+      setBindScopePending(false);
+    }
+  }
+
   async function handleConfirmRunWorkflow() {
     try {
       if (authSession.enabled && !authSession.authenticated) {
@@ -2263,31 +2334,60 @@ function App() {
         return;
       }
 
-      const shouldRunPublishedWorkflow =
-        appContext.workflowStorageMode === 'scope' &&
-        Boolean(appContext.scopeId) &&
-        Boolean(workflowMeta.workflowId) &&
-        !workflowMeta.dirty;
+      const scopeId = runScopeId.trim() || appContext.scopeId || nyxid.loadSession()?.user.sub || '';
+      if (!scopeId) {
+        setRunModalOpen(false);
+        flash('Not logged in — scope ID unavailable', 'error');
+        return;
+      }
 
-      const detail = await api.executions.start({
-        workflowName: workflowMeta.name.trim() || 'draft',
-        prompt: executionPrompt.trim(),
-        workflowYamls: [serialized?.yaml || workflowMeta.yaml],
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
-        scopeId: shouldRunPublishedWorkflow ? appContext.scopeId : null,
-        workflowId: shouldRunPublishedWorkflow ? workflowMeta.workflowId : null,
-        eventFormat: shouldRunPublishedWorkflow ? 'workflow' : null,
-      });
+      const prompt = executionPrompt.trim();
+      const yamlContent = serialized?.yaml || workflowMeta.yaml;
+
       setRunModalOpen(false);
       setStudioView('execution');
       setLogsCollapsed(false);
       setLogsDetached(false);
-      applyExecutionDetail(detail);
-      void loadExecutions(detail?.executionId || null);
-      flash(shouldRunPublishedWorkflow ? 'Published workflow run started' : 'Execution started', 'success');
+      setDraftRunEvents([]);
+      setDraftRunText('');
+      setDraftRunning(true);
+
+      const controller = new AbortController();
+      draftRunAbortRef.current = controller;
+
+      const { normalizeBackendSseFrame } = await import('./runtime/sseUtils');
+
+      const onFrame = (frame: any) => {
+        const evt = normalizeBackendSseFrame(frame);
+        if (!evt) return;
+        setDraftRunEvents(prev => [...prev, evt]);
+        if (evt.type === 'TEXT_MESSAGE_CONTENT') {
+          setDraftRunText(prev => prev + (evt.delta as string || ''));
+        }
+        if (evt.type === 'RUN_ERROR') {
+          flash((evt.message as string) || 'Run error', 'error');
+        }
+      };
+
+      try {
+        await api.scope.streamDraftRun(scopeId, prompt, yamlContent ? [yamlContent] : undefined, onFrame, controller.signal);
+        flash('Draft run completed', 'success');
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          flash(err?.message || 'Draft run failed', 'error');
+        }
+      } finally {
+        setDraftRunning(false);
+        draftRunAbortRef.current = null;
+      }
     } catch (error: any) {
       flash(error?.message || 'Execution failed', 'error');
+      setDraftRunning(false);
     }
+  }
+
+  function handleStopDraftRun() {
+    draftRunAbortRef.current?.abort();
   }
 
   function applyExecutionDetail(detail: any) {
@@ -3145,7 +3245,7 @@ function App() {
         <div className="header-auth-meta">{authAccountSecondaryLabel}</div>
       </div>
       <button
-        onClick={() => window.location.assign(authSession.logoutUrl || '/auth/logout')}
+        onClick={() => { nyxid.clearSession(); window.location.reload(); }}
         className="panel-icon-button header-auth-logout"
         title="Sign out from NyxID."
       >
@@ -3160,9 +3260,9 @@ function App() {
           {authGuestStatusMessage}
         </div>
       </div>
-      <a href={authSession.loginUrl || '/auth/login'} className="solid-action header-auth-link !no-underline">
+      <button onClick={() => nyxid.loginWithRedirect(window.location.pathname)} className="solid-action header-auth-link !no-underline">
         <Shield size={14} /> Sign in
-      </a>
+      </button>
     </div>
   );
 
@@ -3951,6 +4051,12 @@ function App() {
 
         <div className="mt-auto flex flex-col items-center gap-3">
           <RailButton
+            active={workspacePage === 'scope'}
+            label="Scope"
+            icon={<Globe size={18} />}
+            onClick={() => setWorkspacePage('scope')}
+          />
+          <RailButton
             active={settingsState.colorMode === 'dark'}
             label={settingsState.colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             icon={settingsState.colorMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
@@ -4179,6 +4285,8 @@ function App() {
             }}
             onFlash={flash}
           />
+        ) : workspacePage === 'scope' ? (
+          <ScopePage />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">
@@ -4646,15 +4754,23 @@ function App() {
                 </button>
                 <button
                   onClick={handleRunWorkflow}
-                  data-tooltip="Run"
-                  aria-label="Run"
+                  data-tooltip="Draft Run"
+                  aria-label="Draft Run"
                   className="panel-icon-button header-toolbar-action header-run-action"
                 >
                   <Play size={15} />
                 </button>
-                {studioView === 'execution' && executionCanStop ? (
+                <button
+                  onClick={handleBindScope}
+                  data-tooltip="Bind Scope"
+                  aria-label="Bind Scope"
+                  className="panel-icon-button header-toolbar-action"
+                >
+                  <Globe size={15} />
+                </button>
+                {studioView === 'execution' && (executionCanStop || draftRunning) ? (
                   <button
-                    onClick={() => void handleStopExecution()}
+                    onClick={() => draftRunning ? handleStopDraftRun() : void handleStopExecution()}
                     data-tooltip="Stop"
                     aria-label="Stop"
                     disabled={executionStopPending}
@@ -5563,7 +5679,7 @@ function App() {
 
       <ModalShell
         open={runModalOpen}
-        title="Run"
+        title="Draft Run"
         onClose={() => setRunModalOpen(false)}
         actions={(
           <>
@@ -5576,7 +5692,8 @@ function App() {
       >
         <div className="space-y-3">
           <div className="text-[12px] text-gray-500">
-            Optional input will be passed into the workflow as `$input`.
+            Sends the current workflow YAML as an inline bundle to <code>/api/scopes/{'{scopeId}'}/draft-run</code>.
+            {runScopeId ? <span> Scope: <strong>{runScopeId}</strong></span> : <span className="text-amber-600"> Not logged in — scope unavailable.</span>}
           </div>
           <textarea
             rows={6}
@@ -5585,6 +5702,32 @@ function App() {
             placeholder="What should this run do?"
             onChange={event => setExecutionPrompt(event.target.value)}
           />
+        </div>
+      </ModalShell>
+
+      <ModalShell
+        open={bindScopeModalOpen}
+        title="Bind Scope"
+        onClose={() => setBindScopeModalOpen(false)}
+        actions={(
+          <>
+            <button onClick={() => setBindScopeModalOpen(false)} className="ghost-action">Cancel</button>
+            <button onClick={() => { void handleConfirmBindScope(); }} disabled={bindScopePending} className="solid-action">
+              <Globe size={14} /> {bindScopePending ? 'Binding...' : 'Bind'}
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="text-[12px] text-gray-500">
+            Binds the current workflow as the default scope service (<code>serviceId=default</code>).
+            After binding, you can invoke it from <strong>Scope → Invoke</strong>.
+          </div>
+          <div className="rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-4 py-3 text-[13px]">
+            <div><span className="text-gray-400">Scope:</span> <strong>{runScopeId || '(not logged in)'}</strong></div>
+            <div><span className="text-gray-400">Workflow:</span> <strong>{workflowMeta.name || 'draft'}</strong></div>
+            <div><span className="text-gray-400">Target:</span> <code>PUT /api/scopes/{'{scopeId}'}/binding</code></div>
+          </div>
         </div>
       </ModalShell>
 
@@ -5872,13 +6015,13 @@ function AppAuthenticationGate(props: {
             </div>
 
             <div className="mt-6 space-y-3">
-              <a
-                href={props.loginUrl || '/auth/login'}
+              <button
+                onClick={() => nyxid.loginWithRedirect('/')}
                 className="solid-action w-full justify-center !no-underline"
                 title={`Sign in with ${props.providerDisplayName || 'NyxID'}.`}
               >
                 <Shield size={14} /> Sign in
-              </a>
+              </button>
               <div className="text-[12px] leading-5 text-gray-400">
                 After sign-in completes, the app will return to Studio automatically.
               </div>

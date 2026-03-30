@@ -1,7 +1,14 @@
 /* ─── Aevatar Workflow Studio – API client ─── */
 
+import { getAccessToken } from './auth/nyxid';
+
 const BASE = '/api';
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 type AuthRequiredDetail = {
   loginUrl?: string | null;
@@ -47,6 +54,11 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
   if (!isFormDataBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
+  }
+  // Inject NyxID Bearer token if available and not already set.
+  if (!headers.has('Authorization')) {
+    const auth = getAuthHeaders();
+    if (auth.Authorization) headers.set('Authorization', auth.Authorization);
   }
 
   const res = await fetch(`${BASE}${path}`, {
@@ -110,6 +122,7 @@ async function streamSse(
     headers: {
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
+      ...getAuthHeaders(),
     },
     body: JSON.stringify(body),
     signal,
@@ -382,6 +395,71 @@ export const assistant = {
 export const auth = {
   getSession: () => request<any>('/auth/me'),
 };
+
+/* ─── Scope / Runtime APIs (new) ─── */
+export const scope = {
+  /** GET /api/scopes/{scopeId}/binding — read current default scope binding */
+  getBinding: (scopeId: string) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`),
+
+  /** PUT /api/scopes/{scopeId}/binding — bind workflow as default scope service */
+  bindWorkflow: (scopeId: string, workflowYamls: string[], displayName?: string) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'workflow',
+        ...(displayName ? { displayName } : {}),
+        workflowYamls,
+      }),
+    }),
+
+  /** POST /api/scopes/{scopeId}/draft-run — draft run with inline bundle, SSE */
+  streamDraftRun: (
+    scopeId: string,
+    prompt: string,
+    workflowYamls?: string[],
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    if (workflowYamls?.length) body.workflowYamls = workflowYamls;
+    return streamSse(`/scopes/${enc(scopeId)}/draft-run`, body, onFrame ?? (() => {}), signal);
+  },
+
+  /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream — service invoke, SSE */
+  streamInvoke: (
+    scopeId: string,
+    serviceId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    return streamSse(
+      `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/chat:stream`,
+      body, onFrame ?? (() => {}), signal,
+    );
+  },
+
+  /** GET /api/services?tenantId=... — list services in scope */
+  listServices: (scopeId: string, take = 20) =>
+    request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
+
+  /** GET /api/actors/{actorId} — actor snapshot for run logs */
+  getActorSnapshot: (actorId: string) =>
+    request<any>(`/actors/${enc(actorId)}`),
+
+  /** GET /api/actors/{actorId}/timeline — run logs timeline */
+  getActorTimeline: (actorId: string, take = 50) =>
+    request<any>(`/actors/${enc(actorId)}/timeline?take=${take}`),
+};
+
+// Keep legacy alias for backward compat in App.tsx
+export const runtime = scope;
+
+function enc(value: string) {
+  return encodeURIComponent(value.trim());
+}
 
 export const app = {
   getContext: () => request<any>('/app/context'),
