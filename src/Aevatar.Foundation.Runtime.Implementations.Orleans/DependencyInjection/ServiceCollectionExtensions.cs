@@ -66,6 +66,8 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(typeof(IAgentClassDefaultsProvider<>), typeof(NullAgentClassDefaultsProvider<>));
         services.TryAddSingleton<IActorRuntimeCallbackScheduler, OrleansActorRuntimeDurableCallbackScheduler>();
         services.Replace(ServiceDescriptor.Singleton<IActorTypeProbe, OrleansActorTypeProbe>());
+        services.TryAddSingleton<IActorEventSubscriptionProvider>(sp =>
+            new StreamProviderActorEventSubscriptionProvider(sp.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>()));
         services.AddAevatarFoundationRuntimeOrleansStreaming();
 
         return services;

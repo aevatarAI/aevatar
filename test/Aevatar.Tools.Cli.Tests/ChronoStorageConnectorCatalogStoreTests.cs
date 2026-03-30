@@ -180,7 +180,6 @@ public sealed class ChronoStorageConnectorCatalogStoreTests
             Bucket = "aevatar-studio",
             Prefix = string.Empty,
             RolesPrefix = string.Empty,
-            CreateBucketIfMissing = true,
         });
 
     private static StoredConnectorDefinition CreateConnector(string name, string baseUrl) =>

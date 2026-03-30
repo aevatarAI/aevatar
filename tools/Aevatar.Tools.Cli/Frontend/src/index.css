@@ -2119,3 +2119,12 @@
   background: rgba(239, 68, 68, 0.12);
   color: #dc2626;
 }
+
+/* ── Config Explorer drawer animation ── */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.2s ease-out;
+}

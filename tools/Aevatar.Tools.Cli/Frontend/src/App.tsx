@@ -61,6 +61,8 @@ import ScriptsStudio from './ScriptsStudio';
 import * as nyxid from './auth/nyxid';
 import ScopePage from './runtime/ScopePage';
 import RuntimePage from './runtime/RuntimePage';
+import GAgentPage from './runtime/GAgentPage';
+import ConfigExplorerPage from './config-explorer/ConfigExplorerPage';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -140,7 +142,7 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'scope' | 'services' | 'settings';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'gagents' | 'scope' | 'services' | 'settings' | 'config-explorer';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'llm' | 'cloud-config' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
@@ -149,8 +151,8 @@ type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'services', 'settings'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'services'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'services', 'settings', 'config-explorer'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'services', 'config-explorer'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -839,7 +841,13 @@ function App() {
   const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
-  const [userConfigState, setUserConfigState] = useState<{ defaultModel: string; loading: boolean }>({ defaultModel: '', loading: false });
+  const [userConfigState, setUserConfigState] = useState<{
+    defaultModel: string;
+    loading: boolean;
+    providers: { provider_slug: string; provider_name: string; status: string }[];
+    supportedModels: string[];
+    modelsLoading: boolean;
+  }>({ defaultModel: '', loading: false, providers: [], supportedModels: [], modelsLoading: false });
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [logsCollapsed, setLogsCollapsed] = useState(false);
@@ -933,8 +941,8 @@ function App() {
   const [_runServiceId, _setRunServiceId] = useState('');
   const [bindScopeModalOpen, setBindScopeModalOpen] = useState(false);
   const [bindScopePending, setBindScopePending] = useState(false);
-  const [_draftRunEvents, setDraftRunEvents] = useState<any[]>([]);
-  const [_draftRunText, setDraftRunText] = useState('');
+  const [draftRunEvents, setDraftRunEvents] = useState<any[]>([]);
+  const [draftRunText, setDraftRunText] = useState('');
   const [draftRunning, setDraftRunning] = useState(false);
   const draftRunAbortRef = useRef<AbortController | null>(null);
   const [executionActionInput, setExecutionActionInput] = useState('');
@@ -1521,7 +1529,7 @@ function App() {
       setWorkflowList(Array.isArray(workflows) ? workflows : []);
 
       hydrateSettings(settings, userConfigData);
-      setUserConfigState({ defaultModel: userConfigData?.defaultModel || '', loading: false });
+      setUserConfigState(prev => ({ ...prev, defaultModel: userConfigData?.defaultModel || '', loading: false }));
 
       hydrateConnectorCatalog(connectorCatalog);
       hydrateConnectorDraft(connectorDraftResponse);
@@ -2367,6 +2375,9 @@ function App() {
       setDraftRunEvents([]);
       setDraftRunText('');
       setDraftRunning(true);
+      setSelectedExecutionId(null);
+      setExecutionDetail(null);
+      setExecutionTrace(null);
 
       const controller = new AbortController();
       draftRunAbortRef.current = controller;
@@ -3389,7 +3400,48 @@ function App() {
 
             <div className="execution-log-stream">
               <div className="execution-log-list">
-                {executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
+                {/* Live draft-run stream output — prioritize over historical logs */}
+                {(draftRunning || draftRunEvents.length > 0) ? (
+                  <>
+                    {draftRunText && (
+                      <div className="execution-log-card tone-success" style={{ marginBottom: 8 }}>
+                        <div className="execution-log-card-head">
+                          <div className="text-[12px] font-semibold text-gray-800">Response</div>
+                        </div>
+                        <pre className="whitespace-pre-wrap text-[13px] text-gray-700 mt-2 leading-6">{draftRunText}</pre>
+                      </div>
+                    )}
+                    {draftRunEvents.map((evt, index) => (
+                      <div
+                        key={`draft-${index}`}
+                        className={`execution-log-card tone-${evt.type === 'RUN_ERROR' ? 'error' : evt.type === 'RUN_FINISHED' ? 'success' : 'info'}`}
+                      >
+                        <div className="execution-log-card-head">
+                          <div className="text-[12px] font-semibold text-gray-800">
+                            {evt.type === 'CUSTOM' ? (evt.name as string || 'CUSTOM') : evt.type}
+                          </div>
+                          <div className="execution-log-card-meta">
+                            <div className="text-[11px] text-gray-400">{evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : ''}</div>
+                          </div>
+                        </div>
+                        {evt.type === 'TEXT_MESSAGE_CONTENT' && evt.delta ? (
+                          <div className="execution-log-card-preview">{evt.delta as string}</div>
+                        ) : evt.type === 'STEP_STARTED' || evt.type === 'STEP_FINISHED' ? (
+                          <div className="text-[11px] text-gray-400 mt-1">Step: {evt.stepName as string}</div>
+                        ) : evt.type === 'RUN_ERROR' ? (
+                          <div className="text-[11px] text-red-600 mt-1">{evt.message as string}</div>
+                        ) : evt.type === 'CUSTOM' && evt.value ? (
+                          <pre className="text-[11px] text-gray-500 mt-1 whitespace-pre-wrap max-h-[120px] overflow-auto">{typeof evt.value === 'string' ? evt.value : JSON.stringify(evt.value, null, 2)}</pre>
+                        ) : null}
+                      </div>
+                    ))}
+                    {draftRunning && !draftRunEvents.length && (
+                      <div className="execution-log-card tone-info">
+                        <div className="text-[12px] text-gray-500">Waiting for events...</div>
+                      </div>
+                    )}
+                  </>
+                ) : executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
                   <button
                     key={`${log.timestamp}-${index}`}
                     onClick={() => void handleExecutionLogClick(log, index)}
@@ -4060,16 +4112,16 @@ function App() {
             />
           ) : null}
           <RailButton
-            active={workspacePage === 'roles'}
-            label="Roles"
-            icon={<User size={18} />}
-            onClick={() => openCatalogPage('roles')}
+            active={workspacePage === 'config-explorer'}
+            label="Explorer"
+            icon={<FolderPlus size={18} />}
+            onClick={() => setWorkspacePage('config-explorer')}
           />
           <RailButton
-            active={workspacePage === 'connectors'}
-            label="Connectors"
-            icon={<ArrowRightLeft size={18} />}
-            onClick={() => openCatalogPage('connectors')}
+            active={workspacePage === 'gagents'}
+            label="GAgents"
+            icon={<Bot size={18} />}
+            onClick={() => setWorkspacePage('gagents')}
           />
           <RailButton
             active={workspacePage === 'services'}
@@ -4315,6 +4367,13 @@ function App() {
             }}
             onFlash={flash}
           />
+        ) : workspacePage === 'config-explorer' ? (
+          <ConfigExplorerPage
+            scopeId={appContext.scopeId || nyxid.loadSession()?.user.sub || ''}
+            flash={flash}
+          />
+        ) : workspacePage === 'gagents' ? (
+          <GAgentPage />
         ) : workspacePage === 'scope' ? (
           <ScopePage />
         ) : workspacePage === 'services' ? (
@@ -4668,46 +4727,11 @@ function App() {
                     </div>
                   </div>
                 ) : settingsSection === 'cloud-config' ? (
-                  <div className="max-w-[920px] space-y-8">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="panel-eyebrow">Settings</div>
-                        <div className="panel-title">Cloud Config</div>
-                        <div className="text-[12px] text-gray-400 mt-1">Per-user configuration stored on NyxID. Changes sync across all your devices.</div>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          try {
-                            setUserConfigState(prev => ({ ...prev, loading: true }));
-                            await api.userConfig.save({ defaultModel: userConfigState.defaultModel.trim() });
-                            flash('Cloud config saved', 'success');
-                          } catch (error: any) {
-                            flash(error?.message || 'Failed to save cloud config', 'error');
-                          } finally {
-                            setUserConfigState(prev => ({ ...prev, loading: false }));
-                          }
-                        }}
-                        disabled={userConfigState.loading}
-                        className="solid-action"
-                      >
-                        {userConfigState.loading ? 'Saving...' : 'Save config'}
-                      </button>
-                    </div>
-
-                    <div className="settings-section-card space-y-4">
-                      <div className="section-heading">LLM</div>
-                      <InputField
-                        label="Default model"
-                        value={userConfigState.defaultModel}
-                        onChange={value => setUserConfigState(prev => ({ ...prev, defaultModel: value }))}
-                      />
-                      <div className="text-[11px] text-gray-400 leading-relaxed">
-                        The default model used by NyxID Gateway. The model name determines which provider is used
-                        (e.g. <code className="bg-gray-100 px-1 rounded">gpt-4o</code> → OpenAI, <code className="bg-gray-100 px-1 rounded">claude-sonnet-4-5-20250929</code> → Anthropic, <code className="bg-gray-100 px-1 rounded">deepseek-chat</code> → DeepSeek).
-                        Make sure you have connected the corresponding provider on NyxID.
-                      </div>
-                    </div>
-                  </div>
+                  <CloudConfigSection
+                    userConfigState={userConfigState}
+                    setUserConfigState={setUserConfigState}
+                    flash={flash}
+                  />
                 ) : (
                   <div className="max-w-[920px] space-y-8">
                     <div className="flex items-start justify-between gap-4">
@@ -6042,6 +6066,211 @@ function App() {
           {statusMessage.text}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+type UserConfigState = {
+  defaultModel: string;
+  loading: boolean;
+  providers: { provider_slug: string; provider_name: string; status: string }[];
+  supportedModels: string[];
+  modelsLoading: boolean;
+};
+
+function CloudConfigSection(props: {
+  userConfigState: UserConfigState;
+  setUserConfigState: React.Dispatch<React.SetStateAction<UserConfigState>>;
+  flash: (msg: string, type: 'success' | 'error') => void;
+}) {
+  const { userConfigState, setUserConfigState, flash } = props;
+  const [filterText, setFilterText] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setUserConfigState(prev => ({ ...prev, modelsLoading: true }));
+      try {
+        const result = await api.userConfig.models();
+        if (!cancelled) {
+          setUserConfigState(prev => ({
+            ...prev,
+            providers: result?.providers ?? [],
+            supportedModels: result?.supported_models ?? [],
+            modelsLoading: false,
+          }));
+        }
+      } catch {
+        if (!cancelled) setUserConfigState(prev => ({ ...prev, providers: [], supportedModels: [], modelsLoading: false }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && e.target instanceof Node && !containerRef.current.contains(e.target)) setDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const readyProviders = useMemo(
+    () => userConfigState.providers.filter(p => p.status === 'ready'),
+    [userConfigState.providers],
+  );
+
+  const groupedModels = useMemo(() => {
+    const prefixToProvider: Record<string, string> = {};
+    for (const p of readyProviders) {
+      const slug = p.provider_slug;
+      const name = p.provider_name;
+      if (slug === 'openai') { for (const pfx of ['gpt-', 'o1-', 'o1', 'o3-', 'o3', 'o4-', 'chatgpt-']) prefixToProvider[pfx] = name; }
+      else if (slug === 'anthropic') { prefixToProvider['claude-'] = name; }
+      else if (slug === 'google-ai') { prefixToProvider['gemini-'] = name; }
+      else if (slug === 'mistral') { for (const pfx of ['mistral-', 'codestral-', 'magistral-']) prefixToProvider[pfx] = name; }
+      else if (slug === 'cohere') { for (const pfx of ['command-']) prefixToProvider[pfx] = name; }
+      else if (slug === 'deepseek') { prefixToProvider['deepseek-'] = name; }
+      else { prefixToProvider[slug + '-'] = name; }
+    }
+    const q = filterText.trim().toLowerCase();
+    const groups = new Map<string, string[]>();
+    for (const model of userConfigState.supportedModels) {
+      if (q && !model.toLowerCase().includes(q)) continue;
+      let provider = 'Other';
+      for (const [pfx, name] of Object.entries(prefixToProvider)) {
+        if (model.startsWith(pfx) || model === pfx.replace(/-$/, '')) { provider = name; break; }
+      }
+      if (!groups.has(provider)) groups.set(provider, []);
+      groups.get(provider)!.push(model);
+    }
+    return groups;
+  }, [userConfigState.supportedModels, readyProviders, filterText]);
+
+  const hasData = userConfigState.supportedModels.length > 0;
+
+  return (
+    <div className="max-w-[920px] space-y-8">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="panel-eyebrow">Settings</div>
+          <div className="panel-title">Cloud Config</div>
+          <div className="text-[12px] text-gray-400 mt-1">Per-user configuration stored on NyxID. Changes sync across all your devices.</div>
+        </div>
+        <button
+          onClick={async () => {
+            try {
+              setUserConfigState(prev => ({ ...prev, loading: true }));
+              await api.userConfig.save({ defaultModel: userConfigState.defaultModel.trim() });
+              flash('Cloud config saved', 'success');
+            } catch (error: any) {
+              flash(error?.message || 'Failed to save cloud config', 'error');
+            } finally {
+              setUserConfigState(prev => ({ ...prev, loading: false }));
+            }
+          }}
+          disabled={userConfigState.loading}
+          className="solid-action"
+        >
+          {userConfigState.loading ? 'Saving...' : 'Save config'}
+        </button>
+      </div>
+
+      {/* Providers status */}
+      {readyProviders.length > 0 && (
+        <div className="settings-section-card space-y-3">
+          <div className="section-heading">Connected providers</div>
+          <div className="flex flex-wrap gap-2">
+            {userConfigState.providers.map(p => (
+              <span
+                key={p.provider_slug}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium ${
+                  p.status === 'ready'
+                    ? 'bg-green-50 text-green-700'
+                    : p.status === 'expired'
+                    ? 'bg-amber-50 text-amber-700'
+                    : 'bg-gray-100 text-gray-400'
+                }`}
+              >
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  p.status === 'ready' ? 'bg-green-500' : p.status === 'expired' ? 'bg-amber-500' : 'bg-gray-300'
+                }`} />
+                {p.provider_name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Model selection */}
+      <div className="settings-section-card space-y-4">
+        <div className="section-heading">Default model</div>
+        <div ref={containerRef} className="relative">
+          <label className="field-label">Model</label>
+          {hasData ? (
+            <div className="relative mt-1">
+              <input
+                ref={inputRef}
+                className="panel-input pr-8"
+                value={dropdownOpen ? filterText : userConfigState.defaultModel}
+                placeholder={userConfigState.modelsLoading ? 'Loading...' : 'Select a model...'}
+                onChange={e => { setFilterText(e.target.value); if (!dropdownOpen) setDropdownOpen(true); }}
+                onFocus={() => { setFilterText(''); setDropdownOpen(true); }}
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                onClick={() => { setDropdownOpen(!dropdownOpen); if (!dropdownOpen) { setFilterText(''); inputRef.current?.focus(); } }}
+                tabIndex={-1}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              {dropdownOpen && (
+                <div className="absolute z-50 mt-1 w-full max-h-[280px] overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                  {userConfigState.modelsLoading ? (
+                    <div className="px-3 py-2 text-[12px] text-gray-400">Loading...</div>
+                  ) : groupedModels.size === 0 ? (
+                    <div className="px-3 py-2 text-[12px] text-gray-400">No matching models</div>
+                  ) : (
+                    Array.from(groupedModels.entries()).map(([provider, models]) => (
+                      <div key={provider}>
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{provider}</div>
+                        {models.map(model => (
+                          <button
+                            key={model}
+                            type="button"
+                            className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-gray-50 ${model === userConfigState.defaultModel ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                            onClick={() => {
+                              setUserConfigState(prev => ({ ...prev, defaultModel: model }));
+                              setDropdownOpen(false);
+                              setFilterText('');
+                            }}
+                          >
+                            {model}
+                          </button>
+                        ))}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <input
+              className="panel-input mt-1"
+              value={userConfigState.defaultModel}
+              placeholder={userConfigState.modelsLoading ? 'Loading...' : 'Enter model name...'}
+              onChange={e => setUserConfigState(prev => ({ ...prev, defaultModel: e.target.value }))}
+            />
+          )}
+        </div>
+        <div className="text-[11px] text-gray-400 leading-relaxed">
+          The default model used by NyxID Gateway. Select from supported models, or type a model name manually.
+        </div>
+      </div>
     </div>
   );
 }

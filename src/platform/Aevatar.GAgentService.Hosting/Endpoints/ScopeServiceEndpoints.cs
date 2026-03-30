@@ -1,6 +1,8 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
@@ -12,6 +14,7 @@ using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Serialization;
+using Aevatar.Presentation.AGUI;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
@@ -473,6 +476,8 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct) =>
         HandleInvokeStreamAsync(
@@ -485,6 +490,8 @@ public static class ScopeServiceEndpoints
             resolutionService,
             admissionAuthorizer,
             chatRunService,
+            actorRuntime,
+            subscriptionProvider,
             options,
             ct);
 
@@ -772,6 +779,8 @@ public static class ScopeServiceEndpoints
         [FromServices] ServiceInvocationResolutionService resolutionService,
         [FromServices] IInvokeAdmissionAuthorizer admissionAuthorizer,
         [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
         CancellationToken ct)
     {
@@ -792,7 +801,6 @@ public static class ScopeServiceEndpoints
                 request.RevisionId,
                 appId);
             var target = await resolutionService.ResolveAsync(invocationRequest, ct);
-            EnsureWorkflowStreamTarget(target, invocationRequest);
             await admissionAuthorizer.AuthorizeAsync(
                 target.Service.ServiceKey,
                 target.Service.DeploymentId,
@@ -801,18 +809,40 @@ public static class ScopeServiceEndpoints
                 invocationRequest,
                 ct);
 
-            await WorkflowCapabilityEndpoints.HandleChat(
-                http,
-                new ChatInput
-                {
-                    Prompt = normalizedPrompt,
-                    AgentId = target.Service.PrimaryActorId,
-                    SessionId = request.SessionId,
-                    ScopeId = scopeId,
-                    Metadata = scopedHeaders,
-                },
-                chatRunService,
-                ct);
+            switch (target.Artifact.ImplementationKind)
+            {
+                case ServiceImplementationKind.Workflow:
+                    EnsureWorkflowStreamTarget(target, invocationRequest);
+                    await WorkflowCapabilityEndpoints.HandleChat(
+                        http,
+                        new ChatInput
+                        {
+                            Prompt = normalizedPrompt,
+                            AgentId = target.Service.PrimaryActorId,
+                            SessionId = request.SessionId,
+                            ScopeId = scopeId,
+                            Metadata = scopedHeaders,
+                        },
+                        chatRunService,
+                        ct);
+                    break;
+
+                case ServiceImplementationKind.Static:
+                    await HandleStaticGAgentChatStreamAsync(
+                        http,
+                        target,
+                        normalizedPrompt,
+                        request.SessionId,
+                        scopeId,
+                        actorRuntime,
+                        subscriptionProvider,
+                        ct);
+                    break;
+
+                default:
+                    throw new InvalidOperationException(
+                        $"Service implementation '{target.Artifact.ImplementationKind}' does not support SSE stream invocation.");
+            }
         }
         catch (InvalidOperationException ex)
         {
@@ -822,6 +852,113 @@ public static class ScopeServiceEndpoints
                 "INVALID_SERVICE_STREAM_REQUEST",
                 ex.Message,
                 ct);
+        }
+    }
+
+    private static async Task HandleStaticGAgentChatStreamAsync(
+        HttpContext http,
+        ServiceInvocationResolvedTarget target,
+        string prompt,
+        string? sessionId,
+        string scopeId,
+        IActorRuntime actorRuntime,
+        IActorEventSubscriptionProvider subscriptionProvider,
+        CancellationToken ct)
+    {
+        var plan = target.Artifact.DeploymentPlan.StaticPlan;
+        var preferredActorId = string.IsNullOrWhiteSpace(plan.PreferredActorId)
+            ? null
+            : plan.PreferredActorId.Trim();
+
+        // Resolve the actor type and create/reuse the actor.
+        var agentType = ScopeGAgentEndpoints.ResolveAgentType(plan.ActorTypeName);
+        if (agentType is null)
+            throw new InvalidOperationException(
+                $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
+
+        IActor actor;
+        if (preferredActorId is not null)
+        {
+            var existing = await actorRuntime.GetAsync(preferredActorId);
+            actor = existing ?? await actorRuntime.CreateAsync(agentType, preferredActorId, ct);
+        }
+        else
+        {
+            actor = await actorRuntime.CreateAsync(agentType, null, ct);
+        }
+
+        var writer = new AGUISseWriter(http.Response);
+        http.Response.StatusCode = StatusCodes.Status200OK;
+        http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+        http.Response.Headers.CacheControl = "no-store";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+        await http.Response.StartAsync(ct);
+
+        var runId = Guid.NewGuid().ToString("N");
+        await writer.WriteAsync(new AGUIEvent
+        {
+            RunStarted = new RunStartedEvent { ThreadId = actor.Id, RunId = runId },
+        }, ct);
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var ctr = ct.Register(() => tcs.TrySetCanceled());
+
+        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+            actor.Id,
+            async envelope =>
+            {
+                try
+                {
+                    var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
+                    if (aguiEvent is null) return;
+
+                    await writer.WriteAsync(aguiEvent, CancellationToken.None);
+
+                    if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
+                        or AGUIEvent.EventOneofCase.RunError
+                        or AGUIEvent.EventOneofCase.TextMessageEnd)
+                    {
+                        tcs.TrySetResult();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            },
+            ct);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = sessionId ?? string.Empty,
+                ScopeId = scopeId,
+            }),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+        await actor.HandleEventAsync(envelope, ct);
+
+        var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
+        if (completedTask == tcs.Task)
+        {
+            await writer.WriteAsync(new AGUIEvent
+            {
+                RunFinished = new RunFinishedEvent { ThreadId = actor.Id, RunId = runId },
+            }, CancellationToken.None);
+        }
+        else
+        {
+            await writer.WriteAsync(new AGUIEvent
+            {
+                RunError = new RunErrorEvent { Message = "GAgent service chat stream timed out." },
+            }, CancellationToken.None);
         }
     }
 

@@ -33,45 +33,33 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
 
     public async Task<UserConfig> GetAsync(CancellationToken cancellationToken = default)
     {
-        ChronoStorageCatalogBlobClient.RemoteScopeContext? remoteContext;
         try
         {
-            remoteContext = _blobClient.TryResolveContext(_options.UserConfigPrefix, ConfigFileName);
+            var remoteContext = _blobClient.TryResolveContext(_options.UserConfigPrefix, ConfigFileName);
+            if (remoteContext is null)
+                return DefaultConfig;
+
+            var payload = await _blobClient.TryDownloadAsync(remoteContext, cancellationToken);
+            if (payload is null)
+                return DefaultConfig;
+
+            var doc = JsonDocument.Parse(payload);
+            var defaultModel = doc.RootElement.TryGetProperty("defaultModel", out var modelElement)
+                ? modelElement.GetString() ?? string.Empty
+                : string.Empty;
+
+            return new UserConfig(DefaultModel: defaultModel);
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Chrono-storage context could not be resolved for user config read; returning default config");
+            _logger.LogWarning(ex, "Failed to read user config from chrono-storage; returning default config");
             return DefaultConfig;
         }
-
-        if (remoteContext is null)
-            return DefaultConfig;
-
-        var payload = await _blobClient.TryDownloadAsync(remoteContext, cancellationToken);
-        if (payload is null)
-            return DefaultConfig;
-
-        var doc = JsonDocument.Parse(payload);
-        var defaultModel = doc.RootElement.TryGetProperty("defaultModel", out var modelElement)
-            ? modelElement.GetString() ?? string.Empty
-            : string.Empty;
-
-        return new UserConfig(DefaultModel: defaultModel);
     }
 
     public async Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default)
     {
-        ChronoStorageCatalogBlobClient.RemoteScopeContext? remoteContext;
-        try
-        {
-            remoteContext = _blobClient.TryResolveContext(_options.UserConfigPrefix, ConfigFileName);
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new InvalidOperationException(
-                "User config storage is not available. Chrono-storage is not properly configured.", ex);
-        }
-
+        var remoteContext = _blobClient.TryResolveContext(_options.UserConfigPrefix, ConfigFileName);
         if (remoteContext is null)
             throw new InvalidOperationException(
                 "User config storage is not available. Chrono-storage is disabled or the remote context could not be resolved.");

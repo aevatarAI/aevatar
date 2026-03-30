@@ -77,7 +77,9 @@ public sealed class LocalActor : IActor
 
             // Handle Up events from children (they produce to parent's stream).
             // Child events may use Both (self + parent), so treat direct-child Both as upward.
-            if (direction == TopologyAudience.Parent ||
+            // When publisher is self (orphan fallback to self-stream), skip to avoid self-handling.
+            if ((direction == TopologyAudience.Parent &&
+                 !string.Equals(publisherActorId, Id, StringComparison.Ordinal)) ||
                 (direction == TopologyAudience.ParentAndChildren &&
                  !string.IsNullOrWhiteSpace(publisherActorId) &&
                  _childrenIds.Contains(publisherActorId)))

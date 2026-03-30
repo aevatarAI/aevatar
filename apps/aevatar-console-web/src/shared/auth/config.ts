@@ -8,8 +8,8 @@ export interface NyxIDRuntimeConfig {
 }
 
 const DEFAULT_NYXID_BASE_URL = 'https://nyx.chrono-ai.fun';
-const DEFAULT_NYXID_CLIENT_ID = 'd7fb34b5-e5fc-4d0f-9997-26c3c0fca1b3';
-const DEFAULT_SCOPE = 'openid profile email';
+const DEFAULT_NYXID_CLIENT_ID = '37a93189-2734-406e-bca1-7dbdf25c5a53';
+const DEFAULT_SCOPE = 'openid profile email proxy';
 const DEFAULT_REDIRECT_PATH = '/auth/callback';
 
 function trimOptional(value?: string): string | undefined {

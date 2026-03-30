@@ -196,7 +196,11 @@ public sealed class RuntimeActorGrain : Grain, IRuntimeActorGrain
             switch (route.GetTopologyAudience())
             {
                 case TopologyAudience.Self:
+                    break;
                 case TopologyAudience.Parent:
+                    // Skip orphan-fallback events published by self to own stream
+                    if (string.Equals(route?.PublisherActorId, selfActorId, StringComparison.Ordinal))
+                        return;
                     break;
                 case TopologyAudience.Children:
                 case TopologyAudience.ParentAndChildren:

@@ -1,0 +1,249 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as api from '../api';
+import {
+  type RoleState,
+  type ConnectorState,
+  toRoleState,
+  toConnectorState,
+  toRolePayload,
+  toConnectorPayload,
+  createRoleState,
+  createEmptyConnector,
+  createUniqueConnectorName,
+} from '../studio';
+import type { ConfigFile, GAgentType, ActorGroup, ProviderInfo } from './types';
+
+export type ConfigStore = ReturnType<typeof useConfigStore>;
+
+export function useConfigStore(scopeId: string) {
+  const [loading, setLoading] = useState(true);
+  const [selectedFile, setSelectedFile] = useState<ConfigFile>('config.json');
+
+  // ── config.json ──
+  const [defaultModel, setDefaultModel] = useState('');
+  const [configSaving, setConfigSaving] = useState(false);
+  const configSnap = useRef('');
+
+  // ── roles.json ──
+  const [roles, setRoles] = useState<RoleState[]>([]);
+  const [rolesSaving, setRolesSaving] = useState(false);
+  const rolesSnap = useRef('');
+
+  // ── connectors.json ──
+  const [connectors, setConnectors] = useState<ConnectorState[]>([]);
+  const [connectorsSaving, setConnectorsSaving] = useState(false);
+  const connectorsSnap = useRef('');
+
+  // ── actors.json ──
+  const [actorGroups, setActorGroups] = useState<ActorGroup[]>([]);
+  const [actorTypes, setActorTypes] = useState<GAgentType[]>([]);
+
+  // ── LLM models ──
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [supportedModels, setSupportedModels] = useState<string[]>([]);
+  const [modelsLoading] = useState(false);
+
+  // ── Dirty tracking ──
+  const configDirty = useMemo(() => defaultModel !== configSnap.current, [defaultModel]);
+  const rolesDirty = useMemo(() => JSON.stringify(roles) !== rolesSnap.current, [roles]);
+  const connectorsDirty = useMemo(() => JSON.stringify(connectors) !== connectorsSnap.current, [connectors]);
+
+  const anyDirty = configDirty || rolesDirty || connectorsDirty;
+
+  function isDirty(file: ConfigFile): boolean {
+    if (file === 'config.json') return configDirty;
+    if (file === 'roles.json') return rolesDirty;
+    if (file === 'connectors.json') return connectorsDirty;
+    return false;
+  }
+
+  // ── Load all data ──
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    const [configRes, rolesRes, connectorsRes, actorsRes, typesRes, modelsRes] =
+      await Promise.allSettled([
+        api.userConfig.get(),
+        api.roles.getCatalog(),
+        api.connectors.getCatalog(),
+        scopeId ? api.gagent.listActors(scopeId) : Promise.resolve([]),
+        api.gagent.listTypes(),
+        api.userConfig.models(),
+      ]);
+
+    // config
+    if (configRes.status === 'fulfilled' && configRes.value) {
+      const m = configRes.value.defaultModel || '';
+      setDefaultModel(m);
+      configSnap.current = m;
+    }
+
+    // roles
+    if (rolesRes.status === 'fulfilled' && rolesRes.value) {
+      const list: RoleState[] = (rolesRes.value.roles || []).map((r: any, i: number) => toRoleState(r, i + 1));
+      setRoles(list);
+      rolesSnap.current = JSON.stringify(list);
+    }
+
+    // connectors
+    if (connectorsRes.status === 'fulfilled' && connectorsRes.value) {
+      const list: ConnectorState[] = (connectorsRes.value.connectors || []).map((c: any) => toConnectorState(c));
+      setConnectors(list);
+      connectorsSnap.current = JSON.stringify(list);
+    }
+
+    // actors
+    if (actorsRes.status === 'fulfilled') {
+      setActorGroups(actorsRes.value ?? []);
+    }
+
+    // types
+    if (typesRes.status === 'fulfilled') {
+      setActorTypes(typesRes.value ?? []);
+    }
+
+    // models
+    if (modelsRes.status === 'fulfilled' && modelsRes.value) {
+      setProviders(modelsRes.value.providers ?? []);
+      setSupportedModels(modelsRes.value.supported_models ?? []);
+    }
+
+    setLoading(false);
+  }, [scopeId]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // ── Save functions ──
+  async function saveConfig() {
+    setConfigSaving(true);
+    try {
+      await api.userConfig.save({ defaultModel: defaultModel.trim() });
+      configSnap.current = defaultModel;
+      return true;
+    } finally {
+      setConfigSaving(false);
+    }
+  }
+
+  async function saveRoles() {
+    setRolesSaving(true);
+    try {
+      await api.roles.saveCatalog({ roles: roles.map(toRolePayload) });
+      rolesSnap.current = JSON.stringify(roles);
+      return true;
+    } finally {
+      setRolesSaving(false);
+    }
+  }
+
+  async function saveConnectors() {
+    setConnectorsSaving(true);
+    try {
+      await api.connectors.saveCatalog({ connectors: connectors.map(toConnectorPayload) });
+      connectorsSnap.current = JSON.stringify(connectors);
+      return true;
+    } finally {
+      setConnectorsSaving(false);
+    }
+  }
+
+  async function saveFile(file: ConfigFile) {
+    if (file === 'config.json') return saveConfig();
+    if (file === 'roles.json') return saveRoles();
+    if (file === 'connectors.json') return saveConnectors();
+    return false;
+  }
+
+  async function saveAll() {
+    const tasks: Promise<boolean>[] = [];
+    if (configDirty) tasks.push(saveConfig());
+    if (rolesDirty) tasks.push(saveRoles());
+    if (connectorsDirty) tasks.push(saveConnectors());
+    await Promise.all(tasks);
+  }
+
+  // ── Role mutations ──
+  function addRole() {
+    setRoles(prev => [...prev, createRoleState(prev.length + 1)]);
+  }
+
+  function updateRole(key: string, patch: Partial<RoleState>) {
+    setRoles(prev => prev.map(r => r.key === key ? { ...r, ...patch } : r));
+  }
+
+  function removeRole(key: string) {
+    setRoles(prev => prev.filter(r => r.key !== key));
+  }
+
+  // ── Connector mutations ──
+  function addConnector(type: ConnectorState['type'] = 'http') {
+    setConnectors(prev => {
+      const name = createUniqueConnectorName(prev, type);
+      return [...prev, createEmptyConnector(type, name)];
+    });
+  }
+
+  function updateConnector(key: string, patch: Partial<ConnectorState>) {
+    setConnectors(prev => prev.map(c => c.key === key ? { ...c, ...patch } : c));
+  }
+
+  function removeConnector(key: string) {
+    setConnectors(prev => prev.filter(c => c.key !== key));
+  }
+
+  // ── Actor mutations (immediate API, read + delete only) ──
+  async function removeActor(gagentType: string, actorId: string) {
+    if (!scopeId) return;
+    await api.gagent.removeActor(scopeId, gagentType, actorId);
+    const data = await api.gagent.listActors(scopeId);
+    setActorGroups(data ?? []);
+  }
+
+  return {
+    loading,
+    selectedFile,
+    setSelectedFile,
+    scopeId,
+
+    // config
+    defaultModel,
+    setDefaultModel,
+    configDirty,
+    configSaving,
+    saveConfig,
+
+    // roles
+    roles,
+    rolesDirty,
+    rolesSaving,
+    addRole,
+    updateRole,
+    removeRole,
+    saveRoles,
+
+    // connectors
+    connectors,
+    connectorsDirty,
+    connectorsSaving,
+    addConnector,
+    updateConnector,
+    removeConnector,
+    saveConnectors,
+
+    // actors
+    actorGroups,
+    actorTypes,
+    removeActor,
+
+    // models
+    providers,
+    supportedModels,
+    modelsLoading,
+
+    // global
+    anyDirty,
+    isDirty,
+    saveFile,
+    saveAll,
+    loadAll,
+  };
+}

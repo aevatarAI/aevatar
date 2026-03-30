@@ -346,12 +346,13 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var gagent = request.GAgent
             ?? throw new InvalidOperationException("gagent is required for implementationKind 'gagent'.");
         var actorTypeName = ScopeWorkflowCapabilityOptions.NormalizeRequired(gagent.ActorTypeName, nameof(gagent.ActorTypeName));
-        if (gagent.Endpoints == null || gagent.Endpoints.Count == 0)
-            throw new InvalidOperationException("gagent endpoints are required.");
 
-        var endpointSpecs = gagent.Endpoints
+        // Start with caller-supplied endpoints, then ensure a chat endpoint always exists.
+        var endpointSpecs = (gagent.Endpoints ?? [])
             .Select(ToServiceEndpointSpec)
-            .ToArray();
+            .ToList();
+        if (!endpointSpecs.Any(e => string.Equals(e.EndpointId, "chat", StringComparison.OrdinalIgnoreCase)))
+            endpointSpecs.Insert(0, BuildChatEndpointSpec());
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
             actorTypeName.Split(',')[0]);
@@ -577,7 +578,7 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
             Kind = ServiceEndpointKind.Chat,
             RequestTypeUrl = GetTypeUrl(ChatRequestEvent.Descriptor),
             ResponseTypeUrl = GetTypeUrl(ChatResponseEvent.Descriptor),
-            Description = "Workflow chat endpoint.",
+            Description = "Default chat endpoint.",
         };
 
     private static string GetTypeUrl(MessageDescriptor descriptor) =>

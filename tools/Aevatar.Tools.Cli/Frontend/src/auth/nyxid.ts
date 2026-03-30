@@ -3,9 +3,9 @@
  * Ported from apps/aevatar-console-web/src/shared/auth/.
  */
 
-const NYXID_BASE_URL = 'https://nyx.chrono-ai.fun';
-const NYXID_CLIENT_ID = 'd7fb34b5-e5fc-4d0f-9997-26c3c0fca1b3';
-const NYXID_SCOPE = 'openid profile email';
+const NYXID_BASE_URL = (import.meta as any).env?.VITE_NYXID_BASE_URL?.trim() || 'https://nyx.chrono-ai.fun';
+const NYXID_CLIENT_ID = (import.meta as any).env?.VITE_NYXID_CLIENT_ID?.trim() || '37a93189-2734-406e-bca1-7dbdf25c5a53';
+const NYXID_SCOPE = (import.meta as any).env?.VITE_NYXID_SCOPE?.trim() || 'openid profile email proxy';
 const SESSION_KEY = 'aevatar-cli:nyxid:session';
 const PENDING_KEY = 'aevatar-cli:nyxid:pending';
 const CLOCK_SKEW_MS = 30_000;

@@ -74,6 +74,8 @@ public sealed class LocalActorPublisher : IEventPublisher, ICommittedStateEventP
                 var parentId = _getParentId();
                 if (parentId != null)
                     await _streams.GetStream(parentId).ProduceAsync(envelope, ct);
+                else
+                    await _selfStream.ProduceAsync(envelope, ct);
                 break;
             }
             case TopologyAudience.ParentAndChildren:

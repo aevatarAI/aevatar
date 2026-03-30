@@ -281,8 +281,13 @@ export const settings = {
 
 /* ─── User Config (per-user, chrono-storage backed) ─── */
 export const userConfig = {
-  get:  ()          => request<any>('/user-config'),
-  save: (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
+  get:    ()          => request<any>('/user-config'),
+  save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
+  models: ()          => request<{
+    providers?: { provider_slug: string; provider_name: string; status: string; proxy_url: string }[];
+    gateway_url?: string;
+    supported_models?: string[];
+  }>('/user-config/models'),
 };
 
 /* ─── Executions ─── */
@@ -432,6 +437,22 @@ export const scope = {
     return streamSse(`/scopes/${enc(scopeId)}/workflow/draft-run`, body, onFrame ?? (() => {}), signal);
   },
 
+  /** POST /api/scopes/{scopeId}/invoke/chat:stream — scope-level default chat, SSE */
+  streamDefaultChat: (
+    scopeId: string,
+    prompt: string,
+    sessionId?: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    if (sessionId) body.sessionId = sessionId;
+    return streamSse(
+      `/scopes/${enc(scopeId)}/invoke/chat:stream`,
+      body, onFrame ?? (() => {}), signal,
+    );
+  },
+
   /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream — service invoke, SSE */
   streamInvoke: (
     scopeId: string,
@@ -487,6 +508,46 @@ export const nyxidChat = {
 
   deleteConversation: (scopeId: string, actorId: string) =>
     request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
+};
+
+/* ─── GAgent APIs ─── */
+export const gagent = {
+  /** GET /api/scopes/gagent-types — list available GAgent types */
+  listTypes: () =>
+    request<Array<{ typeName: string; fullName: string; assemblyName: string }>>('/scopes/gagent-types'),
+
+  /** GET /api/scopes/{scopeId}/gagent-actors — list persisted actor entries */
+  listActors: (scopeId: string) =>
+    request<Array<{ gAgentType: string; actorIds: string[] }>>(`/scopes/${enc(scopeId)}/gagent-actors`),
+
+  /** POST /api/scopes/{scopeId}/gagent-actors — persist a new actor ID entry */
+  addActor: (scopeId: string, gagentType: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/gagent-actors`, {
+      method: 'POST',
+      body: JSON.stringify({ gagentType, actorId }),
+    }),
+
+  /** DELETE /api/scopes/{scopeId}/gagent-actors/{actorId} — remove an actor entry */
+  removeActor: (scopeId: string, gagentType: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/gagent-actors/${enc(actorId)}?gagentType=${enc(gagentType)}`, {
+      method: 'DELETE',
+    }),
+
+  /** POST /api/scopes/{scopeId}/gagent/draft-run — draft-run a GAgent (SSE) */
+  streamDraftRun: (
+    scopeId: string,
+    actorTypeName: string,
+    prompt: string,
+    preferredActorId?: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/gagent/draft-run`,
+      { actorTypeName, prompt, preferredActorId: preferredActorId || null },
+      onFrame ?? (() => {}),
+      signal,
+    ),
 };
 
 function enc(value: string) {

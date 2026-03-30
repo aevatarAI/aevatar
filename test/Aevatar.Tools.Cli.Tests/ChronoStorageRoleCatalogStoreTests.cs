@@ -180,7 +180,6 @@ public sealed class ChronoStorageRoleCatalogStoreTests
             Bucket = "aevatar-studio",
             Prefix = string.Empty,
             RolesPrefix = string.Empty,
-            CreateBucketIfMissing = true,
         });
 
     private static StoredRoleDefinition CreateRole(string id, string name) =>
