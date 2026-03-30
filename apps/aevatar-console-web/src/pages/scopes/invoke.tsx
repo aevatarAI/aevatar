@@ -732,17 +732,6 @@ const ScopeInvokePage: React.FC = () => {
                     <Button
                       onClick={() =>
                         history.push(
-                          buildRuntimeRunsHref({
-                            scopeId: selectedScopeId,
-                          }),
-                        )
-                      }
-                    >
-                      Open Runs Workbench
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
                           buildScopeHref('/scopes/overview', activeDraft),
                         )
                       }
