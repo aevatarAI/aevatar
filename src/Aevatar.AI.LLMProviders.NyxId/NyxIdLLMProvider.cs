@@ -7,7 +7,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.LLMProviders.NyxId;
 
 /// <summary>
-/// NyxID gateway-backed provider. Requests are sent through NyxID's OpenAI-compatible gateway.
+/// NyxID gateway-backed provider. Requests are sent through NyxID's OpenAI-compatible gateway
+/// using the logged-in user's NyxID access token, so NyxID resolves that user's own LLM credentials.
 /// </summary>
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
@@ -48,7 +49,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
     private ILLMProvider CreateDelegateProvider(LLMRequest request)
     {
         var resolvedModel = ResolveModel(request);
-        var accessToken = ResolveAccessToken();
+        var accessToken = ResolveAccessToken(request);
 
         var options = new OpenAI.OpenAIClientOptions
         {
@@ -83,16 +84,27 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             : requestedModel;
     }
 
-    private string ResolveAccessToken()
+    private string ResolveAccessToken(LLMRequest request)
     {
-        var accessToken = _accessTokenAccessor()?.Trim();
-        if (!string.IsNullOrWhiteSpace(accessToken))
-            return accessToken;
+        // Priority 1: per-user token from request metadata (user's NyxID login token)
+        var userToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
+        if (!string.IsNullOrWhiteSpace(userToken))
+            return userToken;
+
+        // Priority 2: static/configured token (fallback for background tasks)
+        var configuredToken = _accessTokenAccessor()?.Trim();
+        if (!string.IsNullOrWhiteSpace(configuredToken))
+            return configuredToken;
 
         throw new InvalidOperationException(
-            $"NyxID access token is not configured for provider '{Name}'. " +
-            "Set LLMProviders:Providers:<name>:ApiKey to a NyxID bearer token or service-account token.");
+            $"NyxID access token is not available for provider '{Name}'. " +
+            "Ensure the user is logged in via NyxID.");
     }
+
+    private static string? TryGetMetadataValue(LLMRequest request, string key) =>
+        request.Metadata != null && request.Metadata.TryGetValue(key, out var value)
+            ? value?.Trim()
+            : null;
 
     private static Uri NormalizeGatewayEndpoint(string gatewayEndpoint)
     {

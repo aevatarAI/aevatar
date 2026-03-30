@@ -20,6 +20,8 @@ internal sealed class ConnectorCatalogStorageOptions
 
     public string RolesPrefix { get; set; } = string.Empty;
 
+    public string UserConfigPrefix { get; set; } = string.Empty;
+
     public string MasterKey { get; set; } = string.Empty;
 
     public int PresignedUrlExpiresInSeconds { get; set; } = 300;

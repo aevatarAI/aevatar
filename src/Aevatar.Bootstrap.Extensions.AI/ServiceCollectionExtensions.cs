@@ -120,6 +120,19 @@ public static class ServiceCollectionExtensions
         var nyxIdProviders = configuredProviders
             .Where(provider => IsNyxIdProviderType(provider.ProviderType))
             .ToList();
+
+        // Auto-register NyxID provider from appsettings when Aevatar:NyxId is configured
+        if (nyxIdProviders.Count == 0)
+        {
+            var autoRegistered = TryAutoRegisterNyxIdProvider(configuration, options);
+            if (autoRegistered != null)
+            {
+                nyxIdProviders.Add(autoRegistered);
+                configuredProviders.Add(autoRegistered);
+                defaultName = ResolveDefaultProviderName(configuredProviders, preferredDefault);
+            }
+        }
+
         if (nyxIdProviders.Count == 0)
             return BuildPrimaryFactory(configuredProviders, defaultName, options);
 
@@ -242,7 +255,7 @@ public static class ServiceCollectionExtensions
             {
                 throw new InvalidOperationException(
                     $"NyxID provider '{provider.Name}' requires a gateway endpoint. " +
-                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Cli:App:NyxId:Authority.");
+                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Aevatar:NyxId:Authority.");
             }
 
             factory.RegisterGateway(
@@ -254,6 +267,25 @@ public static class ServiceCollectionExtensions
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));
         return factory;
+    }
+
+    private static ConfiguredProvider? TryAutoRegisterNyxIdProvider(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var authority = configuration["Aevatar:NyxId:Authority"]
+            ?? configuration["Cli:App:NyxId:Authority"]
+            ?? configuration["Aevatar:Authentication:Authority"];
+
+        if (string.IsNullOrWhiteSpace(authority))
+            return null;
+
+        var gatewayEndpoint = NormalizeNyxIdGatewayEndpoint(authority);
+        if (string.IsNullOrWhiteSpace(gatewayEndpoint))
+            return null;
+
+        var model = configuration["Aevatar:NyxId:DefaultModel"] ?? options.OpenAIModel;
+        return new ConfiguredProvider("nyxid", "nyxid", model, gatewayEndpoint, string.Empty);
     }
 
     private static Func<IAevatarSecretsStore> CreateSecretsStoreAccessor(AevatarAIFeatureOptions options)

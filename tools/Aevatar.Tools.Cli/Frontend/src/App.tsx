@@ -60,6 +60,7 @@ import * as api from './api';
 import ScriptsStudio from './ScriptsStudio';
 import * as nyxid from './auth/nyxid';
 import ScopePage from './runtime/ScopePage';
+import RuntimePage from './runtime/RuntimePage';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -139,17 +140,17 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'scope' | 'settings';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'scope' | 'services' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
-type SettingsSection = 'runtime' | 'llm' | 'appearance';
+type SettingsSection = 'runtime' | 'llm' | 'cloud-config' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
 type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'settings'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'services', 'settings'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'services'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -838,6 +839,7 @@ function App() {
   const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
+  const [userConfigState, setUserConfigState] = useState<{ defaultModel: string; loading: boolean }>({ defaultModel: '', loading: false });
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [logsCollapsed, setLogsCollapsed] = useState(false);
@@ -1441,6 +1443,7 @@ function App() {
         roleDraftResult,
         executionListResult,
         settingsResult,
+        userConfigResult,
       ] = await Promise.allSettled([
         api.app.getContext(),
         api.workspace.getSettings(),
@@ -1451,6 +1454,7 @@ function App() {
         api.roles.getDraft(),
         api.executions.list(),
         api.settings.get(),
+        api.userConfig.get(),
       ]);
 
       const bootstrapFailures = [
@@ -1463,6 +1467,7 @@ function App() {
         { label: 'role draft', result: roleDraftResult },
         { label: 'execution list', result: executionListResult },
         { label: 'studio settings', result: settingsResult },
+        { label: 'user config', result: userConfigResult },
       ].flatMap(item =>
         item.result.status === 'rejected'
           ? [{ label: item.label, error: item.result.reason }]
@@ -1494,6 +1499,7 @@ function App() {
       const roleDraftResponse = roleDraftResult.status === 'fulfilled' ? roleDraftResult.value : null;
       const executionList = executionListResult.status === 'fulfilled' ? executionListResult.value : [];
       const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
+      const userConfigData = userConfigResult.status === 'fulfilled' ? userConfigResult.value : null;
 
       const workflowStorageMode: WorkflowStorageMode = context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace';
       const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
@@ -1514,7 +1520,8 @@ function App() {
       });
       setWorkflowList(Array.isArray(workflows) ? workflows : []);
 
-      hydrateSettings(settings);
+      hydrateSettings(settings, userConfigData);
+      setUserConfigState({ defaultModel: userConfigData?.defaultModel || '', loading: false });
 
       hydrateConnectorCatalog(connectorCatalog);
       hydrateConnectorDraft(connectorDraftResponse);
@@ -1555,7 +1562,7 @@ function App() {
     }
   }
 
-  function hydrateSettings(payload: any) {
+  function hydrateSettings(payload: any, userConfigData?: any) {
     const providerTypes = Array.isArray(payload?.providerTypes)
       ? payload.providerTypes.map((item: any) => ({
           id: item.id,
@@ -1571,6 +1578,15 @@ function App() {
     const providers = Array.isArray(payload?.providers)
       ? payload.providers.map((item: any) => toProviderDraft(item, providerTypes))
       : [];
+
+    // Apply user-config defaultModel to NyxID Gateway provider
+    const remoteDefaultModel = userConfigData?.defaultModel;
+    if (remoteDefaultModel) {
+      const nyxIdProvider = providers.find((p: any) => usesFixedProviderName(p.providerType));
+      if (nyxIdProvider) {
+        nyxIdProvider.model = remoteDefaultModel;
+      }
+    }
 
     setSettingsState({
       runtimeBaseUrl: payload?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL,
@@ -2848,6 +2864,12 @@ function App() {
 
   async function handleSaveSettings() {
     try {
+      // Save NyxID Gateway model to user-config (chrono-storage) instead of secrets.json
+      const nyxIdProvider = settingsState.providers.find(p => usesFixedProviderName(p.providerType));
+      const userConfigSave = nyxIdProvider
+        ? api.userConfig.save({ defaultModel: nyxIdProvider.model.trim() }).catch(() => {})
+        : Promise.resolve();
+
       const response = await api.settings.save({
         runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
         appearanceTheme: settingsState.appearanceTheme,
@@ -2861,6 +2883,8 @@ function App() {
           apiKey: provider.apiKey,
         })),
       });
+
+      await userConfigSave;
       hydrateSettings(response);
       setWorkspaceSettings(prev => ({
         ...prev,
@@ -4047,6 +4071,12 @@ function App() {
             icon={<ArrowRightLeft size={18} />}
             onClick={() => openCatalogPage('connectors')}
           />
+          <RailButton
+            active={workspacePage === 'services'}
+            label="Services"
+            icon={<Boxes size={18} />}
+            onClick={() => setWorkspacePage('services')}
+          />
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-3">
@@ -4287,6 +4317,8 @@ function App() {
           />
         ) : workspacePage === 'scope' ? (
           <ScopePage />
+        ) : workspacePage === 'services' ? (
+          <RuntimePage />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">
@@ -4313,6 +4345,13 @@ function App() {
                     title="LLM"
                     description="Providers from secrets.json"
                     onClick={() => setSettingsSection('llm')}
+                  />
+                  <SettingsNavButton
+                    active={settingsSection === 'cloud-config'}
+                    icon={<Database size={16} />}
+                    title="Cloud Config"
+                    description="Per-user settings on NyxID"
+                    onClick={() => setSettingsSection('cloud-config')}
                   />
                   <SettingsNavButton
                     active={settingsSection === 'appearance'}
@@ -4501,7 +4540,7 @@ function App() {
                             />
                             {usesFixedProviderName(selectedProvider.providerType) ? (
                               <div className="text-[11px] text-gray-400 -mt-1">
-                                NyxID uses the fixed provider name <code>nyxid</code>.
+                                NyxID Gateway uses the fixed provider name <code>nyxid</code>. Manage your LLM API keys on NyxID.
                               </div>
                             ) : null}
 
@@ -4553,35 +4592,55 @@ function App() {
                               </select>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                              <InputField
-                                label="Model"
-                                value={selectedProvider.model}
-                                onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  model: value,
-                                }))}
-                              />
-                              <InputField
-                                label="Endpoint"
-                                value={selectedProvider.endpoint}
-                                onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  endpoint: value,
-                                }))}
-                              />
-                            </div>
+                            {usesFixedProviderName(selectedProvider.providerType) ? (
+                              <>
+                                <InputField
+                                  label="Default model"
+                                  value={selectedProvider.model}
+                                  onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                    ...provider,
+                                    model: value,
+                                  }))}
+                                />
+                                <div className="rounded-[14px] border border-[#D6E4F0] bg-[#F0F6FB] px-4 py-3 text-[12px] text-[#3B6B96] leading-relaxed">
+                                  NyxID Gateway uses your NyxID login credentials to access the LLM providers you've connected on NyxID.
+                                  No API key or endpoint configuration is needed here. The model name determines which provider is used
+                                  (e.g. <code className="bg-white/60 px-1 rounded">gpt-4o</code> → OpenAI, <code className="bg-white/60 px-1 rounded">claude-sonnet-4-5-20250929</code> → Anthropic).
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <InputField
+                                    label="Model"
+                                    value={selectedProvider.model}
+                                    onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                      ...provider,
+                                      model: value,
+                                    }))}
+                                  />
+                                  <InputField
+                                    label="Endpoint"
+                                    value={selectedProvider.endpoint}
+                                    onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                      ...provider,
+                                      endpoint: value,
+                                    }))}
+                                  />
+                                </div>
 
-                            <TextAreaField
-                              label="API key"
-                              value={selectedProvider.apiKey}
-                              rows={4}
-                              onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                ...provider,
-                                apiKey: value,
-                                apiKeyConfigured: Boolean(value.trim()),
-                              }))}
-                            />
+                                <TextAreaField
+                                  label="API key"
+                                  value={selectedProvider.apiKey}
+                                  rows={4}
+                                  onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                    ...provider,
+                                    apiKey: value,
+                                    apiKeyConfigured: Boolean(value.trim()),
+                                  }))}
+                                />
+                              </>
+                            )}
 
                             <label
                               className="inline-flex items-center gap-2 rounded-[14px] border border-[#E5E1DA] bg-white px-3 py-2 text-[12px] text-gray-600"
@@ -4605,6 +4664,47 @@ function App() {
                             copy="Add a provider or choose one from the list."
                           />
                         )}
+                      </div>
+                    </div>
+                  </div>
+                ) : settingsSection === 'cloud-config' ? (
+                  <div className="max-w-[920px] space-y-8">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="panel-eyebrow">Settings</div>
+                        <div className="panel-title">Cloud Config</div>
+                        <div className="text-[12px] text-gray-400 mt-1">Per-user configuration stored on NyxID. Changes sync across all your devices.</div>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          try {
+                            setUserConfigState(prev => ({ ...prev, loading: true }));
+                            await api.userConfig.save({ defaultModel: userConfigState.defaultModel.trim() });
+                            flash('Cloud config saved', 'success');
+                          } catch (error: any) {
+                            flash(error?.message || 'Failed to save cloud config', 'error');
+                          } finally {
+                            setUserConfigState(prev => ({ ...prev, loading: false }));
+                          }
+                        }}
+                        disabled={userConfigState.loading}
+                        className="solid-action"
+                      >
+                        {userConfigState.loading ? 'Saving...' : 'Save config'}
+                      </button>
+                    </div>
+
+                    <div className="settings-section-card space-y-4">
+                      <div className="section-heading">LLM</div>
+                      <InputField
+                        label="Default model"
+                        value={userConfigState.defaultModel}
+                        onChange={value => setUserConfigState(prev => ({ ...prev, defaultModel: value }))}
+                      />
+                      <div className="text-[11px] text-gray-400 leading-relaxed">
+                        The default model used by NyxID Gateway. The model name determines which provider is used
+                        (e.g. <code className="bg-gray-100 px-1 rounded">gpt-4o</code> → OpenAI, <code className="bg-gray-100 px-1 rounded">claude-sonnet-4-5-20250929</code> → Anthropic, <code className="bg-gray-100 px-1 rounded">deepseek-chat</code> → DeepSeek).
+                        Make sure you have connected the corresponding provider on NyxID.
                       </div>
                     </div>
                   </div>

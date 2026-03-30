@@ -279,6 +279,12 @@ export const settings = {
   testRuntime: (data: any) => request<any>('/settings/runtime/test', { method: 'POST', body: JSON.stringify(data) }),
 };
 
+/* ─── User Config (per-user, chrono-storage backed) ─── */
+export const userConfig = {
+  get:  ()          => request<any>('/user-config'),
+  save: (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
+};
+
 /* ─── Executions ─── */
 export const executions = {
   list:  ()              => request<any[]>('/executions'),

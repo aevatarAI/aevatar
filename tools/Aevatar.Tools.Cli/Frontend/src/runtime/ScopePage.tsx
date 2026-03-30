@@ -297,7 +297,7 @@ export default function ScopePage() {
   if (!scopeId) {
     return (
       <>
-        <header className="h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center">
+        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Scope</div>
             <div className="text-[18px] font-bold text-gray-800">Not Logged In</div>
@@ -312,7 +312,7 @@ export default function ScopePage() {
 
   return (
     <>
-      <header className="h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
+      <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Scope</div>
           <div className="text-[18px] font-bold text-gray-800 font-mono">{scopeId}</div>

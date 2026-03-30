@@ -76,7 +76,7 @@ public static class ScopeServiceEndpoints
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
+            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -781,7 +781,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers);
+            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1463,14 +1463,25 @@ public static class ScopeServiceEndpoints
 
     private static Dictionary<string, string> BuildScopedHeaders(
         string scopeId,
-        IReadOnlyDictionary<string, string>? headers)
+        IReadOnlyDictionary<string, string>? headers,
+        HttpContext? http = null)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
+        InjectBearerToken(http, scopedHeaders);
         return scopedHeaders;
+    }
+
+    private static void InjectBearerToken(HttpContext? http, Dictionary<string, string> metadata)
+    {
+        if (http == null)
+            return;
+        var auth = http.Request.Headers.Authorization.FirstOrDefault();
+        if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            metadata["nyxid.access_token"] = auth["Bearer ".Length..].Trim();
     }
 
     private static bool IsRunBoundToScopeService(

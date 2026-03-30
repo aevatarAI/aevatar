@@ -307,7 +307,7 @@ public static class ScopeWorkflowEndpoints
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
-                    Metadata = BuildScopedHeaders(scopeId, headers),
+                    Metadata = BuildScopedHeaders(scopeId, headers, http),
                 },
                 chatRunService,
                 ct);
@@ -320,7 +320,7 @@ public static class ScopeWorkflowEndpoints
             workflow,
             prompt,
             sessionId,
-            BuildScopedHeaders(scopeId, headers),
+            BuildScopedHeaders(scopeId, headers, http),
             chatRunService,
             ct);
     }
@@ -419,7 +419,7 @@ public static class ScopeWorkflowEndpoints
                 workflow.ActorId,
                 sessionId,
                 WorkflowYamls: null,
-                Metadata: BuildScopedHeaders(scopeId, headers),
+                Metadata: BuildScopedHeaders(scopeId, headers, http),
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
             chatRunService,
             ct);
@@ -507,13 +507,21 @@ public static class ScopeWorkflowEndpoints
 
     private static Dictionary<string, string> BuildScopedHeaders(
         string scopeId,
-        IReadOnlyDictionary<string, string>? headers)
+        IReadOnlyDictionary<string, string>? headers,
+        HttpContext? http = null)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
+        if (http != null)
+        {
+            var auth = http.Request.Headers.Authorization.FirstOrDefault();
+            if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                scopedHeaders["nyxid.access_token"] = auth["Bearer ".Length..].Trim();
+        }
+
         return scopedHeaders;
     }
 
