@@ -35,6 +35,8 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private readonly bool _supportsDynamicIndexing;
     private readonly DocumentIndexMetadata _indexMetadata;
     private readonly Func<TReadModel, string?>? _indexScopeSelector;
+    private readonly Func<string, string> _fieldPathResolver;
+    private readonly Func<ProjectionDocumentFilter, string, string> _exactMatchFieldPathResolver;
     private readonly ILogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>> _logger;
 
     public ElasticsearchProjectionDocumentStore(
@@ -90,6 +92,9 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
         _keyFormatter = keyFormatter ?? (key => key?.ToString() ?? "");
         _indexScopeSelector = indexScopeSelector;
         _defaultSortField = options.DefaultSortField?.Trim() ?? "";
+        var descriptor = new TReadModel().Descriptor;
+        _fieldPathResolver = BuildFieldPathResolver(descriptor);
+        _exactMatchFieldPathResolver = BuildExactMatchFieldPathResolver(descriptor, _indexMetadata);
         _logger = logger ?? NullLogger<ElasticsearchProjectionDocumentStore<TReadModel, TKey>>.Instance;
 
         _indexManager = new ElasticsearchIndexLifecycleManager(_httpClient, _autoCreateIndex);
@@ -152,7 +157,9 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
                 ElasticsearchProjectionDocumentStorePayloadSupport.BuildQueryPayloadJson(
                     query,
                     _defaultSortField,
-                    boundedTake),
+                    boundedTake,
+                    _fieldPathResolver,
+                    _exactMatchFieldPathResolver),
                 Encoding.UTF8,
                 "application/json"),
         };
@@ -214,6 +221,172 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     }
 
     private string FormatKey(TKey key) => _keyFormatter(key)?.Trim() ?? "";
+
+    private static Func<string, string> BuildFieldPathResolver(MessageDescriptor descriptor)
+    {
+        return fieldPath => ResolveFieldPath(descriptor, fieldPath);
+    }
+
+    private static Func<ProjectionDocumentFilter, string, string> BuildExactMatchFieldPathResolver(
+        MessageDescriptor descriptor,
+        DocumentIndexMetadata indexMetadata)
+    {
+        var descriptorFieldMap = BuildDescriptorFieldMap(descriptor);
+        return (filter, resolvedFieldPath) =>
+        {
+            if (resolvedFieldPath.EndsWith(".keyword", StringComparison.Ordinal))
+                return resolvedFieldPath;
+
+            if (filter.Value.Kind is not ProjectionDocumentValueKind.String and not ProjectionDocumentValueKind.StringList)
+                return resolvedFieldPath;
+
+            if (ElasticsearchProjectionDocumentStoreMetadataSupport.TryGetFieldMapping(
+                    indexMetadata.Mappings,
+                    resolvedFieldPath,
+                    out var explicitMapping))
+            {
+                if (ElasticsearchProjectionDocumentStoreMetadataSupport.IsKeywordFieldMapping(explicitMapping))
+                    return resolvedFieldPath;
+
+                if (ElasticsearchProjectionDocumentStoreMetadataSupport.HasKeywordMultiField(explicitMapping))
+                    return $"{resolvedFieldPath}.keyword";
+
+                return resolvedFieldPath;
+            }
+
+            return descriptorFieldMap.TryGetValue(resolvedFieldPath, out var field) &&
+                   field.FieldType == FieldType.String
+                ? $"{resolvedFieldPath}.keyword"
+                : resolvedFieldPath;
+        };
+    }
+
+    private static string ResolveFieldPath(MessageDescriptor descriptor, string fieldPath)
+    {
+        if (string.IsNullOrWhiteSpace(fieldPath))
+            return fieldPath;
+
+        var segments = fieldPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length == 0)
+            return fieldPath;
+
+        var resolvedSegments = new string[segments.Length];
+        MessageDescriptor? currentDescriptor = descriptor;
+        for (var index = 0; index < segments.Length; index++)
+        {
+            var segment = segments[index];
+            var suffix = "";
+            if (segment.EndsWith("[]", StringComparison.Ordinal))
+            {
+                segment = segment[..^2];
+                suffix = "[]";
+            }
+
+            if (currentDescriptor == null)
+            {
+                resolvedSegments[index] = $"{segment}{suffix}";
+                continue;
+            }
+
+            var field = ResolveField(currentDescriptor, segment);
+            if (field == null)
+            {
+                resolvedSegments[index] = $"{segment}{suffix}";
+                currentDescriptor = null;
+                continue;
+            }
+
+            resolvedSegments[index] = $"{field.Name}{suffix}";
+            currentDescriptor = field.FieldType == FieldType.Message
+                ? field.MessageType
+                : null;
+        }
+
+        return string.Join(".", resolvedSegments);
+    }
+
+    private static FieldDescriptor? ResolveField(MessageDescriptor descriptor, string segment)
+    {
+        if (segment.Length == 0)
+            return null;
+
+        var candidates = BuildFieldCandidates(segment);
+        return descriptor.Fields.InDeclarationOrder().FirstOrDefault(field =>
+            candidates.Contains(field.Name) ||
+            candidates.Contains(field.JsonName) ||
+            candidates.Contains(field.PropertyName));
+    }
+
+    private static HashSet<string> BuildFieldCandidates(string segment)
+    {
+        var candidates = new HashSet<string>(StringComparer.Ordinal)
+        {
+            segment,
+        };
+
+        var snakeCase = ToSnakeCase(segment);
+        if (snakeCase.Length > 0)
+        {
+            candidates.Add(snakeCase);
+            candidates.Add($"{snakeCase}_utc_value");
+
+            if (snakeCase.EndsWith("s", StringComparison.Ordinal) && snakeCase.Length > 1)
+                candidates.Add($"{snakeCase[..^1]}_entries");
+        }
+
+        if (segment.EndsWith("At", StringComparison.Ordinal) && segment.Length > 2)
+            candidates.Add($"{segment}UtcValue");
+
+        return candidates;
+    }
+
+    private static string ToSnakeCase(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var builder = new StringBuilder(value.Length + 8);
+        for (var index = 0; index < value.Length; index++)
+        {
+            var current = value[index];
+            if (char.IsUpper(current))
+            {
+                if (index > 0)
+                    builder.Append('_');
+
+                builder.Append(char.ToLowerInvariant(current));
+                continue;
+            }
+
+            builder.Append(current);
+        }
+
+        return builder.ToString();
+    }
+
+    private static Dictionary<string, FieldDescriptor> BuildDescriptorFieldMap(MessageDescriptor descriptor)
+    {
+        var fields = new Dictionary<string, FieldDescriptor>(StringComparer.Ordinal);
+        VisitDescriptorFields(descriptor, prefix: null, fields);
+        return fields;
+    }
+
+    private static void VisitDescriptorFields(
+        MessageDescriptor descriptor,
+        string? prefix,
+        Dictionary<string, FieldDescriptor> fields)
+    {
+        foreach (var field in descriptor.Fields.InDeclarationOrder())
+        {
+            var path = string.IsNullOrWhiteSpace(prefix)
+                ? field.Name
+                : $"{prefix}.{field.Name}";
+            fields[path] = field;
+
+            if (field.FieldType == FieldType.Message && field.MessageType != null)
+                VisitDescriptorFields(field.MessageType, path, fields);
+        }
+    }
 
     private TReadModel? DeserializeOrNull(string json)
     {
