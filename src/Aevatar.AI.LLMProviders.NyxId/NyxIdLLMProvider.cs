@@ -55,6 +55,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         {
             Endpoint = _gatewayEndpoint,
         };
+        // Override User-Agent to avoid Cloudflare WAF blocking the default "OpenAI/x.x" agent string.
+        options.AddPolicy(new NyxIdUserAgentPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
         options.AddPolicy(new NyxIdRequestLoggingPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(resolvedModel).AsIChatClient();
@@ -137,6 +139,27 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 /// <summary>
 /// Pipeline policy that logs the actual HTTP request URL and response status for debugging.
 /// </summary>
+/// <summary>
+/// Replaces the default OpenAI SDK User-Agent with a neutral one.
+/// Cloudflare WAF on NyxID gateway blocks the "OpenAI/x.x" agent string.
+/// </summary>
+internal sealed class NyxIdUserAgentPolicy : System.ClientModel.Primitives.PipelinePolicy
+{
+    private const string UserAgent = "Aevatar/1.0";
+
+    public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
+    {
+        message.Request.Headers.Set("User-Agent", UserAgent);
+        ProcessNext(message, pipeline, currentIndex);
+    }
+
+    public override async ValueTask ProcessAsync(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
+    {
+        message.Request.Headers.Set("User-Agent", UserAgent);
+        await ProcessNextAsync(message, pipeline, currentIndex);
+    }
+}
+
 internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.PipelinePolicy
 {
     public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
