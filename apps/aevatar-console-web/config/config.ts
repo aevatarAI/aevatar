@@ -3,6 +3,7 @@
 import { defineConfig } from '@umijs/max';
 import defaultSettings from './defaultSettings';
 import proxy from './proxy';
+import { aevatarThemeConfig } from '../src/shared/ui/aevatarWorkbench';
 
 import routes from './routes';
 
@@ -109,11 +110,7 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
   antd: {
     appConfig: {},
     configProvider: {
-      theme: {
-        token: {
-          fontFamily: 'AlibabaSans, sans-serif',
-        },
-      },
+      theme: aevatarThemeConfig,
     },
   },
   /**

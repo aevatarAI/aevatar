@@ -1,4 +1,9 @@
 .console-scripts-page {
+  --scripts-chip-muted-text: #7c5b2f;
+  --scripts-chip-text: #6d6254;
+  --scripts-label-text: #6b7280;
+  --scripts-muted-text: #667085;
+  --scripts-placeholder-text: #7a7a8c;
   position: relative;
   display: flex;
   min-height: 0;
@@ -63,7 +68,7 @@
   line-height: 1;
   text-transform: uppercase;
   letter-spacing: 0.16em;
-  color: #a39a8f;
+  color: var(--scripts-label-text);
 }
 
 .console-scripts-title-input {
@@ -81,7 +86,7 @@
 }
 
 .console-scripts-title-input::placeholder {
-  color: #9e958a;
+  color: var(--scripts-placeholder-text);
 }
 
 .console-scripts-title-meta {
@@ -179,7 +184,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -330,14 +335,14 @@
 .console-scripts-run-card-status {
   border: 1px solid #e5ded3;
   background: #f7f2e8;
-  color: #8e6a3d;
+  color: var(--scripts-chip-muted-text);
 }
 
 .console-scripts-chip {
   padding: 4px 8px;
   border: 1px solid #e5ded3;
   background: white;
-  color: #8b7763;
+  color: var(--scripts-chip-text);
 }
 
 .console-scripts-chip.scope {
@@ -418,7 +423,7 @@
   border: 1px solid #e7e3dc;
   border-radius: 18px;
   background: white;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
 }
 
 .console-scripts-search-input {
@@ -431,7 +436,7 @@
 }
 
 .console-scripts-search-input::placeholder {
-  color: #aea59a;
+  color: var(--scripts-placeholder-text);
 }
 
 .console-scripts-section {
@@ -534,7 +539,7 @@
 .console-scripts-run-card-meta {
   margin-top: 4px;
   overflow: hidden;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -574,7 +579,7 @@
 
 .console-scripts-field-label,
 .console-scripts-section-label {
-  color: #a39a8f;
+  color: var(--scripts-label-text);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -766,7 +771,7 @@
 
 .console-scripts-package-preview details > summary {
   cursor: pointer;
-  color: #a39a8f;
+  color: var(--scripts-label-text);
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
@@ -1074,7 +1079,7 @@
 
 .console-scripts-package-file-kind {
   margin-top: 4px;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -1089,7 +1094,7 @@
 }
 
 .console-scripts-package-file-state {
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
   font-size: 11px;
 }
 
@@ -1110,7 +1115,7 @@
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.8);
   padding: 12px;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
 }
 
 .console-scripts-collapsed-file {
@@ -1241,7 +1246,7 @@
 
 .console-scripts-file-kind {
   margin-top: 4px;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -1270,7 +1275,7 @@
 
 .console-scripts-editor-frame-path {
   margin-bottom: 12px;
-  color: #9ca3af;
+  color: var(--scripts-muted-text);
   font-size: 12px;
 }
 

@@ -187,6 +187,8 @@ function createBaseProps(overrides = {}) {
     onWorkflowImportChange: jest.fn(),
     onResetDraft: jest.fn(),
     onSaveDraft: jest.fn(),
+    onOpenProjectOverview: jest.fn(),
+    onOpenProjectInvoke: jest.fn(),
     onInspectPublishedWorkflow: jest.fn(),
     onRunInConsole: jest.fn(),
     onAskAiPromptChange: jest.fn(),
@@ -247,5 +249,60 @@ describe('StudioEditorPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
 
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('guides dirty drafts toward save before later project steps', async () => {
+    const onSaveDraft = jest.fn();
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          isDraftDirty: true,
+          onSaveDraft,
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next step: Save asset')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save asset' }));
+
+    expect(onSaveDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('guides published projects toward Project Invoke', async () => {
+    const onOpenProjectInvoke = jest.fn();
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          scopeBinding: {
+            available: true,
+            scopeId: 'scope-a',
+            serviceId: 'default',
+            displayName: 'Workspace Demo',
+            serviceKey: 'scope-a:default',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            deploymentStatus: 'Active',
+            primaryActorId: 'actor://scope-a/default',
+            updatedAt: '2026-03-26T08:00:00Z',
+            revisions: [],
+          },
+          onOpenProjectInvoke,
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next step: Open Project Invoke')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Project Invoke' }));
+
+    expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
   });
 });

@@ -30,6 +30,46 @@ jest.mock('@/shared/api/scopesApi', () => ({
         updatedAt: '2026-03-25T10:05:00Z',
       },
     ]),
+    getWorkflowDetail: jest.fn(async () => ({
+      available: true,
+      scopeId: 'scope-a',
+      workflow: {
+        scopeId: 'scope-a',
+        workflowId: 'workflow-alpha',
+        displayName: 'Workflow Alpha',
+        serviceKey: 'scope-a/default',
+        workflowName: 'direct_chat',
+        actorId: 'actor://workflow-alpha',
+        activeRevisionId: 'rev-2',
+        deploymentStatus: 'Published',
+        deploymentId: 'deploy-1',
+        updatedAt: '2026-03-25T10:00:00Z',
+      },
+      source: {
+        workflowYaml: 'name: workflow-alpha',
+        definitionActorId: 'definition://workflow-alpha',
+        inlineWorkflowYamls: null,
+      },
+    })),
+    getScriptDetail: jest.fn(async () => ({
+      available: true,
+      scopeId: 'scope-a',
+      script: {
+        scopeId: 'scope-a',
+        scriptId: 'script-alpha',
+        catalogActorId: 'catalog://script-alpha',
+        definitionActorId: 'definition://script-alpha',
+        activeRevision: 'script-rev-1',
+        activeSourceHash: 'hash-1',
+        updatedAt: '2026-03-25T10:05:00Z',
+      },
+      source: {
+        sourceText: 'print(\"hello\")',
+        definitionActorId: 'definition://script-alpha',
+        revision: 'script-rev-1',
+        sourceHash: 'hash-1',
+      },
+    })),
   },
 }));
 
@@ -108,20 +148,19 @@ describe('ScopeOverviewPage', () => {
     jest.clearAllMocks();
   });
 
-  it('renders the scope binding snapshot and asset summaries', async () => {
+  it('renders the scope status board and asset summaries', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Binding Snapshot')).toBeTruthy();
+    expect(await screen.findByText('Scope Status Board')).toBeTruthy();
+    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
     expect(screen.getByText('Revision Rollout')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
     expect(await screen.findByText('script-alpha')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open Studio' })).toBeTruthy();
-    expect(screen.getByText('Project views')).toBeTruthy();
-    expect(screen.getByText('Workflows')).toBeTruthy();
-    expect(screen.getByText('Scripts')).toBeTruthy();
-    expect(screen.getByText('Invoke')).toBeTruthy();
-    expect(screen.getByText('Runs')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Open Runs' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Open workflow workspace' })
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open assets' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open invoke lab' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
   });
 
@@ -129,7 +168,10 @@ describe('ScopeOverviewPage', () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
     expect(await screen.findByText('Revision Rollout')).toBeTruthy();
-    fireEvent.click(await screen.findByRole('button', { name: 'Activate rev-1' }));
+    const activateButtons = await screen.findAllByRole('button', {
+      name: 'Activate',
+    });
+    fireEvent.click(activateButtons[1]);
 
     await waitFor(() => {
       expect(studioApi.activateScopeBindingRevision).toHaveBeenCalledWith({

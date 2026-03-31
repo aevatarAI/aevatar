@@ -71,6 +71,15 @@ export function buildRuntimeRunsHref(options?: {
 
 export function buildRuntimeExplorerHref(options?: {
   actorId?: string;
+  runId?: string;
+  scopeId?: string;
+  serviceId?: string;
+  serviceOverrideId?: string;
 }): string {
-  return buildHref(runtimePaths.explorer, options);
+  return buildHref(runtimePaths.explorer, {
+    actorId: options?.actorId,
+    runId: options?.runId,
+    scopeId: options?.scopeId,
+    serviceId: options?.serviceId ?? options?.serviceOverrideId,
+  });
 }

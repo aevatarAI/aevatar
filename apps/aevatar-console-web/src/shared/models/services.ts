@@ -12,6 +12,12 @@ export interface ServiceIdentity {
   serviceId: string;
 }
 
+export interface ServiceCommandAcceptedReceipt {
+  targetActorId: string;
+  commandId: string;
+  correlationId: string;
+}
+
 export interface ServiceEndpointSnapshot {
   endpointId: string;
   displayName: string;
@@ -79,6 +85,13 @@ export interface ServiceServingTargetSnapshot {
   allocationWeight: number;
   servingState: string;
   enabledEndpointIds: string[];
+}
+
+export interface ServiceServingTargetInput {
+  revisionId: string;
+  allocationWeight: number;
+  servingState?: string;
+  enabledEndpointIds?: string[];
 }
 
 export interface ServiceServingSetSnapshot {

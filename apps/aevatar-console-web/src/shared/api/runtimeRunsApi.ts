@@ -10,7 +10,7 @@ import {
   decodeWorkflowResumeResponseBody,
   decodeWorkflowSignalResponseBody,
 } from "./runtimeDecoders";
-import { requestJson } from "./http/client";
+import { requestJson, withQuery } from "./http/client";
 import { readResponseError } from "./http/error";
 import {
   encodeAppScriptCommandBase64,
@@ -83,6 +83,17 @@ function buildRunControlPath(
     : `${buildScopePath(scopeId)}/runs/${encodedRunId}:${action}`;
 }
 
+function buildRunPath(
+  scopeId: string,
+  runId: string,
+  serviceId?: string
+): string {
+  const encodedRunId = encodeSegment(runId);
+  return serviceId?.trim()
+    ? `${buildScopedServicePath(scopeId, serviceId)}/runs/${encodedRunId}`
+    : `${buildScopePath(scopeId)}/runs/${encodedRunId}`;
+}
+
 function createClientCommandId(): string {
   return globalThis.crypto?.randomUUID?.()
     ? globalThis.crypto.randomUUID()
@@ -147,6 +158,21 @@ export type EndpointInvokeRequest = {
   correlationId?: string;
   payloadTypeUrl?: string;
   payloadBase64?: string;
+};
+
+export type WorkflowRunSummary = {
+  actorId?: string;
+  completionStatus?: string;
+  definitionActorId?: string;
+  deploymentId?: string;
+  lastEventId?: string;
+  lastOutput?: string;
+  revisionId?: string;
+  runId: string;
+  scopeId?: string;
+  serviceId?: string;
+  stateVersion?: number;
+  workflowName?: string;
 };
 
 export const runtimeRunsApi = {
@@ -216,6 +242,28 @@ export const runtimeRunsApi = {
     }
 
     return response;
+  },
+
+  getRunSummary(
+    scopeId: string,
+    runId: string,
+    options?: {
+      actorId?: string;
+      serviceId?: string;
+    }
+  ): Promise<WorkflowRunSummary> {
+    return requestJson(
+      withQuery(buildRunPath(scopeId, runId, options?.serviceId), {
+        actorId: trimOptional(options?.actorId),
+      }),
+      (value) => value as WorkflowRunSummary,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      }
+    );
   },
 
   async invokeEndpoint(

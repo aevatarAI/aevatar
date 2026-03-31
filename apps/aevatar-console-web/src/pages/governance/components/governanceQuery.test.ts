@@ -1,22 +1,24 @@
 import {
   applyGovernanceServiceSelection,
   buildGovernanceServiceOptions,
-  buildGovernanceHref,
+  buildGovernanceWorkbenchHref,
   findGovernanceServiceOption,
   hasGovernanceScope,
   normalizeGovernanceDraft,
   normalizeGovernanceQuery,
   readGovernanceDraft,
+  readGovernanceWorkbenchView,
 } from './governanceQuery';
 
 describe('governanceQuery', () => {
   it('reads governance filters from the query string', () => {
     expect(
       readGovernanceDraft(
-        '?tenantId=t1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
+        '?tenantId=t1&appId=a1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
       ),
     ).toEqual({
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
       serviceId: 'svc-1',
       revisionId: 'rev-2',
@@ -26,6 +28,7 @@ describe('governanceQuery', () => {
   it('normalizes service identity query and full governance draft separately', () => {
     const draft = {
       tenantId: ' t1 ',
+      appId: ' a1 ',
       namespace: ' n1 ',
       serviceId: ' svc-1 ',
       revisionId: ' rev-2 ',
@@ -33,27 +36,36 @@ describe('governanceQuery', () => {
 
     expect(normalizeGovernanceQuery(draft)).toEqual({
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
     });
     expect(normalizeGovernanceDraft(draft)).toEqual({
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
       serviceId: 'svc-1',
       revisionId: 'rev-2',
     });
   });
 
-  it('builds governance routes that preserve service and revision context', () => {
+  it('builds governance workbench routes that preserve service context', () => {
     expect(
-      buildGovernanceHref('/governance/activation', {
+      buildGovernanceWorkbenchHref({
         tenantId: 't1',
+        appId: 'a1',
         namespace: 'n1',
         serviceId: 'svc-1',
         revisionId: 'rev-2',
-      }),
+      }, 'activation'),
     ).toBe(
-      '/governance/activation?tenantId=t1&namespace=n1&serviceId=svc-1&revisionId=rev-2',
+      '/governance?tenantId=t1&appId=a1&namespace=n1&serviceId=svc-1&revisionId=rev-2&view=activation',
     );
+  });
+
+  it('defaults the workbench view to audit when the query is missing or invalid', () => {
+    expect(readGovernanceWorkbenchView('')).toBe('audit');
+    expect(readGovernanceWorkbenchView('?view=bindings')).toBe('bindings');
+    expect(readGovernanceWorkbenchView('?view=unknown')).toBe('audit');
   });
 
   it('builds service picker options and applies their identity to the draft', () => {
@@ -81,6 +93,7 @@ describe('governanceQuery', () => {
         label: 'Payments (t1/n1/svc-1)',
         value: 't1/a1/n1/svc-1',
         tenantId: 't1',
+        appId: 'a1',
         namespace: 'n1',
         serviceId: 'svc-1',
       },
@@ -88,6 +101,7 @@ describe('governanceQuery', () => {
 
     const selectedOption = findGovernanceServiceOption(options, {
       tenantId: '',
+      appId: '',
       namespace: '',
       serviceId: 'svc-1',
       revisionId: '',
@@ -98,6 +112,7 @@ describe('governanceQuery', () => {
       applyGovernanceServiceSelection(
         {
           tenantId: '',
+          appId: '',
           namespace: '',
           serviceId: 'svc-1',
           revisionId: 'rev-2',
@@ -106,6 +121,7 @@ describe('governanceQuery', () => {
       ),
     ).toEqual({
       tenantId: 't1',
+      appId: 'a1',
       namespace: 'n1',
       serviceId: 'svc-1',
       revisionId: 'rev-2',
@@ -116,6 +132,7 @@ describe('governanceQuery', () => {
     expect(
       hasGovernanceScope({
         tenantId: 't1',
+        appId: '',
         namespace: 'n1',
         serviceId: '',
         revisionId: '',
@@ -125,6 +142,7 @@ describe('governanceQuery', () => {
     expect(
       hasGovernanceScope({
         tenantId: 't1',
+        appId: '',
         namespace: '',
         serviceId: '',
         revisionId: '',

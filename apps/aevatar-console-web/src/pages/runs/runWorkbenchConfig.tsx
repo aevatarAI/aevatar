@@ -351,10 +351,10 @@ export const runsWorkbenchShellStyle = {
     "linear-gradient(180deg, rgba(15, 23, 42, 0.03) 0%, rgba(15, 23, 42, 0.01) 100%)",
   display: "flex",
   flexDirection: "column",
-  gap: 12,
+  gap: 8,
   height: "calc(100vh - 64px)",
   overflow: "hidden",
-  padding: 12,
+  padding: 8,
   position: "relative",
 } as const;
 
@@ -411,7 +411,7 @@ export const runsWorkbenchMonitorStyle = {
   display: "flex",
   flex: 1,
   flexDirection: "column",
-  gap: 12,
+  gap: 8,
   minWidth: 0,
   overflow: "hidden",
 } as const;

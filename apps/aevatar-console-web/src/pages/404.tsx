@@ -1,5 +1,6 @@
 import { Button, Card, Result } from 'antd';
 import React from 'react';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 
 const NoFoundPage: React.FC = () => (
   <Card variant="borderless">
@@ -11,10 +12,10 @@ const NoFoundPage: React.FC = () => (
         <Button
           type="primary"
           onClick={() => {
-            window.location.href = '/overview';
+            window.location.href = CONSOLE_HOME_ROUTE;
           }}
         >
-          Return to overview
+          Return to projects
         </Button>
       }
     />

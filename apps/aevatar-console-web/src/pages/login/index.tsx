@@ -11,6 +11,7 @@ import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import {
   sanitizeReturnTo,
 } from '@/shared/auth/session';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import { describeError } from '@/shared/ui/errorText';
 
 const pageStyle: React.CSSProperties = {
@@ -44,7 +45,7 @@ const LoginPage: React.FC = () => {
   const config = useMemo(() => getNyxIDRuntimeConfig(), []);
   const redirectTarget = useMemo(() => {
     if (typeof window === 'undefined') {
-      return '/overview';
+      return CONSOLE_HOME_ROUTE;
     }
 
     const params = new URLSearchParams(window.location.search);

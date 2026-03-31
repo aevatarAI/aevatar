@@ -97,10 +97,12 @@ describe('ScopeInvokePage', () => {
         namespace: 'default',
       });
     });
-    expect(screen.queryByRole('button', { name: 'Open Runs Workbench' })).toBeNull();
+    expect(await screen.findByText('Lab Console')).toBeTruthy();
+    expect(await screen.findByText('Invoke Lab')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Open operator brief' })).toBeTruthy();
     expect(await screen.findByRole('button', { name: 'Invoke endpoint' })).toBeTruthy();
     fireEvent.change(
-      screen.getByPlaceholderText('Describe the request or payload text.'),
+      screen.getByPlaceholderText('Prompt or payload text'),
       {
         target: { value: 'run the scope command' },
       },
@@ -122,6 +124,9 @@ describe('ScopeInvokePage', () => {
       );
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Output' }));
+
+    expect(await screen.findByText('Invocation Receipt')).toBeTruthy();
     expect(await screen.findByText(/"accepted": true/)).toBeTruthy();
   });
 
@@ -187,9 +192,10 @@ describe('ScopeInvokePage', () => {
         namespace: 'default',
       });
     });
+    expect(await screen.findByText('Lab Console')).toBeTruthy();
     expect(await screen.findByRole('button', { name: 'Stream chat' })).toBeTruthy();
     fireEvent.change(
-      screen.getByPlaceholderText('Describe the request or payload text.'),
+      screen.getByPlaceholderText('Prompt or payload text'),
       {
         target: { value: 'hello service' },
       },
@@ -209,11 +215,12 @@ describe('ScopeInvokePage', () => {
       );
     });
 
-    expect(await screen.findByText('Assistant stream')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Output' }));
+
+    expect(await screen.findByText('Assistant Output')).toBeTruthy();
     expect(screen.getByText('hello from scope service')).toBeTruthy();
     expect(screen.getByText('run-1')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open in Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue in Runs' }));
 
     expect(window.location.pathname).toBe('/runtime/runs');
     const draftKey = new URLSearchParams(window.location.search).get('draftKey');
@@ -242,5 +249,51 @@ describe('ScopeInvokePage', () => {
         ],
       }),
     );
+  });
+
+  it('keeps the invoke lab empty after reset instead of auto-refilling a service', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+      {
+        serviceKey: 'scope-a:default:default:default',
+        tenantId: 'scope-a',
+        appId: 'default',
+        namespace: 'default',
+        serviceId: 'default',
+        displayName: 'Workspace Demo',
+        defaultServingRevisionId: 'rev-2',
+        activeServingRevisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        primaryActorId: 'actor://scope-a/default',
+        deploymentStatus: 'Active',
+        endpoints: [
+          {
+            endpointId: 'run',
+            displayName: 'run',
+            kind: 'command',
+            requestTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+            responseTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
+            description: 'Submit a command run.',
+          },
+        ],
+        policyIds: [],
+        updatedAt: '2026-03-26T08:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    expect(await screen.findByRole('button', { name: 'Invoke endpoint' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('No published project service is selected yet.'),
+      ).toBeTruthy();
+    });
+
+    expect(screen.getByRole('button', { name: 'Invoke endpoint' })).toBeDisabled();
+    expect(new URLSearchParams(window.location.search).get('serviceId')).toBeNull();
+    expect(new URLSearchParams(window.location.search).get('endpointId')).toBeNull();
   });
 });
