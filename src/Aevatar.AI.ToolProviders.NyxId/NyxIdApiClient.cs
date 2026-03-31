@@ -46,6 +46,9 @@ public sealed class NyxIdApiClient
     public Task<string> DeleteServiceAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
 
+    public Task<string> CreateServiceAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/keys", body, ct);
+
     // ─── Proxy ───
 
     public async Task<string> ProxyRequestAsync(
@@ -119,6 +122,35 @@ public sealed class NyxIdApiClient
     public Task<string> GetLlmStatusAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/llm/status", ct);
 
+    // ─── Providers ───
+
+    public Task<string> ListProviderTokensAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/providers/my-tokens", ct);
+
+    public Task<string> InitiateOAuthConnectAsync(string token, string providerId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/connect/oauth", ct);
+
+    public Task<string> InitiateDeviceCodeAsync(string token, string providerId, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/connect/device-code/initiate", "{}", ct);
+
+    public Task<string> PollDeviceCodeAsync(string token, string providerId, string state, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/connect/device-code/poll",
+            System.Text.Json.JsonSerializer.Serialize(new { state }), ct);
+
+    public Task<string> DisconnectProviderAsync(string token, string providerId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/disconnect", ct);
+
+    // ─── User Provider Credentials ───
+
+    public Task<string> GetUserCredentialsAsync(string token, string providerId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/credentials", ct);
+
+    public Task<string> SetUserCredentialsAsync(string token, string providerId, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/credentials", body, ct);
+
+    public Task<string> DeleteUserCredentialsAsync(string token, string providerId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/credentials", ct);
+
     // ─── HTTP helpers ───
 
     private string GetBaseUrl() =>
@@ -136,6 +168,15 @@ public sealed class NyxIdApiClient
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await SendAsync(request, ct);
+    }
+
+    private async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Put, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         return await SendAsync(request, ct);

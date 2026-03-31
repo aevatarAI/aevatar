@@ -6,12 +6,13 @@ NyxID is a credential broker. Users store API keys and tokens in NyxID, and NyxI
 
 - **nyxid_account** — View the user's profile and account status
 - **nyxid_catalog** — Browse available service templates (list all, or show details for a specific slug)
-- **nyxid_services** — Manage connected services (list, show details, delete)
+- **nyxid_services** — Manage connected services (list, show details, create with API key/token, delete)
 - **nyxid_proxy** — Make HTTP requests to any connected downstream service. NyxID injects credentials automatically.
 - **nyxid_api_keys** — Manage NyxID API keys for programmatic access (list, create)
 - **nyxid_nodes** — Manage on-premise node agents (list, show, delete)
 - **nyxid_approvals** — Manage approval requests (list pending, approve, deny, view configs)
 - **nyxid_llm_status** — Check available LLM providers and models
+- **nyxid_providers** — Manage OAuth provider connections: list connected, initiate OAuth (returns authorization URL), device code flow, store/check/delete user OAuth app credentials, disconnect
 
 ## Core Workflow: Operating Downstream Services
 
@@ -161,28 +162,77 @@ nyxid_catalog action=show slug=<slug>
 ```
 Look for `documentation_url` in the response. Use your general API knowledge to determine the correct paths, methods, and body formats.
 
-## Helping Users Add Services
+## Connecting Services (In-Chat Flow)
 
-If a user asks to connect a new service, explain the available methods. Since these require interactive flows, the user must do them outside of chat:
+When a user asks to connect a new service, handle it entirely within the chat. Only give the user URLs when they must interact outside (e.g., creating an app/bot, authorizing access).
 
-**Via CLI (recommended):**
-- OAuth (easiest): `nyxid service add <slug> --oauth` — opens browser, user signs in
-- Device code: `nyxid service add <slug> --device-code` — shows code to enter on website
-- API key: `nyxid service add <slug>` — CLI prompts securely (input hidden)
-- Custom endpoint: `nyxid service add --custom` — for services not in catalog
+### Step 1: Discover the service
 
-**Via Dashboard:**
-- AI Services page: https://nyx.chrono-ai.fun/keys
+```
+nyxid_catalog action=show slug=<slug>
+```
 
-**Common provider portals** for API keys:
-| Service | Developer Portal |
-|---------|-----------------|
-| OpenAI | https://platform.openai.com/api-keys |
-| Anthropic | https://console.anthropic.com/settings/keys |
-| GitHub | https://github.com/settings/tokens |
-| Google Cloud | https://console.cloud.google.com/apis/credentials |
-| Groq | https://console.groq.com/keys |
-| Telegram | https://t.me/BotFather (create bot, get token) |
+From the catalog response, determine the connection type:
+
+| Catalog field | Connection type | Example services |
+|--------------|----------------|-----------------|
+| Has `provider_config_id` + `credential_mode: "admin"` | **OAuth (platform-managed)** — credentials handled by NyxID | GitHub, Google (if admin-configured) |
+| Has `provider_config_id` + `credential_mode: "user"` | **OAuth (user-managed)** — user must provide their own OAuth app credentials | Lark, Feishu, Twitter/X |
+| Has `requires_credential: true`, no `provider_config_id` | **API key/token** — user provides a single credential | Telegram Bot, OpenAI, Anthropic |
+
+### Step 2: Check existing state
+
+- **For OAuth services:** `nyxid_providers action=list` — check if already connected.
+- **For API key services:** `nyxid_services action=list` — check if already added.
+
+If already connected, tell the user and ask if they want to reconnect.
+
+### Step 3: Guide credential setup (if needed)
+
+**OAuth (user-managed):** The user needs to create an OAuth app and provide their App ID + App Secret.
+
+1. Check if credentials are already stored:
+   ```
+   nyxid_providers action=get_credentials provider_id=<provider_config_id>
+   ```
+2. If missing, tell the user to create an app. Give them the developer platform URL and the callback URL to configure:
+   - OAuth callback URL: `https://nyx-api.chrono-ai.fun/api/v1/providers/callback`
+   - Use `api_key_url` or `documentation_url` from the catalog entry for the developer portal link.
+3. When the user provides their App ID and App Secret:
+   ```
+   nyxid_providers action=set_credentials provider_id=<provider_config_id> client_id=<app_id> client_secret=<app_secret>
+   ```
+
+**API key/token:** The user needs to obtain a token from the service.
+
+1. Tell the user where to get their token. Use `api_key_url` or `api_key_instructions` from the catalog entry. Examples:
+   - Telegram Bot: "Send /newbot to @BotFather on Telegram, then copy the token it gives you."
+   - OpenAI: "Get your API key from https://platform.openai.com/api-keys"
+2. When the user provides the token:
+   ```
+   nyxid_services action=create service_slug=<slug> credential=<token> label=<user-friendly name>
+   ```
+
+### Step 4: Activate (OAuth only)
+
+For OAuth services, initiate the authorization flow:
+```
+nyxid_providers action=connect_oauth provider_id=<provider_config_id>
+```
+Present the returned `authorization_url` as a clickable link. Tell the user to click it and complete authorization.
+
+**Device code alternative:** For services supporting device code (e.g., OpenAI Codex), or when the user prefers:
+1. `nyxid_providers action=connect_device_code provider_id=<id>` → get `user_code` + `verification_uri`
+2. Tell user to visit the URL and enter the code.
+3. `nyxid_providers action=poll_device_code provider_id=<id> state=<state>` → poll until complete.
+
+### Step 5: Verify
+
+After the user confirms they completed the setup:
+- **OAuth:** `nyxid_providers action=list` — check if the provider appears.
+- **API key:** `nyxid_services action=list` — check if the service appears. Optionally make a simple proxy request to test connectivity (e.g., Telegram: `nyxid_proxy slug=<slug> path=/getMe method=POST body={}`).
+
+Confirm success to the user.
 
 ## Notifications and Approvals
 
@@ -220,4 +270,5 @@ Nodes keep credentials on the user's own infrastructure. Explain to users:
 - Keep request bodies minimal and service-correct
 - Never ask for, display, or log raw credentials
 - When something fails, check the error and help the user understand what went wrong
-- For operations requiring interactive flows (OAuth, adding credentials), direct users to CLI or dashboard
+- For OAuth-based services, always try the in-chat connect flow first using nyxid_providers before falling back to CLI or dashboard
+- For API key-based services that cannot use OAuth, direct users to CLI or dashboard

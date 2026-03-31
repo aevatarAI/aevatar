@@ -25,6 +25,7 @@ public sealed class AppScopedWorkflowService
     private readonly IScopeWorkflowQueryPort? _workflowQueryPort;
     private readonly IScopeWorkflowCommandPort? _workflowCommandPort;
     private readonly IWorkflowActorBindingReader? _workflowActorBindingReader;
+    private readonly IServiceRevisionArtifactStore? _artifactStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
 
@@ -33,13 +34,15 @@ public sealed class AppScopedWorkflowService
         IWorkflowYamlDocumentService yamlDocumentService,
         IScopeWorkflowQueryPort? workflowQueryPort = null,
         IScopeWorkflowCommandPort? workflowCommandPort = null,
-        IWorkflowActorBindingReader? workflowActorBindingReader = null)
+        IWorkflowActorBindingReader? workflowActorBindingReader = null,
+        IServiceRevisionArtifactStore? artifactStore = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
         _workflowQueryPort = workflowQueryPort;
         _workflowCommandPort = workflowCommandPort;
         _workflowActorBindingReader = workflowActorBindingReader;
+        _artifactStore = artifactStore;
     }
 
     public async Task<IReadOnlyList<WorkflowSummary>> ListAsync(
@@ -79,10 +82,23 @@ public sealed class AppScopedWorkflowService
                 ? null
                 : await _workflowActorBindingReader.GetAsync(workflow.ActorId, ct);
 
+            var yaml = binding?.WorkflowYaml ?? string.Empty;
+
+            // Fallback: if binding projection hasn't materialized the YAML yet,
+            // try the artifact store which is written synchronously during save.
+            if (string.IsNullOrWhiteSpace(yaml) &&
+                _artifactStore != null &&
+                !string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
+                !string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
+            {
+                var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
+                yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
+            }
+
             return ToWorkflowFileResponse(
                 normalizedScopeId,
                 workflow,
-                binding?.WorkflowYaml ?? string.Empty,
+                yaml,
                 layout: TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
                 findingsFallbackMessage: "Workflow YAML is not available yet.");
         }

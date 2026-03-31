@@ -5,6 +5,8 @@ namespace Aevatar.Tools.Cli.Hosting;
 
 internal static class AppPlaygroundHost
 {
+    private static volatile string _currentApiBaseUrl = "https://aevatar-console-backend-api.aevatar.ai";
+
     public static async Task RunAsync(
         int port,
         string apiBaseUrl,
@@ -12,6 +14,7 @@ internal static class AppPlaygroundHost
         CancellationToken cancellationToken,
         TaskCompletionSource<string>? startedSignal = null)
     {
+        _currentApiBaseUrl = apiBaseUrl.TrimEnd('/');
         var baseDir = AppContext.BaseDirectory;
         var webRootCandidates = new[]
         {
@@ -34,10 +37,7 @@ internal static class AppPlaygroundHost
 
         var url = $"http://localhost:{port}";
         builder.WebHost.UseUrls(url);
-        builder.Services.AddHttpClient("api-proxy", client =>
-        {
-            client.BaseAddress = new Uri(apiBaseUrl.TrimEnd('/') + "/");
-        });
+        builder.Services.AddHttpClient("api-proxy");
 
         var app = builder.Build();
 
@@ -54,6 +54,18 @@ internal static class AppPlaygroundHost
         app.UseStaticFiles();
 
         app.MapGet("/api/health", () => Results.Json(new { ok = true, service = "aevatar.app" }));
+
+        // Allow frontend to read/update the proxy target URL at runtime.
+        app.MapGet("/api/_proxy/runtime-url", () => Results.Json(new { runtimeBaseUrl = _currentApiBaseUrl }));
+        app.MapPut("/api/_proxy/runtime-url", async (HttpContext ctx) =>
+        {
+            var body = await ctx.Request.ReadFromJsonAsync<RuntimeUrlUpdate>(ctx.RequestAborted);
+            var url = body?.RuntimeBaseUrl?.Trim().TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(url))
+                return Results.BadRequest(new { error = "runtimeBaseUrl is required" });
+            _currentApiBaseUrl = url;
+            return Results.Json(new { runtimeBaseUrl = _currentApiBaseUrl });
+        });
 
         // OAuth callback: serve index.html so frontend JS handles the code exchange.
         app.MapGet("/auth/callback", async (HttpContext ctx) =>
@@ -77,11 +89,13 @@ internal static class AppPlaygroundHost
         {
             var client = factory.CreateClient("api-proxy");
             var path = ctx.Request.Path + ctx.Request.QueryString;
+            var targetBase = _currentApiBaseUrl.TrimEnd('/');
+            var targetUri = new Uri($"{targetBase}{path}");
 
             var requestMessage = new HttpRequestMessage
             {
                 Method = new HttpMethod(ctx.Request.Method),
-                RequestUri = new Uri(path.ToString().TrimStart('/'), UriKind.Relative),
+                RequestUri = targetUri,
             };
 
             foreach (var header in ctx.Request.Headers)
@@ -108,7 +122,7 @@ internal static class AppPlaygroundHost
             catch (HttpRequestException)
             {
                 ctx.Response.StatusCode = 502;
-                await ctx.Response.WriteAsJsonAsync(new { error = "Backend API is unreachable", target = client.BaseAddress?.ToString() });
+                await ctx.Response.WriteAsJsonAsync(new { error = "Backend API is unreachable", target = targetBase });
                 return;
             }
 
@@ -189,4 +203,6 @@ internal static class AppPlaygroundHost
         }
         catch { }
     }
+
+    private sealed record RuntimeUrlUpdate(string? RuntimeBaseUrl);
 }

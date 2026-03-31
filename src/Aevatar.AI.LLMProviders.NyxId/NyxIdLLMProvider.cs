@@ -115,9 +115,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             return configuredToken;
         }
 
-        throw new InvalidOperationException(
-            $"NyxID access token is not available for provider '{Name}'. " +
-            "Ensure the user is logged in via NyxID.");
+        throw new NyxIdAuthenticationRequiredException(Name);
     }
 
     private static string? TryGetMetadataValue(LLMRequest request, string key) =>

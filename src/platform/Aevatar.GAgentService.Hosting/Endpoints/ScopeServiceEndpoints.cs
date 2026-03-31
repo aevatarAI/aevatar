@@ -913,6 +913,15 @@ public static class ScopeServiceEndpoints
                         $"Service implementation '{target.Artifact.ImplementationKind}' does not support SSE stream invocation.");
             }
         }
+        catch (NyxIdAuthenticationRequiredException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status401Unauthorized,
+                "authentication_required",
+                ex.Message,
+                ct);
+        }
         catch (InvalidOperationException ex)
         {
             await WriteJsonErrorResponseAsync(
@@ -1042,10 +1051,28 @@ public static class ScopeServiceEndpoints
         var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
         if (completedTask == tcs.Task)
         {
-            await writer.WriteAsync(new AGUIEvent
+            if (tcs.Task.IsFaulted)
             {
-                RunFinished = new RunFinishedEvent { ThreadId = actor.Id, RunId = runId },
-            }, CancellationToken.None);
+                var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
+                var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
+                await writer.WriteAsync(new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = isAuthRequired
+                            ? "NyxID authentication required. Please sign in."
+                            : (ex?.Message ?? "An error occurred."),
+                        Code = isAuthRequired ? "authentication_required" : null,
+                    },
+                }, CancellationToken.None);
+            }
+            else
+            {
+                await writer.WriteAsync(new AGUIEvent
+                {
+                    RunFinished = new RunFinishedEvent { ThreadId = actor.Id, RunId = runId },
+                }, CancellationToken.None);
+            }
         }
         else
         {

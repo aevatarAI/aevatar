@@ -15,7 +15,8 @@ public sealed class NyxIdServicesTool : IAgentTool
 
     public string Description =>
         "Manage the user's connected services in NyxID. " +
-        "Use 'list' to see all connected services, 'show' for details on a specific service, " +
+        "Use 'list' to see all connected services, 'show' for details, " +
+        "'create' to add a new service with an API key/token, " +
         "or 'delete' to remove a service connection.";
 
     public string ParametersSchema => """
@@ -24,12 +25,24 @@ public sealed class NyxIdServicesTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "delete"],
-              "description": "Action: 'list' all services, 'show' service details, or 'delete' a service"
+              "enum": ["list", "show", "create", "delete"],
+              "description": "Action: 'list' all services, 'show' details, 'create' a new service, or 'delete' a service"
             },
             "id": {
               "type": "string",
               "description": "Service ID (required for 'show' and 'delete')"
+            },
+            "service_slug": {
+              "type": "string",
+              "description": "Catalog service slug (for 'create', e.g. 'telegram-bot', 'openai')"
+            },
+            "credential": {
+              "type": "string",
+              "description": "API key or token value (for 'create')"
+            },
+            "label": {
+              "type": "string",
+              "description": "User-friendly label for the service (for 'create')"
             }
           },
           "required": ["action"]
@@ -44,6 +57,9 @@ public sealed class NyxIdServicesTool : IAgentTool
 
         string action = "list";
         string? id = null;
+        string? serviceSlug = null;
+        string? credential = null;
+        string? label = null;
 
         try
         {
@@ -52,6 +68,12 @@ public sealed class NyxIdServicesTool : IAgentTool
                 action = a.GetString() ?? "list";
             if (doc.RootElement.TryGetProperty("id", out var i))
                 id = i.GetString();
+            if (doc.RootElement.TryGetProperty("service_slug", out var ss))
+                serviceSlug = ss.GetString();
+            if (doc.RootElement.TryGetProperty("credential", out var c))
+                credential = c.GetString();
+            if (doc.RootElement.TryGetProperty("label", out var l))
+                label = l.GetString();
         }
         catch { /* use defaults */ }
 
@@ -61,8 +83,17 @@ public sealed class NyxIdServicesTool : IAgentTool
                 await _client.GetServiceAsync(token, id, ct),
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteServiceAsync(token, id, ct),
-            "delete" => "Error: 'id' is required for delete action.",
-            "show" => "Error: 'id' is required for show action.",
+            "create" when !string.IsNullOrWhiteSpace(serviceSlug) && !string.IsNullOrWhiteSpace(credential) =>
+                await _client.CreateServiceAsync(token,
+                    JsonSerializer.Serialize(new
+                    {
+                        service_slug = serviceSlug,
+                        credential,
+                        label = label ?? serviceSlug,
+                    }), ct),
+
+            "show" or "delete" => "Error: 'id' is required for this action.",
+            "create" => "Error: 'service_slug' and 'credential' are required for create.",
             _ => await _client.ListServicesAsync(token, ct),
         };
     }

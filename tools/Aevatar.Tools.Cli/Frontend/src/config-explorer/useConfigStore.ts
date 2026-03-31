@@ -11,7 +11,7 @@ import {
   createEmptyConnector,
   createUniqueConnectorName,
 } from '../studio';
-import type { ConfigFile, GAgentType, ActorGroup, ProviderInfo } from './types';
+import type { ConfigFile, GAgentType, ActorGroup, ProviderInfo, WorkflowEntry } from './types';
 import type { ConversationMeta, StoredChatMessage } from '../runtime/chatTypes';
 
 export type ConfigStore = ReturnType<typeof useConfigStore>;
@@ -44,6 +44,11 @@ export function useConfigStore(scopeId: string) {
   const [supportedModels, setSupportedModels] = useState<string[]>([]);
   const [modelsLoading] = useState(false);
 
+  // ── Workflows ──
+  const [workflows, setWorkflows] = useState<WorkflowEntry[]>([]);
+  const [selectedWorkflowYaml, setSelectedWorkflowYaml] = useState<string | null>(null);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+
   // ── Chat history ──
   const [chatConversations, setChatConversations] = useState<ConversationMeta[]>([]);
   const [selectedConversationMessages, setSelectedConversationMessages] = useState<StoredChatMessage[]>([]);
@@ -66,7 +71,7 @@ export function useConfigStore(scopeId: string) {
   // ── Load all data ──
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [configRes, rolesRes, connectorsRes, actorsRes, typesRes, modelsRes, chatRes] =
+    const [configRes, rolesRes, connectorsRes, actorsRes, typesRes, modelsRes, chatRes, workflowsRes] =
       await Promise.allSettled([
         api.userConfig.get(),
         api.roles.getCatalog(),
@@ -75,6 +80,7 @@ export function useConfigStore(scopeId: string) {
         api.gagent.listTypes(),
         api.userConfig.models(),
         scopeId ? api.chatHistory.getIndex(scopeId) : Promise.resolve({ conversations: [] }),
+        api.workspace.listWorkflows(),
       ]);
 
     // config — store as raw JSON
@@ -119,6 +125,18 @@ export function useConfigStore(scopeId: string) {
       setChatConversations(chatRes.value.conversations ?? []);
     }
 
+    // workflows
+    if (workflowsRes.status === 'fulfilled' && workflowsRes.value) {
+      setWorkflows((workflowsRes.value ?? []).map((w: any) => ({
+        workflowId: w.workflowId || w.WorkflowId || '',
+        name: w.name || w.Name || '',
+        directoryLabel: w.directoryLabel || w.DirectoryLabel || '',
+        stepCount: w.stepCount ?? w.StepCount ?? 0,
+        updatedAtUtc: w.updatedAtUtc || w.UpdatedAtUtc || '',
+        description: w.description || w.Description || '',
+      })));
+    }
+
     setLoading(false);
   }, [scopeId]);
 
@@ -137,6 +155,20 @@ export function useConfigStore(scopeId: string) {
       .catch(() => setSelectedConversationMessages([]))
       .finally(() => setChatLoading(false));
   }, [selectedFile, scopeId]);
+
+  // ── Load workflow YAML when a workflow file is selected ──
+  useEffect(() => {
+    if (!selectedFile.startsWith('workflow:')) {
+      setSelectedWorkflowYaml(null);
+      return;
+    }
+    const wfId = selectedFile.replace('workflow:', '');
+    setWorkflowLoading(true);
+    api.workspace.getWorkflow(wfId)
+      .then((res: any) => setSelectedWorkflowYaml(res?.yaml ?? res?.Yaml ?? ''))
+      .catch(() => setSelectedWorkflowYaml(null))
+      .finally(() => setWorkflowLoading(false));
+  }, [selectedFile]);
 
   // ── Save functions ──
   async function saveConfig() {
@@ -275,6 +307,11 @@ export function useConfigStore(scopeId: string) {
     providers,
     supportedModels,
     modelsLoading,
+
+    // workflows
+    workflows,
+    selectedWorkflowYaml,
+    workflowLoading,
 
     // chat history
     chatConversations,

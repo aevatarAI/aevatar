@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -32,10 +32,10 @@ import {
   Copy,
   Database,
   FileText,
+  FolderOpen,
   FolderPlus,
   GitBranch,
   Globe,
-  LayoutGrid,
   Loader2,
   LogOut,
   Moon,
@@ -43,13 +43,11 @@ import {
   Palette,
   Play,
   Plus,
-  Rows3,
   Search,
   Settings,
   Shield,
   Square,
   Sun,
-  Terminal,
   Trash2,
   Upload,
   User,
@@ -72,7 +70,6 @@ import {
   buildWorkflowDocument,
   createDefaultRoles,
   createEdge,
-  createEmptyConnector,
   createEmptyWorkflowMeta,
   createNode,
   createRoleState,
@@ -141,18 +138,16 @@ type DirectorySummary = {
   isBuiltIn: boolean;
 };
 
-type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'gagents' | 'scope' | 'settings' | 'config-explorer';
+type WorkspacePage = 'studio' | 'scripts' | 'gagents' | 'explorer' | 'console' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'cloud-config' | 'skills' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
-type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'settings', 'config-explorer'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'config-explorer'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'scripts', 'gagents', 'explorer', 'console', 'settings'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'scripts', 'gagents', 'explorer'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -767,6 +762,7 @@ function App() {
   const [authSession, setAuthSession] = useState<AuthSessionState>(createEmptyAuthSession());
   const [workspacePage, setWorkspacePage] = useState<WorkspacePage>(() => readStoredWorkspacePage());
   const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
+  const [explorerInitialFolder, setExplorerInitialFolder] = useState<string | null>(null);
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [userConfigState, setUserConfigState] = useState<{
@@ -789,11 +785,6 @@ function App() {
     directories: [],
   });
   const [workflowList, setWorkflowList] = useState<WorkflowSummary[]>([]);
-  const [workflowSearch, setWorkflowSearch] = useState('');
-  const [workflowLayout, setWorkflowLayout] = useState<WorkflowLayout>('grid');
-  const [newDirectoryPath, setNewDirectoryPath] = useState('');
-  const [newDirectoryLabel, setNewDirectoryLabel] = useState('');
-  const [showDirectoryForm, setShowDirectoryForm] = useState(false);
 
   const [settingsState, setSettingsState] = useState<StudioSettingsState>(createEmptyStudioSettings());
   const [, setSelectedProviderKey] = useState<string | null>(null);
@@ -819,41 +810,27 @@ function App() {
   });
 
   const [connectors, setConnectors] = useState<ConnectorState[]>([]);
-  const [connectorsMeta, setConnectorsMeta] = useState({
+  const [, setConnectorsMeta] = useState({
     homeDirectory: '',
     filePath: '',
     fileExists: false,
   });
-  const [connectorDraftMeta, setConnectorDraftMeta] = useState({
-    filePath: '',
-    fileExists: false,
-    updatedAtUtc: '',
-  });
-  const [connectorSearch, setConnectorSearch] = useState('');
-  const [selectedConnectorKey, setSelectedConnectorKey] = useState<string | null>(null);
+  const [, setSelectedConnectorKey] = useState<string | null>(null);
   const [connectorDraft, setConnectorDraft] = useState<ConnectorState | null>(null);
   const [connectorModalOpen, setConnectorModalOpen] = useState(false);
-  const [connectorImportPending, setConnectorImportPending] = useState(false);
 
   const [roleCatalog, setRoleCatalog] = useState<RoleState[]>([]);
-  const [rolesMeta, setRolesMeta] = useState({
+  const [, setRolesMeta] = useState({
     homeDirectory: '',
     filePath: '',
     fileExists: false,
   });
-  const [roleDraftMeta, setRoleDraftMeta] = useState({
-    filePath: '',
-    fileExists: false,
-    updatedAtUtc: '',
-  });
-  const [roleCatalogSearch, setRoleCatalogSearch] = useState('');
   const [workflowRoleSearch, setWorkflowRoleSearch] = useState('');
-  const [selectedCatalogRoleKey, setSelectedCatalogRoleKey] = useState<string | null>(null);
+  const [, setSelectedCatalogRoleKey] = useState<string | null>(null);
   const [expandedWorkflowRoleKey, setExpandedWorkflowRoleKey] = useState<string | null>(null);
   const [roleDraft, setRoleDraft] = useState<RoleState | null>(null);
   const [roleModalTarget, setRoleModalTarget] = useState<RoleModalTarget>('catalog');
   const [roleModalOpen, setRoleModalOpen] = useState(false);
-  const [roleImportPending, setRoleImportPending] = useState(false);
 
   const [executions, setExecutions] = useState<any[]>([]);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
@@ -908,8 +885,6 @@ function App() {
   const executionActionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const executionLogsPopoutMonitorRef = useRef<number | null>(null);
   const executionLogsPopoutWindowRef = useRef<Window | null>(null);
-  const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
-  const roleImportInputRef = useRef<HTMLInputElement | null>(null);
   const saveShortcutHandlerRef = useRef<() => void>(() => {});
 
   const selectedNode = nodes.find(node => node.id === selectedNodeId) || null;
@@ -917,10 +892,6 @@ function App() {
     () => buildWorkflowAuthoringMetadata(appContext.scopeId),
     [appContext.scopeId],
   );
-  const selectedConnector = connectors.find(connector => connector.key === selectedConnectorKey) || null;
-  const selectedCatalogRole = roleCatalog.find(role => role.key === selectedCatalogRoleKey) || null;
-  const connectorCatalogIsRemote = connectorsMeta.filePath.startsWith('chrono-storage://');
-  const roleCatalogIsRemote = rolesMeta.filePath.startsWith('chrono-storage://');
   const currentWorkflowExecutions = executions.filter(item => {
     const currentName = normalizeWorkflowName(workflowMeta.name);
     return !currentName || normalizeWorkflowName(item.workflowName) === currentName;
@@ -1434,6 +1405,14 @@ function App() {
       const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
       const userConfigData = userConfigResult.status === 'fulfilled' ? userConfigResult.value : null;
 
+      // Runtime URL from chrono-storage config.json (authoritative source) — update local proxy target
+      const nextRuntime = userConfigData?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
+      fetch('/api/_proxy/runtime-url', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtimeBaseUrl: nextRuntime }),
+      }).catch(() => {});
+
       const workflowStorageMode: WorkflowStorageMode = context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace';
       const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
       const nextDirectories = workflowStorageMode === 'scope' && resolvedScopeId
@@ -1444,7 +1423,6 @@ function App() {
             isBuiltIn: true,
           }]
         : Array.isArray(workspace?.directories) ? workspace.directories : [];
-      const nextRuntime = settings?.runtimeBaseUrl || workspace?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
 
       setAppContext(resolveAppContextState(context));
       setWorkspaceSettings({
@@ -1521,12 +1499,11 @@ function App() {
       }
     }
 
-    const savedRuntimeUrl = payload?.runtimeBaseUrl || DEFAULT_REMOTE_RUNTIME_URL;
-    const savedLocalUrl = DEFAULT_LOCAL_RUNTIME_URL;
+    const savedRuntimeUrl = userConfigData?.runtimeBaseUrl || DEFAULT_REMOTE_RUNTIME_URL;
 
     setSettingsState({
       runtimeBaseUrl: savedRuntimeUrl,
-      localRuntimeUrl: savedLocalUrl,
+      localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
       runtimeMode: 'remote',
       ornnBaseUrl: payload?.ornnBaseUrl || DEFAULT_ORNN_BASE_URL,
       appearanceTheme: payload?.appearanceTheme || 'blue',
@@ -1541,26 +1518,6 @@ function App() {
       status: 'idle',
       message: '',
     });
-
-    // Auto-probe local runtime and switch if reachable
-    probeLocalRuntime(savedLocalUrl).then(reachable => {
-      setSettingsState(prev => ({
-        ...prev,
-        runtimeMode: reachable ? 'local' : 'remote',
-      }));
-    });
-  }
-
-  async function probeLocalRuntime(localUrl: string): Promise<boolean> {
-    try {
-      const response = await fetch(localUrl.replace(/\/+$/, '') + '/api/health', {
-        method: 'GET',
-        signal: AbortSignal.timeout(3000),
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
   }
 
   function hydrateConnectorCatalog(payload: any) {
@@ -1592,20 +1549,10 @@ function App() {
   }
 
   function hydrateConnectorDraft(payload: any) {
-    setConnectorDraftMeta({
-      filePath: payload?.filePath || '',
-      fileExists: Boolean(payload?.fileExists),
-      updatedAtUtc: payload?.updatedAtUtc || '',
-    });
     setConnectorDraft(payload?.draft ? toConnectorState(payload.draft) : null);
   }
 
   function hydrateRoleDraft(payload: any) {
-    setRoleDraftMeta({
-      filePath: payload?.filePath || '',
-      fileExists: Boolean(payload?.fileExists),
-      updatedAtUtc: payload?.updatedAtUtc || '',
-    });
     setRoleDraft(payload?.draft ? toRoleState(payload.draft, 1) : null);
   }
 
@@ -1776,8 +1723,9 @@ function App() {
     setWorkflowMeta(prev => (prev.dirty ? prev : { ...prev, dirty: true }));
   }
 
-  function openWorkflowsPage() {
-    setWorkspacePage('workflows');
+  function openExplorerPage(initialFolder?: string) {
+    setWorkspacePage('explorer');
+    if (initialFolder) setExplorerInitialFolder(initialFolder);
     setRightPanelOpen(false);
     setPaletteOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
@@ -1791,13 +1739,6 @@ function App() {
 
   function openScriptsPage() {
     setWorkspacePage('scripts');
-    setRightPanelOpen(false);
-    setPaletteOpen(false);
-    setCanvasMenu({ open: false, x: 0, y: 0 });
-  }
-
-  function openCatalogPage(page: CatalogPage) {
-    setWorkspacePage(page);
     setRightPanelOpen(false);
     setPaletteOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
@@ -1828,28 +1769,6 @@ function App() {
     setRightPanelOpen(true);
   }
 
-  function createNewWorkflow(directoryId?: string | null) {
-    syncSuppressedRef.current = true;
-    invalidateYamlSync();
-    setRoles(createDefaultRoles());
-    setNodes([]);
-    setEdges([]);
-    setSelectedNodeId(null);
-    setSelectedExecutionId(null);
-    setExecutionDetail(null);
-    setExecutionTrace(null);
-    setActiveExecutionLogIndex(null);
-    setWorkflowMeta({
-      ...createEmptyWorkflowMeta(),
-      directoryId: directoryId ?? workspaceSettings.directories[0]?.directoryId ?? null,
-      dirty: true,
-    });
-    setWorkspacePage('studio');
-    setStudioView('editor');
-    setRightPanelTab('node');
-    setRightPanelOpen(false);
-    scheduleCanvasOverview();
-  }
 
   function scheduleCanvasOverview() {
     window.requestAnimationFrame(() => {
@@ -1867,35 +1786,6 @@ function App() {
   async function loadWorkflowList() {
     const workflows = await api.workspace.listWorkflows();
     setWorkflowList(Array.isArray(workflows) ? workflows : []);
-  }
-
-  async function loadWorkspaceSettings() {
-    const [context, settings] = await Promise.all([
-      api.app.getContext(),
-      api.workspace.getSettings(),
-    ]);
-    setAppContext({
-      hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
-      scopeId: context?.scopeResolved && context?.scopeId ? context.scopeId : null,
-      scopeResolved: Boolean(context?.scopeResolved && context?.scopeId),
-      scopeSource: context?.scopeSource || '',
-      workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
-      scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
-      scriptsEnabled: Boolean(context?.features?.scripts),
-      scriptContract: {
-        inputType: context?.scriptContract?.inputType || '',
-        readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
-      },
-    });
-    const nextSettings = {
-      runtimeBaseUrl: workspaceSettings.runtimeBaseUrl,
-      directories: Array.isArray(settings?.directories) ? settings.directories : [],
-    };
-    setWorkspaceSettings(nextSettings);
-    setWorkflowMeta(prev => ({
-      ...prev,
-      directoryId: prev.directoryId || nextSettings.directories[0]?.directoryId || null,
-    }));
   }
 
   function hydrateWorkflow(payload: any) {
@@ -2066,7 +1956,7 @@ function App() {
     const directoryId = workflowMeta.directoryId || workspaceSettings.directories[0]?.directoryId;
     if (!directoryId) {
       flash('Add a workflow directory first', 'error');
-      openWorkflowsPage();
+      openExplorerPage('workflows');
       return;
     }
 
@@ -2138,50 +2028,6 @@ function App() {
     }
   }
 
-  function handleImportWorkflow() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.yaml,.yml';
-    input.onchange = async event => {
-      const file = (event.target as HTMLInputElement).files?.[0];
-      if (!file) {
-        return;
-      }
-
-      const yaml = await file.text();
-      try {
-        const parsed = await api.editor.parseYaml(yaml, workflowList.map(item => item.name));
-        if (!parsed?.document) {
-          throw new Error('YAML parse returned an empty document.');
-        }
-
-        const graph = buildGraphFromWorkflow(parsed.document, null, createDefaultRoles());
-        syncSuppressedRef.current = true;
-        invalidateYamlSync();
-        setRoles(graph.roles);
-        setNodes(graph.nodes);
-        setEdges(graph.edges);
-        setSelectedNodeId(graph.nodes[0]?.id || null);
-        setWorkflowMeta({
-          ...createEmptyWorkflowMeta(),
-          directoryId: workflowMeta.directoryId || workspaceSettings.directories[0]?.directoryId || null,
-          name: parsed.document.name || file.name.replace(/\.ya?ml$/i, ''),
-          description: parsed.document.description || '',
-          closedWorldMode: Boolean(parsed.document.configuration?.closedWorldMode),
-          yaml,
-          findings: Array.isArray(parsed.findings) ? parsed.findings : [],
-          dirty: true,
-          lastSavedAt: null,
-        });
-        setWorkspacePage('studio');
-        setStudioView('editor');
-        flash('YAML imported', 'success');
-      } catch (error: any) {
-        flash(error?.message || 'Import failed', 'error');
-      }
-    };
-    input.click();
-  }
 
   async function applyAskAiYaml(yaml: string) {
     const parsed = await api.editor.parseYaml(yaml, workflowList.map(item => item.name));
@@ -2454,83 +2300,6 @@ function App() {
     }
   }
 
-  async function handleAddDirectory() {
-    if (appContext.workflowStorageMode === 'scope') {
-      flash('Workflow storage is bound to the current scope.', 'info');
-      return;
-    }
-
-    if (!newDirectoryPath.trim()) {
-      flash('Directory path required', 'error');
-      return;
-    }
-
-    try {
-      await api.workspace.addDirectory({
-        path: newDirectoryPath.trim(),
-        label: newDirectoryLabel.trim() || null,
-      });
-      setNewDirectoryPath('');
-      setNewDirectoryLabel('');
-      setShowDirectoryForm(false);
-      await loadWorkspaceSettings();
-      await loadWorkflowList();
-      flash('Directory added', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to add directory', 'error');
-    }
-  }
-
-  async function handleRemoveDirectory(directoryId: string) {
-    if (appContext.workflowStorageMode === 'scope') {
-      flash('Workflow storage is bound to the current scope.', 'info');
-      return;
-    }
-
-    try {
-      await api.workspace.removeDirectory(directoryId);
-      await loadWorkspaceSettings();
-      await loadWorkflowList();
-      flash('Directory removed', 'info');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to remove directory', 'error');
-    }
-  }
-
-  async function handleSaveConnectors() {
-    try {
-      const response = await api.connectors.saveCatalog({
-        connectors: connectors.map(toConnectorPayload),
-      });
-      hydrateConnectorCatalog(response);
-      flash('Connectors saved', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to save connectors', 'error');
-    }
-  }
-
-  function openConnectorImportPicker() {
-    connectorImportInputRef.current?.click();
-  }
-
-  async function handleConnectorCatalogImport(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) {
-      return;
-    }
-
-    try {
-      setConnectorImportPending(true);
-      const response = await api.connectors.importCatalog(file);
-      hydrateConnectorCatalog(response);
-      flash(`Imported ${response?.importedCount ?? 0} connectors from ${response?.sourceFilePath || file.name}`, 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to import connector catalog', 'error');
-    } finally {
-      setConnectorImportPending(false);
-    }
-  }
 
   async function clearConnectorDraft() {
     await api.connectors.deleteDraft();
@@ -2547,11 +2316,6 @@ function App() {
       draft: toConnectorPayload(nextDraft!),
     });
     hydrateConnectorDraft(response);
-  }
-
-  function openConnectorModal(type: ConnectorState['type'] = 'http') {
-    setConnectorDraft(prev => prev || createEmptyConnector(type, ''));
-    setConnectorModalOpen(true);
   }
 
   async function closeConnectorModal() {
@@ -2584,7 +2348,7 @@ function App() {
 
     setConnectors(prev => [nextConnector, ...prev]);
     setSelectedConnectorKey(nextConnector.key);
-    openCatalogPage('connectors');
+    openExplorerPage();
     setConnectorDraft(null);
     setConnectorModalOpen(false);
 
@@ -2595,53 +2359,6 @@ function App() {
     }
 
     flash(`Connector ${connectorName} added`, 'success');
-  }
-
-  function handleDeleteConnector(connectorKey: string) {
-    setConnectors(prev => {
-      const next = prev.filter(connector => connector.key !== connectorKey);
-      setSelectedConnectorKey(next[0]?.key || null);
-      return next;
-    });
-  }
-
-  function updateConnector(connectorKey: string, updater: (connector: ConnectorState) => ConnectorState) {
-    setConnectors(prev => prev.map(connector => (connector.key === connectorKey ? updater(connector) : connector)));
-  }
-
-  async function handleSaveRoleCatalog() {
-    try {
-      const response = await api.roles.saveCatalog({
-        roles: roleCatalog.map(toRolePayload),
-      });
-      hydrateRoleCatalog(response);
-      flash('Roles saved', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to save roles', 'error');
-    }
-  }
-
-  function openRoleImportPicker() {
-    roleImportInputRef.current?.click();
-  }
-
-  async function handleRoleCatalogImport(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) {
-      return;
-    }
-
-    try {
-      setRoleImportPending(true);
-      const response = await api.roles.importCatalog(file);
-      hydrateRoleCatalog(response);
-      flash(`Imported ${response?.importedCount ?? 0} roles from ${response?.sourceFilePath || file.name}`, 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to import role catalog', 'error');
-    } finally {
-      setRoleImportPending(false);
-    }
   }
 
   async function clearRoleDraft() {
@@ -2721,7 +2438,7 @@ function App() {
     } else {
       setRoleCatalog(prev => [nextRole, ...prev]);
       setSelectedCatalogRoleKey(nextRole.key);
-      openCatalogPage('roles');
+      openExplorerPage();
     }
 
     setRoleDraft(null);
@@ -2734,16 +2451,6 @@ function App() {
     }
 
     flash(roleModalTarget === 'workflow' ? `Role ${roleId} added to workflow` : `Role ${roleId} added`, 'success');
-  }
-
-  function handleDeleteCatalogRole(roleKey: string) {
-    const nextRoles = roleCatalog.filter(role => role.key !== roleKey);
-    setRoleCatalog(nextRoles);
-    setSelectedCatalogRoleKey(nextRoles[0]?.key || null);
-  }
-
-  function updateCatalogRole(roleKey: string, updater: (role: RoleState) => RoleState) {
-    setRoleCatalog(prev => prev.map(role => (role.key === roleKey ? updater(role) : role)));
   }
 
   function updateWorkflowRole(roleKey: string, updater: (role: RoleState) => RoleState) {
@@ -2820,23 +2527,23 @@ function App() {
 
     setRoleCatalog(nextCatalog);
     setSelectedCatalogRoleKey(existing?.key || draft?.key || null);
-    openCatalogPage('roles');
+    openExplorerPage();
     flash('Role copied to catalog. Save to persist.', 'info');
   }
 
   async function handleSaveSettings() {
     try {
-      // Save NyxID Gateway model to user-config (chrono-storage) instead of secrets.json
       const nyxIdProvider = settingsState.providers.find(p => usesFixedProviderName(p.providerType));
-      const userConfigSave = nyxIdProvider
-        ? api.userConfig.save({ defaultModel: nyxIdProvider.model.trim() }).catch(() => {})
-        : Promise.resolve();
+      const activeRuntimeUrl = settingsState.runtimeBaseUrl || DEFAULT_REMOTE_RUNTIME_URL;
 
-      const activeRuntimeUrl = settingsState.runtimeMode === 'local'
-        ? settingsState.localRuntimeUrl
-        : settingsState.runtimeBaseUrl;
-      const response = await api.settings.save({
+      // Save runtimeBaseUrl + defaultModel to chrono-storage (userConfig)
+      const nyxIdModel = nyxIdProvider?.model.trim() || '';
+      const userConfigSaveAll = api.userConfig.save({
+        defaultModel: nyxIdModel,
         runtimeBaseUrl: activeRuntimeUrl,
+      }).catch(() => {});
+
+      const response = await api.settings.save({
         appearanceTheme: settingsState.appearanceTheme,
         colorMode: settingsState.colorMode,
         defaultProviderName: settingsState.defaultProviderName || null,
@@ -2849,11 +2556,19 @@ function App() {
         })),
       });
 
-      await userConfigSave;
-      hydrateSettings(response);
+      await userConfigSaveAll;
+
+      // Update the local proxy target so subsequent requests go to the new URL
+      await fetch('/api/_proxy/runtime-url', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtimeBaseUrl: activeRuntimeUrl }),
+      }).catch(() => {});
+
+      hydrateSettings(response, { defaultModel: nyxIdModel, runtimeBaseUrl: activeRuntimeUrl });
       setWorkspaceSettings(prev => ({
         ...prev,
-        runtimeBaseUrl: response?.runtimeBaseUrl || prev.runtimeBaseUrl,
+        runtimeBaseUrl: activeRuntimeUrl,
       }));
       flash('Settings saved', 'success');
     } catch (error: any) {
@@ -2880,8 +2595,7 @@ function App() {
   }
 
   async function handleTestRuntime(targetUrl?: string) {
-    const urlToTest = targetUrl
-      ?? (settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.runtimeBaseUrl);
+    const urlToTest = targetUrl ?? settingsState.runtimeBaseUrl;
     try {
       setRuntimeTestState({
         status: 'testing',
@@ -3049,19 +2763,6 @@ function App() {
     markDirty();
   }
 
-  const filteredWorkflows = workflowList.filter(workflow => {
-    const query = workflowSearch.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-    return [
-      workflow.name,
-      workflow.description,
-      workflow.fileName,
-      workflow.filePath,
-      workflow.directoryLabel,
-    ].join(' ').toLowerCase().includes(query);
-  });
 
   const filteredPrimitiveCategories = PRIMITIVE_CATEGORIES.map(category => ({
     ...category,
@@ -3085,22 +2786,6 @@ function App() {
     ].join(' ').toLowerCase().includes(query);
   });
 
-  const filteredConnectorList = connectors.filter(connector => {
-    const query = connectorSearch.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-    return [
-      connector.name,
-      connector.type,
-      connector.http.baseUrl,
-      connector.cli.command,
-      connector.mcp.serverName,
-      connector.mcp.command,
-    ].join(' ').toLowerCase().includes(query);
-  });
-
-  const filteredRoleCatalog = roleCatalog.filter(role => matchesRoleQuery(role, roleCatalogSearch));
   const filteredWorkflowCatalogRoles = roleCatalog.filter(role => matchesRoleQuery(role, workflowRoleSearch));
   const filteredWorkflowRoles = roles.filter(role => matchesRoleQuery(role, workflowRoleSearch));
 
@@ -3119,10 +2804,6 @@ function App() {
   const executionLogsCollapsed = !isExecutionLogsPopout && (logsCollapsed || logsDetached);
   const executionLogsToggleLabel = logsDetached ? 'Viewing in new window' : executionSummaryLabel;
 
-  const selectedSurfaceStyle = {
-    borderColor: 'var(--accent-border)',
-    background: 'var(--accent-soft-end)',
-  } as const;
   const selectedIconSurfaceStyle = {
     background: 'var(--accent-icon-surface)',
     color: 'var(--accent)',
@@ -3466,464 +3147,7 @@ function App() {
     );
   }
 
-  function renderRolesPage() {
-    return (
-      <>
-        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-          <div>
-            <div className="panel-eyebrow">Catalog</div>
-            <div className="panel-title !mt-0">Roles</div>
-          </div>
-        </header>
 
-        <section className="flex-1 min-h-0 grid grid-cols-[360px_minmax(0,1fr)] bg-[#F2F1EE]">
-          <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
-            <div className="space-y-3">
-              <div className="catalog-sidebar-actions">
-                <input
-                  ref={roleImportInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={event => void handleRoleCatalogImport(event)}
-                />
-                <button
-                  onClick={() => openRoleModal('catalog')}
-                  className="solid-action flex-1 justify-center"
-                >
-                  <Plus size={14} /> Add role
-                </button>
-                <button
-                  onClick={handleSaveRoleCatalog}
-                  className="ghost-action catalog-save-action"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={openRoleImportPicker}
-                  className="ghost-action catalog-save-action"
-                  disabled={roleImportPending}
-                >
-                  <Upload size={14} /> {roleImportPending ? 'Importing...' : 'Import'}
-                </button>
-              </div>
-
-              <div className="search-field">
-                <Search size={14} className="text-gray-400" />
-                <input
-                  className="search-input"
-                  placeholder="Search roles"
-                  value={roleCatalogSearch}
-                  onChange={event => setRoleCatalogSearch(event.target.value)}
-                />
-              </div>
-
-              <div className="text-[11px] text-gray-400 break-all">
-                {roleCatalogIsRemote
-                  ? `${rolesMeta.fileExists ? 'Remote object' : 'Remote object pending'} · ${rolesMeta.filePath}`
-                  : `${rolesMeta.fileExists ? 'File' : 'Will create'} · ${rolesMeta.filePath}`}
-              </div>
-              {roleDraftMeta.filePath ? (
-                <div className="text-[11px] text-gray-400 break-all">
-                  Draft · {roleDraftMeta.filePath}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="space-y-2">
-              {filteredRoleCatalog.length === 0 ? (
-                <div className="empty-card">No roles matched</div>
-              ) : filteredRoleCatalog.map(role => (
-                <button
-                  key={role.key}
-                  onClick={() => setSelectedCatalogRoleKey(role.key)}
-                  className="w-full text-left rounded-[18px] border border-[#EEEAE4] bg-white px-3 py-3 transition-colors hover:bg-[#FAF8F4]"
-                  style={selectedCatalogRoleKey === role.key ? selectedSurfaceStyle : undefined}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[13px] font-semibold text-gray-800 truncate">{role.name || role.id || 'Role'}</div>
-                    <span className="text-[10px] uppercase tracking-wide text-gray-400">{role.id || 'role'}</span>
-                  </div>
-                  <div className="text-[11px] text-gray-400 mt-1 truncate">
-                    {role.provider || 'default'}{role.model ? ` · ${role.model}` : ''}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="min-h-0 overflow-y-auto p-6">
-            {selectedCatalogRole ? (
-              <div className="max-w-[980px] space-y-3 rounded-[28px] border border-[#EEEAE4] bg-white p-5 shadow-[0_22px_54px_rgba(17,24,39,0.06)]">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[18px] font-semibold text-gray-800">{selectedCatalogRole.name || selectedCatalogRole.id || 'Role'}</div>
-                    <div className="text-[12px] text-gray-400 mt-1">{selectedCatalogRole.id || 'role_id'}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => applyCatalogRoleToWorkflow(selectedCatalogRole.key)}
-                      className="ghost-action !px-3"
-                    >
-                      Use in workflow
-                    </button>
-                    <button
-                      onClick={() => handleDeleteCatalogRole(selectedCatalogRole.key)}
-                      title="Delete role."
-                      className="panel-icon-button text-red-500 hover:bg-red-50"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <InputField
-                    label="Role ID"
-                    value={selectedCatalogRole.id}
-                    onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                      ...role,
-                      id: value,
-                    }))}
-                  />
-                  <InputField
-                    label="Role name"
-                    value={selectedCatalogRole.name}
-                    onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                      ...role,
-                      name: value,
-                    }))}
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="field-label">Provider</label>
-                    <select
-                      className="panel-input mt-1"
-                      value={selectedCatalogRole.provider}
-                      onChange={event => {
-                        const selectedProviderName = event.target.value;
-                        const configuredProvider = settingsState.providers.find(provider => provider.providerName === selectedProviderName);
-                        updateCatalogRole(selectedCatalogRole.key, role => ({
-                          ...role,
-                          provider: selectedProviderName,
-                          model: configuredProvider?.model || role.model,
-                        }));
-                      }}
-                    >
-                      <option value="">Default</option>
-                      {settingsState.providers.map(provider => (
-                        <option key={provider.key} value={provider.providerName}>
-                          {provider.providerName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <InputField
-                    label="Model"
-                    value={selectedCatalogRole.model}
-                    onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                      ...role,
-                      model: value,
-                    }))}
-                  />
-                </div>
-
-                <TextAreaField
-                  label="System prompt"
-                  value={selectedCatalogRole.systemPrompt}
-                  rows={8}
-                  onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                    ...role,
-                    systemPrompt: value,
-                  }))}
-                />
-
-                <div className="space-y-2">
-                  <div className="field-label">Allowed connectors</div>
-                  <div className="flex flex-wrap gap-2">
-                    {connectors.length === 0 ? (
-                      <div className="text-[12px] text-gray-400">No connectors configured</div>
-                    ) : connectors.map(connector => {
-                      const active = splitLines(selectedCatalogRole.connectorsText).includes(connector.name);
-                      return (
-                        <button
-                          key={connector.key}
-                          onClick={() => updateCatalogRole(selectedCatalogRole.key, role => {
-                            const values = new Set(splitLines(role.connectorsText));
-                            if (values.has(connector.name)) {
-                              values.delete(connector.name);
-                            } else {
-                              values.add(connector.name);
-                            }
-
-                            return {
-                              ...role,
-                              connectorsText: Array.from(values).join('\n'),
-                            };
-                          })}
-                          className={`chip-button ${active ? 'chip-button-active' : ''}`}
-                        >
-                          {connector.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="max-w-[420px]">
-                <EmptyPanel
-                  icon={<User size={18} className="text-gray-300" />}
-                  title="No role selected"
-                  copy="Create a role or pick one from the catalog."
-                />
-              </div>
-            )}
-          </div>
-        </section>
-      </>
-    );
-  }
-
-  function renderConnectorsPage() {
-    return (
-      <>
-        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-          <div>
-            <div className="panel-eyebrow">Catalog</div>
-            <div className="panel-title !mt-0">Connectors</div>
-          </div>
-        </header>
-
-        <section className="flex-1 min-h-0 grid grid-cols-[360px_minmax(0,1fr)] bg-[#F2F1EE]">
-          <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
-            <div className="space-y-3">
-              <div className="catalog-sidebar-actions">
-                <input
-                  ref={connectorImportInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={event => void handleConnectorCatalogImport(event)}
-                />
-                <button
-                  onClick={() => openConnectorModal('http')}
-                  className="solid-action flex-1 justify-center"
-                >
-                  <Plus size={14} /> Add connector
-                </button>
-                <button
-                  onClick={handleSaveConnectors}
-                  className="ghost-action catalog-save-action"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={openConnectorImportPicker}
-                  className="ghost-action catalog-save-action"
-                  disabled={connectorImportPending}
-                >
-                  <Upload size={14} /> {connectorImportPending ? 'Importing...' : 'Import'}
-                </button>
-              </div>
-
-              <div className="search-field">
-                <Search size={14} className="text-gray-400" />
-                <input
-                  className="search-input"
-                  placeholder="Search connectors"
-                  value={connectorSearch}
-                  onChange={event => setConnectorSearch(event.target.value)}
-                />
-              </div>
-
-              <div className="text-[11px] text-gray-400 break-all">
-                {connectorCatalogIsRemote
-                  ? `${connectorsMeta.fileExists ? 'Remote object' : 'Remote object pending'} · ${connectorsMeta.filePath}`
-                  : `${connectorsMeta.fileExists ? 'File' : 'Will create'} · ${connectorsMeta.filePath}`}
-              </div>
-              {connectorDraftMeta.filePath ? (
-                <div className="text-[11px] text-gray-400 break-all">
-                  Draft · {connectorDraftMeta.filePath}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="space-y-2">
-              {filteredConnectorList.length === 0 ? (
-                <div className="empty-card">No connectors matched</div>
-              ) : filteredConnectorList.map(connector => (
-                <button
-                  key={connector.key}
-                  onClick={() => setSelectedConnectorKey(connector.key)}
-                  className="w-full text-left rounded-[18px] border border-[#EEEAE4] bg-white px-3 py-3 transition-colors hover:bg-[#FAF8F4]"
-                  style={selectedConnectorKey === connector.key ? selectedSurfaceStyle : undefined}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[13px] font-semibold text-gray-800 truncate">{connector.name || 'New connector'}</div>
-                    <span className="text-[10px] uppercase tracking-wide text-gray-400">{connector.type}</span>
-                  </div>
-                  <div className="text-[11px] text-gray-400 mt-1 truncate">
-                    {connector.type === 'http'
-                      ? connector.http.baseUrl || 'HTTP connector'
-                      : connector.type === 'cli'
-                        ? connector.cli.command || 'CLI connector'
-                        : connector.mcp.serverName || connector.mcp.command || 'MCP connector'}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="min-h-0 overflow-y-auto p-6">
-            {selectedConnector ? (
-              <div className="max-w-[980px] space-y-3 rounded-[28px] border border-[#EEEAE4] bg-white p-5 shadow-[0_22px_54px_rgba(17,24,39,0.06)]">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[18px] font-semibold text-gray-800">{selectedConnector.name || 'Connector'}</div>
-                    <div className="text-[12px] text-gray-400 mt-1">{selectedConnector.type.toUpperCase()}</div>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteConnector(selectedConnector.key)}
-                    title="Delete connector."
-                    className="panel-icon-button text-red-500 hover:bg-red-50"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-
-                <InputField
-                  label="Name"
-                  value={selectedConnector.name}
-                  onChange={value => updateConnector(selectedConnector.key, connector => ({ ...connector, name: value }))}
-                />
-
-                <div>
-                  <label className="field-label">Type</label>
-                  <select
-                    className="panel-input mt-1"
-                    value={selectedConnector.type}
-                    onChange={event => updateConnector(selectedConnector.key, connector => ({ ...connector, type: event.target.value as ConnectorState['type'] }))}
-                  >
-                    <option value="http">HTTP</option>
-                    <option value="cli">CLI</option>
-                    <option value="mcp">MCP</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <InputField
-                    label="Timeout"
-                    value={selectedConnector.timeoutMs}
-                    onChange={value => updateConnector(selectedConnector.key, connector => ({ ...connector, timeoutMs: value }))}
-                  />
-                  <InputField
-                    label="Retry"
-                    value={selectedConnector.retry}
-                    onChange={value => updateConnector(selectedConnector.key, connector => ({ ...connector, retry: value }))}
-                  />
-                </div>
-
-                <label className={`inline-flex items-center gap-2 rounded-[14px] border px-3 py-2 text-[12px] ${selectedConnector.enabled ? 'border-green-200 bg-green-50 text-green-700' : 'border-[#E5E1DA] bg-white text-gray-600'}`}>
-                  <input
-                    type="checkbox"
-                    checked={selectedConnector.enabled}
-                    onChange={event => updateConnector(selectedConnector.key, connector => ({ ...connector, enabled: event.target.checked }))}
-                  />
-                  Enabled
-                </label>
-
-                {selectedConnector.type === 'http' ? (
-                  <div className="space-y-3 rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] p-4">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><Globe size={15} /> HTTP</div>
-                    <InputField
-                      label="Base URL"
-                      value={selectedConnector.http.baseUrl}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        http: { ...connector.http, baseUrl: value },
-                      }))}
-                    />
-                    <TextAreaField
-                      label="Allowed methods"
-                      value={selectedConnector.http.allowedMethods.join('\n')}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        http: { ...connector.http, allowedMethods: splitLines(value).map(item => item.toUpperCase()) },
-                      }))}
-                    />
-                    <TextAreaField
-                      label="Allowed paths"
-                      value={selectedConnector.http.allowedPaths.join('\n')}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        http: { ...connector.http, allowedPaths: splitLines(value) },
-                      }))}
-                    />
-                  </div>
-                ) : null}
-
-                {selectedConnector.type === 'cli' ? (
-                  <div className="space-y-3 rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] p-4">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><Terminal size={15} /> CLI</div>
-                    <InputField
-                      label="Command"
-                      value={selectedConnector.cli.command}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        cli: { ...connector.cli, command: value },
-                      }))}
-                    />
-                    <TextAreaField
-                      label="Fixed arguments"
-                      value={selectedConnector.cli.fixedArguments.join('\n')}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        cli: { ...connector.cli, fixedArguments: splitLines(value) },
-                      }))}
-                    />
-                  </div>
-                ) : null}
-
-                {selectedConnector.type === 'mcp' ? (
-                  <div className="space-y-3 rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] p-4">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><Wrench size={15} /> MCP</div>
-                    <InputField
-                      label="Server name"
-                      value={selectedConnector.mcp.serverName}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        mcp: { ...connector.mcp, serverName: value },
-                      }))}
-                    />
-                    <InputField
-                      label="Command"
-                      value={selectedConnector.mcp.command}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        mcp: { ...connector.mcp, command: value },
-                      }))}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="max-w-[420px]">
-                <EmptyPanel
-                  icon={<ArrowRightLeft size={18} className="text-gray-300" />}
-                  title="No connector selected"
-                  copy="Create a connector or pick one from the catalog."
-                />
-              </div>
-            )}
-          </div>
-        </section>
-      </>
-    );
-  }
 
   if (authSession.loading) {
     return <AppLoadingScreen />;
@@ -3971,46 +3195,46 @@ function App() {
           <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[14px] border border-black/10 bg-[#18181B]">
             <AevatarBrandMark size={44} />
           </div>
+
+          {/* ── Service Sources ── */}
+          <div className="w-8 border-t border-[#E6E3DE] my-0.5" />
           <RailButton
             active={workspacePage === 'studio'}
-            label="Studio"
+            label="Workflow Studio"
             icon={<WorkflowIcon size={18} />}
             onClick={openStudioPage}
-          />
-          <RailButton
-            active={workspacePage === 'workflows'}
-            label="Workflows"
-            icon={<FileText size={18} />}
-            onClick={openWorkflowsPage}
           />
           {appContext.scriptsEnabled ? (
             <RailButton
               active={workspacePage === 'scripts'}
-              label="Scripts Studio"
+              label="Script Studio"
               icon={<Code2 size={18} />}
               onClick={openScriptsPage}
             />
           ) : null}
           <RailButton
-            active={workspacePage === 'config-explorer'}
-            label="Explorer"
-            icon={<FolderPlus size={18} />}
-            onClick={() => setWorkspacePage('config-explorer')}
-          />
-          <RailButton
             active={workspacePage === 'gagents'}
-            label="GAgents"
+            label="GAgent Types"
             icon={<Bot size={18} />}
             onClick={() => setWorkspacePage('gagents')}
+          />
+
+          {/* ── Storage ── */}
+          <div className="w-8 border-t border-[#E6E3DE] my-0.5" />
+          <RailButton
+            active={workspacePage === 'explorer'}
+            label="Explorer"
+            icon={<FolderPlus size={18} />}
+            onClick={() => openExplorerPage()}
           />
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-3">
           <RailButton
-            active={workspacePage === 'scope'}
-            label="Scope"
+            active={workspacePage === 'console'}
+            label="Console"
             icon={<Globe size={18} />}
-            onClick={() => setWorkspacePage('scope')}
+            onClick={() => setWorkspacePage('console')}
           />
           <RailButton
             active={settingsState.colorMode === 'dark'}
@@ -4028,208 +3252,7 @@ function App() {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col">
-        {workspacePage === 'workflows' ? (
-          <>
-            <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-              <div>
-                <div className="panel-eyebrow">Workspace</div>
-                <div className="panel-title !mt-0">Workflows</div>
-              </div>
-            </header>
-
-            <section className="flex-1 min-h-0 grid grid-cols-[320px_minmax(0,1fr)] bg-[#F2F1EE]">
-              <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="section-heading">{appContext.workflowStorageMode === 'scope' ? 'Scope' : 'Directories'}</div>
-                    <div className="text-[12px] text-gray-400 mt-1">
-                      {appContext.workflowStorageMode === 'scope'
-                        ? 'Workflows are loaded from and saved to the current login scope.'
-                        : 'New workflows will be created in the selected directory.'}
-                    </div>
-                  </div>
-                  {appContext.workflowStorageMode !== 'scope' ? (
-                    <button
-                      onClick={() => setShowDirectoryForm(value => !value)}
-                      title={showDirectoryForm ? 'Hide directory form.' : 'Add workflow directory.'}
-                      className="panel-icon-button"
-                    >
-                      <FolderPlus size={14} />
-                    </button>
-                  ) : null}
-                </div>
-
-                {showDirectoryForm && appContext.workflowStorageMode !== 'scope' ? (
-                  <div className="space-y-2 rounded-[22px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-                    <input
-                      className="panel-input"
-                      placeholder="/absolute/path/to/workflows"
-                      value={newDirectoryPath}
-                      onChange={event => setNewDirectoryPath(event.target.value)}
-                    />
-                    <input
-                      className="panel-input"
-                      placeholder="Directory label"
-                      value={newDirectoryLabel}
-                      onChange={event => setNewDirectoryLabel(event.target.value)}
-                    />
-                    <button
-                      onClick={handleAddDirectory}
-                      className="solid-action w-full justify-center"
-                    >
-                      Add directory
-                    </button>
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  {workspaceSettings.directories.map(directory => (
-                    <div
-                      key={directory.directoryId}
-                      className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-3"
-                      style={workflowMeta.directoryId === directory.directoryId ? selectedSurfaceStyle : undefined}
-                    >
-                      <div className="flex items-start gap-3">
-                        <button
-                          onClick={() => setWorkflowMeta(prev => ({ ...prev, directoryId: directory.directoryId }))}
-                          className="text-left flex-1 min-w-0"
-                        >
-                          <div className="text-[13px] font-semibold text-gray-800 truncate">{directory.label}</div>
-                          <div className="text-[11px] text-gray-400 truncate mt-1">{directory.path}</div>
-                        </button>
-                        {!directory.isBuiltIn && appContext.workflowStorageMode !== 'scope' ? (
-                          <button
-                            onClick={() => void handleRemoveDirectory(directory.directoryId)}
-                            title="Remove directory."
-                            className="p-2 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </aside>
-
-              <div className="min-h-0 flex flex-col">
-                <div className="p-5 border-b border-[#E6E3DE] bg-white/70">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="search-field max-w-[420px] flex-1 min-w-[260px]">
-                      <Search size={14} className="text-gray-400" />
-                      <input
-                        className="search-input"
-                        placeholder="Search workflows"
-                        value={workflowSearch}
-                        onChange={event => setWorkflowSearch(event.target.value)}
-                      />
-                    </div>
-
-                    <div className="workflow-toolbar-actions">
-                      <div className="inline-flex items-center gap-2 rounded-[18px] border border-[#E5E1DA] bg-white px-2 py-2 shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-                        <button
-                          type="button"
-                          onClick={() => setWorkflowLayout('grid')}
-                          data-tooltip="Show workflows in a grid."
-                          className="panel-icon-button"
-                          style={workflowLayout === 'grid' ? selectedIconSurfaceStyle : undefined}
-                        >
-                          <LayoutGrid size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setWorkflowLayout('list')}
-                          data-tooltip="Show workflows in a list."
-                          className="panel-icon-button"
-                          style={workflowLayout === 'list' ? selectedIconSurfaceStyle : undefined}
-                        >
-                          <Rows3 size={15} />
-                        </button>
-                      </div>
-
-                      <button onClick={handleImportWorkflow} className="ghost-action">
-                        <Upload size={14} /> Import
-                      </button>
-                      <button
-                        onClick={() => createNewWorkflow(workspaceSettings.directories[0]?.directoryId || workflowMeta.directoryId)}
-                        className="solid-action"
-                        title="Create workflow"
-                      >
-                        <Plus size={16} /> New workflow
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 min-h-0 overflow-y-auto p-6">
-                  {filteredWorkflows.length === 0 ? (
-                    <div className="max-w-[420px]">
-                      <EmptyPanel
-                        icon={<FileText size={18} className="text-gray-300" />}
-                        title="No workflows"
-                        copy="Create a workflow with the New workflow button above."
-                      />
-                    </div>
-                  ) : (
-                    <div className={workflowLayout === 'grid' ? 'grid gap-4 md:grid-cols-2 xl:grid-cols-3' : 'space-y-3 max-w-[1080px]'}>
-                      {filteredWorkflows.map(workflow => (
-                        <button
-                          key={workflow.workflowId}
-                          onClick={() => void openWorkflow(workflow.workflowId)}
-                          className={`w-full text-left rounded-[24px] border border-[#EEEAE4] bg-white transition-colors hover:bg-[#FAF8F4] ${workflowLayout === 'grid' ? 'px-5 py-5' : 'px-5 py-4'}`}
-                          style={workflow.workflowId === workflowMeta.workflowId ? selectedSurfaceStyle : undefined}
-                        >
-                          <div className={`flex gap-4 ${workflowLayout === 'grid' ? 'items-start' : 'items-center'}`}>
-                            <div
-                              className="w-12 h-12 rounded-[16px] flex items-center justify-center bg-[#F3F0EA] text-gray-400"
-                              style={workflow.workflowId === workflowMeta.workflowId ? selectedIconSurfaceStyle : undefined}
-                            >
-                              <FileText size={18} />
-                            </div>
-
-                            <div className="min-w-0 flex-1">
-                              <div className="text-[15px] font-semibold text-gray-800 truncate">{workflow.name}</div>
-                              {workflowLayout === 'grid' ? (
-                                <>
-                                  <div className="text-[12px] text-gray-400 mt-1 truncate">{workflow.directoryLabel}</div>
-                                  <div className="text-[12px] text-gray-400 truncate">{workflow.stepCount} steps · {formatDateTime(workflow.updatedAtUtc)}</div>
-                                  {workflow.description ? (
-                                    <div className="text-[12px] text-gray-500 mt-3 line-clamp-2">{workflow.description}</div>
-                                  ) : null}
-                                </>
-                              ) : (
-                                <>
-                                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-gray-400">
-                                    <span className="truncate">{workflow.directoryLabel}</span>
-                                    <span>{workflow.stepCount} steps</span>
-                                    <span>{formatDateTime(workflow.updatedAtUtc)}</span>
-                                  </div>
-                                  {workflow.description ? (
-                                    <div className="text-[12px] text-gray-500 mt-2 truncate">{workflow.description}</div>
-                                  ) : null}
-                                </>
-                              )}
-                            </div>
-
-                            {workflowLayout === 'list' ? (
-                              <div className="hidden shrink-0 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-300 sm:block">
-                                Open
-                              </div>
-                            ) : null}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
-          </>
-        ) : workspacePage === 'roles' ? (
-          renderRolesPage()
-        ) : workspacePage === 'connectors' ? (
-          renderConnectorsPage()
-        ) : workspacePage === 'scripts' ? (
+        {workspacePage === 'scripts' ? (
           <ScriptsStudio
             appContext={{
               hostMode: appContext.hostMode,
@@ -4241,14 +3264,17 @@ function App() {
             }}
             onFlash={flash}
           />
-        ) : workspacePage === 'config-explorer' ? (
+        ) : workspacePage === 'explorer' ? (
           <ConfigExplorerPage
             scopeId={appContext.scopeId || nyxid.loadSession()?.user.sub || ''}
             flash={flash}
+            initialFolder={explorerInitialFolder}
+            onInitialFolderConsumed={() => setExplorerInitialFolder(null)}
+            onOpenWorkflowInStudio={(workflowId: string) => { void openWorkflow(workflowId); }}
           />
         ) : workspacePage === 'gagents' ? (
           <GAgentPage />
-        ) : workspacePage === 'scope' ? (
+        ) : workspacePage === 'console' ? (
           <ScopePage />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
@@ -4303,40 +3329,17 @@ function App() {
                     </div>
 
                     <div className="settings-section-card space-y-5">
-                      {/* Mode toggle */}
-                      <div className="flex gap-2">
-                        <button
-                          className={settingsState.runtimeMode === 'remote' ? 'solid-action justify-center' : 'ghost-action justify-center'}
-                          onClick={() => { setSettingsState(prev => ({ ...prev, runtimeMode: 'remote' })); setRuntimeTestState({ status: 'idle', message: '' }); }}
-                        >
-                          Remote
-                        </button>
-                        <button
-                          className={settingsState.runtimeMode === 'local' ? 'solid-action justify-center' : 'ghost-action justify-center'}
-                          onClick={() => { setSettingsState(prev => ({ ...prev, runtimeMode: 'local' })); setRuntimeTestState({ status: 'idle', message: '' }); }}
-                        >
-                          Local
-                        </button>
-                      </div>
-
-                      {/* Active URL — only show the one matching the current mode */}
                       <div>
-                        <label className="field-label">
-                          {settingsState.runtimeMode === 'local' ? 'Local runtime URL' : 'Remote runtime URL'}
-                        </label>
+                        <label className="field-label">Runtime URL</label>
                         <input
                           className="panel-input mt-1"
-                          value={settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.runtimeBaseUrl}
+                          value={settingsState.runtimeBaseUrl}
                           onChange={event => {
                             const value = event.target.value;
-                            setSettingsState(prev =>
-                              prev.runtimeMode === 'local'
-                                ? { ...prev, localRuntimeUrl: value }
-                                : { ...prev, runtimeBaseUrl: value },
-                            );
+                            setSettingsState(prev => ({ ...prev, runtimeBaseUrl: value }));
                             setRuntimeTestState({ status: 'idle', message: '' });
                           }}
-                          placeholder={settingsState.runtimeMode === 'local' ? DEFAULT_LOCAL_RUNTIME_URL : DEFAULT_REMOTE_RUNTIME_URL}
+                          placeholder={DEFAULT_REMOTE_RUNTIME_URL}
                         />
                       </div>
 
@@ -4365,7 +3368,7 @@ function App() {
                             <SettingsStatusPill status={runtimeTestState.status} />
                           </div>
                           <div className="text-[12px] text-gray-500 mt-2 break-all">
-                            {settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.runtimeBaseUrl}
+                            {settingsState.runtimeBaseUrl}
                           </div>
                           <div className="text-[13px] text-gray-600 mt-3">
                             {runtimeTestState.message}
@@ -4539,6 +3542,14 @@ function App() {
               </div>
 
               <div className="studio-header-actions">
+                <button
+                  onClick={() => openExplorerPage('workflows')}
+                  data-tooltip="Browse Workflows"
+                  aria-label="Browse Workflows"
+                  className="panel-icon-button header-toolbar-action"
+                >
+                  <FolderOpen size={15} />
+                </button>
                 <button
                   onClick={handleSaveWorkflow}
                   data-tooltip="Save"
@@ -5049,7 +4060,7 @@ function App() {
                             </div>
                             <button
                               onClick={() => {
-                                openCatalogPage('connectors');
+                                openExplorerPage();
                               }}
                               className="accent-inline-link text-[11px] font-medium"
                             >
@@ -5255,7 +4266,7 @@ function App() {
                         </div>
                         <button
                           onClick={() => {
-                            openCatalogPage('roles');
+                            openExplorerPage();
                           }}
                           className="accent-inline-link text-[11px] font-medium"
                         >

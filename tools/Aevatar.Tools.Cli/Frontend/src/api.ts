@@ -2,17 +2,7 @@
 
 import { getAccessToken } from './auth/nyxid';
 
-const DEFAULT_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
-let BASE = `${DEFAULT_RUNTIME_URL}/api`;
-
-export function setBaseUrl(runtimeUrl: string) {
-  const trimmed = (runtimeUrl || DEFAULT_RUNTIME_URL).replace(/\/+$/, '');
-  BASE = `${trimmed}/api`;
-}
-
-export function getBaseUrl(): string {
-  return BASE;
-}
+const BASE = '/api';
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
 
 function getAuthHeaders(): Record<string, string> {
@@ -300,7 +290,7 @@ export const userConfig = {
   }>('/user-config/models'),
 };
 
-/* ─── Executions ─── */
+/* ─── Executions (runtime) ─── */
 export const executions = {
   list:  ()              => request<any[]>('/executions'),
   get:   (id: string)    => request<any>(`/executions/${id}`),
@@ -417,7 +407,7 @@ export const auth = {
   getSession: () => request<any>('/auth/me'),
 };
 
-/* ─── Scope / Runtime APIs (new) ─── */
+/* ─── Scope / Runtime APIs (remote runtime) ─── */
 export const scope = {
   /** GET /api/scopes/{scopeId}/binding — read current default scope binding */
   getBinding: (scopeId: string) =>
@@ -516,7 +506,7 @@ export const scope = {
 // Keep legacy alias for backward compat in App.tsx
 export const runtime = scope;
 
-/* ─── NyxID Chat APIs ─── */
+/* ─── NyxID Chat APIs (runtime) ─── */
 export const nyxidChat = {
   createConversation: (scopeId: string) =>
     request<{ actorId: string; createdAt: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
@@ -542,7 +532,7 @@ export const nyxidChat = {
     request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
 };
 
-/* ─── Chat History APIs ─── */
+/* ─── Chat History APIs (local, chrono-storage backed) ─── */
 export const chatHistory = {
   getIndex: (scopeId: string) =>
     request<{ conversations: Array<{ id: string; title: string; serviceId: string; serviceKind: string; createdAt: string; updatedAt: string; messageCount: number }> }>(
@@ -566,7 +556,7 @@ export const chatHistory = {
     }),
 };
 
-/* ─── GAgent APIs ─── */
+/* ─── GAgent APIs (runtime) ─── */
 export const gagent = {
   /** GET /api/scopes/gagent-types — list available GAgent types */
   listTypes: () =>

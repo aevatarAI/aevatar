@@ -268,7 +268,9 @@ public static class ServiceCollectionExtensions
                 provider.Name,
                 provider.Model,
                 provider.Endpoint,
-                () => secretsStoreAccessor().GetApiKey(provider.Name) ?? provider.ApiKey);
+                () => secretsStoreAccessor().Get("NyxId:AccessToken")?.Trim()
+                     ?? secretsStoreAccessor().GetApiKey(provider.Name)
+                     ?? provider.ApiKey);
         }
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));

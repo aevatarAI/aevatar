@@ -525,10 +525,9 @@ export default function ScopePage() {
 
   // Services
   const [services, setServices] = useState<ServiceOption[]>([
-    { id: '__default-chat__', label: 'Default Chat', kind: 'draft-run' },
     { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat' },
   ]);
-  const [selectedService, setSelectedService] = useState('__default-chat__');
+  const [selectedService, setSelectedService] = useState('nyxid-chat');
 
   // Draft Run YAML (optional)
   const [draftYaml, setDraftYaml] = useState(DEFAULT_CHAT_WORKFLOW_YAML);
@@ -839,17 +838,26 @@ export default function ScopePage() {
     } catch { /* ignore */ }
   }, [scopeId, activeConvId]);
 
+  // Endpoint tabs — currently only 'chat' is functional; others are placeholders
+  const [activeEndpoint, setActiveEndpoint] = useState<'chat' | 'query' | 'execute' | 'raw'>('chat');
+  const endpointTabs: { id: 'chat' | 'query' | 'execute' | 'raw'; label: string }[] = [
+    { id: 'chat', label: 'Chat' },
+    { id: 'query', label: 'Query' },
+    { id: 'execute', label: 'Execute' },
+    { id: 'raw', label: 'Raw' },
+  ];
+
   if (!scopeId) {
     return (
       <>
         <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Scope</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Console</div>
             <div className="text-[18px] font-bold text-gray-800">Not Logged In</div>
           </div>
         </header>
         <div className="flex-1 flex items-center justify-center text-gray-400 text-[14px]">
-          Sign in with NyxID to access your scope.
+          Sign in with NyxID to access the console.
         </div>
       </>
     );
@@ -858,40 +866,78 @@ export default function ScopePage() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <header className="flex-shrink-0 h-[52px] border-b border-[#E6E3DE] bg-white/95 backdrop-blur-sm px-5 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="text-[14px] font-semibold text-gray-800">Chat</div>
-          <ServiceSelector services={services} selected={selectedService} onSelect={setSelectedService} />
-          {activeService.kind === 'draft-run' && (
+      <header className="flex-shrink-0 border-b border-[#E6E3DE] bg-white/95 backdrop-blur-sm px-5">
+        <div className="h-[52px] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="text-[14px] font-semibold text-gray-800">Console</div>
+            <ServiceSelector services={services} selected={selectedService} onSelect={setSelectedService} />
+            {activeService.kind === 'draft-run' && (
+              <button
+                onClick={() => setShowYamlInput(v => !v)}
+                className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  showYamlInput ? 'border-indigo-300 bg-indigo-50 text-indigo-600' : 'border-[#E6E3DE] text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                YAML
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowYamlInput(v => !v)}
-              className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                showYamlInput ? 'border-indigo-300 bg-indigo-50 text-indigo-600' : 'border-[#E6E3DE] text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+              onClick={handleNewChat}
+              className="rounded-lg border border-[#E6E3DE] px-3 py-1.5 text-[12px] text-gray-500 hover:bg-[#F7F5F2] hover:text-gray-700 transition-colors"
+            >
+              New Chat
+            </button>
+            <button
+              onClick={() => setShowDebug(v => !v)}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
+                showDebug ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-[#E6E3DE] text-gray-400 hover:bg-[#F7F5F2]'
               }`}
             >
-              YAML
+              Debug
             </button>
-          )}
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleNewChat}
-            className="rounded-lg border border-[#E6E3DE] px-3 py-1.5 text-[12px] text-gray-500 hover:bg-[#F7F5F2] hover:text-gray-700 transition-colors"
-          >
-            New Chat
-          </button>
-          <button
-            onClick={() => setShowDebug(v => !v)}
-            className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
-              showDebug ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-[#E6E3DE] text-gray-400 hover:bg-[#F7F5F2]'
-            }`}
-          >
-            Debug
-          </button>
+
+        {/* Endpoint Tabs */}
+        <div className="flex items-center gap-1 -mb-px">
+          {endpointTabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveEndpoint(tab.id)}
+              className={`px-3 py-1.5 text-[12px] font-medium rounded-t-lg border-b-2 transition-colors ${
+                activeEndpoint === tab.id
+                  ? 'border-[#18181B] text-gray-800'
+                  : 'border-transparent text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </header>
 
-      {/* Body: Sidebar + Chat */}
+      {/* Body */}
+      {activeEndpoint !== 'chat' ? (
+        <div className="flex-1 min-h-0 flex items-center justify-center bg-[#F2F1EE]">
+          <div className="text-center max-w-sm">
+            <div className="text-[32px] text-gray-300 mb-3">
+              {activeEndpoint === 'query' ? '?' : activeEndpoint === 'execute' ? '>' : '{ }'}
+            </div>
+            <div className="text-[15px] font-semibold text-gray-600 mb-1">
+              {activeEndpoint === 'query' ? 'Query Endpoint' : activeEndpoint === 'execute' ? 'Execute Endpoint' : 'Raw Request'}
+            </div>
+            <div className="text-[13px] text-gray-400">
+              {activeEndpoint === 'query'
+                ? 'Send queries to a bound service and view structured results. Coming soon.'
+                : activeEndpoint === 'execute'
+                ? 'Trigger service execution and track progress. Coming soon.'
+                : 'Send raw JSON requests and inspect responses. Coming soon.'}
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="flex-1 min-h-0 flex">
         {/* Conversation Sidebar */}
         <ConversationSidebar
@@ -989,8 +1035,9 @@ export default function ScopePage() {
         </div>
       </div>
 
-        </div>{/* end Chat Column */}
-      </div>{/* end Body flex */}
+        </div>
+      </div>
+      )}
     </div>
   );
 }

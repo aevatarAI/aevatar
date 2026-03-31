@@ -72,19 +72,27 @@ public static class ScopeGAgentEndpoints
 
             foreach (var type in exportedTypes)
             {
-                if (!type.IsClass || type.IsAbstract)
-                    continue;
-
-                if (!DerivesFromOpenGeneric(type, aiGAgentBaseType))
-                    continue;
-
-                types.Add(new
+                try
                 {
-                    typeName = type.Name,
-                    fullName = type.FullName ?? type.Name,
-                    assemblyName = assembly.GetName().Name ?? assembly.FullName ?? string.Empty,
-                    endpoints = DiscoverEndpoints(type),
-                });
+                    if (!type.IsClass || type.IsAbstract)
+                        continue;
+
+                    if (!DerivesFromOpenGeneric(type, aiGAgentBaseType))
+                        continue;
+
+                    types.Add(new
+                    {
+                        typeName = type.Name,
+                        fullName = type.FullName ?? type.Name,
+                        assemblyName = assembly.GetName().Name ?? assembly.FullName ?? string.Empty,
+                        endpoints = DiscoverEndpoints(type),
+                    });
+                }
+                catch
+                {
+                    // Skip individual types that fail to inspect — don't let one broken
+                    // GAgent type prevent the rest from being listed.
+                }
             }
         }
 
@@ -133,45 +141,62 @@ public static class ScopeGAgentEndpoints
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var current = gAgentType; current != null && current != typeof(object); current = current.BaseType)
         {
-            var methods = current.GetMethods(
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            MethodInfo[] methods;
+            try
+            {
+                methods = current.GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+            }
+            catch
+            {
+                // Type hierarchy reflection failed — skip this level.
+                continue;
+            }
 
             foreach (var method in methods)
             {
-                var ehAttr = method.GetCustomAttribute<EventHandlerAttribute>();
-                if (ehAttr is null)
-                    continue;
-
-                var parameters = method.GetParameters();
-                if (parameters.Length != 1)
-                    continue;
-
-                var paramType = parameters[0].ParameterType;
-                if (!typeof(IMessage).IsAssignableFrom(paramType) || paramType.IsAbstract)
-                    continue;
-
-                // Skip framework/internal event types — they're not user-facing endpoints.
-                if (frameworkEventTypes.Contains(paramType))
-                    continue;
-
-                var typeUrl = TryGetProtoTypeUrl(paramType);
-                var customName = ehAttr.EndpointName;
-                var endpointId = !string.IsNullOrWhiteSpace(customName)
-                    ? customName
-                    : ToCamelCase(StripEventSuffix(paramType.Name));
-
-                if (!seen.Add(endpointId))
-                    continue;
-
-                endpoints.Add(new
+                try
                 {
-                    endpointId,
-                    displayName = endpointId,
-                    kind = "command",
-                    requestTypeUrl = typeUrl ?? paramType.FullName ?? paramType.Name,
-                    description = $"Handles {paramType.Name}",
-                    auto = true,
-                });
+                    var ehAttr = method.GetCustomAttribute<EventHandlerAttribute>();
+                    if (ehAttr is null)
+                        continue;
+
+                    var parameters = method.GetParameters();
+                    if (parameters.Length != 1)
+                        continue;
+
+                    var paramType = parameters[0].ParameterType;
+                    if (!typeof(IMessage).IsAssignableFrom(paramType) || paramType.IsAbstract)
+                        continue;
+
+                    // Skip framework/internal event types — they're not user-facing endpoints.
+                    if (frameworkEventTypes.Contains(paramType))
+                        continue;
+
+                    var typeUrl = TryGetProtoTypeUrl(paramType);
+                    var customName = ehAttr.EndpointName;
+                    var endpointId = !string.IsNullOrWhiteSpace(customName)
+                        ? customName
+                        : ToCamelCase(StripEventSuffix(paramType.Name));
+
+                    if (!seen.Add(endpointId))
+                        continue;
+
+                    endpoints.Add(new
+                    {
+                        endpointId,
+                        displayName = endpointId,
+                        kind = "command",
+                        requestTypeUrl = typeUrl ?? paramType.FullName ?? paramType.Name,
+                        description = $"Handles {paramType.Name}",
+                        auto = true,
+                    });
+                }
+                catch
+                {
+                    // Skip individual methods that fail — don't let one broken
+                    // handler prevent other endpoints from being discovered.
+                }
             }
         }
 
@@ -403,15 +428,33 @@ public static class ScopeGAgentEndpoints
 
             if (completedTask == tcs.Task)
             {
-                // Completed — write RunFinished to close the SSE stream
-                await writer.WriteAsync(new AGUIEvent
+                if (tcs.Task.IsFaulted)
                 {
-                    RunFinished = new RunFinishedEvent
+                    var faultEx = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
+                    var isAuthRequired = IsNyxIdAuthenticationRequired(faultEx!);
+                    await writer.WriteAsync(new AGUIEvent
                     {
-                        ThreadId = actor.Id,
-                        RunId = runId,
-                    },
-                }, CancellationToken.None);
+                        RunError = new RunErrorEvent
+                        {
+                            Message = isAuthRequired
+                                ? "NyxID authentication required. Please sign in."
+                                : (faultEx?.Message ?? "An error occurred."),
+                            Code = isAuthRequired ? "authentication_required" : null,
+                        },
+                    }, CancellationToken.None);
+                }
+                else
+                {
+                    // Completed — write RunFinished to close the SSE stream
+                    await writer.WriteAsync(new AGUIEvent
+                    {
+                        RunFinished = new RunFinishedEvent
+                        {
+                            ThreadId = actor.Id,
+                            RunId = runId,
+                        },
+                    }, CancellationToken.None);
+                }
             }
             else
             {
@@ -434,9 +477,16 @@ public static class ScopeGAgentEndpoints
             logger.LogError(ex, "GAgent draft-run failed for type {TypeName}", request.ActorTypeName);
             try
             {
+                var isAuthRequired = IsNyxIdAuthenticationRequired(ex);
                 await writer.WriteAsync(new AGUIEvent
                 {
-                    RunError = new RunErrorEvent { Message = ex.Message },
+                    RunError = new RunErrorEvent
+                    {
+                        Message = isAuthRequired
+                            ? "NyxID authentication required. Please sign in."
+                            : ex.Message,
+                        Code = isAuthRequired ? "authentication_required" : null,
+                    },
                 }, CancellationToken.None);
             }
             catch
@@ -679,6 +729,11 @@ public static class ScopeGAgentEndpoints
         var json = JsonSerializer.Serialize(new { code, message });
         await response.WriteAsync(json, ct);
     }
+
+    private static bool IsNyxIdAuthenticationRequired(Exception ex) =>
+        ex is NyxIdAuthenticationRequiredException
+        || ex.InnerException is NyxIdAuthenticationRequiredException
+        || (ex is AggregateException agg && agg.InnerExceptions.Any(e => e is NyxIdAuthenticationRequiredException));
 
     // ─── Request models ───
 

@@ -1,4 +1,5 @@
 import { Save, Loader2 } from 'lucide-react';
+import { useEffect } from 'react';
 import { useConfigStore } from './useConfigStore';
 import FileTree from './FileTree';
 import EditorPanel from './EditorPanel';
@@ -6,10 +7,19 @@ import EditorPanel from './EditorPanel';
 type Props = {
   scopeId: string;
   flash: (msg: string, type: 'success' | 'error') => void;
+  initialFolder?: string | null;
+  onInitialFolderConsumed?: () => void;
+  onOpenWorkflowInStudio?: (workflowId: string) => void;
 };
 
-export default function ConfigExplorerPage({ scopeId, flash }: Props) {
+export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onInitialFolderConsumed, onOpenWorkflowInStudio }: Props) {
   const store = useConfigStore(scopeId);
+
+  useEffect(() => {
+    if (initialFolder && onInitialFolderConsumed) {
+      onInitialFolderConsumed();
+    }
+  }, [initialFolder, onInitialFolderConsumed]);
 
   async function handleSaveAll() {
     try {
@@ -25,12 +35,12 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
       <>
         <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Configuration</div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Storage</div>
             <div className="text-[18px] font-bold text-gray-800 mt-0.5">Explorer</div>
           </div>
         </header>
         <div className="flex-1 flex items-center justify-center text-[14px] text-gray-400 bg-[#F2F1EE]">
-          Sign in to view configuration
+          Sign in to view storage
         </div>
       </>
     );
@@ -41,7 +51,7 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
       {/* Header */}
       <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Configuration</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Storage</div>
           <div className="text-[18px] font-bold text-gray-800 mt-0.5">Explorer</div>
         </div>
         <div className="flex items-center gap-3">
@@ -75,6 +85,9 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
               onSelect={store.setSelectedFile}
               isDirty={store.isDirty}
               chatConversations={store.chatConversations}
+              workflows={store.workflows}
+              onOpenWorkflowInStudio={onOpenWorkflowInStudio}
+              initialFolder={initialFolder}
             />
           )}
         </aside>
@@ -87,7 +100,7 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
               <span>Loading...</span>
             </div>
           ) : (
-            <EditorPanel store={store} flash={flash} />
+            <EditorPanel store={store} flash={flash} onOpenWorkflowInStudio={onOpenWorkflowInStudio} />
           )}
         </div>
       </section>
