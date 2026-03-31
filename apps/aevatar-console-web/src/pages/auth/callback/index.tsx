@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { loadStoredAuthSession } from '@/shared/auth/session';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import { describeError } from '@/shared/ui/errorText';
 
 const CallbackPage: React.FC = () => {
@@ -34,7 +35,7 @@ const CallbackPage: React.FC = () => {
     if (!loadStoredAuthSession()) {
       void finishLogin();
     } else {
-      window.location.replace('/overview');
+      window.location.replace(CONSOLE_HOME_ROUTE);
     }
 
     return () => {

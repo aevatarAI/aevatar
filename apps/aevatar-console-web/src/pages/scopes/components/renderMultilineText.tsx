@@ -5,7 +5,9 @@ import { codeBlockStyle } from '@/shared/ui/proComponents';
 export function renderMultilineText(value: string | null | undefined) {
   if (!value) {
     return (
-      <Typography.Text type="secondary">No source attached.</Typography.Text>
+      <Typography.Text style={{ color: 'var(--ant-color-text-secondary)' }}>
+        No source attached.
+      </Typography.Text>
     );
   }
 

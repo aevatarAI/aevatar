@@ -1,124 +1,83 @@
-import type { ProColumns } from '@ant-design/pro-components';
-import { PageContainer, ProCard, ProTable } from '@ant-design/pro-components';
-import { parseCustomEvent } from '@aevatar-react-sdk/agui';
+import { parseCustomEvent } from "@aevatar-react-sdk/agui";
 import {
   AGUIEventType,
   CustomEventName,
   type AGUIEvent,
-} from '@aevatar-react-sdk/types';
-import { useQuery } from '@tanstack/react-query';
-import { Alert, Button, Col, Input, Row, Select, Space, Tag, Typography } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { parseRunContextData } from '@/shared/agui/customEventData';
-import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
-import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
-import { servicesApi } from '@/shared/api/servicesApi';
-import { formatDateTime } from '@/shared/datetime/dateTime';
-import { history } from '@/shared/navigation/history';
-import { buildRuntimeRunsHref } from '@/shared/navigation/runtimeRoutes';
-import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
-import { studioApi } from '@/shared/studio/api';
+} from "@aevatar-react-sdk/types";
+import {
+  BorderBottomOutlined,
+  PlayCircleOutlined,
+  StopOutlined,
+} from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
+import { Alert, Button, Empty, Input, Select, Space, Typography } from "antd";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { parseRunContextData } from "@/shared/agui/customEventData";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { servicesApi } from "@/shared/api/servicesApi";
+import { history } from "@/shared/navigation/history";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
+import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
+import { studioApi } from "@/shared/studio/api";
+import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
+import { formatDateTime } from "@/shared/datetime/dateTime";
 import type {
   ServiceCatalogSnapshot,
   ServiceEndpointSnapshot,
-} from '@/shared/models/services';
-import { buildServiceDetailHref } from '@/pages/services/components/serviceQuery';
+} from "@/shared/models/services";
 import {
-  cardStackStyle,
-  codeBlockStyle,
-  compactTableCardProps,
-  embeddedPanelStyle,
-  moduleCardProps,
-  summaryFieldGridStyle,
-  summaryFieldLabelStyle,
-  summaryFieldStyle,
-  summaryMetricGridStyle,
-  summaryMetricStyle,
-  summaryMetricValueStyle,
-} from '@/shared/ui/proComponents';
-import ScopeQueryCard from './components/ScopeQueryCard';
-import { resolveStudioScopeContext } from './components/resolvedScope';
+  AevatarContextDrawer,
+  AevatarInspectorEmpty,
+  AevatarPageShell,
+  AevatarPanel,
+  AevatarStatusTag,
+  AevatarWorkbenchLayout,
+} from "@/shared/ui/aevatarPageShells";
+import { resolveStudioScopeContext } from "./components/resolvedScope";
+import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
   buildScopeHref,
   normalizeScopeDraft,
   readScopeQueryDraft,
   type ScopeQueryDraft,
-} from './components/scopeQuery';
-
-type SummaryFieldProps = {
-  label: string;
-  value: React.ReactNode;
-};
-
-type SummaryMetricProps = {
-  label: string;
-  value: React.ReactNode;
-};
+} from "./components/scopeQuery";
 
 type InvokeResultState = {
-  status: 'idle' | 'running' | 'success' | 'error';
-  mode: 'stream' | 'invoke';
-  serviceId: string;
-  endpointId: string;
-  assistantText: string;
-  responseJson: string;
-  error: string;
-  runId: string;
   actorId: string;
+  assistantText: string;
   commandId: string;
+  endpointId: string;
+  error: string;
   eventCount: number;
   events: AGUIEvent[];
+  mode: "stream" | "invoke";
+  responseJson: string;
+  runId: string;
+  serviceId: string;
+  status: "idle" | "running" | "success" | "error";
 };
 
-const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
-  <div style={summaryFieldStyle}>
-    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
-    {typeof value === 'string' || typeof value === 'number' ? (
-      <Typography.Text>{value}</Typography.Text>
-    ) : (
-      value
-    )}
-  </div>
-);
+type InvokeDockTab = "events" | "output";
 
-const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
-  <div style={summaryMetricStyle}>
-    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
-    <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
-  </div>
-);
+type InvokeContextSurface = "insight" | "service" | null;
+
+const initialDraft = readScopeQueryDraft();
+const scopeServiceAppId = "default";
+const scopeServiceNamespace = "default";
 
 function readQueryValue(name: string): string {
-  if (typeof window === 'undefined') {
-    return '';
+  if (typeof window === "undefined") {
+    return "";
   }
 
-  return new URLSearchParams(window.location.search).get(name)?.trim() ?? '';
-}
-
-function createIdleResult(): InvokeResultState {
-  return {
-    status: 'idle',
-    mode: 'invoke',
-    serviceId: '',
-    endpointId: '',
-    assistantText: '',
-    responseJson: '',
-    error: '',
-    runId: '',
-    actorId: '',
-    commandId: '',
-    eventCount: 0,
-    events: [],
-  };
-}
-
-function isChatEndpoint(endpoint: ServiceEndpointSnapshot | undefined): boolean {
-  if (!endpoint) {
-    return false;
-  }
-
-  return endpoint.kind === 'chat' || endpoint.endpointId.trim() === 'chat';
+  return new URLSearchParams(window.location.search).get(name)?.trim() ?? "";
 }
 
 function buildServiceOptions(
@@ -128,6 +87,7 @@ function buildServiceOptions(
   return [...services].sort((left, right) => {
     const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
     const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+
     if (leftIsDefault !== rightIsDefault) {
       return rightIsDefault - leftIsDefault;
     }
@@ -136,27 +96,65 @@ function buildServiceOptions(
   });
 }
 
-const initialDraft = readScopeQueryDraft();
-const initialServiceId = readQueryValue('serviceId');
-const initialEndpointId = readQueryValue('endpointId');
-const scopeServiceAppId = 'default';
-const scopeServiceNamespace = 'default';
+function isChatEndpoint(endpoint: ServiceEndpointSnapshot | undefined): boolean {
+  if (!endpoint) {
+    return false;
+  }
+
+  return endpoint.kind === "chat" || endpoint.endpointId.trim() === "chat";
+}
+
+function createIdleResult(): InvokeResultState {
+  return {
+    actorId: "",
+    assistantText: "",
+    commandId: "",
+    endpointId: "",
+    error: "",
+    eventCount: 0,
+    events: [],
+    mode: "invoke",
+    responseJson: "",
+    runId: "",
+    serviceId: "",
+    status: "idle",
+  };
+}
+
+function getEventKey(event: AGUIEvent, indexHint: number): string {
+  const candidate = event as unknown as Record<string, unknown>;
+  return [
+    event.type,
+    String(candidate.timestamp ?? ""),
+    String(candidate.runId ?? ""),
+    String(candidate.messageId ?? ""),
+    String(indexHint),
+  ].join("-");
+}
 
 const ScopeInvokePage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [draft, setDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(initialDraft);
-  const [selectedServiceId, setSelectedServiceId] = useState(initialServiceId);
-  const [selectedEndpointId, setSelectedEndpointId] = useState(initialEndpointId);
-  const [prompt, setPrompt] = useState('');
-  const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
-  const [payloadBase64, setPayloadBase64] = useState('');
+  const [selectedServiceId, setSelectedServiceId] = useState(readQueryValue("serviceId"));
+  const [selectedEndpointId, setSelectedEndpointId] = useState(
+    readQueryValue("endpointId"),
+  );
+  const [prompt, setPrompt] = useState("");
+  const [payloadTypeUrl, setPayloadTypeUrl] = useState("");
+  const [payloadBase64, setPayloadBase64] = useState("");
+  const [preserveEmptySelection, setPreserveEmptySelection] = useState(false);
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
+  const [contextSurface, setContextSurface] =
+    useState<InvokeContextSurface>(null);
+  const [dockTab, setDockTab] = useState<InvokeDockTab>("events");
+  const [dockHeight, setDockHeight] = useState(248);
+  const [isDockCollapsed, setDockCollapsed] = useState(false);
 
   const authSessionQuery = useQuery({
-    queryKey: ['scopes', 'auth-session'],
+    queryKey: ["scopes", "auth-session"],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
@@ -164,15 +162,6 @@ const ScopeInvokePage: React.FC = () => {
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
-
-  useEffect(() => {
-    history.replace(
-      buildScopeHref('/scopes/invoke', activeDraft, {
-        serviceId: selectedServiceId,
-        endpointId: selectedEndpointId,
-      }),
-    );
-  }, [activeDraft, selectedEndpointId, selectedServiceId]);
 
   useEffect(() => {
     if (!resolvedScope?.scopeId) {
@@ -191,21 +180,31 @@ const ScopeInvokePage: React.FC = () => {
     );
   }, [resolvedScope?.scopeId]);
 
+  useEffect(() => {
+    history.replace(
+      buildScopeHref("/scopes/invoke", activeDraft, {
+        endpointId: selectedEndpointId,
+        serviceId: selectedServiceId,
+      }),
+    );
+  }, [activeDraft, selectedEndpointId, selectedServiceId]);
+
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
+  const scopeId = activeDraft.scopeId.trim();
   const bindingQuery = useQuery({
-    queryKey: ['scopes', 'binding', activeDraft.scopeId],
-    enabled: activeDraft.scopeId.trim().length > 0,
-    queryFn: () => studioApi.getScopeBinding(activeDraft.scopeId),
+    enabled: scopeId.length > 0,
+    queryKey: ["scopes", "binding", scopeId],
+    queryFn: () => studioApi.getScopeBinding(scopeId),
   });
   const scopeServicesQuery = useQuery({
-    queryKey: ['scopes', 'invoke', 'services', activeDraft.scopeId],
-    enabled: activeDraft.scopeId.trim().length > 0,
+    enabled: scopeId.length > 0,
+    queryKey: ["scopes", "invoke", "services", scopeId],
     queryFn: () =>
       servicesApi.listServices({
-        tenantId: activeDraft.scopeId,
         appId: scopeServiceAppId,
         namespace: scopeServiceNamespace,
+        tenantId: scopeId,
       }),
   });
 
@@ -219,8 +218,8 @@ const ScopeInvokePage: React.FC = () => {
   );
 
   useEffect(() => {
-    if (services.length === 0) {
-      setSelectedServiceId('');
+    if (!services.length) {
+      setSelectedServiceId("");
       return;
     }
 
@@ -231,25 +230,30 @@ const ScopeInvokePage: React.FC = () => {
       return;
     }
 
-    const preferredServiceId =
-      services.find(
-        (service) => service.serviceId === bindingQuery.data?.serviceId,
-      )?.serviceId ??
-      services[0]?.serviceId ??
-      '';
+    if (preserveEmptySelection) {
+      setSelectedServiceId("");
+      return;
+    }
 
-    setSelectedServiceId(preferredServiceId);
-  }, [bindingQuery.data?.serviceId, selectedServiceId, services]);
+    setSelectedServiceId(
+      services.find((service) => service.serviceId === bindingQuery.data?.serviceId)
+        ?.serviceId ||
+        services[0]?.serviceId ||
+        "",
+    );
+  }, [
+    bindingQuery.data?.serviceId,
+    preserveEmptySelection,
+    selectedServiceId,
+    services,
+  ]);
 
-  const selectedService = useMemo(
-    () =>
-      services.find((service) => service.serviceId === selectedServiceId) ?? null,
-    [selectedServiceId, services],
-  );
+  const selectedService =
+    services.find((service) => service.serviceId === selectedServiceId) ?? null;
 
   useEffect(() => {
     if (!selectedService) {
-      setSelectedEndpointId('');
+      setSelectedEndpointId("");
       return;
     }
 
@@ -262,126 +266,50 @@ const ScopeInvokePage: React.FC = () => {
       return;
     }
 
-    const preferredEndpointId =
-      selectedService.endpoints.find((endpoint) => endpoint.endpointId === 'chat')
-        ?.endpointId ??
-      selectedService.endpoints[0]?.endpointId ??
-      '';
-
-    setSelectedEndpointId(preferredEndpointId);
+    setSelectedEndpointId(
+      selectedService.endpoints.find((endpoint) => endpoint.endpointId === "chat")
+        ?.endpointId ||
+        selectedService.endpoints[0]?.endpointId ||
+        "",
+    );
   }, [selectedEndpointId, selectedService]);
 
-  const selectedEndpoint = useMemo(
-    () =>
-      selectedService?.endpoints.find(
-        (endpoint) => endpoint.endpointId === selectedEndpointId,
-      ) ?? null,
-    [selectedEndpointId, selectedService],
-  );
+  const selectedEndpoint =
+    selectedService?.endpoints.find(
+      (endpoint) => endpoint.endpointId === selectedEndpointId,
+    ) ?? null;
 
   useEffect(() => {
-    if (!selectedEndpoint) {
-      setPayloadTypeUrl('');
-      setPayloadBase64('');
+    if (!selectedEndpoint || isChatEndpoint(selectedEndpoint)) {
+      setPayloadTypeUrl("");
+      setPayloadBase64("");
       return;
     }
 
-    if (isChatEndpoint(selectedEndpoint)) {
-      setPayloadTypeUrl('');
-      setPayloadBase64('');
-      return;
-    }
+    setPayloadTypeUrl(selectedEndpoint.requestTypeUrl || "");
+  }, [selectedEndpoint]);
 
-    setPayloadTypeUrl(selectedEndpoint.requestTypeUrl || '');
-    setPayloadBase64('');
-  }, [selectedEndpointId, selectedServiceId, selectedEndpoint]);
-
-  const isStreaming = invokeResult.status === 'running' && invokeResult.mode === 'stream';
-  const isInvoking = invokeResult.status === 'running' && invokeResult.mode === 'invoke';
-  const selectedScopeId = activeDraft.scopeId.trim();
-
-  const serviceColumns = useMemo<ProColumns<ServiceCatalogSnapshot>[]>(
-    () => [
-      {
-        title: 'Service',
-        dataIndex: 'serviceId',
-        render: (_, record) => (
-          <Space direction="vertical" size={4}>
-            <Space wrap size={[8, 8]}>
-              <Typography.Text strong>
-                {record.displayName || record.serviceId}
-              </Typography.Text>
-              <Tag color={record.serviceId === bindingQuery.data?.serviceId ? 'processing' : 'default'}>
-                {record.serviceId === bindingQuery.data?.serviceId
-                  ? 'default binding'
-                  : 'scope service'}
-              </Tag>
-            </Space>
-            <Typography.Text type="secondary">
-              {record.namespace} / {record.serviceId}
-            </Typography.Text>
-          </Space>
-        ),
-      },
-      {
-        title: 'Endpoints',
-        render: (_, record) => record.endpoints.length,
-      },
-      {
-        title: 'Deployment',
-        render: (_, record) =>
-          `${record.deploymentStatus || 'unknown'}${
-            record.deploymentId ? ` · ${record.deploymentId}` : ''
-          }`,
-      },
-      {
-        title: 'Updated',
-        render: (_, record) => formatDateTime(record.updatedAt),
-      },
-      {
-        title: 'Action',
-        valueType: 'option',
-        render: (_, record) => [
-          <Button
-            key={`${record.serviceKey}-select`}
-            type={record.serviceId === selectedServiceId ? 'primary' : 'link'}
-            onClick={() => setSelectedServiceId(record.serviceId)}
-          >
-            {record.serviceId === selectedServiceId ? 'Selected' : 'Use'}
-          </Button>,
-          <Button
-            key={`${record.serviceKey}-detail`}
-            type="link"
-            onClick={() =>
-              history.push(
-                buildServiceDetailHref(record.serviceId, {
-                  tenantId: selectedScopeId,
-                  appId: record.appId,
-                  namespace: record.namespace,
-                }),
-              )
-            }
-          >
-            Platform detail
-          </Button>,
-        ],
-      },
-    ],
-    [bindingQuery.data?.serviceId, selectedScopeId, selectedServiceId],
-  );
+  const serviceOptions = services.map((service) => ({
+    label: service.displayName || service.serviceId,
+    value: service.serviceId,
+  }));
+  const endpointOptions = (selectedService?.endpoints ?? []).map((endpoint) => ({
+    label: endpoint.displayName || endpoint.endpointId,
+    value: endpoint.endpointId,
+  }));
 
   const handleAbort = () => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setInvokeResult((current) => ({
       ...current,
-      status: 'error',
-      error: 'Invocation aborted by operator.',
+      error: "Invocation aborted by operator.",
+      status: "error",
     }));
   };
 
   const handleInvoke = async () => {
-    if (!selectedScopeId || !selectedService || !selectedEndpoint) {
+    if (!scopeId || !selectedService || !selectedEndpoint) {
       return;
     }
 
@@ -393,15 +321,15 @@ const ScopeInvokePage: React.FC = () => {
       abortControllerRef.current = controller;
       setInvokeResult({
         ...createIdleResult(),
-        status: 'running',
-        mode: 'stream',
-        serviceId: selectedService.serviceId,
         endpointId: selectedEndpoint.endpointId,
+        mode: "stream",
+        serviceId: selectedService.serviceId,
+        status: "running",
       });
 
       try {
         const response = await runtimeRunsApi.streamChat(
-          selectedScopeId,
+          scopeId,
           {
             prompt: prompt.trim(),
           },
@@ -411,12 +339,12 @@ const ScopeInvokePage: React.FC = () => {
           },
         );
 
-        let assistantText = '';
-        let actorId = '';
-        let commandId = '';
-        let runId = '';
+        let assistantText = "";
+        let actorId = "";
+        let commandId = "";
+        let runId = "";
         let eventCount = 0;
-        let runError = '';
+        let runError = "";
         const events: AGUIEvent[] = [];
 
         for await (const event of parseBackendSSEStream(response, {
@@ -430,11 +358,11 @@ const ScopeInvokePage: React.FC = () => {
           }
 
           if (event.type === AGUIEventType.TEXT_MESSAGE_CONTENT) {
-            assistantText += event.delta || '';
+            assistantText += event.delta || "";
           }
 
           if (event.type === AGUIEventType.RUN_ERROR) {
-            runError = event.message || 'Assistant run failed.';
+            runError = event.message || "Assistant run failed.";
           }
 
           if (event.type === AGUIEventType.CUSTOM) {
@@ -447,47 +375,46 @@ const ScopeInvokePage: React.FC = () => {
           }
 
           setInvokeResult({
-            status: runError ? 'error' : 'running',
-            mode: 'stream',
-            serviceId: selectedService.serviceId,
-            endpointId: selectedEndpoint.endpointId,
-            assistantText,
-            responseJson: '',
-            error: runError,
-            runId,
             actorId,
+            assistantText,
             commandId,
+            endpointId: selectedEndpoint.endpointId,
+            error: runError,
             eventCount,
             events: [...events],
+            mode: "stream",
+            responseJson: "",
+            runId,
+            serviceId: selectedService.serviceId,
+            status: runError ? "error" : "running",
           });
         }
 
         if (!controller.signal.aborted) {
           setInvokeResult({
-            status: runError ? 'error' : 'success',
-            mode: 'stream',
-            serviceId: selectedService.serviceId,
-            endpointId: selectedEndpoint.endpointId,
-            assistantText,
-            responseJson: '',
-            error: runError,
-            runId,
             actorId,
+            assistantText,
             commandId,
+            endpointId: selectedEndpoint.endpointId,
+            error: runError,
             eventCount,
             events,
+            mode: "stream",
+            responseJson: "",
+            runId,
+            serviceId: selectedService.serviceId,
+            status: runError ? "error" : "success",
           });
         }
       } catch (error) {
         if (!controller.signal.aborted) {
           setInvokeResult({
             ...createIdleResult(),
-            status: 'error',
-            mode: 'stream',
-            serviceId: selectedService.serviceId,
             endpointId: selectedEndpoint.endpointId,
             error: error instanceof Error ? error.message : String(error),
-            events: [],
+            mode: "stream",
+            serviceId: selectedService.serviceId,
+            status: "error",
           });
         }
       } finally {
@@ -501,506 +428,831 @@ const ScopeInvokePage: React.FC = () => {
 
     setInvokeResult({
       ...createIdleResult(),
-      status: 'running',
-      mode: 'invoke',
-      serviceId: selectedService.serviceId,
       endpointId: selectedEndpoint.endpointId,
+      mode: "invoke",
+      serviceId: selectedService.serviceId,
+      status: "running",
     });
 
     try {
       const response = await runtimeRunsApi.invokeEndpoint(
-        selectedScopeId,
+        scopeId,
         {
           endpointId: selectedEndpoint.endpointId,
-          prompt: prompt.trim(),
-          payloadTypeUrl: payloadTypeUrl.trim() || undefined,
           payloadBase64: payloadBase64.trim() || undefined,
+          payloadTypeUrl: payloadTypeUrl.trim() || undefined,
+          prompt: prompt.trim(),
         },
         {
           serviceId: selectedService.serviceId,
         },
       );
       const responseRunId = String(
-        response.request_id ?? response.requestId ?? response.commandId ?? '',
+        response.request_id ?? response.requestId ?? response.commandId ?? "",
       ).trim();
       const responseActorId = String(
-        response.target_actor_id ?? response.targetActorId ?? response.actorId ?? '',
+        response.target_actor_id ?? response.targetActorId ?? response.actorId ?? "",
       ).trim();
       const responseCommandId = String(
         response.command_id ?? response.commandId ?? responseRunId,
       ).trim();
       const events: AGUIEvent[] = [
         {
-          type: AGUIEventType.RUN_STARTED,
           runId: responseRunId || undefined,
           threadId:
             String(
               response.correlation_id ?? response.correlationId ?? responseRunId,
             ).trim() || undefined,
           timestamp: Date.now(),
+          type: AGUIEventType.RUN_STARTED,
         } as AGUIEvent,
       ];
+
       if (responseActorId || responseCommandId) {
         events.push({
-          type: AGUIEventType.CUSTOM,
           name: CustomEventName.RunContext,
+          timestamp: Date.now(),
+          type: AGUIEventType.CUSTOM,
           value: {
             actorId: responseActorId || undefined,
             commandId: responseCommandId || undefined,
           },
-          timestamp: Date.now(),
         } as AGUIEvent);
       }
 
       setInvokeResult({
         ...createIdleResult(),
-        status: 'success',
-        mode: 'invoke',
-        serviceId: selectedService.serviceId,
-        endpointId: selectedEndpoint.endpointId,
-        responseJson: JSON.stringify(response, null, 2),
-        runId: responseRunId,
         actorId: responseActorId,
         commandId: responseCommandId,
+        endpointId: selectedEndpoint.endpointId,
         eventCount: events.length,
         events,
+        mode: "invoke",
+        responseJson: JSON.stringify(response, null, 2),
+        runId: responseRunId,
+        serviceId: selectedService.serviceId,
+        status: "success",
       });
     } catch (error) {
       setInvokeResult({
         ...createIdleResult(),
-        status: 'error',
-        mode: 'invoke',
-        serviceId: selectedService.serviceId,
         endpointId: selectedEndpoint.endpointId,
         error: error instanceof Error ? error.message : String(error),
-        events: [],
+        mode: "invoke",
+        serviceId: selectedService.serviceId,
+        status: "error",
       });
     }
   };
 
-  const selectedEndpointOptions = useMemo(
-    () =>
-      (selectedService?.endpoints ?? []).map((endpoint) => ({
-        label: `${endpoint.endpointId} · ${endpoint.kind || 'unknown'}`,
-        value: endpoint.endpointId,
-      })),
-    [selectedService?.endpoints],
-  );
-
   const handleOpenRuns = () => {
-    if (!selectedScopeId) {
+    if (!scopeId) {
       return;
     }
 
     const observedDraftKey =
       invokeResult.events.length > 0
         ? saveObservedRunSessionPayload({
-            scopeId: selectedScopeId,
-            serviceOverrideId: selectedService?.serviceId,
-            endpointId: invokeResult.endpointId || selectedEndpoint?.endpointId || 'chat',
-            prompt,
-            payloadTypeUrl:
-              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
-                ? payloadTypeUrl || undefined
-                : undefined,
+            actorId: invokeResult.actorId || undefined,
+            commandId: invokeResult.commandId || undefined,
+            endpointId: invokeResult.endpointId || selectedEndpoint?.endpointId || "chat",
+            events: invokeResult.events,
             payloadBase64:
               selectedEndpoint && !isChatEndpoint(selectedEndpoint)
                 ? payloadBase64 || undefined
                 : undefined,
-            actorId: invokeResult.actorId || undefined,
-            commandId: invokeResult.commandId || undefined,
+            payloadTypeUrl:
+              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+                ? payloadTypeUrl || undefined
+                : undefined,
+            prompt,
             runId: invokeResult.runId || undefined,
-            events: invokeResult.events,
+            scopeId,
+            serviceOverrideId: selectedService?.serviceId,
           })
-        : '';
+        : "";
 
     history.push(
       buildRuntimeRunsHref({
-        scopeId: selectedScopeId,
-        serviceId: selectedService?.serviceId,
+        actorId: invokeResult.actorId || undefined,
+        draftKey: observedDraftKey || undefined,
         endpointId: selectedEndpoint?.endpointId,
         payloadTypeUrl:
           selectedEndpoint && !isChatEndpoint(selectedEndpoint)
             ? payloadTypeUrl || undefined
             : undefined,
         prompt: prompt || undefined,
-        actorId: invokeResult.actorId || undefined,
-        draftKey: observedDraftKey || undefined,
+        scopeId,
+        serviceId: selectedService?.serviceId,
       }),
     );
   };
 
+  const recommendedNextStep = !scopeId
+    ? {
+        action: () => history.push("/scopes/overview"),
+        actionLabel: "Open projects",
+        description:
+          "Project Invoke only becomes useful after you anchor the console to a scope.",
+        title: "Load a project first",
+      }
+    : services.length === 0
+      ? {
+          action: () => history.push(buildStudioWorkflowWorkspaceRoute()),
+          actionLabel: "Open workflow workspace",
+          description:
+            "No published scope services were discovered. Bind a workflow or script before using the invoke lab.",
+          title: "Publish a project service",
+        }
+      : invokeResult.status === "success"
+        ? {
+            action: handleOpenRuns,
+            actionLabel: "Continue in Runs",
+            description:
+              "The latest invoke has context attached. Move to Runs for the full trace and intervention controls.",
+            title: "Promote this session to runtime observation",
+          }
+        : {
+            action: () => setContextSurface("service"),
+            actionLabel: "Browse services",
+            description:
+              "Pick the right service and endpoint before you start streaming or generic invocation.",
+            title: "Choose the published entrypoint",
+          };
+
+  const outputPanels = useMemo(
+    () =>
+      [
+        invokeResult.assistantText
+          ? {
+              title: "Assistant Output",
+              value: invokeResult.assistantText,
+            }
+          : null,
+        invokeResult.responseJson
+          ? {
+              title: "Invocation Receipt",
+              value: invokeResult.responseJson,
+            }
+          : null,
+      ].filter((panel): panel is { title: string; value: string } => Boolean(panel)),
+    [invokeResult.assistantText, invokeResult.responseJson],
+  );
+
+  const startDockResize = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (isDockCollapsed) {
+        return;
+      }
+
+      event.preventDefault();
+      const startY = event.clientY;
+      const startHeight = dockHeight;
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const nextHeight = Math.max(
+          180,
+          Math.min(420, startHeight + startY - moveEvent.clientY),
+        );
+        setDockHeight(nextHeight);
+      };
+
+      const handleMouseUp = () => {
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    },
+    [dockHeight, isDockCollapsed],
+  );
+
   return (
-    <PageContainer
-      title="Scope Service Invoke"
-      content="Invoke the services already published into a scope. This stays scope-first, but exposes the real service endpoints and runtime invoke paths behind the current scope."
-      onBack={() => history.push(buildScopeHref('/scopes/overview', activeDraft))}
+    <AevatarPageShell
+      content="Invoke Lab keeps parameters on the left, execution on the main stage, and deeper context in the drawer or lab console."
+      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
+      title="Invoke Lab"
     >
-      <Row gutter={[16, 16]}>
-        <Col xs={24}>
-          <ScopeQueryCard
-            draft={draft}
-            onChange={setDraft}
-            loadLabel="Load scope services"
-            resolvedScopeId={resolvedScope?.scopeId}
-            resolvedScopeSource={resolvedScope?.scopeSource}
-            onUseResolvedScope={() => {
-              if (!resolvedScope?.scopeId) {
-                return;
-              }
+      <AevatarWorkbenchLayout
+        rail={
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <AevatarPanel
+              description="Load the current scope, then choose the published service and endpoint you want to probe."
+              title="Invocation Controls"
+            >
+              <ScopeQueryCard
+                draft={draft}
+                loadLabel="Load invoke lab"
+                onChange={setDraft}
+                onLoad={() => {
+                  const nextDraft = normalizeScopeDraft(draft);
+                  setPreserveEmptySelection(false);
+                  setDraft(nextDraft);
+                  setActiveDraft(nextDraft);
+                }}
+                onReset={() => {
+                  const nextDraft = normalizeScopeDraft({
+                    scopeId: resolvedScope?.scopeId ?? "",
+                  });
+                  setPreserveEmptySelection(true);
+                  setDraft(nextDraft);
+                  setActiveDraft(nextDraft);
+                  setSelectedServiceId("");
+                  setSelectedEndpointId("");
+                  setPrompt("");
+                  setPayloadTypeUrl("");
+                  setPayloadBase64("");
+                  setInvokeResult(createIdleResult());
+                }}
+                onUseResolvedScope={() => {
+                  if (!resolvedScope?.scopeId) {
+                    return;
+                  }
 
-              const nextDraft = normalizeScopeDraft({
-                scopeId: resolvedScope.scopeId,
-              });
-              setDraft(nextDraft);
-              setActiveDraft(nextDraft);
-            }}
-            onLoad={() => {
-              const nextDraft = normalizeScopeDraft(draft);
-              setDraft(nextDraft);
-              setActiveDraft(nextDraft);
-            }}
-            onReset={() => {
-              const nextDraft = normalizeScopeDraft({
-                scopeId: resolvedScope?.scopeId ?? '',
-              });
-              setDraft(nextDraft);
-              setActiveDraft(nextDraft);
-              setSelectedServiceId('');
-              setSelectedEndpointId('');
-              setPrompt('');
-              setPayloadTypeUrl('');
-              setPayloadBase64('');
-              setInvokeResult(createIdleResult());
-            }}
-          />
-        </Col>
+                  const nextDraft = normalizeScopeDraft({
+                    scopeId: resolvedScope.scopeId,
+                  });
+                  setPreserveEmptySelection(false);
+                  setDraft(nextDraft);
+                  setActiveDraft(nextDraft);
+                }}
+                resolvedScopeId={resolvedScope?.scopeId}
+                resolvedScopeSource={resolvedScope?.scopeSource}
+              />
 
-        <Col xs={24}>
+              <Select
+                onChange={(value) => {
+                  setPreserveEmptySelection(false);
+                  setSelectedServiceId(value);
+                }}
+                options={serviceOptions}
+                placeholder="Select published service"
+                value={selectedServiceId || undefined}
+              />
+              <Select
+                onChange={setSelectedEndpointId}
+                options={endpointOptions}
+                placeholder="Select endpoint"
+                value={selectedEndpointId || undefined}
+              />
+              <Input.TextArea
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Prompt or payload text"
+                rows={5}
+                value={prompt}
+              />
+              {selectedEndpoint && !isChatEndpoint(selectedEndpoint) ? (
+                <>
+                  <Input
+                    onChange={(event) => setPayloadTypeUrl(event.target.value)}
+                    placeholder="Payload type URL"
+                    value={payloadTypeUrl}
+                  />
+                  <Input.TextArea
+                    onChange={(event) => setPayloadBase64(event.target.value)}
+                    placeholder="Payload base64"
+                    rows={3}
+                    value={payloadBase64}
+                  />
+                </>
+              ) : (
+                <Alert
+                  title="Chat endpoints stream SSE responses and emit run context events automatically."
+                  showIcon
+                  type="info"
+                />
+              )}
+              <Space wrap>
+                <Button
+                  aria-label={
+                    selectedEndpoint && isChatEndpoint(selectedEndpoint)
+                      ? "Stream chat"
+                      : "Invoke endpoint"
+                  }
+                  disabled={!selectedEndpointId}
+                  icon={<PlayCircleOutlined />}
+                  loading={invokeResult.status === "running"}
+                  onClick={() => void handleInvoke()}
+                  type="primary"
+                >
+                  {selectedEndpoint && isChatEndpoint(selectedEndpoint)
+                    ? "Stream chat"
+                    : "Invoke endpoint"}
+                </Button>
+                <Button
+                  aria-label="Abort"
+                  disabled={invokeResult.status !== "running"}
+                  icon={<StopOutlined />}
+                  onClick={handleAbort}
+                >
+                  Abort
+                </Button>
+              </Space>
+            </AevatarPanel>
+          </div>
+        }
+        stage={
           <div
             style={{
-              ...embeddedPanelStyle,
-              background: 'var(--ant-color-fill-quaternary)',
+              display: "flex",
+              flex: 1,
+              flexDirection: "column",
+              gap: 16,
+              minHeight: 0,
             }}
           >
-            <Typography.Text strong>Scope-first invoke surface</Typography.Text>
-            <Typography.Paragraph
-              style={{ margin: '8px 0 0' }}
-              type="secondary"
-            >
-              This page resolves the scope to its published service identities,
-              then uses the same runtime invoke contracts as the operator
-              workbench. Use chat endpoints for SSE runs and non-chat endpoints
-              for generic protobuf invoke.
-            </Typography.Paragraph>
-          </div>
-        </Col>
-
-        {!selectedScopeId ? (
-          <Col xs={24}>
-            <Alert
-              showIcon
-              type="info"
-              title="Select a scope to inspect its published services and invoke endpoints."
-            />
-          </Col>
-        ) : (
-          <>
-            <Col xs={24}>
-              <ProCard {...moduleCardProps} title="Scope invoke summary">
-                <div style={cardStackStyle}>
-                  <div style={summaryMetricGridStyle}>
-                    <SummaryMetric label="Scope" value={selectedScopeId} />
-                    <SummaryMetric
-                      label="Published services"
-                      value={services.length}
-                    />
-                    <SummaryMetric
-                      label="Default binding"
-                      value={
-                        bindingQuery.data?.available
-                          ? bindingQuery.data.displayName || bindingQuery.data.serviceId
-                          : 'Not bound'
-                      }
-                    />
-                    <SummaryMetric
-                      label="Selected endpoint"
-                      value={selectedEndpoint?.endpointId || 'n/a'}
-                    />
-                  </div>
-                  <Space wrap>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildScopeHref('/scopes/overview', activeDraft),
-                        )
-                      }
-                    >
-                      Back to Scope Overview
+            <AevatarPanel
+              description="The center stage stays focused on execution. Service catalog details and operator guidance move into the contextual drawer."
+              extra={
+                <Space wrap>
+                  <Button onClick={() => setContextSurface("service")}>
+                    Browse services
+                  </Button>
+                  <Button onClick={() => setContextSurface("insight")}>
+                    Open operator brief
+                  </Button>
+                  {invokeResult.status === "success" ? (
+                    <Button onClick={handleOpenRuns} type="primary">
+                      Continue in Runs
                     </Button>
-                  </Space>
-                </div>
-              </ProCard>
-            </Col>
+                  ) : null}
+                </Space>
+              }
+              minHeight={320}
+              title="Execution Preview"
+            >
+              {!scopeId ? (
+                <Alert
+                  title="Select a project to load its published services."
+                  showIcon
+                  type="info"
+                />
+              ) : !selectedService ? (
+                <Alert
+                  title="No published project service is selected yet."
+                  showIcon
+                  type="warning"
+                />
+              ) : (
+                <>
+                  {invokeResult.status !== "idle" ? (
+                    <Alert
+                      description={
+                        invokeResult.error ||
+                        (invokeResult.status === "running"
+                          ? "Invocation in progress."
+                          : "Invocation completed.")
+                      }
+                      title={`${
+                        invokeResult.mode === "stream" ? "Streaming" : "Invoke"
+                      } · ${invokeResult.serviceId || selectedService.serviceId} / ${
+                        invokeResult.endpointId || selectedEndpointId || "endpoint"
+                      }`}
+                      showIcon
+                      type={
+                        invokeResult.status === "error"
+                          ? "error"
+                          : invokeResult.status === "success"
+                            ? "success"
+                            : "info"
+                      }
+                    />
+                  ) : (
+                    <Alert
+                      title="Ready to invoke"
+                      showIcon
+                      type="info"
+                    />
+                  )}
 
-            <Col xs={24} xl={11}>
-              <ProTable<ServiceCatalogSnapshot>
-                columns={serviceColumns}
-                dataSource={services}
-                loading={scopeServicesQuery.isLoading}
-                rowKey="serviceKey"
-                search={false}
-                pagination={false}
-                cardProps={compactTableCardProps}
-                toolBarRender={false}
-                headerTitle="Scope Services"
-              />
-            </Col>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    }}
+                  >
+                    <MetricCard label="Service" value={selectedService.displayName || selectedService.serviceId} />
+                    <MetricCard label="Endpoint" value={selectedEndpoint?.endpointId || "n/a"} />
+                    <MetricCard label="Run ID" value={invokeResult.runId || "n/a"} />
+                    <MetricCard label="Actor ID" value={invokeResult.actorId || "n/a"} />
+                  </div>
 
-            <Col xs={24} xl={13}>
-              <ProCard
-                {...moduleCardProps}
-                title={
-                  selectedService
-                    ? `Invoke ${selectedService.displayName || selectedService.serviceId}`
-                    : 'Invoke service'
-                }
-                loading={scopeServicesQuery.isLoading}
-              >
-                {!selectedService ? (
                   <Alert
                     showIcon
-                    type="info"
-                    title="No scope services are available yet."
-                    description="Publish or bind a scope service first, then return here to invoke it."
+                    title={
+                      invokeResult.status === "idle"
+                        ? "The lab console is ready for live events and invocation output."
+                        : invokeResult.status === "running"
+                          ? "Live data is streaming into the lab console."
+                          : "Open the lab console for the full event trace and response payload."
+                    }
+                    type={
+                      invokeResult.status === "error"
+                        ? "error"
+                        : invokeResult.status === "success"
+                          ? "success"
+                          : "info"
+                    }
                   />
-                ) : (
-                  <div style={cardStackStyle}>
-                    <div style={summaryFieldGridStyle}>
-                      <SummaryField
-                        label="Service key"
-                        value={
-                          <Typography.Text copyable>
-                            {selectedService.serviceKey}
-                          </Typography.Text>
-                        }
-                      />
-                      <SummaryField
-                        label="Deployment"
-                        value={`${selectedService.deploymentStatus || 'unknown'}${
-                          selectedService.deploymentId
-                            ? ` · ${selectedService.deploymentId}`
-                            : ''
-                        }`}
-                      />
-                      <SummaryField
-                        label="Active revision"
-                        value={
-                          selectedService.activeServingRevisionId ||
-                          selectedService.defaultServingRevisionId ||
-                          'n/a'
-                        }
-                      />
-                      <SummaryField
-                        label="Primary actor"
-                        value={
-                          selectedService.primaryActorId ? (
-                            <Typography.Text copyable>
-                              {selectedService.primaryActorId}
-                            </Typography.Text>
-                          ) : (
-                            'n/a'
-                          )
-                        }
-                      />
-                    </div>
+                </>
+              )}
+            </AevatarPanel>
+          </div>
+        }
+      />
 
-                    <div>
-                      <Typography.Text style={summaryFieldLabelStyle}>
-                        Endpoint
-                      </Typography.Text>
-                      <Select
-                        aria-label="Endpoint"
-                        style={{ display: 'block', marginTop: 8, width: '100%' }}
-                        options={selectedEndpointOptions}
-                        value={selectedEndpointId || undefined}
-                        onChange={(value) => setSelectedEndpointId(value)}
-                      />
-                      <Typography.Paragraph
-                        style={{ margin: '8px 0 0' }}
-                        type="secondary"
-                      >
-                        {selectedEndpoint?.description ||
-                          'Select a published endpoint for this scope service.'}
-                      </Typography.Paragraph>
-                    </div>
+      <InvokeLabDock
+        activeTab={dockTab}
+        dockHeight={dockHeight}
+        events={invokeResult.events}
+        isCollapsed={isDockCollapsed}
+        onResizeStart={startDockResize}
+        onTabChange={setDockTab}
+        outputPanels={outputPanels}
+        setCollapsed={setDockCollapsed}
+      />
 
-                    <div>
-                      <Typography.Text style={summaryFieldLabelStyle}>
-                        {selectedEndpoint && isChatEndpoint(selectedEndpoint)
-                          ? 'Prompt'
-                          : 'Payload text'}
-                      </Typography.Text>
-                      <Input.TextArea
-                        placeholder="Describe the request or payload text."
-                        rows={5}
-                        style={{ marginTop: 8 }}
-                        value={prompt}
-                        onChange={(event) => setPrompt(event.target.value)}
-                      />
-                    </div>
-
-                    {selectedEndpoint && !isChatEndpoint(selectedEndpoint) ? (
-                      <>
-                        <div>
-                          <Typography.Text style={summaryFieldLabelStyle}>
-                            Payload type URL
-                          </Typography.Text>
-                          <Input
-                            placeholder="type.googleapis.com/google.protobuf.StringValue"
-                            style={{ marginTop: 8 }}
-                            value={payloadTypeUrl}
-                            onChange={(event) => setPayloadTypeUrl(event.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <Typography.Text style={summaryFieldLabelStyle}>
-                            Payload base64 (advanced)
-                          </Typography.Text>
-                          <Input.TextArea
-                            placeholder="Leave empty only when the endpoint accepts StringValue or AppScriptCommand."
-                            rows={3}
-                            style={{ marginTop: 8 }}
-                            value={payloadBase64}
-                            onChange={(event) => setPayloadBase64(event.target.value)}
-                          />
-                        </div>
-                      </>
-                    ) : (
-                      <Alert
-                        showIcon
-                        type="info"
-                        title="Chat endpoints run as SSE streams."
-                        description="This path uses the published scope service and will stream assistant output plus run context in real time."
-                      />
-                    )}
-
-                    <Space wrap>
-                      <Button
-                        type="primary"
-                        loading={isStreaming || isInvoking}
-                        disabled={!selectedEndpointId}
-                        onClick={() => void handleInvoke()}
-                      >
-                        {selectedEndpoint && isChatEndpoint(selectedEndpoint)
-                          ? 'Stream chat'
-                          : 'Invoke endpoint'}
-                      </Button>
-                      <Button disabled={!isStreaming} onClick={handleAbort}>
-                        Abort stream
-                      </Button>
-                      <Button onClick={handleOpenRuns}>
-                        Open in Runs
-                      </Button>
-                    </Space>
-
-                    {invokeResult.status !== 'idle' ? (
-                      <div style={cardStackStyle}>
-                        <Alert
-                          showIcon
-                          type={
-                            invokeResult.status === 'error'
-                              ? 'error'
-                              : invokeResult.status === 'success'
-                                ? 'success'
-                                : 'info'
-                          }
-                          title={`${
-                            invokeResult.mode === 'stream'
-                              ? 'Streaming invoke'
-                              : 'Generic invoke'
-                          } · ${invokeResult.serviceId || selectedService.serviceId} / ${
-                            invokeResult.endpointId || selectedEndpointId || 'endpoint'
-                          }`}
-                          description={
-                            invokeResult.error ||
-                            (invokeResult.status === 'running'
-                              ? 'Invocation in progress.'
-                              : 'Invocation completed.')
-                          }
-                        />
-
-                        <div style={summaryFieldGridStyle}>
-                          <SummaryField
-                            label="Run ID"
-                            value={
-                              invokeResult.runId ? (
-                                <Typography.Text copyable>
-                                  {invokeResult.runId}
-                                </Typography.Text>
-                              ) : (
-                                'n/a'
-                              )
-                            }
-                          />
-                          <SummaryField
-                            label="Actor ID"
-                            value={
-                              invokeResult.actorId ? (
-                                <Typography.Text copyable>
-                                  {invokeResult.actorId}
-                                </Typography.Text>
-                              ) : (
-                                'n/a'
-                              )
-                            }
-                          />
-                          <SummaryField
-                            label="Command ID"
-                            value={
-                              invokeResult.commandId ? (
-                                <Typography.Text copyable>
-                                  {invokeResult.commandId}
-                                </Typography.Text>
-                              ) : (
-                                'n/a'
-                              )
-                            }
-                          />
-                          <SummaryField
-                            label="Observed events"
-                            value={invokeResult.eventCount}
-                          />
-                        </div>
-
-                        {invokeResult.assistantText ? (
-                          <div>
-                            <Typography.Text style={summaryFieldLabelStyle}>
-                              Assistant stream
-                            </Typography.Text>
-                            <pre style={codeBlockStyle}>{invokeResult.assistantText}</pre>
-                          </div>
-                        ) : null}
-
-                        {invokeResult.responseJson ? (
-                          <div>
-                            <Typography.Text style={summaryFieldLabelStyle}>
-                              Invoke receipt
-                            </Typography.Text>
-                            <pre style={codeBlockStyle}>{invokeResult.responseJson}</pre>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
+      <AevatarContextDrawer
+        onClose={() => setContextSurface(null)}
+        open={Boolean(contextSurface)}
+        subtitle={
+          contextSurface === "service"
+            ? selectedService
+              ? `${selectedService.namespace}/${selectedService.serviceId}`
+              : "Published service"
+            : "Recommended next step for the current invoke session"
+        }
+        title={
+          contextSurface === "service"
+            ? selectedService?.displayName || selectedService?.serviceId || "Service"
+            : "Operator Brief"
+        }
+        extra={
+          contextSurface === "insight" ? (
+            <Button onClick={recommendedNextStep.action} type="primary">
+              {recommendedNextStep.actionLabel}
+            </Button>
+          ) : null
+        }
+      >
+        {contextSurface === "insight" ? (
+          <>
+            <AevatarPanel
+              description="The operator brief keeps the next step out of the main stage until you need it."
+              title="Recommended Action"
+            >
+              <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                <Typography.Text strong>{recommendedNextStep.title}</Typography.Text>
+                <Typography.Text type="secondary">
+                  {recommendedNextStep.description}
+                </Typography.Text>
+                <AevatarStatusTag
+                  domain="run"
+                  status={
+                    invokeResult.status === "idle" ? "draft" : invokeResult.status
+                  }
+                />
+                <Typography.Text type="secondary">
+                  {invokeResult.eventCount} observed events · Mode {invokeResult.mode}
+                </Typography.Text>
+              </Space>
+            </AevatarPanel>
+            <AevatarPanel title="Session Snapshot">
+              <div
+                style={{
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                }}
+              >
+                <MetricCard label="Project" value={scopeId || "n/a"} />
+                <MetricCard
+                  label="Service"
+                  value={selectedService?.displayName || selectedService?.serviceId || "n/a"}
+                />
+                <MetricCard
+                  label="Endpoint"
+                  value={selectedEndpoint?.displayName || selectedEndpoint?.endpointId || "n/a"}
+                />
+                <MetricCard label="Run ID" value={invokeResult.runId || "n/a"} />
+              </div>
+            </AevatarPanel>
+          </>
+        ) : (
+          <>
+            {selectedService ? (
+              <>
+                <AevatarPanel title="Service Snapshot">
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    }}
+                  >
+                    <MetricCard label="Service key" value={selectedService.serviceKey} />
+                    <MetricCard label="Deployment" value={selectedService.deploymentStatus || "draft"} />
+                    <MetricCard
+                      label="Revision"
+                      value={
+                        selectedService.activeServingRevisionId ||
+                        selectedService.defaultServingRevisionId ||
+                        "n/a"
+                      }
+                    />
+                    <MetricCard label="Actor" value={selectedService.primaryActorId || "n/a"} />
                   </div>
-                )}
-              </ProCard>
-            </Col>
+                </AevatarPanel>
+
+                <AevatarPanel title="Endpoint Surface">
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {selectedService.endpoints.map((endpoint) => (
+                      <div
+                        key={endpoint.endpointId}
+                        style={{
+                          border: "1px solid var(--ant-color-border-secondary)",
+                          borderRadius: 12,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          padding: 12,
+                        }}
+                      >
+                        <Space wrap size={[8, 8]}>
+                          <Typography.Text strong>
+                            {endpoint.displayName || endpoint.endpointId}
+                          </Typography.Text>
+                          <AevatarStatusTag
+                            domain="observation"
+                            status={isChatEndpoint(endpoint) ? "streaming" : "snapshot_available"}
+                            label={endpoint.kind || "endpoint"}
+                          />
+                        </Space>
+                        <Typography.Text type="secondary">
+                          {endpoint.description || "No endpoint description."}
+                        </Typography.Text>
+                        <Space wrap>
+                          <Button
+                            onClick={() => {
+                              setPreserveEmptySelection(false);
+                              setSelectedServiceId(selectedService.serviceId);
+                              setSelectedEndpointId(endpoint.endpointId);
+                            }}
+                            type={
+                              selectedEndpointId === endpoint.endpointId
+                                ? "primary"
+                                : "default"
+                            }
+                          >
+                            {selectedEndpointId === endpoint.endpointId
+                              ? "Selected"
+                              : "Use endpoint"}
+                          </Button>
+                        </Space>
+                      </div>
+                    ))}
+                  </div>
+                </AevatarPanel>
+              </>
+            ) : (
+              <AevatarInspectorEmpty description="Choose a published service to inspect its invoke surface." />
+            )}
+            <AevatarPanel
+              description="Browse every published service without taking over the main stage."
+              title="Published Services"
+            >
+              {services.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {services.map((service) => (
+                    <div
+                      key={service.serviceKey}
+                      style={{
+                        border: "1px solid var(--ant-color-border-secondary)",
+                        borderRadius: 12,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        padding: 12,
+                      }}
+                    >
+                      <Space wrap size={[8, 8]}>
+                        <Typography.Text strong>
+                          {service.displayName || service.serviceId}
+                        </Typography.Text>
+                        <AevatarStatusTag
+                          domain="governance"
+                          status={service.deploymentStatus || "draft"}
+                        />
+                      </Space>
+                      <Typography.Text type="secondary">
+                        {service.endpoints.length} endpoints · Updated{" "}
+                        {formatDateTime(service.updatedAt)}
+                      </Typography.Text>
+                      <Space wrap>
+                        <Button
+                          onClick={() => {
+                            setPreserveEmptySelection(false);
+                            setSelectedServiceId(service.serviceId);
+                          }}
+                          type={
+                            service.serviceId === selectedServiceId
+                              ? "primary"
+                              : "default"
+                          }
+                        >
+                          {service.serviceId === selectedServiceId ? "Selected" : "Use"}
+                        </Button>
+                      </Space>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Empty
+                  description="No published services were discovered for this project."
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              )}
+            </AevatarPanel>
           </>
         )}
-      </Row>
-    </PageContainer>
+      </AevatarContextDrawer>
+    </AevatarPageShell>
   );
 };
+
+const MetricCard: React.FC<{
+  label: string;
+  value: React.ReactNode;
+}> = ({ label, value }) => (
+  <div
+    style={{
+      background: "var(--ant-color-fill-quaternary)",
+      border: "1px solid var(--ant-color-border-secondary)",
+      borderRadius: 12,
+      display: "flex",
+      flexDirection: "column",
+      gap: 4,
+      padding: 12,
+    }}
+  >
+    <Typography.Text type="secondary">{label}</Typography.Text>
+    <Typography.Text strong>{value}</Typography.Text>
+  </div>
+);
+
+const CodePanel: React.FC<{
+  title: string;
+  value: string;
+}> = ({ title, value }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <Typography.Text strong>{title}</Typography.Text>
+    <pre
+      style={{
+        background: "var(--ant-color-fill-quaternary)",
+        border: "1px solid var(--ant-color-border-secondary)",
+        borderRadius: 12,
+        margin: 0,
+        maxHeight: 320,
+        overflow: "auto",
+        padding: 12,
+        whiteSpace: "pre-wrap",
+      }}
+    >
+      {value}
+    </pre>
+  </div>
+);
+
+const InvokeLabDock: React.FC<{
+  activeTab: InvokeDockTab;
+  dockHeight: number;
+  events: AGUIEvent[];
+  isCollapsed: boolean;
+  onResizeStart: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onTabChange: (tab: InvokeDockTab) => void;
+  outputPanels: { title: string; value: string }[];
+  setCollapsed: (collapsed: boolean) => void;
+}> = ({
+  activeTab,
+  dockHeight,
+  events,
+  isCollapsed,
+  onResizeStart,
+  onTabChange,
+  outputPanels,
+  setCollapsed,
+}) => (
+  <div
+    style={{
+      border: "1px solid var(--ant-color-border-secondary)",
+      borderRadius: 12,
+      display: "flex",
+      flex: `0 0 ${isCollapsed ? 54 : dockHeight}px`,
+      flexDirection: "column",
+      minHeight: isCollapsed ? 54 : 188,
+      overflow: "hidden",
+    }}
+  >
+    <hr
+      aria-label="Resize lab console"
+      onMouseDown={onResizeStart}
+      style={{
+        background: "var(--ant-color-fill-tertiary)",
+        border: 0,
+        cursor: isCollapsed ? "default" : "row-resize",
+        flex: "0 0 8px",
+        margin: 0,
+      }}
+    />
+    <div
+      style={{
+        alignItems: "center",
+        borderBottom: "1px solid var(--ant-color-border-secondary)",
+        display: "flex",
+        gap: 12,
+        justifyContent: "space-between",
+        padding: "12px 16px",
+      }}
+    >
+      <Space wrap size={[8, 8]}>
+        <Typography.Text strong>Lab Console</Typography.Text>
+        <Button
+          icon={<BorderBottomOutlined />}
+          onClick={() => onTabChange("events")}
+          type={activeTab === "events" ? "primary" : "default"}
+        >
+          Observed Events
+        </Button>
+        <Button
+          onClick={() => onTabChange("output")}
+          type={activeTab === "output" ? "primary" : "default"}
+        >
+          Output
+        </Button>
+      </Space>
+      <Button onClick={() => setCollapsed(!isCollapsed)}>
+        {isCollapsed ? "Expand Console" : "Collapse Console"}
+      </Button>
+    </div>
+    {!isCollapsed ? (
+      <div
+        style={{
+          display: "flex",
+          flex: 1,
+          flexDirection: "column",
+          minHeight: 0,
+          overflow: "auto",
+          padding: 16,
+        }}
+      >
+        {activeTab === "events" ? (
+          events.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {events.slice(-16).map((event, index) => (
+                <div
+                  key={getEventKey(event, index)}
+                  style={{
+                    border: "1px solid var(--ant-color-border-secondary)",
+                    borderRadius: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    padding: 12,
+                  }}
+                >
+                  <Space wrap size={[8, 8]}>
+                    <AevatarStatusTag domain="observation" status="streaming" />
+                    <Typography.Text strong>{event.type}</Typography.Text>
+                  </Space>
+                  <Typography.Text type="secondary">
+                    {JSON.stringify(event, null, 2)}
+                  </Typography.Text>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <Empty
+              description="No events have been observed yet."
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
+          )
+        ) : outputPanels.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {outputPanels.map((panel) => (
+              <CodePanel key={panel.title} title={panel.title} value={panel.value} />
+            ))}
+          </div>
+        ) : (
+          <Empty
+            description="Invocation output will appear here after you stream or invoke a service."
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        )}
+      </div>
+    ) : null}
+  </div>
+);
 
 export default ScopeInvokePage;

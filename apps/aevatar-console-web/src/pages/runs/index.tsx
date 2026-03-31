@@ -131,12 +131,12 @@ const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
   alignItems: "center",
   background: "var(--ant-color-bg-container)",
   border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 12,
+  borderRadius: 10,
   display: "flex",
   flexWrap: "wrap",
-  gap: 16,
+  gap: 12,
   justifyContent: "space-between",
-  padding: "14px 16px",
+  padding: "10px 12px",
 };
 
 const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
@@ -880,6 +880,20 @@ const RunsPage: React.FC = () => {
         )
           ? (entry.status as RunStatusValue)
           : "unknown",
+        onOpenActor: entry.actorId
+          ? () =>
+              history.push(
+                buildRuntimeExplorerHref({
+                  actorId: entry.actorId,
+                  runId: entry.runId || undefined,
+                  scopeId: entry.scopeId || undefined,
+                  serviceOverrideId:
+                    entry.serviceOverrideId === entry.routeName
+                      ? undefined
+                      : entry.serviceOverrideId || undefined,
+                })
+              )
+          : undefined,
         onRestore: () => {
           const isChatEndpoint =
             !entry.endpointId || entry.endpointId === "chat";
@@ -921,14 +935,6 @@ const RunsPage: React.FC = () => {
           setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
           setActiveEndpointId(entry.endpointId || "chat");
         },
-        onOpenActor: entry.actorId
-          ? () =>
-              history.push(
-                buildRuntimeExplorerHref({
-                  actorId: entry.actorId,
-                })
-              )
-          : undefined,
       })),
     [hydrateObservedSession, recentRuns, selectedTransport]
   );
@@ -1469,19 +1475,26 @@ const RunsPage: React.FC = () => {
             </Popover>
           </div>
           <div style={runsWorkbenchHeaderActionStyle}>
-            <Button onClick={() => history.push(buildRuntimeWorkflowsHref())}>
-              Open Runtime Catalog
+            <Button
+              size="small"
+              onClick={() => history.push(buildRuntimeWorkflowsHref())}
+            >
+              Catalog
             </Button>
             <Button
+              size="small"
               onClick={() =>
                 history.push(
                   buildRuntimeExplorerHref({
                     actorId: actorId ?? undefined,
+                    runId: session.runId || undefined,
+                    scopeId: activeScopeId || undefined,
+                    serviceOverrideId: activeServiceOverrideId || undefined,
                   })
                 )
               }
             >
-              Open Runtime Explorer
+              Explorer
             </Button>
           </div>
         </div>

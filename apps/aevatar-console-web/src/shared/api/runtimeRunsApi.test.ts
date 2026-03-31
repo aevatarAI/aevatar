@@ -209,6 +209,82 @@ describe("runtimeRunsApi", () => {
     );
   });
 
+  it("routes getRunSummary through the scope run endpoint", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        actorId: "actor-1",
+        runId: "run-1",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.getRunSummary(
+      "scope-1",
+      "run-1"
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/runs/run-1?",
+      expect.objectContaining({
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      })
+    );
+  });
+
+  it("routes scoped getRunSummary through the service run endpoint with actor filters", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        actorId: "actor-1",
+        runId: "run-1",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.getRunSummary(
+      "scope-1",
+      "run-1",
+      { serviceId: "service-1" }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/services/service-1/runs/run-1?",
+      expect.objectContaining({
+        method: "GET",
+      })
+    );
+  });
+
+  it("forwards actor filters when resolving run summaries", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        actorId: "actor-1",
+        runId: "run-1",
+      }),
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.getRunSummary("scope-1", "run-1", {
+      actorId: "actor-1",
+      serviceId: "service-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scopes/scope-1/services/service-1/runs/run-1?actorId=actor-1",
+      expect.objectContaining({
+        method: "GET",
+      })
+    );
+  });
+
   it("routes generic endpoint invokes through the scope endpoint path with a default string payload", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

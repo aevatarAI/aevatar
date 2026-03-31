@@ -64,7 +64,10 @@ import {
   type StudioWorkflowLayoutDocument,
 } from '@/shared/studio/graph';
 import { studioApi } from '@/shared/studio/api';
-import type { StudioTab } from '@/shared/studio/navigation';
+import {
+  buildStudioRoute,
+  type StudioTab,
+} from '@/shared/studio/navigation';
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
@@ -838,9 +841,14 @@ function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage 
     case 'executions':
       return 'studio';
     default:
+      if (state.scriptId) {
+        return 'scripts';
+      }
+
       return state.workflowId ||
         state.templateWorkflow ||
         state.draftMode === 'new' ||
+        state.executionId ||
         state.prompt
         ? 'studio'
         : 'workflows';
@@ -1398,75 +1406,34 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const url = new URL(window.location.href);
-    if (selectedWorkflowId) {
-      url.searchParams.set('workflow', selectedWorkflowId);
-    } else {
-      url.searchParams.delete('workflow');
-    }
+    const tab: StudioTab =
+      workspacePage === 'studio'
+        ? studioView === 'execution'
+          ? 'executions'
+          : 'studio'
+        : workspacePage;
 
-    if (selectedScriptId) {
-      url.searchParams.set('script', selectedScriptId);
-    } else {
-      url.searchParams.delete('script');
-    }
-
-    if (!selectedWorkflowId && templateWorkflow) {
-      url.searchParams.set('template', templateWorkflow);
-    } else {
-      url.searchParams.delete('template');
-    }
-
-    if (!selectedWorkflowId && !templateWorkflow && draftMode === 'new') {
-      url.searchParams.set('draft', 'new');
-    } else {
-      url.searchParams.delete('draft');
-    }
-
-    if (
-      !selectedWorkflowId &&
-      !templateWorkflow &&
-      draftMode === 'new' &&
-      legacySource === 'playground'
-    ) {
-      url.searchParams.set('legacy', 'playground');
-    } else {
-      url.searchParams.delete('legacy');
-    }
-
-    if (workspacePage === 'scripts') {
-      url.searchParams.set('tab', 'scripts');
-    } else if (workspacePage === 'roles') {
-      url.searchParams.set('tab', 'roles');
-    } else if (workspacePage === 'connectors') {
-      url.searchParams.set('tab', 'connectors');
-    } else if (workspacePage === 'settings') {
-      url.searchParams.set('tab', 'settings');
-    } else if (workspacePage === 'workflows') {
-      url.searchParams.set('tab', 'workflows');
-    } else if (studioView === 'execution') {
-      url.searchParams.set('tab', 'executions');
-    } else {
-      url.searchParams.set('tab', 'studio');
-    }
-
-    if (selectedExecutionId) {
-      url.searchParams.set('execution', selectedExecutionId);
-    } else {
-      url.searchParams.delete('execution');
-    }
-
-    if (logsPopoutMode === 'popout') {
-      url.searchParams.set('logs', 'popout');
-    } else {
-      url.searchParams.delete('logs');
-    }
-
-    window.history.replaceState(
-      null,
-      '',
-      `${url.pathname}${url.search}`,
-    );
+    window.history.replaceState(null, '', buildStudioRoute({
+      workflowId: selectedWorkflowId || undefined,
+      scriptId: selectedScriptId || undefined,
+      template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
+      tab,
+      draftMode:
+        !selectedWorkflowId &&
+        !templateWorkflow &&
+        draftMode === 'new'
+          ? 'new'
+          : undefined,
+      legacySource:
+        !selectedWorkflowId &&
+        !templateWorkflow &&
+        draftMode === 'new' &&
+        legacySource === 'playground'
+          ? 'playground'
+          : undefined,
+      executionId: selectedExecutionId || undefined,
+      logsMode: logsPopoutMode === 'popout' ? 'popout' : undefined,
+    }));
   }, [
     draftMode,
     legacySource,
@@ -4206,6 +4173,20 @@ const StudioPage: React.FC = () => {
           onReusePrompt={applyRunPrompt}
           onOpenWorkflowFromHistory={openWorkflowFromHistory}
           onStartExecution={() => void handleStartExecution()}
+          onOpenProjectOverview={() => {
+            history.push(
+              resolvedStudioScopeId
+                ? `/scopes/overview?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
+                : '/scopes/overview',
+            );
+          }}
+          onOpenProjectInvoke={() => {
+            history.push(
+              resolvedStudioScopeId
+                ? `/scopes/invoke?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
+                : '/scopes/invoke',
+            );
+          }}
           onOpenExecutions={() => {
             setWorkspacePage('studio');
             setStudioView('execution');

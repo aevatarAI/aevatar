@@ -1,4 +1,4 @@
-import { requestJson, withQuery } from "./http/client";
+import { jsonBody, requestJson, withQuery } from "./http/client";
 import {
   expectArray,
   expectRecord,
@@ -9,17 +9,23 @@ import {
 } from "./http/decoders";
 import type {
   ActivationCapabilityView,
+  GovernanceIdentityInput,
+  ServiceBindingInput,
   BoundConnectorReference,
   BoundSecretReference,
   BoundServiceReference,
+  ServiceEndpointCatalogInput,
+  ServiceEndpointExposureInput,
   ServiceBindingCatalogSnapshot,
   ServiceBindingSnapshot,
   ServiceEndpointCatalogSnapshot,
   ServiceEndpointExposureSnapshot,
+  ServicePolicyInput,
   ServicePolicyCatalogSnapshot,
   ServicePolicySnapshot,
 } from "@/shared/models/governance";
 import type {
+  ServiceCommandAcceptedReceipt,
   ServiceIdentity,
   ServiceIdentityQuery,
 } from "@/shared/models/services";
@@ -83,6 +89,30 @@ function decodeServiceIdentity(
       record,
       ["serviceId", "ServiceId"],
       `${label}.serviceId`
+    ),
+  };
+}
+
+function decodeServiceCommandAcceptedReceipt(
+  value: unknown,
+  label = "ServiceCommandAcceptedReceipt"
+): ServiceCommandAcceptedReceipt {
+  const record = expectRecord(value, label);
+  return {
+    targetActorId: readString(
+      record,
+      ["targetActorId", "TargetActorId"],
+      `${label}.targetActorId`
+    ),
+    commandId: readString(
+      record,
+      ["commandId", "CommandId"],
+      `${label}.commandId`
+    ),
+    correlationId: readString(
+      record,
+      ["correlationId", "CorrelationId"],
+      `${label}.correlationId`
     ),
   };
 }
@@ -473,6 +503,79 @@ function buildIdentityQuery(query: ServiceIdentityQuery) {
   };
 }
 
+function buildIdentityBody(identity: GovernanceIdentityInput) {
+  return {
+    tenantId: identity.tenantId.trim(),
+    appId: identity.appId.trim(),
+    namespace: identity.namespace.trim(),
+  };
+}
+
+function encodeServiceBindingPayload(input: ServiceBindingInput) {
+  return {
+    ...buildIdentityBody(input),
+    bindingId: input.bindingId.trim(),
+    displayName: input.displayName.trim(),
+    bindingKind: input.bindingKind.trim(),
+    policyIds: (input.policyIds ?? []).map((entry) => entry.trim()).filter(Boolean),
+    service: input.service
+      ? {
+          tenantId: input.service.tenantId.trim(),
+          appId: input.service.appId.trim(),
+          namespace: input.service.namespace.trim(),
+          serviceId: input.service.serviceId.trim(),
+          endpointId: input.service.endpointId?.trim() ?? "",
+        }
+      : undefined,
+    connector: input.connector
+      ? {
+          connectorType: input.connector.connectorType.trim(),
+          connectorId: input.connector.connectorId.trim(),
+        }
+      : undefined,
+    secret: input.secret
+      ? {
+          secretName: input.secret.secretName.trim(),
+        }
+      : undefined,
+  };
+}
+
+function encodeServicePolicyPayload(input: ServicePolicyInput) {
+  return {
+    ...buildIdentityBody(input),
+    policyId: input.policyId.trim(),
+    displayName: input.displayName.trim(),
+    activationRequiredBindingIds: input.activationRequiredBindingIds
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    invokeAllowedCallerServiceKeys: input.invokeAllowedCallerServiceKeys
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+    invokeRequiresActiveDeployment: input.invokeRequiresActiveDeployment,
+  };
+}
+
+function encodeEndpointCatalogEntry(input: ServiceEndpointExposureInput) {
+  return {
+    endpointId: input.endpointId.trim(),
+    displayName: input.displayName.trim(),
+    kind: input.kind.trim(),
+    requestTypeUrl: input.requestTypeUrl.trim(),
+    responseTypeUrl: input.responseTypeUrl.trim(),
+    description: input.description.trim(),
+    exposureKind: input.exposureKind.trim(),
+    policyIds: (input.policyIds ?? []).map((entry) => entry.trim()).filter(Boolean),
+  };
+}
+
+function encodeEndpointCatalogPayload(input: ServiceEndpointCatalogInput) {
+  return {
+    ...buildIdentityBody(input),
+    endpoints: input.endpoints.map(encodeEndpointCatalogEntry),
+  };
+}
+
 export const governanceApi = {
   getBindings(
     serviceId: string,
@@ -529,6 +632,122 @@ export const governanceApi = {
         }
       ),
       decodeActivationCapabilityView
+    );
+  },
+
+  createBinding(
+    serviceId: string,
+    input: ServiceBindingInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/bindings`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody(encodeServiceBindingPayload(input)),
+      }
+    );
+  },
+
+  updateBinding(
+    serviceId: string,
+    bindingId: string,
+    input: ServiceBindingInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/bindings/${encodeURIComponent(bindingId)}`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "PUT",
+        ...jsonBody(encodeServiceBindingPayload(input)),
+      }
+    );
+  },
+
+  retireBinding(
+    serviceId: string,
+    bindingId: string,
+    identity: GovernanceIdentityInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/bindings/${encodeURIComponent(bindingId)}:retire`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody(buildIdentityBody(identity)),
+      }
+    );
+  },
+
+  createPolicy(
+    serviceId: string,
+    input: ServicePolicyInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/policies`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody(encodeServicePolicyPayload(input)),
+      }
+    );
+  },
+
+  updatePolicy(
+    serviceId: string,
+    policyId: string,
+    input: ServicePolicyInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/policies/${encodeURIComponent(policyId)}`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "PUT",
+        ...jsonBody(encodeServicePolicyPayload(input)),
+      }
+    );
+  },
+
+  retirePolicy(
+    serviceId: string,
+    policyId: string,
+    identity: GovernanceIdentityInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/policies/${encodeURIComponent(policyId)}:retire`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody(buildIdentityBody(identity)),
+      }
+    );
+  },
+
+  createEndpointCatalog(
+    serviceId: string,
+    input: ServiceEndpointCatalogInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/endpoint-catalog`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody(encodeEndpointCatalogPayload(input)),
+      }
+    );
+  },
+
+  updateEndpointCatalog(
+    serviceId: string,
+    input: ServiceEndpointCatalogInput
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/endpoint-catalog`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "PUT",
+        ...jsonBody(encodeEndpointCatalogPayload(input)),
+      }
     );
   },
 };

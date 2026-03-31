@@ -1,241 +1,167 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import React from 'react';
-import { runtimeCatalogApi } from '@/shared/api/runtimeCatalogApi';
-import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import WorkflowsPage from './index';
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import React from "react";
+import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
+import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
+import WorkflowsPage from "./index";
 
-jest.mock('@/shared/api/runtimeCatalogApi', () => ({
+jest.mock("@/shared/api/runtimeCatalogApi", () => ({
   runtimeCatalogApi: {
     listWorkflowCatalog: jest.fn(async () => [
       {
-        name: 'demo_flow',
-        description: 'Demo workflow',
-        category: 'demo',
-        group: 'demo',
-        groupLabel: 'Demo',
+        name: "demo_flow",
+        description: "Demo workflow",
+        category: "demo",
+        group: "demo",
+        groupLabel: "Demo",
         sortOrder: 1,
-        source: 'BuiltIn',
-        sourceLabel: 'Built-in',
+        source: "BuiltIn",
+        sourceLabel: "Built-in",
         showInLibrary: true,
         isPrimitiveExample: false,
         requiresLlmProvider: false,
-        primitives: ['human_input'],
+        primitives: ["human_input"],
       },
     ]),
     getWorkflowDetail: jest.fn(async () => ({
       catalog: {
-        name: 'demo_flow',
-        description: 'Demo workflow',
-        category: 'demo',
-        group: 'demo',
-        groupLabel: 'Demo',
+        name: "demo_flow",
+        description: "Demo workflow",
+        category: "demo",
+        group: "demo",
+        groupLabel: "Demo",
         sortOrder: 1,
-        source: 'BuiltIn',
-        sourceLabel: 'Built-in',
+        source: "BuiltIn",
+        sourceLabel: "Built-in",
         showInLibrary: true,
         isPrimitiveExample: false,
         requiresLlmProvider: false,
-        primitives: ['human_input'],
+        primitives: ["human_input"],
       },
-      yaml: 'name: demo_flow\nsteps: []\n',
+      yaml: "name: demo_flow\nsteps: []\n",
       definition: {
-        name: 'demo_flow',
-        description: 'Demo workflow',
-        closedWorldMode: false,
+        name: "demo_flow",
+        description: "Demo workflow",
+        closedWorldMode: true,
         roles: [
           {
-            id: 'planner',
-            name: 'Planner',
-            systemPrompt: 'Plan the work.',
-            provider: 'openai',
-            model: 'gpt-4.1',
-            temperature: 0.2,
-            maxTokens: 1024,
-            maxToolRounds: 4,
-            maxHistoryMessages: 12,
-            streamBufferCapacity: 8,
-            eventModules: ['approval'],
-            eventRoutes: 'approval -> planner',
-            connectors: ['memory'],
+            id: "planner",
+            name: "Planner",
+            systemPrompt: "Plan the work.",
+            provider: "",
+            model: "",
+            temperature: 0,
+            maxTokens: 0,
+            maxToolRounds: 0,
+            maxHistoryMessages: 0,
+            streamBufferCapacity: 0,
+            eventModules: [],
+            eventRoutes: "",
+            connectors: ["memory"],
           },
         ],
         steps: [
           {
-            id: 'step_prepare',
-            type: 'prompt',
-            targetRole: 'planner',
-            parameters: { input: '{{prompt}}' },
-            next: 'step_finish',
+            id: "step_prepare",
+            type: "prompt",
+            targetRole: "planner",
+            parameters: { input: "{{prompt}}" },
+            next: "",
             branches: {},
-            children: [],
-          },
-          {
-            id: 'step_finish',
-            type: 'emit',
-            targetRole: 'planner',
-            parameters: {},
-            next: '',
-            branches: { done: 'complete' },
             children: [],
           },
         ],
       },
-      edges: [{ from: 'step_prepare', to: 'step_finish', label: 'next' }],
+      edges: [],
     })),
   },
 }));
 
-jest.mock('@/shared/graphs/GraphCanvas', () => ({
-  __esModule: true,
-  default: ({ selectedNodeId }: { selectedNodeId?: string }) => {
-    const React = require('react');
-    return React.createElement(
-      'div',
-      null,
-      `Graph node: ${selectedNodeId || 'none'}`,
-    );
-  },
-}));
-
-describe('WorkflowsPage', () => {
+describe("WorkflowsPage", () => {
   beforeEach(() => {
-    HTMLElement.prototype.scrollIntoView = jest.fn();
-    window.history.replaceState({}, '', '/runtime/workflows');
+    window.history.replaceState({}, "", "/runtime/workflows");
   });
 
-  it('keeps advanced filters collapsed until requested', async () => {
-    renderWithQueryClient(React.createElement(WorkflowsPage));
+  it("opens the definition inspector from the workflow query", async () => {
+    window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
 
-    await waitFor(() => {
-      expect(runtimeCatalogApi.listWorkflowCatalog).toHaveBeenCalled();
-    });
-    expect(await screen.findAllByText('demo_flow')).toBeTruthy();
-
-    expect(screen.queryByRole('combobox', { name: 'Groups' })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Advanced filters' }));
-
-    expect(
-      await screen.findByRole('combobox', { name: 'Groups' }),
-    ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Inspect' })).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Copy workflow YAML' }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Open YAML fullscreen' }),
-    ).toBeTruthy();
-  });
-
-  it('collapses and expands the workflow library panel', async () => {
-    renderWithQueryClient(React.createElement(WorkflowsPage));
-
-    await waitFor(() => {
-      expect(runtimeCatalogApi.listWorkflowCatalog).toHaveBeenCalled();
-    });
-
-    expect(
-      await screen.findByPlaceholderText(
-        /Filter by name, description, group, category, or primitive/i,
-      ),
-    ).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Collapse workflow library' }),
-    );
-
-    expect(
-      screen.queryByPlaceholderText(
-        /Filter by name, description, group, category, or primitive/i,
-      ),
-    ).toBeNull();
-    expect(screen.getByText('Library panel is collapsed.')).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Expand workflow library' }),
-    );
-
-    expect(
-      await screen.findByPlaceholderText(
-        /Filter by name, description, group, category, or primitive/i,
-      ),
-    ).toBeTruthy();
-  });
-
-  it('opens the workflow graph in a fullscreen modal', async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     await waitFor(() => {
       expect(runtimeCatalogApi.getWorkflowDetail).toHaveBeenCalledWith(
-        'demo_flow',
+        "demo_flow",
       );
     });
 
-    fireEvent.click(await screen.findByRole('tab', { name: /Graph/i }));
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Open graph fullscreen' }),
-    );
-
-    expect(await screen.findByText('Fullscreen graph view')).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Close graph fullscreen' }),
-    ).toBeTruthy();
-
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Close graph fullscreen' }),
-    );
-
-    await waitFor(() => {
-      expect(screen.queryByText('Fullscreen graph view')).toBeNull();
-    });
+    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+    expect(window.location.search).toContain("workflow=demo_flow");
   });
 
-  it('focuses the selected step in graph view', async () => {
+  it("closes the inspector and clears the workflow query", async () => {
+    window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
+
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
     await waitFor(() => {
       expect(runtimeCatalogApi.getWorkflowDetail).toHaveBeenCalledWith(
-        'demo_flow',
+        "demo_flow",
       );
     });
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'Steps (2)' }));
-    fireEvent.click(screen.getByRole('button', { name: /step_prepare/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Focus in graph' }));
+    fireEvent.click(document.querySelector(".ant-drawer-close") as HTMLElement);
 
     await waitFor(() => {
-      expect(
-        screen
-          .getByRole('tab', { name: 'Graph' })
-          .getAttribute('aria-selected'),
-      ).toBe('true');
+      expect(window.location.search).toBe("");
+      expect(screen.queryByText("Definition Summary")).toBeNull();
     });
-    expect(screen.getByText('Graph node: step_prepare')).toBeTruthy();
-    expect(
-      screen
-        .getByTestId('workflow-graph-tab-label')
-        .getAttribute('data-highlighted'),
-    ).toBe('true');
-    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
   });
 
-  it('routes workflow library actions into Studio drafts', async () => {
+  it("stretches the filter group selector to the panel width", async () => {
+    const { container } = renderWithQueryClient(React.createElement(WorkflowsPage));
+
+    expect(await screen.findByText("Library Digest")).toBeTruthy();
+    expect(container.querySelector(".ant-select")).toHaveStyle({ width: "100%" });
+  });
+
+  it("renders catalog cards as full-width summaries with in-card actions", async () => {
     renderWithQueryClient(React.createElement(WorkflowsPage));
 
-    await waitFor(() => {
-      expect(runtimeCatalogApi.listWorkflowCatalog).toHaveBeenCalled();
+    expect(await screen.findByText("Closed-world ready")).toBeTruthy();
+    expect(screen.getByText("Group")).toBeTruthy();
+    expect(screen.getByText("Source")).toBeTruthy();
+    expect(screen.getByText("Primitives")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Inspect workflow demo_flow" }),
+    ).toHaveStyle({
+      width: "100%",
     });
+  });
+
+  it("opens the definition inspector when the catalog card is clicked", async () => {
+    renderWithQueryClient(React.createElement(WorkflowsPage));
 
     fireEvent.click(
-      (await screen.findAllByRole('button', { name: 'Open in Studio' }))[0],
+      await screen.findByRole("button", { name: "Inspect workflow demo_flow" }),
     );
 
-    expect(window.location.pathname).toBe('/studio');
-    expect(new URLSearchParams(window.location.search).get('template')).toBe(
-      'demo_flow',
+    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+  });
+
+  it("opens the Studio workflow editor from the definition inspector", async () => {
+    window.history.replaceState({}, "", "/runtime/workflows?workflow=demo_flow");
+
+    renderWithQueryClient(React.createElement(WorkflowsPage));
+
+    expect(await screen.findByText("Definition Summary")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open workflow editor" }),
     );
-    expect(new URLSearchParams(window.location.search).get('tab')).toBe(
-      'studio',
-    );
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+      expect(window.location.search).toBe("?workflow=demo_flow&tab=studio");
+    });
   });
 });

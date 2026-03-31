@@ -31,11 +31,11 @@ describe("AccountSettingsPage", () => {
     renderWithQueryClient(React.createElement(AccountSettingsPage));
 
     expect(await screen.findByText("Settings")).toBeTruthy();
-    expect(screen.getByText("Account profile")).toBeTruthy();
+    expect(screen.getByText("Operator Account")).toBeTruthy();
     expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2);
     expect(screen.getAllByText("ada@example.com")).toHaveLength(2);
-    expect(screen.getByText("Session summary")).toBeTruthy();
-    expect(screen.getByText("Access notes")).toBeTruthy();
+    expect(screen.getByText("Session Summary")).toBeTruthy();
+    expect(screen.getByText("Access Notes")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
   });
 });

@@ -2,6 +2,7 @@ export interface WorkflowActorSnapshot {
   actorId: string;
   workflowName: string;
   lastCommandId: string;
+  completionStatusValue: number;
   stateVersion: number;
   lastEventId: string;
   lastUpdatedAt: string;
