@@ -38,7 +38,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdAccountTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
-            new NyxIdProxyTool(_client),
+            new NyxIdProxyTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),

@@ -9,7 +9,7 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
 {
     private const string ConfigFileName = "config.json";
 
-    private static readonly UserConfig DefaultConfig = new(DefaultModel: string.Empty);
+    private static readonly UserConfig DefaultConfig = new(DefaultModel: string.Empty, RuntimeBaseUrl: string.Empty);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -48,7 +48,11 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
                 ? modelElement.GetString() ?? string.Empty
                 : string.Empty;
 
-            return new UserConfig(DefaultModel: defaultModel);
+            var runtimeBaseUrl = doc.RootElement.TryGetProperty("runtimeBaseUrl", out var runtimeElement)
+                ? runtimeElement.GetString() ?? string.Empty
+                : string.Empty;
+
+            return new UserConfig(DefaultModel: defaultModel, RuntimeBaseUrl: runtimeBaseUrl);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -64,7 +68,7 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
             throw new InvalidOperationException(
                 "User config storage is not available. Chrono-storage is disabled or the remote context could not be resolved.");
 
-        var json = JsonSerializer.SerializeToUtf8Bytes(new { defaultModel = config.DefaultModel }, JsonOptions);
+        var json = JsonSerializer.SerializeToUtf8Bytes(new { defaultModel = config.DefaultModel, runtimeBaseUrl = config.RuntimeBaseUrl }, JsonOptions);
         await _blobClient.UploadAsync(remoteContext, json, "application/json", cancellationToken);
     }
 }

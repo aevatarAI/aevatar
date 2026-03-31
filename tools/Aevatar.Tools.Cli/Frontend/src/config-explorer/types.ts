@@ -1,4 +1,4 @@
-export type ConfigFile = 'config.json' | 'roles.json' | 'connectors.json' | 'actors.json';
+export type ConfigFile = 'config.json' | 'roles.json' | 'connectors.json' | 'actors.json' | `chat-history:${string}`;
 
 export type GAgentType = { typeName: string; fullName: string; assemblyName: string };
 export type ActorGroup = { gAgentType: string; actorIds: string[] };

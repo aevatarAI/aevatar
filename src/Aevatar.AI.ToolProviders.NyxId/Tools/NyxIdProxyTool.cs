@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
@@ -8,8 +10,13 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 public sealed class NyxIdProxyTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
+    private readonly ILogger _logger;
 
-    public NyxIdProxyTool(NyxIdApiClient client) => _client = client;
+    public NyxIdProxyTool(NyxIdApiClient client, ILogger? logger = null)
+    {
+        _client = client;
+        _logger = logger ?? NullLogger.Instance;
+    }
 
     public string Name => "nyxid_proxy";
 
@@ -56,6 +63,8 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return "Error: No NyxID access token available. User must be authenticated.";
 
+        _logger.LogInformation("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
+
         string? slug = null;
         string? path = null;
         string method = "GET";
@@ -80,12 +89,18 @@ public sealed class NyxIdProxyTool : IAgentTool
                     headers[prop.Name] = prop.Value.GetString() ?? "";
             }
         }
-        catch { /* use defaults */ }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[nyxid_proxy] Failed to parse arguments: {Args}", argumentsJson);
+            return $"Error: Failed to parse arguments. Raw input: {argumentsJson}";
+        }
+
+        _logger.LogInformation("[nyxid_proxy] Parsed: slug={Slug}, path={Path}, method={Method}", slug, path, method);
 
         if (string.IsNullOrWhiteSpace(slug))
-            return "Error: 'slug' is required.";
+            return $"Error: 'slug' is required. Received arguments: {argumentsJson}";
         if (string.IsNullOrWhiteSpace(path))
-            return "Error: 'path' is required.";
+            return $"Error: 'path' is required. Received arguments: {argumentsJson}";
 
         return await _client.ProxyRequestAsync(token, slug, path, method, body, headers, ct);
     }

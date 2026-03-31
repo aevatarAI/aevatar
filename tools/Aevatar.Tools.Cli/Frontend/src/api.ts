@@ -2,7 +2,17 @@
 
 import { getAccessToken } from './auth/nyxid';
 
-const BASE = '/api';
+const DEFAULT_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
+let BASE = `${DEFAULT_RUNTIME_URL}/api`;
+
+export function setBaseUrl(runtimeUrl: string) {
+  const trimmed = (runtimeUrl || DEFAULT_RUNTIME_URL).replace(/\/+$/, '');
+  BASE = `${trimmed}/api`;
+}
+
+export function getBaseUrl(): string {
+  return BASE;
+}
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
 
 function getAuthHeaders(): Record<string, string> {
@@ -530,6 +540,30 @@ export const nyxidChat = {
 
   deleteConversation: (scopeId: string, actorId: string) =>
     request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
+};
+
+/* ─── Chat History APIs ─── */
+export const chatHistory = {
+  getIndex: (scopeId: string) =>
+    request<{ conversations: Array<{ id: string; title: string; serviceId: string; serviceKind: string; createdAt: string; updatedAt: string; messageCount: number }> }>(
+      `/scopes/${enc(scopeId)}/chat-history`,
+    ),
+
+  getConversation: (scopeId: string, convId: string) =>
+    request<Array<{ id: string; role: string; content: string; timestamp: number; status: string; error?: string; thinking?: string }>>(
+      `/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`,
+    ),
+
+  saveConversation: (scopeId: string, convId: string, meta: any, messages: any[]) =>
+    request<void>(`/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ meta, messages }),
+    }),
+
+  deleteConversation: (scopeId: string, convId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`, {
+      method: 'DELETE',
+    }),
 };
 
 /* ─── GAgent APIs ─── */

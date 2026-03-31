@@ -36,3 +36,25 @@ export type ServiceOption = {
   label: string;
   kind: 'nyxid-chat' | 'service' | 'draft-run';
 };
+
+/* ─── Chat History Persistence Types ─── */
+
+export type ConversationMeta = {
+  id: string;
+  title: string;
+  serviceId: string;
+  serviceKind: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+};
+
+export type StoredChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+  status: 'complete' | 'error';
+  error?: string;
+  thinking?: string;
+};

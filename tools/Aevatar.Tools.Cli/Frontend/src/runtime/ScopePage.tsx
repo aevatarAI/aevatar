@@ -6,7 +6,7 @@ import {
   isRawObserved,
   type RuntimeEvent,
 } from './sseUtils';
-import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo } from './chatTypes';
+import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
 
@@ -413,6 +413,111 @@ function DebugPanel({ events }: { events: RuntimeEvent[] }) {
   );
 }
 
+// ── Conversation Sidebar ───────────────────────────────────────────────────────
+
+function ConversationSidebar({
+  conversations,
+  activeId,
+  onSelect,
+  onDelete,
+  onNewChat,
+  open,
+  onToggle,
+}: {
+  conversations: ConversationMeta[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onNewChat: () => void;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!open) {
+    return (
+      <div className="flex-shrink-0 border-r border-[#E6E3DE] bg-white flex flex-col items-center py-3 w-[40px]">
+        <button onClick={onToggle} className="p-1.5 rounded-lg hover:bg-[#F7F5F2] text-gray-400" title="Show conversations">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="w-[260px] flex-shrink-0 border-r border-[#E6E3DE] bg-white flex flex-col">
+      {/* Header */}
+      <div className="px-3 py-2.5 border-b border-[#E6E3DE] flex items-center justify-between">
+        <span className="text-[12px] font-semibold text-gray-500 uppercase tracking-wider">History</span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onNewChat}
+            className="p-1 rounded-md hover:bg-[#F7F5F2] text-gray-400 hover:text-gray-600"
+            title="New chat"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+          </button>
+          <button onClick={onToggle} className="p-1 rounded-md hover:bg-[#F7F5F2] text-gray-400 hover:text-gray-600" title="Hide sidebar">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {/* Conversation list */}
+      <div className="flex-1 min-h-0 overflow-auto">
+        {conversations.length === 0 && (
+          <div className="px-4 py-6 text-center text-[12px] text-gray-300">No conversations yet</div>
+        )}
+        {conversations.map(conv => {
+          const isActive = conv.id === activeId;
+          return (
+            <div
+              key={conv.id}
+              className={`group relative w-full text-left px-3 py-2.5 border-b border-[#F0EDE8] transition-colors cursor-pointer ${
+                isActive ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-[#F7F5F2] border-l-2 border-l-transparent'
+              }`}
+              onClick={() => onSelect(conv.id)}
+            >
+              <div className="text-[13px] font-medium text-gray-700 truncate pr-6">{conv.title || 'Untitled'}</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">
+                {conv.messageCount} msg{conv.messageCount !== 1 ? 's' : ''}
+                {' · '}
+                {formatRelativeTime(conv.updatedAt)}
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); onDelete(conv.id); }}
+                className="absolute top-2.5 right-2 p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-red-50 text-gray-300 hover:text-red-500 transition-all"
+                title="Delete conversation"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+function formatRelativeTime(isoString: string) {
+  if (!isoString) return '';
+  const diff = Date.now() - new Date(isoString).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(isoString).toLocaleDateString();
+}
+
 // ── Main ScopePage ──────────────────────────────────────────────────────────────
 
 export default function ScopePage() {
@@ -440,6 +545,12 @@ export default function ScopePage() {
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Chat history persistence
+  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Load services on mount
   useEffect(() => {
     if (!scopeId) return;
@@ -449,10 +560,16 @@ export default function ScopePage() {
         { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat' },
       ];
       if (Array.isArray(svcList)) {
+        // Built-in service IDs that already have hardcoded entries above.
+        const builtinIds = new Set(base.map(b => b.id));
         for (const s of svcList) {
           const sid = s?.serviceId || s?.ServiceId;
           const name = s?.displayName || s?.DisplayName || sid;
-          if (sid) base.push({ id: sid, label: name, kind: 'service' });
+          // Skip services whose displayName matches a built-in entry (e.g. "NyxID Chat")
+          // to avoid duplicates when the backend returns a previously bound service.
+          const isDuplicate = builtinIds.has(sid)
+            || base.some(b => b.label === name);
+          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind: 'service' });
         }
       }
       setServices(base);
@@ -470,6 +587,51 @@ export default function ScopePage() {
   useEffect(() => {
     nyxidChatBoundRef.current = false;
   }, [scopeId]);
+
+  // Load conversation index when scope changes
+  useEffect(() => {
+    if (!scopeId) return;
+    api.chatHistory.getIndex(scopeId).then(data => {
+      setConversations(data?.conversations ?? []);
+    }).catch(() => {});
+  }, [scopeId]);
+
+  // Save current conversation to chrono-storage (called after streaming completes)
+  const saveCurrentConversation = useCallback((msgs: ChatMessage[]) => {
+    if (!scopeId || msgs.length === 0) return;
+    const convId = activeConvId || `conv-${genId()}`;
+    const firstUserMsg = msgs.find(m => m.role === 'user');
+    const title = (firstUserMsg?.content || 'Untitled').slice(0, 60);
+    const now = new Date().toISOString();
+    const storedMsgs = msgs
+      .filter(m => m.status !== 'streaming')
+      .map(m => ({
+        id: m.id, role: m.role, content: m.content, timestamp: m.timestamp,
+        status: m.status === 'streaming' ? 'complete' : m.status,
+        ...(m.error ? { error: m.error } : {}),
+        ...(m.thinking ? { thinking: m.thinking } : {}),
+      }));
+    const meta: ConversationMeta = {
+      id: convId,
+      title,
+      serviceId: activeService.id,
+      serviceKind: activeService.kind,
+      createdAt: conversations.find(c => c.id === convId)?.createdAt || now,
+      updatedAt: now,
+      messageCount: storedMsgs.length,
+    };
+    // Update local state immediately
+    setActiveConvId(convId);
+    setConversations(prev => {
+      const filtered = prev.filter(c => c.id !== convId);
+      return [meta, ...filtered];
+    });
+    // Persist (fire-and-forget with debounce)
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      api.chatHistory.saveConversation(scopeId, convId, meta, storedMsgs).catch(() => {});
+    }, 500);
+  }, [scopeId, activeConvId, activeService, conversations]);
 
   // ── Send message ──
   const handleSend = useCallback(async (text: string) => {
@@ -596,7 +758,7 @@ export default function ScopePage() {
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
             scopeId,
-            'Aevatar.NyxId.Chat.NyxIdChatGAgent',
+            'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
             `NyxIdChat:${scopeId}`,
             'NyxID Chat',
           );
@@ -622,6 +784,7 @@ export default function ScopePage() {
         if (last?.role === 'assistant' && last.status !== 'error') {
           updated[updated.length - 1] = { ...last, status: 'complete', events, steps: [...steps], toolCalls: [...toolCalls], thinking };
         }
+        saveCurrentConversation(updated);
         return updated;
       });
     } catch (e: any) {
@@ -630,12 +793,13 @@ export default function ScopePage() {
         updateAssistant({
           status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
         });
+        setMessages(prev => { saveCurrentConversation(prev); return prev; });
       }
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, activeService, draftYaml]);
+  }, [scopeId, isStreaming, activeService, draftYaml, saveCurrentConversation]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -644,8 +808,36 @@ export default function ScopePage() {
   const handleNewChat = useCallback(() => {
     setMessages([]);
     setDebugEvents([]);
+    setActiveConvId(null);
     nyxidChatBoundRef.current = false;
   }, []);
+
+  const handleSelectConversation = useCallback(async (convId: string) => {
+    if (!scopeId || convId === activeConvId) return;
+    try {
+      const msgs = await api.chatHistory.getConversation(scopeId, convId);
+      setMessages(msgs.map(m => ({
+        id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+        timestamp: m.timestamp, status: (m.status || 'complete') as ChatMessage['status'],
+        error: m.error ?? undefined, thinking: m.thinking ?? undefined,
+      })));
+      setActiveConvId(convId);
+      setDebugEvents([]);
+    } catch { /* ignore */ }
+  }, [scopeId, activeConvId]);
+
+  const handleDeleteConversation = useCallback(async (convId: string) => {
+    if (!scopeId) return;
+    try {
+      await api.chatHistory.deleteConversation(scopeId, convId);
+      setConversations(prev => prev.filter(c => c.id !== convId));
+      if (activeConvId === convId) {
+        setMessages([]);
+        setActiveConvId(null);
+        setDebugEvents([]);
+      }
+    } catch { /* ignore */ }
+  }, [scopeId, activeConvId]);
 
   if (!scopeId) {
     return (
@@ -698,6 +890,22 @@ export default function ScopePage() {
           </button>
         </div>
       </header>
+
+      {/* Body: Sidebar + Chat */}
+      <div className="flex-1 min-h-0 flex">
+        {/* Conversation Sidebar */}
+        <ConversationSidebar
+          conversations={conversations}
+          activeId={activeConvId}
+          onSelect={handleSelectConversation}
+          onDelete={handleDeleteConversation}
+          onNewChat={handleNewChat}
+          open={sidebarOpen}
+          onToggle={() => setSidebarOpen(v => !v)}
+        />
+
+        {/* Chat Column */}
+        <div className="flex-1 min-h-0 flex flex-col">
 
       {/* Workflow YAML editor for draft-run */}
       {activeService.kind === 'draft-run' && showYamlInput && (
@@ -780,6 +988,9 @@ export default function ScopePage() {
           </div>
         </div>
       </div>
+
+        </div>{/* end Chat Column */}
+      </div>{/* end Body flex */}
     </div>
   );
 }

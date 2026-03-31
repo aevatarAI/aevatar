@@ -4,9 +4,11 @@ using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Presentation.AGUI;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Type = System.Type;
 // AI Abstractions types (published by RoleGAgent) — aliased to avoid conflict with AGUI types
@@ -81,12 +83,120 @@ public static class ScopeGAgentEndpoints
                     typeName = type.Name,
                     fullName = type.FullName ?? type.Name,
                     assemblyName = assembly.GetName().Name ?? assembly.FullName ?? string.Empty,
+                    endpoints = DiscoverEndpoints(type),
                 });
             }
         }
 
         return Results.Ok(types);
     }
+
+    /// <summary>
+    /// Discovers available endpoints from a GAgent type by reflecting over [EventHandler] methods.
+    /// Any AIGAgentBase subclass always has a "chat" endpoint (ChatRequestEvent).
+    /// Additional endpoints are discovered from [EventHandler] methods whose parameter type
+    /// is NOT a base framework event (TextMessageStart/End/Content, ToolCall, etc.).
+    /// </summary>
+    private static object[] DiscoverEndpoints(Type gAgentType)
+    {
+        // Well-known base event types that are internal framework plumbing,
+        // not user-facing endpoints.
+        var frameworkEventTypes = new HashSet<Type>
+        {
+            typeof(ChatRequestEvent),
+            typeof(ChatResponseEvent),
+            typeof(AiTextStart),
+            typeof(AiTextContent),
+            typeof(AiTextReasoning),
+            typeof(AiTextEnd),
+            typeof(AiToolCall),
+            typeof(ToolResultEvent),
+            typeof(InitializeRoleAgentEvent),
+            typeof(RoleChatSessionStartedEvent),
+            typeof(RoleChatSessionCompletedEvent),
+        };
+
+        var endpoints = new List<object>();
+
+        // Chat endpoint is always present for AIGAgentBase subclasses.
+        endpoints.Add(new
+        {
+            endpointId = "chat",
+            displayName = "chat",
+            kind = "chat",
+            requestTypeUrl = GetProtoTypeUrl(ChatRequestEvent.Descriptor),
+            description = "Default chat endpoint.",
+            auto = true,
+        });
+
+        // Walk the type hierarchy and discover [EventHandler] methods.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var current = gAgentType; current != null && current != typeof(object); current = current.BaseType)
+        {
+            var methods = current.GetMethods(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+
+            foreach (var method in methods)
+            {
+                var ehAttr = method.GetCustomAttribute<EventHandlerAttribute>();
+                if (ehAttr is null)
+                    continue;
+
+                var parameters = method.GetParameters();
+                if (parameters.Length != 1)
+                    continue;
+
+                var paramType = parameters[0].ParameterType;
+                if (!typeof(IMessage).IsAssignableFrom(paramType) || paramType.IsAbstract)
+                    continue;
+
+                // Skip framework/internal event types — they're not user-facing endpoints.
+                if (frameworkEventTypes.Contains(paramType))
+                    continue;
+
+                var typeUrl = TryGetProtoTypeUrl(paramType);
+                var customName = ehAttr.EndpointName;
+                var endpointId = !string.IsNullOrWhiteSpace(customName)
+                    ? customName
+                    : ToCamelCase(StripEventSuffix(paramType.Name));
+
+                if (!seen.Add(endpointId))
+                    continue;
+
+                endpoints.Add(new
+                {
+                    endpointId,
+                    displayName = endpointId,
+                    kind = "command",
+                    requestTypeUrl = typeUrl ?? paramType.FullName ?? paramType.Name,
+                    description = $"Handles {paramType.Name}",
+                    auto = true,
+                });
+            }
+        }
+
+        return endpoints.ToArray();
+    }
+
+    private static string GetProtoTypeUrl(Google.Protobuf.Reflection.MessageDescriptor descriptor) =>
+        $"type.googleapis.com/{descriptor.FullName}";
+
+    private static string? TryGetProtoTypeUrl(Type messageType)
+    {
+        // Try to get the Protobuf Descriptor property to build the proper TypeUrl.
+        var descriptorProp = messageType.GetProperty(
+            "Descriptor",
+            BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
+        if (descriptorProp?.GetValue(null) is Google.Protobuf.Reflection.MessageDescriptor desc)
+            return $"type.googleapis.com/{desc.FullName}";
+        return null;
+    }
+
+    private static string StripEventSuffix(string name) =>
+        name.EndsWith("Event", StringComparison.Ordinal) ? name[..^5] : name;
+
+    private static string ToCamelCase(string name) =>
+        string.IsNullOrEmpty(name) ? name : char.ToLowerInvariant(name[0]) + name[1..];
 
     private static Type? FindOpenGenericBaseType(string fullName)
     {

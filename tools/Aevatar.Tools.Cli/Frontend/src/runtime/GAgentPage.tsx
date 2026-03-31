@@ -5,7 +5,15 @@ import * as nyxid from '../auth/nyxid';
 
 // ── Types ──
 
-type GAgentType = { typeName: string; fullName: string; assemblyName: string };
+type DiscoveredEndpoint = {
+  endpointId: string;
+  displayName: string;
+  kind: string;
+  requestTypeUrl: string;
+  description: string;
+  auto: boolean;
+};
+type GAgentType = { typeName: string; fullName: string; assemblyName: string; endpoints?: DiscoveredEndpoint[] };
 type ActorGroup = { gAgentType: string; actorIds: string[] };
 type ExtraEndpoint = {
   endpointId: string;
@@ -91,6 +99,29 @@ export default function GAgentPage() {
     setBinding(true);
     setBindResult('');
     try {
+      // Combine auto-discovered endpoints with any user-added extra endpoints.
+      const discoveredEps = (selectedType.endpoints ?? [])
+        .filter(ep => ep.endpointId !== 'chat') // Backend always injects chat; avoid duplicates.
+        .map(ep => ({
+          endpointId: ep.endpointId,
+          displayName: ep.displayName || ep.endpointId,
+          kind: ep.kind,
+          requestTypeUrl: ep.requestTypeUrl || null,
+          responseTypeUrl: null,
+          description: ep.description || null,
+        }));
+      const userEps = extraEndpoints.map(ep => ({
+        endpointId: ep.endpointId,
+        displayName: ep.displayName || ep.endpointId,
+        kind: ep.kind,
+        requestTypeUrl: ep.requestTypeUrl || null,
+        responseTypeUrl: null,
+        description: ep.description || null,
+      }));
+      // Merge: discovered first, then user-added (skip duplicates by endpointId).
+      const seenIds = new Set(discoveredEps.map(e => e.endpointId));
+      const allEndpoints = [...discoveredEps, ...userEps.filter(e => !seenIds.has(e.endpointId))];
+
       const res = await fetch(`/api/scopes/${encodeURIComponent(scopeId)}/binding`, {
         method: 'PUT',
         headers: {
@@ -102,15 +133,7 @@ export default function GAgentPage() {
           gAgent: {
             actorTypeName: `${selectedType.fullName}, ${selectedType.assemblyName}`,
             preferredActorId: effectiveActorId || null,
-            // Backend always injects a default chat endpoint; extra endpoints are appended.
-            endpoints: extraEndpoints.map(ep => ({
-              endpointId: ep.endpointId,
-              displayName: ep.displayName || ep.endpointId,
-              kind: ep.kind,
-              requestTypeUrl: ep.requestTypeUrl || null,
-              responseTypeUrl: null,
-              description: ep.description || null,
-            })),
+            endpoints: allEndpoints,
           },
         }),
       });
@@ -332,16 +355,18 @@ export default function GAgentPage() {
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Bind as Scope Service</div>
 
-                  {/* Endpoints — chat is always auto-added by the backend */}
+                  {/* Endpoints — auto-discovered from GAgent [EventHandler] methods */}
                   <div className="mb-3 space-y-1">
-                    {/* Fixed chat endpoint indicator */}
-                    <div className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-3 py-1.5">
-                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />
-                      <span className="text-[12px] font-mono text-green-700">chat</span>
-                      <span className="text-[11px] text-green-500 ml-1">auto · ChatRequestEvent</span>
-                    </div>
+                    {/* Auto-discovered endpoints */}
+                    {(selectedType?.endpoints ?? []).map(ep => (
+                      <div key={ep.endpointId} className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-3 py-1.5">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400" />
+                        <span className="text-[12px] font-mono text-green-700">{ep.endpointId}</span>
+                        <span className="text-[11px] text-green-500 ml-1">auto · {ep.displayName}</span>
+                      </div>
+                    ))}
 
-                    {/* Extra endpoints */}
+                    {/* Extra user-added endpoints */}
                     {extraEndpoints.map(ep => (
                       <div key={ep.endpointId} className="flex items-center gap-2 rounded-lg bg-[#F7F5F2] border border-[#E6E3DE] px-3 py-1.5">
                         <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400" />

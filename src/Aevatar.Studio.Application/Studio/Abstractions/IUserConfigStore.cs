@@ -6,4 +6,4 @@ public interface IUserConfigStore
     Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default);
 }
 
-public sealed record UserConfig(string DefaultModel);
+public sealed record UserConfig(string DefaultModel, string RuntimeBaseUrl = "");

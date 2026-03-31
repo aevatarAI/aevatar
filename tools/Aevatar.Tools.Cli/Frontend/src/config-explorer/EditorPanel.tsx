@@ -3,6 +3,7 @@ import ConfigEditor from './editors/ConfigEditor';
 import RolesEditor from './editors/RolesEditor';
 import ConnectorsEditor from './editors/ConnectorsEditor';
 import ActorsEditor from './editors/ActorsEditor';
+import ChatHistoryViewer from './editors/ChatHistoryViewer';
 
 type Props = {
   store: ConfigStore;
@@ -10,6 +11,11 @@ type Props = {
 };
 
 export default function EditorPanel({ store, flash }: Props) {
+  if (store.selectedFile.startsWith('chat-history:')) {
+    const convId = store.selectedFile.replace('chat-history:', '');
+    return <ChatHistoryViewer store={store} conversationId={convId} flash={flash} />;
+  }
+
   switch (store.selectedFile) {
     case 'config.json':
       return <ConfigEditor store={store} flash={flash} />;

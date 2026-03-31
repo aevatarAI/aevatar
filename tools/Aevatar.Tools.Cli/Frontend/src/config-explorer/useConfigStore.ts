@@ -12,6 +12,7 @@ import {
   createUniqueConnectorName,
 } from '../studio';
 import type { ConfigFile, GAgentType, ActorGroup, ProviderInfo } from './types';
+import type { ConversationMeta, StoredChatMessage } from '../runtime/chatTypes';
 
 export type ConfigStore = ReturnType<typeof useConfigStore>;
 
@@ -20,7 +21,7 @@ export function useConfigStore(scopeId: string) {
   const [selectedFile, setSelectedFile] = useState<ConfigFile>('config.json');
 
   // ── config.json ──
-  const [defaultModel, setDefaultModel] = useState('');
+  const [configJson, setConfigJson] = useState('');
   const [configSaving, setConfigSaving] = useState(false);
   const configSnap = useRef('');
 
@@ -43,8 +44,13 @@ export function useConfigStore(scopeId: string) {
   const [supportedModels, setSupportedModels] = useState<string[]>([]);
   const [modelsLoading] = useState(false);
 
+  // ── Chat history ──
+  const [chatConversations, setChatConversations] = useState<ConversationMeta[]>([]);
+  const [selectedConversationMessages, setSelectedConversationMessages] = useState<StoredChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+
   // ── Dirty tracking ──
-  const configDirty = useMemo(() => defaultModel !== configSnap.current, [defaultModel]);
+  const configDirty = useMemo(() => configJson !== configSnap.current, [configJson]);
   const rolesDirty = useMemo(() => JSON.stringify(roles) !== rolesSnap.current, [roles]);
   const connectorsDirty = useMemo(() => JSON.stringify(connectors) !== connectorsSnap.current, [connectors]);
 
@@ -60,7 +66,7 @@ export function useConfigStore(scopeId: string) {
   // ── Load all data ──
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [configRes, rolesRes, connectorsRes, actorsRes, typesRes, modelsRes] =
+    const [configRes, rolesRes, connectorsRes, actorsRes, typesRes, modelsRes, chatRes] =
       await Promise.allSettled([
         api.userConfig.get(),
         api.roles.getCatalog(),
@@ -68,13 +74,14 @@ export function useConfigStore(scopeId: string) {
         scopeId ? api.gagent.listActors(scopeId) : Promise.resolve([]),
         api.gagent.listTypes(),
         api.userConfig.models(),
+        scopeId ? api.chatHistory.getIndex(scopeId) : Promise.resolve({ conversations: [] }),
       ]);
 
-    // config
+    // config — store as raw JSON
     if (configRes.status === 'fulfilled' && configRes.value) {
-      const m = configRes.value.defaultModel || '';
-      setDefaultModel(m);
-      configSnap.current = m;
+      const json = JSON.stringify(configRes.value, null, 2);
+      setConfigJson(json);
+      configSnap.current = json;
     }
 
     // roles
@@ -107,17 +114,37 @@ export function useConfigStore(scopeId: string) {
       setSupportedModels(modelsRes.value.supported_models ?? []);
     }
 
+    // chat history index
+    if (chatRes.status === 'fulfilled' && chatRes.value) {
+      setChatConversations(chatRes.value.conversations ?? []);
+    }
+
     setLoading(false);
   }, [scopeId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // ── Load conversation messages when a chat-history file is selected ──
+  useEffect(() => {
+    if (!selectedFile.startsWith('chat-history:') || !scopeId) {
+      setSelectedConversationMessages([]);
+      return;
+    }
+    const convId = selectedFile.replace('chat-history:', '');
+    setChatLoading(true);
+    api.chatHistory.getConversation(scopeId, convId)
+      .then(msgs => setSelectedConversationMessages((msgs ?? []) as StoredChatMessage[]))
+      .catch(() => setSelectedConversationMessages([]))
+      .finally(() => setChatLoading(false));
+  }, [selectedFile, scopeId]);
+
   // ── Save functions ──
   async function saveConfig() {
     setConfigSaving(true);
     try {
-      await api.userConfig.save({ defaultModel: defaultModel.trim() });
-      configSnap.current = defaultModel;
+      const parsed = JSON.parse(configJson);
+      await api.userConfig.save(parsed);
+      configSnap.current = configJson;
       return true;
     } finally {
       setConfigSaving(false);
@@ -198,15 +225,25 @@ export function useConfigStore(scopeId: string) {
     setActorGroups(data ?? []);
   }
 
+  // ── Chat history mutations ──
+  async function deleteChatConversation(convId: string) {
+    if (!scopeId) return;
+    await api.chatHistory.deleteConversation(scopeId, convId);
+    setChatConversations(prev => prev.filter(c => c.id !== convId));
+    if (selectedFile === `chat-history:${convId}`) {
+      setSelectedFile('config.json');
+    }
+  }
+
   return {
     loading,
     selectedFile,
     setSelectedFile,
     scopeId,
 
-    // config
-    defaultModel,
-    setDefaultModel,
+    // config (raw JSON)
+    configJson,
+    setConfigJson,
     configDirty,
     configSaving,
     saveConfig,
@@ -238,6 +275,12 @@ export function useConfigStore(scopeId: string) {
     providers,
     supportedModels,
     modelsLoading,
+
+    // chat history
+    chatConversations,
+    selectedConversationMessages,
+    chatLoading,
+    deleteChatConversation,
 
     // global
     anyDirty,

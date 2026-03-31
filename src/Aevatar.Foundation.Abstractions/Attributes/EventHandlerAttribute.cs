@@ -26,4 +26,11 @@ public sealed class EventHandlerAttribute : Attribute
     /// Only handle events published by itself (TopologyAudience.Self). Default is false.
     /// </summary>
     public bool OnlySelfHandling { get; set; }
+
+    /// <summary>
+    /// Display name for the endpoint exposed by this handler.
+    /// When set, the auto-discovery logic uses this as the endpoint label
+    /// instead of the raw event type name.
+    /// </summary>
+    public string? EndpointName { get; set; }
 }

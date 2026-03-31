@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRoleCatalogStore, ChronoStorageRoleCatalogStore>();
         services.AddSingleton<IUserConfigStore, ChronoStorageUserConfigStore>();
         services.AddSingleton<IGAgentActorStore, ChronoStorageGAgentActorStore>();
+        services.AddSingleton<IChatHistoryStore, ChronoStorageChatHistoryStore>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }

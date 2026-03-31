@@ -1,4 +1,8 @@
 <Solution>
+  <Folder Name="/agents/">
+    <Project Path="agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
+    <Project Path="agents\Aevatar.GAgents.StreamingProxy\Aevatar.GAgents.StreamingProxy.csproj" />
+  </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
     <Project Path="demos\Aevatar.Demos.Maker\Aevatar.Demos.Maker.csproj" />
@@ -31,7 +35,6 @@
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.NyxId\Aevatar.AI.LLMProviders.NyxId.csproj" />
-    <Project Path="src\Aevatar.NyxId.Chat\Aevatar.NyxId.Chat.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.Tornado\Aevatar.AI.LLMProviders.Tornado.csproj" />
     <Project Path="src\Aevatar.AI.Projection\Aevatar.AI.Projection.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />

@@ -4273,7 +4273,7 @@ function App() {
                   <SettingsNavButton
                     active={settingsSection === 'cloud-config'}
                     icon={<Database size={16} />}
-                    title="Cloud Config"
+                    title="LLM"
                     description="Per-user settings on NyxID"
                     onClick={() => setSettingsSection('cloud-config')}
                   />
@@ -5836,7 +5836,7 @@ function CloudConfigSection(props: {
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="panel-eyebrow">Settings</div>
-          <div className="panel-title">Cloud Config</div>
+          <div className="panel-title">LLM</div>
           <div className="text-[12px] text-gray-400 mt-1">Per-user configuration stored on NyxID. Changes sync across all your devices.</div>
         </div>
         <button
@@ -5844,9 +5844,9 @@ function CloudConfigSection(props: {
             try {
               setUserConfigState(prev => ({ ...prev, loading: true }));
               await api.userConfig.save({ defaultModel: userConfigState.defaultModel.trim() });
-              flash('Cloud config saved', 'success');
+              flash('LLM config saved', 'success');
             } catch (error: any) {
-              flash(error?.message || 'Failed to save cloud config', 'error');
+              flash(error?.message || 'Failed to save LLM config', 'error');
             } finally {
               setUserConfigState(prev => ({ ...prev, loading: false }));
             }

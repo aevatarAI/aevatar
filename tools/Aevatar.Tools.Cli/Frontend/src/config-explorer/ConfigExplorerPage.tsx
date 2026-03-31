@@ -74,6 +74,7 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
               selectedFile={store.selectedFile}
               onSelect={store.setSelectedFile}
               isDirty={store.isDirty}
+              chatConversations={store.chatConversations}
             />
           )}
         </aside>

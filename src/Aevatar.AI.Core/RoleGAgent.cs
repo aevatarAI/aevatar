@@ -112,7 +112,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// Publishes text stream events and tool call events.
     /// </summary>
     [EventHandler]
-    public async Task HandleChatRequest(ChatRequestEvent request)
+    public virtual async Task HandleChatRequest(ChatRequestEvent request)
     {
         var trackedSession = ResolveTrackedSession(request);
         if (trackedSession is { Completed: true })
