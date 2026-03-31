@@ -1,7 +1,14 @@
 /* ─── Aevatar Workflow Studio – API client ─── */
 
+import { getAccessToken } from './auth/nyxid';
+
 const BASE = '/api';
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 type AuthRequiredDetail = {
   loginUrl?: string | null;
@@ -47,6 +54,11 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
   if (!isFormDataBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
+  }
+  // Inject NyxID Bearer token if available and not already set.
+  if (!headers.has('Authorization')) {
+    const auth = getAuthHeaders();
+    if (auth.Authorization) headers.set('Authorization', auth.Authorization);
   }
 
   const res = await fetch(`${BASE}${path}`, {
@@ -110,6 +122,7 @@ async function streamSse(
     headers: {
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
+      ...getAuthHeaders(),
     },
     body: JSON.stringify(body),
     signal,
@@ -266,6 +279,17 @@ export const settings = {
   testRuntime: (data: any) => request<any>('/settings/runtime/test', { method: 'POST', body: JSON.stringify(data) }),
 };
 
+/* ─── User Config (per-user, chrono-storage backed) ─── */
+export const userConfig = {
+  get:    ()          => request<any>('/user-config'),
+  save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
+  models: ()          => request<{
+    providers?: { provider_slug: string; provider_name: string; status: string; proxy_url: string }[];
+    gateway_url?: string;
+    supported_models?: string[];
+  }>('/user-config/models'),
+};
+
 /* ─── Executions ─── */
 export const executions = {
   list:  ()              => request<any[]>('/executions'),
@@ -382,6 +406,153 @@ export const assistant = {
 export const auth = {
   getSession: () => request<any>('/auth/me'),
 };
+
+/* ─── Scope / Runtime APIs (new) ─── */
+export const scope = {
+  /** GET /api/scopes/{scopeId}/binding — read current default scope binding */
+  getBinding: (scopeId: string) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`),
+
+  /** PUT /api/scopes/{scopeId}/binding — bind workflow as default scope service */
+  bindWorkflow: (scopeId: string, workflowYamls: string[], displayName?: string) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'workflow',
+        ...(displayName ? { displayName } : {}),
+        workflowYamls,
+      }),
+    }),
+
+  /** POST /api/scopes/{scopeId}/workflow/draft-run — draft run with inline bundle, SSE */
+  streamDraftRun: (
+    scopeId: string,
+    prompt: string,
+    workflowYamls?: string[],
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    if (workflowYamls?.length) body.workflowYamls = workflowYamls;
+    return streamSse(`/scopes/${enc(scopeId)}/workflow/draft-run`, body, onFrame ?? (() => {}), signal);
+  },
+
+  /** POST /api/scopes/{scopeId}/invoke/chat:stream — scope-level default chat, SSE */
+  streamDefaultChat: (
+    scopeId: string,
+    prompt: string,
+    sessionId?: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    if (sessionId) body.sessionId = sessionId;
+    return streamSse(
+      `/scopes/${enc(scopeId)}/invoke/chat:stream`,
+      body, onFrame ?? (() => {}), signal,
+    );
+  },
+
+  /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream — service invoke, SSE */
+  streamInvoke: (
+    scopeId: string,
+    serviceId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    return streamSse(
+      `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/chat:stream`,
+      body, onFrame ?? (() => {}), signal,
+    );
+  },
+
+  /** GET /api/services?tenantId=... — list services in scope */
+  listServices: (scopeId: string, take = 20) =>
+    request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
+
+  /** GET /api/actors/{actorId} — actor snapshot for run logs */
+  getActorSnapshot: (actorId: string) =>
+    request<any>(`/actors/${enc(actorId)}`),
+
+  /** GET /api/actors/{actorId}/timeline — run logs timeline */
+  getActorTimeline: (actorId: string, take = 50) =>
+    request<any>(`/actors/${enc(actorId)}/timeline?take=${take}`),
+};
+
+// Keep legacy alias for backward compat in App.tsx
+export const runtime = scope;
+
+/* ─── NyxID Chat APIs ─── */
+export const nyxidChat = {
+  createConversation: (scopeId: string) =>
+    request<{ actorId: string; createdAt: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
+
+  listConversations: (scopeId: string) =>
+    request<Array<{ actorId: string; createdAt: string }>>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`),
+
+  streamMessage: (
+    scopeId: string,
+    actorId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}:stream`,
+      { prompt },
+      onFrame ?? (() => {}),
+      signal,
+    ),
+
+  deleteConversation: (scopeId: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
+};
+
+/* ─── GAgent APIs ─── */
+export const gagent = {
+  /** GET /api/scopes/gagent-types — list available GAgent types */
+  listTypes: () =>
+    request<Array<{ typeName: string; fullName: string; assemblyName: string }>>('/scopes/gagent-types'),
+
+  /** GET /api/scopes/{scopeId}/gagent-actors — list persisted actor entries */
+  listActors: (scopeId: string) =>
+    request<Array<{ gAgentType: string; actorIds: string[] }>>(`/scopes/${enc(scopeId)}/gagent-actors`),
+
+  /** POST /api/scopes/{scopeId}/gagent-actors — persist a new actor ID entry */
+  addActor: (scopeId: string, gagentType: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/gagent-actors`, {
+      method: 'POST',
+      body: JSON.stringify({ gagentType, actorId }),
+    }),
+
+  /** DELETE /api/scopes/{scopeId}/gagent-actors/{actorId} — remove an actor entry */
+  removeActor: (scopeId: string, gagentType: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/gagent-actors/${enc(actorId)}?gagentType=${enc(gagentType)}`, {
+      method: 'DELETE',
+    }),
+
+  /** POST /api/scopes/{scopeId}/gagent/draft-run — draft-run a GAgent (SSE) */
+  streamDraftRun: (
+    scopeId: string,
+    actorTypeName: string,
+    prompt: string,
+    preferredActorId?: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/gagent/draft-run`,
+      { actorTypeName, prompt, preferredActorId: preferredActorId || null },
+      onFrame ?? (() => {}),
+      signal,
+    ),
+};
+
+function enc(value: string) {
+  return encodeURIComponent(value.trim());
+}
 
 export const app = {
   getContext: () => request<any>('/app/context'),

@@ -65,6 +65,11 @@ public static class WebApplicationBuilderExtensions
         if (hostOptions.EnableOpenApiDocument)
             builder.Services.AddOpenApi();
 
+        // Authorization services are always required because UseAuthorization() runs
+        // unconditionally in UseAevatarDefaultHost. This is safe even when no auth
+        // scheme is registered -- endpoints without RequireAuthorization remain open.
+        builder.Services.AddAuthorization();
+
         return builder;
     }
 
@@ -102,8 +107,11 @@ public static class WebApplicationBuilderExtensions
         if (app.Services.GetService<Microsoft.AspNetCore.Authentication.IAuthenticationSchemeProvider>() != null)
         {
             app.UseAuthentication();
-            app.UseAuthorization();
         }
+
+        // Authorization middleware must always run so that [Authorize] attributes produce
+        // a proper 401/403 instead of an unhandled 500 when no auth scheme is configured.
+        app.UseAuthorization();
 
         if (options.EnableWebSockets)
             app.UseWebSockets();

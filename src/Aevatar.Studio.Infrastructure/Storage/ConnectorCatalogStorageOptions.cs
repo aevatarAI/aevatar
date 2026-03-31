@@ -14,17 +14,17 @@ internal sealed class ConnectorCatalogStorageOptions
 
     public string BaseUrl { get; set; } = "http://chrono-storage.chronoai-platform.svc.cluster.local:3805";
 
-    public string Bucket { get; set; } = "aevatar-studio";
+    public string Bucket { get; set; } = "chrono-platform-aevatar-studio";
 
     public string Prefix { get; set; } = string.Empty;
 
     public string RolesPrefix { get; set; } = string.Empty;
 
+    public string UserConfigPrefix { get; set; } = string.Empty;
+
     public string MasterKey { get; set; } = string.Empty;
 
     public int PresignedUrlExpiresInSeconds { get; set; } = 300;
-
-    public bool CreateBucketIfMissing { get; set; } = true;
 
     public string? StaticBearerToken { get; set; }
 }

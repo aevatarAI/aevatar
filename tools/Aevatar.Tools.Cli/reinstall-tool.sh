@@ -110,6 +110,14 @@ else
   echo "==> Global tool ${TOOL_PACKAGE_ID} is not installed. Skipping uninstall."
 fi
 
+FRONTEND_DIR="${REPO_ROOT}/tools/Aevatar.Tools.Cli/Frontend"
+if [[ -f "${FRONTEND_DIR}/package.json" ]]; then
+  echo "==> Building frontend..."
+  (cd "${FRONTEND_DIR}" && npm ci --ignore-scripts 2>/dev/null || npm install && npx vite build --config vite.config.ts)
+else
+  echo "==> Frontend directory not found, skipping frontend build."
+fi
+
 echo "==> Packing tool..."
 dotnet pack "${PROJECT_PATH}" -c "${CONFIGURATION}"
 

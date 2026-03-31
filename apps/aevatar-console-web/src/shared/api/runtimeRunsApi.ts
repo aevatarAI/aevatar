@@ -192,7 +192,7 @@ export const runtimeRunsApi = {
     request: ChatRunRequest,
     signal: AbortSignal
   ): Promise<Response> {
-    const response = await authFetch(`${buildScopePath(scopeId)}/draft-run`, {
+    const response = await authFetch(`${buildScopePath(scopeId)}/workflow/draft-run`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

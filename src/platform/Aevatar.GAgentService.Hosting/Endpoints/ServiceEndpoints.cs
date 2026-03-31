@@ -31,6 +31,7 @@ public static partial class ServiceEndpoints
         app.MapScopeServiceEndpoints();
         app.MapScopeWorkflowCapabilityEndpoints();
         app.MapScopeScriptCapabilityEndpoints();
+        app.MapScopeGAgentCapabilityEndpoints();
         return app;
     }
 

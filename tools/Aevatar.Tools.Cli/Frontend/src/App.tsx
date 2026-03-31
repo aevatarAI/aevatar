@@ -58,6 +58,11 @@ import {
 } from 'lucide-react';
 import * as api from './api';
 import ScriptsStudio from './ScriptsStudio';
+import * as nyxid from './auth/nyxid';
+import ScopePage from './runtime/ScopePage';
+import RuntimePage from './runtime/RuntimePage';
+import GAgentPage from './runtime/GAgentPage';
+import ConfigExplorerPage from './config-explorer/ConfigExplorerPage';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -137,17 +142,17 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'settings';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'gagents' | 'scope' | 'services' | 'settings' | 'config-explorer';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
-type SettingsSection = 'runtime' | 'llm' | 'appearance';
+type SettingsSection = 'runtime' | 'llm' | 'cloud-config' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
 type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'settings'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'services', 'settings', 'config-explorer'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'services', 'config-explorer'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -836,6 +841,13 @@ function App() {
   const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
+  const [userConfigState, setUserConfigState] = useState<{
+    defaultModel: string;
+    loading: boolean;
+    providers: { provider_slug: string; provider_name: string; status: string }[];
+    supportedModels: string[];
+    modelsLoading: boolean;
+  }>({ defaultModel: '', loading: false, providers: [], supportedModels: [], modelsLoading: false });
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [logsCollapsed, setLogsCollapsed] = useState(false);
@@ -925,6 +937,14 @@ function App() {
   const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = useState(false);
   const [executionPrompt, setExecutionPrompt] = useState('');
   const [runModalOpen, setRunModalOpen] = useState(false);
+  const [runScopeId, setRunScopeId] = useState(() => nyxid.loadSession()?.user.sub || '');
+  const [_runServiceId, _setRunServiceId] = useState('');
+  const [bindScopeModalOpen, setBindScopeModalOpen] = useState(false);
+  const [bindScopePending, setBindScopePending] = useState(false);
+  const [draftRunEvents, setDraftRunEvents] = useState<any[]>([]);
+  const [draftRunText, setDraftRunText] = useState('');
+  const [draftRunning, setDraftRunning] = useState(false);
+  const draftRunAbortRef = useRef<AbortController | null>(null);
   const [executionActionInput, setExecutionActionInput] = useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] = useState('');
   const [executionStopPending, setExecutionStopPending] = useState(false);
@@ -1356,22 +1376,68 @@ function App() {
 
   async function bootstrap() {
     try {
-      const session = await api.auth.getSession();
+      // Handle OAuth callback if we're returning from NyxID.
+      if (nyxid.isAuthCallback()) {
+        try {
+          const { session: oauthSession, returnTo } = await nyxid.handleCallback();
+          setAuthSession({
+            loading: false,
+            enabled: true,
+            authenticated: true,
+            providerDisplayName: 'NyxID',
+            loginUrl: '',
+            logoutUrl: '',
+            name: oauthSession.user.name || '',
+            email: oauthSession.user.email || '',
+            picture: oauthSession.user.picture || '',
+            errorMessage: '',
+          });
+          // Update scope ID from NyxID user.
+          if (oauthSession.user.sub) setRunScopeId(oauthSession.user.sub);
+          // Clean up callback URL params.
+          window.history.replaceState({}, '', returnTo || '/');
+        } catch (err: any) {
+          setAuthSession(prev => ({
+            ...prev,
+            loading: false,
+            enabled: true,
+            authenticated: false,
+            errorMessage: err?.message || 'OAuth callback failed.',
+          }));
+          window.history.replaceState({}, '', '/');
+          return;
+        }
+      }
+
+      // Check for existing NyxID session in localStorage.
+      let localSession = nyxid.loadSession();
+      if (localSession && !nyxid.getActiveSession()) {
+        // Token expired but refresh token available.
+        localSession = await nyxid.refreshSession(localSession);
+      }
+
+      // Also check backend auth status (for scope resolution).
+      let backendSession: any = null;
+      try {
+        backendSession = await api.auth.getSession();
+      } catch { /* backend may not have auth endpoint */ }
+
+      const isAuthenticated = Boolean(localSession) || Boolean(backendSession?.authenticated);
       const nextAuthSession: AuthSessionState = {
         loading: false,
-        enabled: session?.enabled !== false,
-        authenticated: Boolean(session?.authenticated),
-        providerDisplayName: session?.providerDisplayName || 'NyxID',
-        loginUrl: session?.loginUrl || '/auth/login',
-        logoutUrl: session?.logoutUrl || '/auth/logout',
-        name: session?.name || '',
-        email: session?.email || '',
-        picture: session?.picture || '',
-        errorMessage: session?.errorMessage || '',
+        enabled: true,
+        authenticated: isAuthenticated,
+        providerDisplayName: 'NyxID',
+        loginUrl: '',
+        logoutUrl: '',
+        name: localSession?.user.name || backendSession?.name || '',
+        email: localSession?.user.email || backendSession?.email || '',
+        picture: localSession?.user.picture || '',
+        errorMessage: '',
       };
       setAuthSession(nextAuthSession);
 
-      if (nextAuthSession.enabled && !nextAuthSession.authenticated) {
+      if (!isAuthenticated) {
         return;
       }
 
@@ -1385,6 +1451,7 @@ function App() {
         roleDraftResult,
         executionListResult,
         settingsResult,
+        userConfigResult,
       ] = await Promise.allSettled([
         api.app.getContext(),
         api.workspace.getSettings(),
@@ -1395,6 +1462,7 @@ function App() {
         api.roles.getDraft(),
         api.executions.list(),
         api.settings.get(),
+        api.userConfig.get(),
       ]);
 
       const bootstrapFailures = [
@@ -1407,6 +1475,7 @@ function App() {
         { label: 'role draft', result: roleDraftResult },
         { label: 'execution list', result: executionListResult },
         { label: 'studio settings', result: settingsResult },
+        { label: 'user config', result: userConfigResult },
       ].flatMap(item =>
         item.result.status === 'rejected'
           ? [{ label: item.label, error: item.result.reason }]
@@ -1438,6 +1507,7 @@ function App() {
       const roleDraftResponse = roleDraftResult.status === 'fulfilled' ? roleDraftResult.value : null;
       const executionList = executionListResult.status === 'fulfilled' ? executionListResult.value : [];
       const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
+      const userConfigData = userConfigResult.status === 'fulfilled' ? userConfigResult.value : null;
 
       const workflowStorageMode: WorkflowStorageMode = context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace';
       const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
@@ -1458,7 +1528,8 @@ function App() {
       });
       setWorkflowList(Array.isArray(workflows) ? workflows : []);
 
-      hydrateSettings(settings);
+      hydrateSettings(settings, userConfigData);
+      setUserConfigState(prev => ({ ...prev, defaultModel: userConfigData?.defaultModel || '', loading: false }));
 
       hydrateConnectorCatalog(connectorCatalog);
       hydrateConnectorDraft(connectorDraftResponse);
@@ -1499,7 +1570,7 @@ function App() {
     }
   }
 
-  function hydrateSettings(payload: any) {
+  function hydrateSettings(payload: any, userConfigData?: any) {
     const providerTypes = Array.isArray(payload?.providerTypes)
       ? payload.providerTypes.map((item: any) => ({
           id: item.id,
@@ -1515,6 +1586,15 @@ function App() {
     const providers = Array.isArray(payload?.providers)
       ? payload.providers.map((item: any) => toProviderDraft(item, providerTypes))
       : [];
+
+    // Apply user-config defaultModel to NyxID Gateway provider
+    const remoteDefaultModel = userConfigData?.defaultModel;
+    if (remoteDefaultModel) {
+      const nyxIdProvider = providers.find((p: any) => usesFixedProviderName(p.providerType));
+      if (nyxIdProvider) {
+        nyxIdProvider.model = remoteDefaultModel;
+      }
+    }
 
     setSettingsState({
       runtimeBaseUrl: payload?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL,
@@ -1836,19 +1916,6 @@ function App() {
   async function loadWorkflowList() {
     const workflows = await api.workspace.listWorkflows();
     setWorkflowList(Array.isArray(workflows) ? workflows : []);
-  }
-
-  async function loadExecutions(preferredExecutionId?: string | null) {
-    const executionList = await api.executions.list();
-    const nextExecutions = Array.isArray(executionList) ? executionList : [];
-    setExecutions(nextExecutions);
-
-    const preferred = preferredExecutionId
-      ? nextExecutions.find(item => item.executionId === preferredExecutionId)
-      : null;
-    if (preferred?.executionId) {
-      await openExecution(preferred.executionId);
-    }
   }
 
   async function loadWorkspaceSettings() {
@@ -2245,6 +2312,34 @@ function App() {
     setRunModalOpen(true);
   }
 
+  function handleBindScope() {
+    setBindScopeModalOpen(true);
+  }
+
+  async function handleConfirmBindScope() {
+    const scopeId = runScopeId.trim() || nyxid.loadSession()?.user.sub || '';
+    if (!scopeId) {
+      flash('Not logged in — scope ID unavailable', 'error');
+      return;
+    }
+    try {
+      setBindScopePending(true);
+      const serialized = await serializeCurrentWorkflow();
+      const yamlContent = serialized?.yaml || workflowMeta.yaml;
+      if (!yamlContent?.trim()) {
+        flash('No workflow YAML to bind', 'error');
+        return;
+      }
+      const result = await api.scope.bindWorkflow(scopeId, [yamlContent], workflowMeta.name.trim() || undefined);
+      setBindScopeModalOpen(false);
+      flash(`Scope bound: serviceId=${result?.serviceId || 'default'}, revision=${result?.revisionId || 'latest'}`, 'success');
+    } catch (error: any) {
+      flash(error?.message || 'Bind scope failed', 'error');
+    } finally {
+      setBindScopePending(false);
+    }
+  }
+
   async function handleConfirmRunWorkflow() {
     try {
       if (authSession.enabled && !authSession.authenticated) {
@@ -2263,31 +2358,63 @@ function App() {
         return;
       }
 
-      const shouldRunPublishedWorkflow =
-        appContext.workflowStorageMode === 'scope' &&
-        Boolean(appContext.scopeId) &&
-        Boolean(workflowMeta.workflowId) &&
-        !workflowMeta.dirty;
+      const scopeId = runScopeId.trim() || appContext.scopeId || nyxid.loadSession()?.user.sub || '';
+      if (!scopeId) {
+        setRunModalOpen(false);
+        flash('Not logged in — scope ID unavailable', 'error');
+        return;
+      }
 
-      const detail = await api.executions.start({
-        workflowName: workflowMeta.name.trim() || 'draft',
-        prompt: executionPrompt.trim(),
-        workflowYamls: [serialized?.yaml || workflowMeta.yaml],
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
-        scopeId: shouldRunPublishedWorkflow ? appContext.scopeId : null,
-        workflowId: shouldRunPublishedWorkflow ? workflowMeta.workflowId : null,
-        eventFormat: shouldRunPublishedWorkflow ? 'workflow' : null,
-      });
+      const prompt = executionPrompt.trim();
+      const yamlContent = serialized?.yaml || workflowMeta.yaml;
+
       setRunModalOpen(false);
       setStudioView('execution');
       setLogsCollapsed(false);
       setLogsDetached(false);
-      applyExecutionDetail(detail);
-      void loadExecutions(detail?.executionId || null);
-      flash(shouldRunPublishedWorkflow ? 'Published workflow run started' : 'Execution started', 'success');
+      setDraftRunEvents([]);
+      setDraftRunText('');
+      setDraftRunning(true);
+      setSelectedExecutionId(null);
+      setExecutionDetail(null);
+      setExecutionTrace(null);
+
+      const controller = new AbortController();
+      draftRunAbortRef.current = controller;
+
+      const { normalizeBackendSseFrame } = await import('./runtime/sseUtils');
+
+      const onFrame = (frame: any) => {
+        const evt = normalizeBackendSseFrame(frame);
+        if (!evt) return;
+        setDraftRunEvents(prev => [...prev, evt]);
+        if (evt.type === 'TEXT_MESSAGE_CONTENT') {
+          setDraftRunText(prev => prev + (evt.delta as string || ''));
+        }
+        if (evt.type === 'RUN_ERROR') {
+          flash((evt.message as string) || 'Run error', 'error');
+        }
+      };
+
+      try {
+        await api.scope.streamDraftRun(scopeId, prompt, yamlContent ? [yamlContent] : undefined, onFrame, controller.signal);
+        flash('Draft run completed', 'success');
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          flash(err?.message || 'Draft run failed', 'error');
+        }
+      } finally {
+        setDraftRunning(false);
+        draftRunAbortRef.current = null;
+      }
     } catch (error: any) {
       flash(error?.message || 'Execution failed', 'error');
+      setDraftRunning(false);
     }
+  }
+
+  function handleStopDraftRun() {
+    draftRunAbortRef.current?.abort();
   }
 
   function applyExecutionDetail(detail: any) {
@@ -2748,6 +2875,12 @@ function App() {
 
   async function handleSaveSettings() {
     try {
+      // Save NyxID Gateway model to user-config (chrono-storage) instead of secrets.json
+      const nyxIdProvider = settingsState.providers.find(p => usesFixedProviderName(p.providerType));
+      const userConfigSave = nyxIdProvider
+        ? api.userConfig.save({ defaultModel: nyxIdProvider.model.trim() }).catch(() => {})
+        : Promise.resolve();
+
       const response = await api.settings.save({
         runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
         appearanceTheme: settingsState.appearanceTheme,
@@ -2761,6 +2894,8 @@ function App() {
           apiKey: provider.apiKey,
         })),
       });
+
+      await userConfigSave;
       hydrateSettings(response);
       setWorkspaceSettings(prev => ({
         ...prev,
@@ -3145,7 +3280,7 @@ function App() {
         <div className="header-auth-meta">{authAccountSecondaryLabel}</div>
       </div>
       <button
-        onClick={() => window.location.assign(authSession.logoutUrl || '/auth/logout')}
+        onClick={() => { nyxid.clearSession(); window.location.reload(); }}
         className="panel-icon-button header-auth-logout"
         title="Sign out from NyxID."
       >
@@ -3160,9 +3295,9 @@ function App() {
           {authGuestStatusMessage}
         </div>
       </div>
-      <a href={authSession.loginUrl || '/auth/login'} className="solid-action header-auth-link !no-underline">
+      <button onClick={() => nyxid.loginWithRedirect(window.location.pathname)} className="solid-action header-auth-link !no-underline">
         <Shield size={14} /> Sign in
-      </a>
+      </button>
     </div>
   );
 
@@ -3265,7 +3400,48 @@ function App() {
 
             <div className="execution-log-stream">
               <div className="execution-log-list">
-                {executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
+                {/* Live draft-run stream output — prioritize over historical logs */}
+                {(draftRunning || draftRunEvents.length > 0) ? (
+                  <>
+                    {draftRunText && (
+                      <div className="execution-log-card tone-success" style={{ marginBottom: 8 }}>
+                        <div className="execution-log-card-head">
+                          <div className="text-[12px] font-semibold text-gray-800">Response</div>
+                        </div>
+                        <pre className="whitespace-pre-wrap text-[13px] text-gray-700 mt-2 leading-6">{draftRunText}</pre>
+                      </div>
+                    )}
+                    {draftRunEvents.map((evt, index) => (
+                      <div
+                        key={`draft-${index}`}
+                        className={`execution-log-card tone-${evt.type === 'RUN_ERROR' ? 'error' : evt.type === 'RUN_FINISHED' ? 'success' : 'info'}`}
+                      >
+                        <div className="execution-log-card-head">
+                          <div className="text-[12px] font-semibold text-gray-800">
+                            {evt.type === 'CUSTOM' ? (evt.name as string || 'CUSTOM') : evt.type}
+                          </div>
+                          <div className="execution-log-card-meta">
+                            <div className="text-[11px] text-gray-400">{evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : ''}</div>
+                          </div>
+                        </div>
+                        {evt.type === 'TEXT_MESSAGE_CONTENT' && evt.delta ? (
+                          <div className="execution-log-card-preview">{evt.delta as string}</div>
+                        ) : evt.type === 'STEP_STARTED' || evt.type === 'STEP_FINISHED' ? (
+                          <div className="text-[11px] text-gray-400 mt-1">Step: {evt.stepName as string}</div>
+                        ) : evt.type === 'RUN_ERROR' ? (
+                          <div className="text-[11px] text-red-600 mt-1">{evt.message as string}</div>
+                        ) : evt.type === 'CUSTOM' && evt.value ? (
+                          <pre className="text-[11px] text-gray-500 mt-1 whitespace-pre-wrap max-h-[120px] overflow-auto">{typeof evt.value === 'string' ? evt.value : JSON.stringify(evt.value, null, 2)}</pre>
+                        ) : null}
+                      </div>
+                    ))}
+                    {draftRunning && !draftRunEvents.length && (
+                      <div className="execution-log-card tone-info">
+                        <div className="text-[12px] text-gray-500">Waiting for events...</div>
+                      </div>
+                    )}
+                  </>
+                ) : executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
                   <button
                     key={`${log.timestamp}-${index}`}
                     onClick={() => void handleExecutionLogClick(log, index)}
@@ -3936,20 +4112,32 @@ function App() {
             />
           ) : null}
           <RailButton
-            active={workspacePage === 'roles'}
-            label="Roles"
-            icon={<User size={18} />}
-            onClick={() => openCatalogPage('roles')}
+            active={workspacePage === 'config-explorer'}
+            label="Explorer"
+            icon={<FolderPlus size={18} />}
+            onClick={() => setWorkspacePage('config-explorer')}
           />
           <RailButton
-            active={workspacePage === 'connectors'}
-            label="Connectors"
-            icon={<ArrowRightLeft size={18} />}
-            onClick={() => openCatalogPage('connectors')}
+            active={workspacePage === 'gagents'}
+            label="GAgents"
+            icon={<Bot size={18} />}
+            onClick={() => setWorkspacePage('gagents')}
+          />
+          <RailButton
+            active={workspacePage === 'services'}
+            label="Services"
+            icon={<Boxes size={18} />}
+            onClick={() => setWorkspacePage('services')}
           />
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-3">
+          <RailButton
+            active={workspacePage === 'scope'}
+            label="Scope"
+            icon={<Globe size={18} />}
+            onClick={() => setWorkspacePage('scope')}
+          />
           <RailButton
             active={settingsState.colorMode === 'dark'}
             label={settingsState.colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -4179,6 +4367,17 @@ function App() {
             }}
             onFlash={flash}
           />
+        ) : workspacePage === 'config-explorer' ? (
+          <ConfigExplorerPage
+            scopeId={appContext.scopeId || nyxid.loadSession()?.user.sub || ''}
+            flash={flash}
+          />
+        ) : workspacePage === 'gagents' ? (
+          <GAgentPage />
+        ) : workspacePage === 'scope' ? (
+          <ScopePage />
+        ) : workspacePage === 'services' ? (
+          <RuntimePage />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">
@@ -4205,6 +4404,13 @@ function App() {
                     title="LLM"
                     description="Providers from secrets.json"
                     onClick={() => setSettingsSection('llm')}
+                  />
+                  <SettingsNavButton
+                    active={settingsSection === 'cloud-config'}
+                    icon={<Database size={16} />}
+                    title="Cloud Config"
+                    description="Per-user settings on NyxID"
+                    onClick={() => setSettingsSection('cloud-config')}
                   />
                   <SettingsNavButton
                     active={settingsSection === 'appearance'}
@@ -4393,7 +4599,7 @@ function App() {
                             />
                             {usesFixedProviderName(selectedProvider.providerType) ? (
                               <div className="text-[11px] text-gray-400 -mt-1">
-                                NyxID uses the fixed provider name <code>nyxid</code>.
+                                NyxID Gateway uses the fixed provider name <code>nyxid</code>. Manage your LLM API keys on NyxID.
                               </div>
                             ) : null}
 
@@ -4445,35 +4651,55 @@ function App() {
                               </select>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                              <InputField
-                                label="Model"
-                                value={selectedProvider.model}
-                                onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  model: value,
-                                }))}
-                              />
-                              <InputField
-                                label="Endpoint"
-                                value={selectedProvider.endpoint}
-                                onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  endpoint: value,
-                                }))}
-                              />
-                            </div>
+                            {usesFixedProviderName(selectedProvider.providerType) ? (
+                              <>
+                                <InputField
+                                  label="Default model"
+                                  value={selectedProvider.model}
+                                  onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                    ...provider,
+                                    model: value,
+                                  }))}
+                                />
+                                <div className="rounded-[14px] border border-[#D6E4F0] bg-[#F0F6FB] px-4 py-3 text-[12px] text-[#3B6B96] leading-relaxed">
+                                  NyxID Gateway uses your NyxID login credentials to access the LLM providers you've connected on NyxID.
+                                  No API key or endpoint configuration is needed here. The model name determines which provider is used
+                                  (e.g. <code className="bg-white/60 px-1 rounded">gpt-4o</code> → OpenAI, <code className="bg-white/60 px-1 rounded">claude-sonnet-4-5-20250929</code> → Anthropic).
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <InputField
+                                    label="Model"
+                                    value={selectedProvider.model}
+                                    onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                      ...provider,
+                                      model: value,
+                                    }))}
+                                  />
+                                  <InputField
+                                    label="Endpoint"
+                                    value={selectedProvider.endpoint}
+                                    onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                      ...provider,
+                                      endpoint: value,
+                                    }))}
+                                  />
+                                </div>
 
-                            <TextAreaField
-                              label="API key"
-                              value={selectedProvider.apiKey}
-                              rows={4}
-                              onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                ...provider,
-                                apiKey: value,
-                                apiKeyConfigured: Boolean(value.trim()),
-                              }))}
-                            />
+                                <TextAreaField
+                                  label="API key"
+                                  value={selectedProvider.apiKey}
+                                  rows={4}
+                                  onChange={value => updateProvider(selectedProvider.key, provider => ({
+                                    ...provider,
+                                    apiKey: value,
+                                    apiKeyConfigured: Boolean(value.trim()),
+                                  }))}
+                                />
+                              </>
+                            )}
 
                             <label
                               className="inline-flex items-center gap-2 rounded-[14px] border border-[#E5E1DA] bg-white px-3 py-2 text-[12px] text-gray-600"
@@ -4500,6 +4726,12 @@ function App() {
                       </div>
                     </div>
                   </div>
+                ) : settingsSection === 'cloud-config' ? (
+                  <CloudConfigSection
+                    userConfigState={userConfigState}
+                    setUserConfigState={setUserConfigState}
+                    flash={flash}
+                  />
                 ) : (
                   <div className="max-w-[920px] space-y-8">
                     <div className="flex items-start justify-between gap-4">
@@ -4646,15 +4878,23 @@ function App() {
                 </button>
                 <button
                   onClick={handleRunWorkflow}
-                  data-tooltip="Run"
-                  aria-label="Run"
+                  data-tooltip="Draft Run"
+                  aria-label="Draft Run"
                   className="panel-icon-button header-toolbar-action header-run-action"
                 >
                   <Play size={15} />
                 </button>
-                {studioView === 'execution' && executionCanStop ? (
+                <button
+                  onClick={handleBindScope}
+                  data-tooltip="Bind Scope"
+                  aria-label="Bind Scope"
+                  className="panel-icon-button header-toolbar-action"
+                >
+                  <Globe size={15} />
+                </button>
+                {studioView === 'execution' && (executionCanStop || draftRunning) ? (
                   <button
-                    onClick={() => void handleStopExecution()}
+                    onClick={() => draftRunning ? handleStopDraftRun() : void handleStopExecution()}
                     data-tooltip="Stop"
                     aria-label="Stop"
                     disabled={executionStopPending}
@@ -5563,7 +5803,7 @@ function App() {
 
       <ModalShell
         open={runModalOpen}
-        title="Run"
+        title="Draft Run"
         onClose={() => setRunModalOpen(false)}
         actions={(
           <>
@@ -5576,7 +5816,8 @@ function App() {
       >
         <div className="space-y-3">
           <div className="text-[12px] text-gray-500">
-            Optional input will be passed into the workflow as `$input`.
+            Sends the current workflow YAML as an inline bundle to <code>/api/scopes/{'{scopeId}'}/workflow/draft-run</code>.
+            {runScopeId ? <span> Scope: <strong>{runScopeId}</strong></span> : <span className="text-amber-600"> Not logged in — scope unavailable.</span>}
           </div>
           <textarea
             rows={6}
@@ -5585,6 +5826,32 @@ function App() {
             placeholder="What should this run do?"
             onChange={event => setExecutionPrompt(event.target.value)}
           />
+        </div>
+      </ModalShell>
+
+      <ModalShell
+        open={bindScopeModalOpen}
+        title="Bind Scope"
+        onClose={() => setBindScopeModalOpen(false)}
+        actions={(
+          <>
+            <button onClick={() => setBindScopeModalOpen(false)} className="ghost-action">Cancel</button>
+            <button onClick={() => { void handleConfirmBindScope(); }} disabled={bindScopePending} className="solid-action">
+              <Globe size={14} /> {bindScopePending ? 'Binding...' : 'Bind'}
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="text-[12px] text-gray-500">
+            Binds the current workflow as the default scope service (<code>serviceId=default</code>).
+            After binding, you can invoke it from <strong>Scope → Invoke</strong>.
+          </div>
+          <div className="rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-4 py-3 text-[13px]">
+            <div><span className="text-gray-400">Scope:</span> <strong>{runScopeId || '(not logged in)'}</strong></div>
+            <div><span className="text-gray-400">Workflow:</span> <strong>{workflowMeta.name || 'draft'}</strong></div>
+            <div><span className="text-gray-400">Target:</span> <code>PUT /api/scopes/{'{scopeId}'}/binding</code></div>
+          </div>
         </div>
       </ModalShell>
 
@@ -5803,6 +6070,211 @@ function App() {
   );
 }
 
+type UserConfigState = {
+  defaultModel: string;
+  loading: boolean;
+  providers: { provider_slug: string; provider_name: string; status: string }[];
+  supportedModels: string[];
+  modelsLoading: boolean;
+};
+
+function CloudConfigSection(props: {
+  userConfigState: UserConfigState;
+  setUserConfigState: React.Dispatch<React.SetStateAction<UserConfigState>>;
+  flash: (msg: string, type: 'success' | 'error') => void;
+}) {
+  const { userConfigState, setUserConfigState, flash } = props;
+  const [filterText, setFilterText] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setUserConfigState(prev => ({ ...prev, modelsLoading: true }));
+      try {
+        const result = await api.userConfig.models();
+        if (!cancelled) {
+          setUserConfigState(prev => ({
+            ...prev,
+            providers: result?.providers ?? [],
+            supportedModels: result?.supported_models ?? [],
+            modelsLoading: false,
+          }));
+        }
+      } catch {
+        if (!cancelled) setUserConfigState(prev => ({ ...prev, providers: [], supportedModels: [], modelsLoading: false }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && e.target instanceof Node && !containerRef.current.contains(e.target)) setDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const readyProviders = useMemo(
+    () => userConfigState.providers.filter(p => p.status === 'ready'),
+    [userConfigState.providers],
+  );
+
+  const groupedModels = useMemo(() => {
+    const prefixToProvider: Record<string, string> = {};
+    for (const p of readyProviders) {
+      const slug = p.provider_slug;
+      const name = p.provider_name;
+      if (slug === 'openai') { for (const pfx of ['gpt-', 'o1-', 'o1', 'o3-', 'o3', 'o4-', 'chatgpt-']) prefixToProvider[pfx] = name; }
+      else if (slug === 'anthropic') { prefixToProvider['claude-'] = name; }
+      else if (slug === 'google-ai') { prefixToProvider['gemini-'] = name; }
+      else if (slug === 'mistral') { for (const pfx of ['mistral-', 'codestral-', 'magistral-']) prefixToProvider[pfx] = name; }
+      else if (slug === 'cohere') { for (const pfx of ['command-']) prefixToProvider[pfx] = name; }
+      else if (slug === 'deepseek') { prefixToProvider['deepseek-'] = name; }
+      else { prefixToProvider[slug + '-'] = name; }
+    }
+    const q = filterText.trim().toLowerCase();
+    const groups = new Map<string, string[]>();
+    for (const model of userConfigState.supportedModels) {
+      if (q && !model.toLowerCase().includes(q)) continue;
+      let provider = 'Other';
+      for (const [pfx, name] of Object.entries(prefixToProvider)) {
+        if (model.startsWith(pfx) || model === pfx.replace(/-$/, '')) { provider = name; break; }
+      }
+      if (!groups.has(provider)) groups.set(provider, []);
+      groups.get(provider)!.push(model);
+    }
+    return groups;
+  }, [userConfigState.supportedModels, readyProviders, filterText]);
+
+  const hasData = userConfigState.supportedModels.length > 0;
+
+  return (
+    <div className="max-w-[920px] space-y-8">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="panel-eyebrow">Settings</div>
+          <div className="panel-title">Cloud Config</div>
+          <div className="text-[12px] text-gray-400 mt-1">Per-user configuration stored on NyxID. Changes sync across all your devices.</div>
+        </div>
+        <button
+          onClick={async () => {
+            try {
+              setUserConfigState(prev => ({ ...prev, loading: true }));
+              await api.userConfig.save({ defaultModel: userConfigState.defaultModel.trim() });
+              flash('Cloud config saved', 'success');
+            } catch (error: any) {
+              flash(error?.message || 'Failed to save cloud config', 'error');
+            } finally {
+              setUserConfigState(prev => ({ ...prev, loading: false }));
+            }
+          }}
+          disabled={userConfigState.loading}
+          className="solid-action"
+        >
+          {userConfigState.loading ? 'Saving...' : 'Save config'}
+        </button>
+      </div>
+
+      {/* Providers status */}
+      {readyProviders.length > 0 && (
+        <div className="settings-section-card space-y-3">
+          <div className="section-heading">Connected providers</div>
+          <div className="flex flex-wrap gap-2">
+            {userConfigState.providers.map(p => (
+              <span
+                key={p.provider_slug}
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium ${
+                  p.status === 'ready'
+                    ? 'bg-green-50 text-green-700'
+                    : p.status === 'expired'
+                    ? 'bg-amber-50 text-amber-700'
+                    : 'bg-gray-100 text-gray-400'
+                }`}
+              >
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  p.status === 'ready' ? 'bg-green-500' : p.status === 'expired' ? 'bg-amber-500' : 'bg-gray-300'
+                }`} />
+                {p.provider_name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Model selection */}
+      <div className="settings-section-card space-y-4">
+        <div className="section-heading">Default model</div>
+        <div ref={containerRef} className="relative">
+          <label className="field-label">Model</label>
+          {hasData ? (
+            <div className="relative mt-1">
+              <input
+                ref={inputRef}
+                className="panel-input pr-8"
+                value={dropdownOpen ? filterText : userConfigState.defaultModel}
+                placeholder={userConfigState.modelsLoading ? 'Loading...' : 'Select a model...'}
+                onChange={e => { setFilterText(e.target.value); if (!dropdownOpen) setDropdownOpen(true); }}
+                onFocus={() => { setFilterText(''); setDropdownOpen(true); }}
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                onClick={() => { setDropdownOpen(!dropdownOpen); if (!dropdownOpen) { setFilterText(''); inputRef.current?.focus(); } }}
+                tabIndex={-1}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              {dropdownOpen && (
+                <div className="absolute z-50 mt-1 w-full max-h-[280px] overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                  {userConfigState.modelsLoading ? (
+                    <div className="px-3 py-2 text-[12px] text-gray-400">Loading...</div>
+                  ) : groupedModels.size === 0 ? (
+                    <div className="px-3 py-2 text-[12px] text-gray-400">No matching models</div>
+                  ) : (
+                    Array.from(groupedModels.entries()).map(([provider, models]) => (
+                      <div key={provider}>
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{provider}</div>
+                        {models.map(model => (
+                          <button
+                            key={model}
+                            type="button"
+                            className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-gray-50 ${model === userConfigState.defaultModel ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                            onClick={() => {
+                              setUserConfigState(prev => ({ ...prev, defaultModel: model }));
+                              setDropdownOpen(false);
+                              setFilterText('');
+                            }}
+                          >
+                            {model}
+                          </button>
+                        ))}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <input
+              className="panel-input mt-1"
+              value={userConfigState.defaultModel}
+              placeholder={userConfigState.modelsLoading ? 'Loading...' : 'Enter model name...'}
+              onChange={e => setUserConfigState(prev => ({ ...prev, defaultModel: e.target.value }))}
+            />
+          )}
+        </div>
+        <div className="text-[11px] text-gray-400 leading-relaxed">
+          The default model used by NyxID Gateway. Select from supported models, or type a model name manually.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppLoadingScreen() {
   return (
     <div className="min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8">
@@ -5872,13 +6344,13 @@ function AppAuthenticationGate(props: {
             </div>
 
             <div className="mt-6 space-y-3">
-              <a
-                href={props.loginUrl || '/auth/login'}
+              <button
+                onClick={() => nyxid.loginWithRedirect('/')}
                 className="solid-action w-full justify-center !no-underline"
                 title={`Sign in with ${props.providerDisplayName || 'NyxID'}.`}
               >
                 <Shield size={14} /> Sign in
-              </a>
+              </button>
               <div className="text-[12px] leading-5 text-gray-400">
                 After sign-in completes, the app will return to Studio automatically.
               </div>

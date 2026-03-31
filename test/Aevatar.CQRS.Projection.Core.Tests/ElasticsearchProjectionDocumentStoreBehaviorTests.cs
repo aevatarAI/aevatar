@@ -81,6 +81,153 @@ public sealed class ElasticsearchProjectionDocumentStoreBehaviorTests
     }
 
     [Fact]
+    public async Task QueryAsync_WhenUsingClrFieldPaths_ShouldTranslateToProtoFieldNames()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        using var store = CreateStore(
+            new ElasticsearchProjectionDocumentStoreOptions
+            {
+                AutoCreateIndex = false,
+            },
+            handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.ActorId),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("actor-1"),
+                },
+            ],
+            Sorts =
+            [
+                new ProjectionDocumentSort
+                {
+                    FieldPath = nameof(TestStoreReadModel.UpdatedAt),
+                    Direction = ProjectionDocumentSortDirection.Desc,
+                },
+            ],
+        });
+
+        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        searchRequest.Body.Should().Contain("\"actor_id.keyword\":\"actor-1\"");
+        searchRequest.Body.Should().Contain("\"updated_at_utc_value\"");
+        searchRequest.Body.Should().NotContain("\"ActorId\"");
+        searchRequest.Body.Should().NotContain("\"UpdatedAt\"");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenFieldHasExplicitKeywordMapping_ShouldNotAppendKeywordSuffix()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = false,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["value"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "keyword",
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("v1"),
+                },
+            ],
+        });
+
+        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        searchRequest.Body.Should().Contain("\"value\":\"v1\"");
+        searchRequest.Body.Should().NotContain("\"value.keyword\"");
+    }
+
+    [Fact]
+    public async Task QueryAsync_WhenFieldHasExplicitTextMappingWithoutKeyword_ShouldNotInventKeywordSuffix()
+    {
+        var handler = new ScriptedHttpMessageHandler();
+        handler.EnqueueResponse(_ => CreateJsonResponse(
+            HttpStatusCode.OK,
+            """{"hits":{"hits":[]}}"""));
+
+        var options = new ElasticsearchProjectionDocumentStoreOptions
+        {
+            AutoCreateIndex = false,
+        };
+        options.Endpoints = ["http://localhost:9200"];
+
+        using var store = new ElasticsearchProjectionDocumentStore<TestStoreReadModel, string>(
+            options,
+            new DocumentIndexMetadata(
+                IndexName: "projection-core-tests",
+                Mappings: new Dictionary<string, object?>
+                {
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        ["value"] = new Dictionary<string, object?>
+                        {
+                            ["type"] = "text",
+                        },
+                    },
+                },
+                Settings: new Dictionary<string, object?>(),
+                Aliases: new Dictionary<string, object?>()),
+            keySelector: model => model.Id,
+            keyFormatter: key => key,
+            httpMessageHandler: handler);
+
+        _ = await store.QueryAsync(new ProjectionDocumentQuery
+        {
+            Filters =
+            [
+                new ProjectionDocumentFilter
+                {
+                    FieldPath = nameof(TestStoreReadModel.Value),
+                    Operator = ProjectionDocumentFilterOperator.Eq,
+                    Value = ProjectionDocumentValue.FromString("v1"),
+                },
+            ],
+        });
+
+        var searchRequest = handler.CapturedRequests.Should().ContainSingle().Subject;
+        searchRequest.Body.Should().Contain("\"value\":\"v1\"");
+        searchRequest.Body.Should().NotContain("\"value.keyword\"");
+    }
+
+    [Fact]
     public async Task UpsertAsync_WhenMetadataContainsStructuredObjects_ShouldSendStructuredIndexInitializationPayload()
     {
         var handler = new ScriptedHttpMessageHandler();

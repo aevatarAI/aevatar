@@ -470,7 +470,9 @@
 
 .workspace-page-header,
 .studio-editor-header {
-  padding-right: clamp(220px, 25vw, 360px);
+  /* chip is fixed at right: 16px with max-width: min(320px, 100vw - 20px);
+     padding must be at least 16px + chip-width + 8px gap to avoid overlap */
+  padding-right: calc(24px + min(320px, 100vw - 20px));
 }
 
 .studio-editor-toolbar {
@@ -485,7 +487,7 @@
 @media (max-width: 1180px) {
   .workspace-page-header,
   .studio-editor-header {
-    padding-right: clamp(170px, 22vw, 250px);
+    padding-right: calc(24px + min(320px, 100vw - 20px));
   }
 
   .studio-title-bar {
@@ -2116,4 +2118,13 @@
 .node-run-pill.failed {
   background: rgba(239, 68, 68, 0.12);
   color: #dc2626;
+}
+
+/* ── Config Explorer drawer animation ── */
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.2s ease-out;
 }

@@ -67,7 +67,6 @@ internal sealed class ChronoStorageCatalogBlobClient
             ScopeDirectory: scopeDirectory,
             ObjectKey: objectKey,
             PresignedUrlExpiresInSeconds: Math.Clamp(_options.PresignedUrlExpiresInSeconds <= 0 ? 300 : _options.PresignedUrlExpiresInSeconds, 30, 3600),
-            CreateBucketIfMissing: _options.CreateBucketIfMissing,
             UseNyxProxy: endpoint.UseNyxProxy,
             StaticBearerToken: _options.StaticBearerToken?.Trim());
     }
@@ -119,11 +118,6 @@ internal sealed class ChronoStorageCatalogBlobClient
         string contentType,
         CancellationToken cancellationToken)
     {
-        if (context.CreateBucketIfMissing)
-        {
-            await EnsureBucketExistsAsync(context, cancellationToken);
-        }
-
         using var content = new ByteArrayContent(payload);
         content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
 
@@ -166,33 +160,6 @@ internal sealed class ChronoStorageCatalogBlobClient
 
     public string CreateRemoteFilePath(RemoteScopeContext context) =>
         $"chrono-storage://{context.Bucket}/{context.ObjectKey}";
-
-    private async Task EnsureBucketExistsAsync(RemoteScopeContext context, CancellationToken cancellationToken)
-    {
-        using var headRequest = CreateChronoStorageRequest(
-            HttpMethod.Head,
-            CreateChronoStorageUri(context, $"api/buckets/{Uri.EscapeDataString(context.Bucket)}"),
-            context);
-        using var headResponse = await GetCatalogApiClient(context).SendAsync(headRequest, cancellationToken);
-        if (headResponse.StatusCode != HttpStatusCode.NotFound)
-        {
-            headResponse.EnsureSuccessStatusCode();
-            return;
-        }
-
-        using var createRequest = CreateChronoStorageRequest(
-            HttpMethod.Post,
-            CreateChronoStorageUri(context, "api/buckets"),
-            context,
-            JsonContent.Create(new { name = context.Bucket }));
-        using var createResponse = await GetCatalogApiClient(context).SendAsync(createRequest, cancellationToken);
-        if (createResponse.StatusCode == HttpStatusCode.Conflict)
-        {
-            return;
-        }
-
-        createResponse.EnsureSuccessStatusCode();
-    }
 
     private ChronoStorageApiEndpoint ResolveApiEndpoint()
     {
@@ -359,7 +326,6 @@ internal sealed class ChronoStorageCatalogBlobClient
         string ScopeDirectory,
         string ObjectKey,
         int PresignedUrlExpiresInSeconds,
-        bool CreateBucketIfMissing,
         bool UseNyxProxy,
         string? StaticBearerToken);
 

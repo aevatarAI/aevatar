@@ -48,10 +48,24 @@ internal static class ScopeWorkflowCapabilityConventions
 
     public static string NormalizeOptional(string? value) => value?.Trim() ?? string.Empty;
 
+    /// <summary>
+    /// Resolves the effective app_id: uses the provided value when non-empty,
+    /// otherwise falls back to <see cref="ScopeWorkflowCapabilityOptions.ServiceAppId"/> ("default").
+    /// </summary>
+    public static string ResolveAppId(ScopeWorkflowCapabilityOptions options, string? appId)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var normalized = NormalizeOptional(appId);
+        return string.IsNullOrWhiteSpace(normalized)
+            ? ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceAppId, nameof(options.ServiceAppId))
+            : normalized;
+    }
+
     public static ServiceIdentity BuildIdentity(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,
-        string workflowId)
+        string workflowId,
+        string? appId = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
@@ -59,7 +73,7 @@ internal static class ScopeWorkflowCapabilityConventions
         return new()
         {
             TenantId = normalizedScopeId,
-            AppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceAppId, nameof(options.ServiceAppId)),
+            AppId = ResolveAppId(options, appId),
             Namespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceNamespace, nameof(options.ServiceNamespace)),
             ServiceId = normalizedWorkflowId,
         };
@@ -68,7 +82,8 @@ internal static class ScopeWorkflowCapabilityConventions
     public static ServiceIdentity BuildServiceIdentity(
         ScopeWorkflowCapabilityOptions options,
         string scopeId,
-        string serviceId)
+        string serviceId,
+        string? appId = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         var normalizedScopeId = ScopeWorkflowCapabilityOptions.NormalizeRequired(scopeId, nameof(scopeId));
@@ -76,7 +91,7 @@ internal static class ScopeWorkflowCapabilityConventions
         return new()
         {
             TenantId = normalizedScopeId,
-            AppId = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceAppId, nameof(options.ServiceAppId)),
+            AppId = ResolveAppId(options, appId),
             Namespace = ScopeWorkflowCapabilityOptions.NormalizeRequired(options.ServiceNamespace, nameof(options.ServiceNamespace)),
             ServiceId = normalizedServiceId,
         };
@@ -84,11 +99,13 @@ internal static class ScopeWorkflowCapabilityConventions
 
     public static ServiceIdentity BuildDefaultServiceIdentity(
         ScopeWorkflowCapabilityOptions options,
-        string scopeId) =>
+        string scopeId,
+        string? appId = null) =>
         BuildServiceIdentity(
             options,
             scopeId,
-            ScopeWorkflowCapabilityOptions.NormalizeRequired(options.DefaultServiceId, nameof(options.DefaultServiceId)));
+            ScopeWorkflowCapabilityOptions.NormalizeRequired(options.DefaultServiceId, nameof(options.DefaultServiceId)),
+            appId);
 
     public static string BuildDefaultDefinitionActorIdPrefix(
         ScopeWorkflowCapabilityOptions options,

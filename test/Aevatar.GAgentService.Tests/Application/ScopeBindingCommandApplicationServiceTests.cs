@@ -793,6 +793,148 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         commandPort.Calls.Should().BeEmpty();
     }
 
+    // ── AppId routing tests ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task UpsertAsync_ShouldUseCustomAppId_WhenProvidedInWorkflowBindingRequest()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            AppId: "tenant-app"));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be("tenant-app");
+        createCommand.Spec.Identity.TenantId.Should().Be(ScopeId);
+        createCommand.Spec.Identity.ServiceId.Should().Be(DefaultOptions.DefaultServiceId);
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldUseCustomAppId_WhenProvidedInScriptingBindingRequest()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort
+        {
+            Script = new ScopeScriptSummary(
+                ScopeId,
+                "script-a",
+                "catalog-1",
+                "definition-script-1",
+                "script-rev-1",
+                "hash-script-1",
+                DateTimeOffset.UtcNow),
+        };
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort
+        {
+            Snapshot = CreateScriptDefinitionSnapshot("script-a", "script-rev-1", "definition-script-1"),
+        };
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Scripting,
+            Script: new ScopeBindingScriptSpec("script-a"),
+            AppId: "tenant-app"));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be("tenant-app");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldUseCustomAppId_WhenProvidedInGAgentBindingRequest()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.GAgent,
+            GAgent: new ScopeBindingGAgentSpec(
+                typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
+                "gagent-orders",
+                [
+                    new ScopeBindingGAgentEndpoint(
+                        "run",
+                        "Run",
+                        ServiceEndpointKind.Command,
+                        "type.googleapis.com/google.protobuf.StringValue",
+                        string.Empty,
+                        "Run the bound gagent."),
+                ]),
+            AppId: "tenant-app"));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be("tenant-app");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldFallbackToDefaultAppId_WhenAppIdIsNull()
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            AppId: null));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task UpsertAsync_ShouldFallbackToDefaultAppId_WhenAppIdIsBlank(string blankAppId)
+    {
+        var commandPort = new RecordingServiceCommandPort();
+        var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
+        var governanceCommandPort = new RecordingServiceGovernanceCommandPort();
+        var governanceQueryPort = new FakeServiceGovernanceQueryPort();
+        var scopeScriptQueryPort = new FakeScopeScriptQueryPort();
+        var scriptDefinitionSnapshotPort = new FakeScriptDefinitionSnapshotPort();
+        var actorPort = new FakeWorkflowRunActorPort();
+        var service = CreateService(commandPort, lifecyclePort, governanceCommandPort, governanceQueryPort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
+
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
+            ScopeId,
+            ScopeBindingImplementationKind.Workflow,
+            Workflow: new ScopeBindingWorkflowSpec([
+                "name: main\nsteps:\n  - run: echo hello",
+            ]),
+            AppId: blankAppId));
+
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Identity.AppId.Should().Be(ScopeWorkflowCapabilityOptions.FixedServiceAppId);
+    }
+
     private static ScopeBindingCommandApplicationService CreateService(
         RecordingServiceCommandPort commandPort,
         FakeServiceLifecycleQueryPort lifecyclePort,

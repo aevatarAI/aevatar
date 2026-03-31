@@ -34,7 +34,7 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
-import { Alert, Button, Col, Row, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Col, Menu, Row, Space, Tag, Typography } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import ScopeQueryCard from './components/ScopeQueryCard';
 import { resolveStudioScopeContext } from './components/resolvedScope';
@@ -167,6 +167,35 @@ const ScopeOverviewPage: React.FC = () => {
   const activeRevision = useMemo(
     () => findActiveRevision(binding),
     [binding],
+  );
+  const projectViewItems = useMemo(
+    () => [
+      {
+        key: 'workflows',
+        label: 'Workflows',
+        href: buildScopeHref('/scopes/workflows', activeDraft),
+      },
+      {
+        key: 'scripts',
+        label: 'Scripts',
+        href: buildScopeHref('/scopes/scripts', activeDraft),
+      },
+      {
+        key: 'invoke',
+        label: 'Invoke',
+        href: buildScopeHref('/scopes/invoke', activeDraft, {
+          serviceId: binding?.serviceId ?? '',
+        }),
+      },
+      {
+        key: 'runs',
+        label: 'Runs',
+        href: buildRuntimeRunsHref({
+          scopeId: activeDraft.scopeId,
+        }),
+      },
+    ],
+    [activeDraft, binding?.serviceId],
   );
 
   useEffect(() => {
@@ -414,47 +443,39 @@ const ScopeOverviewPage: React.FC = () => {
                     >
                       Open Studio
                     </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildRuntimeRunsHref({
-                            scopeId: activeDraft.scopeId,
-                          }),
-                        )
-                      }
-                    >
-                      Open Runs
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildScopeHref('/scopes/invoke', activeDraft, {
-                            serviceId: binding?.serviceId ?? '',
-                          }),
-                        )
-                      }
-                    >
-                      Invoke Services
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildScopeHref('/scopes/workflows', activeDraft),
-                        )
-                      }
-                    >
-                      Open Workflows
-                    </Button>
-                    <Button
-                      onClick={() =>
-                        history.push(
-                          buildScopeHref('/scopes/scripts', activeDraft),
-                        )
-                      }
-                    >
-                      Open Scripts
-                    </Button>
                   </Space>
+
+                  <div
+                    style={{
+                      borderTop: '1px solid var(--ant-color-border-secondary)',
+                      paddingTop: 12,
+                    }}
+                  >
+                    <Typography.Text style={summaryFieldLabelStyle}>
+                      Project views
+                    </Typography.Text>
+                    <Menu
+                      mode="horizontal"
+                      selectable={false}
+                      style={{
+                        background: 'transparent',
+                        borderBottom: 'none',
+                        marginTop: 8,
+                      }}
+                      items={projectViewItems.map((item) => ({
+                        key: item.key,
+                        label: item.label,
+                      }))}
+                      onClick={({ key }) => {
+                        const target = projectViewItems.find(
+                          (item) => item.key === key,
+                        );
+                        if (target) {
+                          history.push(target.href);
+                        }
+                      }}
+                    />
+                  </div>
                 </div>
               </ProCard>
             </Col>

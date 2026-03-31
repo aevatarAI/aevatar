@@ -7,7 +7,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>aevatar</ToolCommandName>
     <PackageId>aevatar</PackageId>
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
     <Authors>Aevatar</Authors>
     <Description>Aevatar CLI — config management and app launcher.</Description>
     <PackageTags>aevatar;cli;config</PackageTags>
@@ -45,5 +45,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+
+    <!-- SDK auto-includes wwwroot/ as Content; we just need CopyToOutputDirectory -->
+    <Content Update="wwwroot\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+
   </ItemGroup>
 </Project>

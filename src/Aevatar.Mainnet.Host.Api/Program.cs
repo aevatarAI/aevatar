@@ -3,6 +3,7 @@ using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.NyxId.Chat;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Microsoft.AspNetCore.Hosting;
@@ -31,9 +32,11 @@ builder.AddStudioCapability();
 // Authentication: config-driven, provider-agnostic
 builder.Services.AddNyxIdAuthentication();
 builder.AddAevatarAuthentication();
+builder.Services.AddNyxIdChat();
 
 var app = builder.Build();
 
 app.UseAevatarDefaultHost();
+app.MapNyxIdChatEndpoints();
 
 app.Run();

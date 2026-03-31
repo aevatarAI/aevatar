@@ -77,7 +77,7 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
-    public async Task ScopeBindingEndpoint_ShouldReturnForbidden_WhenAuthenticationIsMissing()
+    public async Task ScopeBindingEndpoint_ShouldReturnUnauthorized_WhenAuthenticationIsMissing()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
 
@@ -94,12 +94,8 @@ public sealed class ScopeServiceEndpointsTests
             });
 
         var response = await host.Client.SendAsync(request);
-        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        body.Should().NotBeNull();
-        body!["code"].Should().Be("SCOPE_ACCESS_DENIED");
-        body["message"].Should().Be("Authentication is required.");
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         host.ScopeBindingPort.LastRequest.Should().BeNull();
     }
 
@@ -764,7 +760,7 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/draft-run", new
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
         {
             prompt = "run the draft",
             workflowYamls = new[]
@@ -814,7 +810,7 @@ public sealed class ScopeServiceEndpointsTests
                 .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
         };
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/draft-run", new
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
         {
             prompt = "run the draft",
             workflowYamls = new[]
@@ -837,7 +833,7 @@ public sealed class ScopeServiceEndpointsTests
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/draft-run", new
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
         {
             prompt = "run the draft",
             workflowYamls = new[]
@@ -858,7 +854,7 @@ public sealed class ScopeServiceEndpointsTests
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
 
-        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/draft-run", new
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/workflow/draft-run", new
         {
             prompt = "run the draft",
             workflowYamls = Array.Empty<string>(),
@@ -2141,8 +2137,12 @@ public sealed class ScopeServiceEndpointsTests
                     ServiceAppId = "default",
                     ServiceNamespace = "default",
                 }));
+            builder.Services.AddAuthentication("Test")
+                .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
+            builder.Services.AddAuthorization();
 
             var app = builder.Build();
+            app.UseAuthentication();
             app.Use(async (http, next) =>
             {
                 var hasExplicitAuthenticationHeader = http.Request.Headers.TryGetValue("X-Test-Authenticated", out var authenticatedValues);
@@ -2172,6 +2172,7 @@ public sealed class ScopeServiceEndpointsTests
 
                 await next();
             });
+            app.UseAuthorization();
             app.MapScopeServiceEndpoints();
             await app.StartAsync();
 
@@ -2649,6 +2650,25 @@ public sealed class ScopeServiceEndpointsTests
             LastCommand = command;
             return Task.FromResult(CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
                 new WorkflowRunControlAcceptedReceipt(command.ActorId, command.RunId, "cmd-stop", "corr-stop")));
+        }
+    }
+
+    private sealed class TestAuthHandler
+        : Microsoft.AspNetCore.Authentication.AuthenticationHandler<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions>
+    {
+        public TestAuthHandler(
+            Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions> options,
+            Microsoft.Extensions.Logging.ILoggerFactory logger,
+            System.Text.Encodings.Web.UrlEncoder encoder)
+            : base(options, logger, encoder)
+        {
+        }
+
+        protected override Task<Microsoft.AspNetCore.Authentication.AuthenticateResult> HandleAuthenticateAsync()
+        {
+            // The custom middleware after UseAuthentication() overrides http.User.
+            // This handler returns NoResult so it does not interfere.
+            return Task.FromResult(Microsoft.AspNetCore.Authentication.AuthenticateResult.NoResult());
         }
     }
 }
