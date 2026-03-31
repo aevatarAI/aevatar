@@ -55,8 +55,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         {
             Endpoint = _gatewayEndpoint,
         };
-        // Add logging policy to capture the actual HTTP request URL for debugging
-        options.AddPolicy(new NyxIdRequestLoggingPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
+        options.AddPolicy(new NyxIdRequestLoggingPolicy(_logger), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(resolvedModel).AsIChatClient();
         return new MEAILLMProvider(Name, chatClient, _logger);
@@ -140,17 +139,53 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 /// </summary>
 internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.PipelinePolicy
 {
+    private readonly ILogger _logger;
+
+    public NyxIdRequestLoggingPolicy(ILogger logger) => _logger = logger;
+
     public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
     {
-        Console.Error.WriteLine($"[NyxIdLLM.HTTP] {message.Request.Method} {message.Request.Uri}");
+        LogRequest(message);
         ProcessNext(message, pipeline, currentIndex);
-        Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response: {message.Response?.Status}");
+        LogResponse(message);
     }
 
     public override async ValueTask ProcessAsync(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
     {
-        Console.Error.WriteLine($"[NyxIdLLM.HTTP] {message.Request.Method} {message.Request.Uri}");
+        LogRequest(message);
         await ProcessNextAsync(message, pipeline, currentIndex);
-        Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response: {message.Response?.Status}");
+        LogResponse(message);
+    }
+
+    private void LogRequest(System.ClientModel.Primitives.PipelineMessage message)
+    {
+        _logger.LogWarning("[NyxIdLLM.HTTP] {Method} {Uri}", message.Request.Method, message.Request.Uri);
+        foreach (var header in message.Request.Headers)
+        {
+            var val = header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
+                ? header.Value?[..Math.Min(header.Value.Length, 30)] + "..."
+                : header.Value;
+            _logger.LogWarning("[NyxIdLLM.HTTP]   {Key}: {Value}", header.Key, val);
+        }
+    }
+
+    private void LogResponse(System.ClientModel.Primitives.PipelineMessage message)
+    {
+        var status = message.Response?.Status;
+        _logger.LogWarning("[NyxIdLLM.HTTP] Response: {Status}", status);
+        if (status is >= 400)
+        {
+            try
+            {
+                using var reader = new StreamReader(message.Response!.ContentStream!, leaveOpen: true);
+                var body = reader.ReadToEnd();
+                message.Response.ContentStream!.Position = 0;
+                _logger.LogWarning("[NyxIdLLM.HTTP] Response body: {Body}", body);
+            }
+            catch
+            {
+                // best-effort
+            }
+        }
     }
 }
