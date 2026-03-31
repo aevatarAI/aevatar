@@ -630,35 +630,6 @@ function createEmptyStudioSettings(): StudioSettingsState {
   };
 }
 
-function createProviderDraft(
-  providerTypeId: string,
-  providerTypes: ProviderTypeOption[],
-  existingProviders: ProviderDraft[],
-): ProviderDraft {
-  const profile = providerTypes.find(item => item.id === providerTypeId) || providerTypes[0] || {
-    id: providerTypeId || 'openai',
-    displayName: providerTypeId || 'Provider',
-    category: 'configured',
-    description: '',
-    defaultEndpoint: '',
-    defaultModel: '',
-    recommended: false,
-  };
-
-  return {
-    key: `provider_${crypto.randomUUID()}`,
-    providerName: createUniqueProviderName(profile.id, existingProviders),
-    providerType: profile.id,
-    displayName: profile.displayName,
-    category: profile.category,
-    description: profile.description,
-    endpoint: profile.defaultEndpoint,
-    model: profile.defaultModel,
-    apiKey: '',
-    apiKeyConfigured: false,
-  };
-}
-
 function getFixedProviderName(providerType: string) {
   return providerType.trim().toLowerCase() === 'nyxid' ? 'nyxid' : '';
 }
@@ -681,23 +652,6 @@ function toProviderDraft(item: any, providerTypes: ProviderTypeOption[]): Provid
     apiKey: item?.apiKey || '',
     apiKeyConfigured: Boolean(item?.apiKeyConfigured),
   };
-}
-
-function createUniqueProviderName(providerType: string, providers: ProviderDraft[]) {
-  const fixed = getFixedProviderName(providerType);
-  if (fixed) {
-    return fixed;
-  }
-
-  const normalizedBase = (providerType || 'provider').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
-  const used = new Set(providers.map(provider => provider.providerName.trim().toLowerCase()));
-  let index = 1;
-  let candidate = `${normalizedBase}-main`;
-  while (used.has(candidate)) {
-    index += 1;
-    candidate = `${normalizedBase}-${index}`;
-  }
-  return candidate;
 }
 
 function createUniqueRoleId(existingRoles: RoleState[], base = 'role') {
