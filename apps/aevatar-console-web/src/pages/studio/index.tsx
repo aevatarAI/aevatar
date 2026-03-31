@@ -738,18 +738,13 @@ function createSettingsDraft(
 
 function normalizeSettingsDraftForHostMode(
   settings: StudioSettingsDraft | null | undefined,
-  hostMode: 'embedded' | 'proxy',
+  _hostMode: 'embedded' | 'proxy',
 ): StudioSettingsDraft | null {
   if (!settings) {
     return null;
   }
 
-  return hostMode === 'proxy'
-    ? settings
-    : {
-        ...settings,
-        runtimeBaseUrl: '',
-      };
+  return settings;
 }
 
 function createProviderDraft(
@@ -3026,8 +3021,7 @@ const StudioPage: React.FC = () => {
     setSettingsNotice(null);
     try {
       const response = await studioApi.saveSettings({
-        runtimeBaseUrl:
-          studioHostMode === 'proxy' ? settingsDraft.runtimeBaseUrl : undefined,
+        runtimeBaseUrl: settingsDraft.runtimeBaseUrl,
         defaultProviderName: settingsDraft.defaultProviderName,
         providers: settingsDraft.providers.map((provider) => ({
           providerName: provider.providerName,
@@ -3084,11 +3078,9 @@ const StudioPage: React.FC = () => {
     setRuntimeTestResult(null);
     try {
       const response =
-        studioHostMode === 'proxy'
-          ? await studioApi.testRuntimeConnection({
+        await studioApi.testRuntimeConnection({
               runtimeBaseUrl: settingsDraft.runtimeBaseUrl,
-            })
-          : await studioApi.testRuntimeConnection({});
+            });
       setRuntimeTestResult(response);
     } catch (error) {
       setSettingsNotice({

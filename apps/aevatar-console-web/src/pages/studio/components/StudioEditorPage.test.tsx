@@ -47,7 +47,7 @@ const connectorsCatalog = {
 };
 
 const workspaceSettings = {
-  runtimeBaseUrl: 'http://127.0.0.1:5100',
+  runtimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
   directories: [
     {
       directoryId: 'dir-1',

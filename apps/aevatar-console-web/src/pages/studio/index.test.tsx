@@ -213,7 +213,7 @@ function resetMockState(): void {
     draft: null,
   };
   mockSettings = {
-    runtimeBaseUrl: "http://127.0.0.1:5100",
+    runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
     defaultProviderName: "tornado",
     providerTypes: [
       {
@@ -234,7 +234,7 @@ function resetMockState(): void {
         category: "llm",
         description: "Local provider",
         model: "gpt-test",
-        endpoint: "http://127.0.0.1:5100",
+        endpoint: "https://aevatar-console-backend-api.aevatar.ai",
         apiKey: "",
         apiKeyConfigured: true,
       },
@@ -286,7 +286,7 @@ jest.mock("@/shared/studio/api", () => ({
       providerDisplayName: "NyxID",
     })),
     getWorkspaceSettings: jest.fn(async () => ({
-      runtimeBaseUrl: "http://127.0.0.1:5100",
+      runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
       directories: [
         {
           directoryId: "dir-1",
@@ -485,7 +485,7 @@ jest.mock("@/shared/studio/api", () => ({
         executionId: "execution-2",
         workflowName: input.workflowName,
         prompt: input.prompt,
-        runtimeBaseUrl: "http://127.0.0.1:5100",
+        runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
         status: "running",
         startedAtUtc: "2026-03-18T00:06:00Z",
         completedAtUtc: null,
@@ -598,7 +598,7 @@ jest.mock("@/shared/studio/api", () => ({
       executionId,
       workflowName: "workspace-demo",
       prompt: "Run the demo workflow.",
-      runtimeBaseUrl: "http://127.0.0.1:5100",
+      runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
       status: "stopped",
       startedAtUtc: "2026-03-18T00:00:00Z",
       completedAtUtc: "2026-03-18T00:07:00Z",
@@ -766,7 +766,7 @@ jest.mock("@/shared/studio/api", () => ({
       })
     ),
     addWorkflowDirectory: jest.fn(async () => ({
-      runtimeBaseUrl: "http://127.0.0.1:5100",
+      runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
       directories: [
         {
           directoryId: "dir-1",

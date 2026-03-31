@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
@@ -23,6 +24,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
@@ -1007,6 +1009,23 @@ public static class ScopeServiceEndpoints
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+
+        // Forward the user's preferred model from their config so the LLM provider
+        // uses the correct model (e.g. deepseek-chat) instead of a hardcoded default.
+        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+        if (userConfigStore != null)
+        {
+            try
+            {
+                var userConfig = await userConfigStore.GetAsync(ct);
+                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                    chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+            }
+            catch
+            {
+                // Best-effort; fall back to provider default if config unavailable.
+            }
+        }
 
         var envelope = new EventEnvelope
         {

@@ -456,6 +456,19 @@ export default function GAgentPage() {
                     Creates an ad-hoc actor and sends the prompt directly. Does not affect scope binding.
                   </p>
                 </div>
+
+                {/* Ornn Skills info */}
+                <div className="border-t border-[#E6E3DE] pt-4">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Available Tools</div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-lg px-3 py-1.5 text-[12px] font-medium border bg-violet-50 border-violet-200 text-violet-700">ornn_search_skills</span>
+                    <span className="rounded-lg px-3 py-1.5 text-[12px] font-medium border bg-violet-50 border-violet-200 text-violet-700">ornn_use_skill</span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    Ornn skill tools are automatically available. Agents can search and load skills from your Ornn library.
+                    <a href="https://ornn.chrono-ai.fun" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline ml-1">Manage skills on Ornn &rarr;</a>
+                  </p>
+                </div>
               </div>
 
               {/* Run output */}

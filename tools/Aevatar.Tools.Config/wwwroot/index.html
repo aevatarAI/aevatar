@@ -57,6 +57,14 @@
         </div>
 
         <div class="nav-section">
+          <div class="nav-section-title">integrations</div>
+          <div class="nav-item" data-view="ornn" id="navOrnn">
+            <span class="nav-icon">🧩</span>
+            <span class="nav-label">Ornn Skills</span>
+          </div>
+        </div>
+
+        <div class="nav-section">
           <div class="nav-section-title">workflows/</div>
           <div class="nav-item" data-view="agents" id="navAgents">
             <span class="nav-icon">🤖</span>
@@ -514,6 +522,41 @@
 
           <div class="hint" style="margin-top: 16px;">
             Each file defines one workflow YAML that can be loaded by Aevatar runtime.
+          </div>
+        </div>
+      </div>
+
+      <!-- ORNN SKILLS VIEW -->
+      <div id="viewOrnn" class="hidden">
+        <div class="topbar">
+          <button class="icon-btn" id="ornnBackBtn" title="Back">←</button>
+          <div class="title">Ornn Skills Platform</div>
+          <div class="spacer"></div>
+          <button class="icon-btn" id="ornnCloseBtn" title="Close">✕</button>
+        </div>
+        <div class="form">
+          <div class="subtitle">
+            Connect your Ornn skill library. Skills are automatically available to all agents via
+            <span class="mono">ornn_search_skills</span> and <span class="mono">ornn_use_skill</span> tools.
+          </div>
+
+          <label>Ornn Base URL</label>
+          <input id="ornnBaseUrlInput" type="text" placeholder="https://ornn.chrono-ai.fun" />
+
+          <div class="actions">
+            <button class="btn primary" id="ornnSaveBtn" type="button">Save</button>
+            <button class="btn" id="ornnTestBtn" type="button">Test</button>
+            <a id="ornnOpenLink" href="https://ornn.chrono-ai.fun" target="_blank" rel="noopener noreferrer" class="btn" style="text-decoration:none; text-align:center;">Open Ornn Platform ↗</a>
+          </div>
+
+          <div id="ornnMsg" class="msg"></div>
+
+          <div id="ornnSkillsList" class="list" style="margin-top: 16px;"></div>
+
+          <div class="hint" style="margin-top: 16px;">
+            Stored at <span class="mono">Ornn:BaseUrl</span> in config.json (not secrets).
+            <br />
+            To create, edit, or manage skills, use the Ornn platform directly.
           </div>
         </div>
       </div>

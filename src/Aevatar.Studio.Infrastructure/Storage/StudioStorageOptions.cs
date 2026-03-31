@@ -5,7 +5,7 @@ public sealed class StudioStorageOptions
     public string RootDirectory { get; set; } =
         Path.Combine(StudioStoragePathHelpers.ResolveDefaultAevatarHomeDirectory(), "studio");
 
-    public string DefaultRuntimeBaseUrl { get; set; } = "http://127.0.0.1:5100";
+    public string DefaultRuntimeBaseUrl { get; set; } = "https://aevatar-console-backend-api.aevatar.ai";
 
     public bool ForceLocalRuntime { get; set; }
 }

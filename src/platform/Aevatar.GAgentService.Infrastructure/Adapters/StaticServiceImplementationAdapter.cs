@@ -1,3 +1,4 @@
+using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Core.Ports;
@@ -6,6 +7,33 @@ namespace Aevatar.GAgentService.Infrastructure.Adapters;
 
 public sealed class StaticServiceImplementationAdapter : IServiceImplementationAdapter
 {
+    /// <summary>
+    /// Resolves a type by name, searching all loaded assemblies if <see cref="Type.GetType"/> fails.
+    /// </summary>
+    private static Type? ResolveType(string typeName)
+    {
+        var type = Type.GetType(typeName, throwOnError: false);
+        if (type is not null)
+            return type;
+
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic) continue;
+            try
+            {
+                type = assembly.GetType(typeName);
+                if (type is not null)
+                    return type;
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        return null;
+    }
+
     public ServiceImplementationKind ImplementationKind => ServiceImplementationKind.Static;
 
     public Task<PreparedServiceRevisionArtifact> PrepareRevisionAsync(
@@ -21,7 +49,7 @@ public sealed class StaticServiceImplementationAdapter : IServiceImplementationA
         if (spec.Endpoints.Count == 0)
             throw new InvalidOperationException("static endpoints are required.");
 
-        var actorType = Type.GetType(spec.ActorTypeName, throwOnError: false);
+        var actorType = ResolveType(spec.ActorTypeName);
         if (actorType == null)
             throw new InvalidOperationException($"Static actor type '{spec.ActorTypeName}' was not found.");
         if (!typeof(IAgent).IsAssignableFrom(actorType))

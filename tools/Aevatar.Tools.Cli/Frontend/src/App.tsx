@@ -60,7 +60,6 @@ import * as api from './api';
 import ScriptsStudio from './ScriptsStudio';
 import * as nyxid from './auth/nyxid';
 import ScopePage from './runtime/ScopePage';
-import RuntimePage from './runtime/RuntimePage';
 import GAgentPage from './runtime/GAgentPage';
 import ConfigExplorerPage from './config-explorer/ConfigExplorerPage';
 import {
@@ -142,17 +141,17 @@ type DirectorySummary = {
 };
 
 type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'gagents' | 'scope' | 'services' | 'settings' | 'config-explorer';
+type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'gagents' | 'scope' | 'settings' | 'config-explorer';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
-type SettingsSection = 'runtime' | 'llm' | 'cloud-config' | 'appearance';
+type SettingsSection = 'runtime' | 'cloud-config' | 'skills' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
 type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'services', 'settings', 'config-explorer'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'services', 'config-explorer'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'scope', 'settings', 'config-explorer'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'config-explorer'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -206,6 +205,9 @@ type ProviderDraft = {
 
 type StudioSettingsState = {
   runtimeBaseUrl: string;
+  localRuntimeUrl: string;
+  runtimeMode: 'remote' | 'local';
+  ornnBaseUrl: string;
   appearanceTheme: string;
   colorMode: 'light' | 'dark';
   secretsFilePath: string;
@@ -242,8 +244,9 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
   },
 ];
 
-const DEFAULT_RUNTIME_BASE_URL =
-  typeof window === 'undefined' ? 'http://127.0.0.1:5100' : window.location.origin;
+const DEFAULT_REMOTE_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
+const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:5080';
+const DEFAULT_RUNTIME_BASE_URL = DEFAULT_REMOTE_RUNTIME_URL;
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
 const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
 
@@ -609,9 +612,14 @@ function formatExecutionLogsClipboard(trace: ExecutionTrace | null) {
   return trace.logs.map(log => formatExecutionLogClipboard(log)).join('\n\n---\n\n');
 }
 
+const DEFAULT_ORNN_BASE_URL = 'https://ornn.chrono-ai.fun';
+
 function createEmptyStudioSettings(): StudioSettingsState {
   return {
-    runtimeBaseUrl: DEFAULT_RUNTIME_BASE_URL,
+    runtimeBaseUrl: DEFAULT_REMOTE_RUNTIME_URL,
+    localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
+    runtimeMode: 'remote',
+    ornnBaseUrl: DEFAULT_ORNN_BASE_URL,
     appearanceTheme: 'blue',
     colorMode: 'light',
     secretsFilePath: '',
@@ -954,6 +962,9 @@ function App() {
   const [askAiReasoning, setAskAiReasoning] = useState('');
   const [askAiGeneratedYaml, setAskAiGeneratedYaml] = useState('');
   const [askAiPending, setAskAiPending] = useState(false);
+  const [ornnTestState, setOrnnTestState] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ status: 'idle', message: '' });
+  const [ornnSkillsCache, setOrnnSkillsCache] = useState<api.OrnnSkillSummary[]>([]);
+  const [ornnSkillsLoading, setOrnnSkillsLoading] = useState(false);
   const [runtimeTestState, setRuntimeTestState] = useState<{
     status: 'idle' | 'testing' | 'success' | 'error';
     message: string;
@@ -1596,8 +1607,14 @@ function App() {
       }
     }
 
+    const savedRuntimeUrl = payload?.runtimeBaseUrl || DEFAULT_REMOTE_RUNTIME_URL;
+    const savedLocalUrl = DEFAULT_LOCAL_RUNTIME_URL;
+
     setSettingsState({
-      runtimeBaseUrl: payload?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL,
+      runtimeBaseUrl: savedRuntimeUrl,
+      localRuntimeUrl: savedLocalUrl,
+      runtimeMode: 'remote',
+      ornnBaseUrl: payload?.ornnBaseUrl || DEFAULT_ORNN_BASE_URL,
       appearanceTheme: payload?.appearanceTheme || 'blue',
       colorMode: payload?.colorMode === 'dark' ? 'dark' : 'light',
       secretsFilePath: payload?.secretsFilePath || '',
@@ -1610,6 +1627,26 @@ function App() {
       status: 'idle',
       message: '',
     });
+
+    // Auto-probe local runtime and switch if reachable
+    probeLocalRuntime(savedLocalUrl).then(reachable => {
+      setSettingsState(prev => ({
+        ...prev,
+        runtimeMode: reachable ? 'local' : 'remote',
+      }));
+    });
+  }
+
+  async function probeLocalRuntime(localUrl: string): Promise<boolean> {
+    try {
+      const response = await fetch(localUrl.replace(/\/+$/, '') + '/api/health', {
+        method: 'GET',
+        signal: AbortSignal.timeout(3000),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
   }
 
   function hydrateConnectorCatalog(payload: any) {
@@ -2881,8 +2918,11 @@ function App() {
         ? api.userConfig.save({ defaultModel: nyxIdProvider.model.trim() }).catch(() => {})
         : Promise.resolve();
 
+      const activeRuntimeUrl = settingsState.runtimeMode === 'local'
+        ? settingsState.localRuntimeUrl
+        : settingsState.runtimeBaseUrl;
       const response = await api.settings.save({
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        runtimeBaseUrl: activeRuntimeUrl,
         appearanceTheme: settingsState.appearanceTheme,
         colorMode: settingsState.colorMode,
         defaultProviderName: settingsState.defaultProviderName || null,
@@ -2925,25 +2965,27 @@ function App() {
     }
   }
 
-  async function handleTestRuntime() {
+  async function handleTestRuntime(targetUrl?: string) {
+    const urlToTest = targetUrl
+      ?? (settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.runtimeBaseUrl);
     try {
       setRuntimeTestState({
         status: 'testing',
-        message: 'Testing runtime connectivity...',
+        message: `Testing ${urlToTest} ...`,
       });
 
       const response = await api.settings.testRuntime({
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        runtimeBaseUrl: urlToTest,
       });
 
       setRuntimeTestState({
         status: response?.reachable ? 'success' : 'error',
-        message: response?.message || (response?.reachable ? 'Connected successfully.' : 'Failed to reach runtime.'),
+        message: response?.message || (response?.reachable ? `Connected successfully (${urlToTest}).` : `Failed to reach ${urlToTest}.`),
       });
     } catch (error: any) {
       setRuntimeTestState({
         status: 'error',
-        message: error?.message || 'Failed to reach runtime.',
+        message: error?.message || `Failed to reach ${urlToTest}.`,
       });
     }
   }
@@ -2956,7 +2998,7 @@ function App() {
         provider.providerName.trim().toLowerCase() === fixedName);
       if (existing) {
         setSelectedProviderKey(existing.key);
-        openSettingsPage('llm');
+        openSettingsPage('runtime');
         return;
       }
     }
@@ -2968,7 +3010,7 @@ function App() {
       defaultProviderName: prev.defaultProviderName || provider.providerName,
     }));
     setSelectedProviderKey(provider.key);
-    openSettingsPage('llm');
+    openSettingsPage('runtime');
   }
 
   function updateProvider(providerKey: string, updater: (provider: ProviderDraft) => ProviderDraft) {
@@ -4123,12 +4165,6 @@ function App() {
             icon={<Bot size={18} />}
             onClick={() => setWorkspacePage('gagents')}
           />
-          <RailButton
-            active={workspacePage === 'services'}
-            label="Services"
-            icon={<Boxes size={18} />}
-            onClick={() => setWorkspacePage('services')}
-          />
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-3">
@@ -4376,8 +4412,6 @@ function App() {
           <GAgentPage />
         ) : workspacePage === 'scope' ? (
           <ScopePage />
-        ) : workspacePage === 'services' ? (
-          <RuntimePage />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">
@@ -4399,18 +4433,18 @@ function App() {
                     onClick={() => setSettingsSection('runtime')}
                   />
                   <SettingsNavButton
-                    active={settingsSection === 'llm'}
-                    icon={<Bot size={16} />}
-                    title="LLM"
-                    description="Providers from secrets.json"
-                    onClick={() => setSettingsSection('llm')}
-                  />
-                  <SettingsNavButton
                     active={settingsSection === 'cloud-config'}
                     icon={<Database size={16} />}
                     title="Cloud Config"
                     description="Per-user settings on NyxID"
                     onClick={() => setSettingsSection('cloud-config')}
+                  />
+                  <SettingsNavButton
+                    active={settingsSection === 'skills'}
+                    icon={<Wrench size={16} />}
+                    title="Skills"
+                    description="Ornn skill platform"
+                    onClick={() => setSettingsSection('skills')}
                   />
                   <SettingsNavButton
                     active={settingsSection === 'appearance'}
@@ -4431,49 +4465,56 @@ function App() {
                     </div>
 
                     <div className="settings-section-card space-y-5">
-                      {appContext.hostMode === 'embedded' ? (
-                        <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3 text-[13px] text-gray-600">
-                          Embedded mode runs against the in-memory local mainnet hosted by `aevatar app`.
-                        </div>
-                      ) : null}
+                      {/* Mode toggle */}
+                      <div className="flex gap-2">
+                        <button
+                          className={settingsState.runtimeMode === 'remote' ? 'solid-action justify-center' : 'ghost-action justify-center'}
+                          onClick={() => { setSettingsState(prev => ({ ...prev, runtimeMode: 'remote' })); setRuntimeTestState({ status: 'idle', message: '' }); }}
+                        >
+                          Remote
+                        </button>
+                        <button
+                          className={settingsState.runtimeMode === 'local' ? 'solid-action justify-center' : 'ghost-action justify-center'}
+                          onClick={() => { setSettingsState(prev => ({ ...prev, runtimeMode: 'local' })); setRuntimeTestState({ status: 'idle', message: '' }); }}
+                        >
+                          Local
+                        </button>
+                      </div>
 
-                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
-                        <div>
-                          <label className="field-label">
-                            {appContext.hostMode === 'embedded' ? 'Local mainnet URL' : 'Runtime base URL'}
-                          </label>
-                          <input
-                            className="panel-input mt-1"
-                            value={settingsState.runtimeBaseUrl}
-                            onChange={event => {
-                              const value = event.target.value;
-                              setSettingsState(prev => ({ ...prev, runtimeBaseUrl: value }));
-                              setRuntimeTestState({
-                                status: 'idle',
-                                message: '',
-                              });
-                            }}
-                            placeholder={DEFAULT_RUNTIME_BASE_URL}
-                            readOnly={appContext.hostMode === 'embedded'}
-                          />
-                        </div>
+                      {/* Active URL — only show the one matching the current mode */}
+                      <div>
+                        <label className="field-label">
+                          {settingsState.runtimeMode === 'local' ? 'Local runtime URL' : 'Remote runtime URL'}
+                        </label>
+                        <input
+                          className="panel-input mt-1"
+                          value={settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.runtimeBaseUrl}
+                          onChange={event => {
+                            const value = event.target.value;
+                            setSettingsState(prev =>
+                              prev.runtimeMode === 'local'
+                                ? { ...prev, localRuntimeUrl: value }
+                                : { ...prev, runtimeBaseUrl: value },
+                            );
+                            setRuntimeTestState({ status: 'idle', message: '' });
+                          }}
+                          placeholder={settingsState.runtimeMode === 'local' ? DEFAULT_LOCAL_RUNTIME_URL : DEFAULT_REMOTE_RUNTIME_URL}
+                        />
+                      </div>
+
+                      <div className="flex gap-3">
                         <button
                           onClick={() => { void handleTestRuntime(); }}
                           className="ghost-action justify-center"
                           disabled={runtimeTestState.status === 'testing'}
                         >
-                          {runtimeTestState.status === 'testing'
-                            ? 'Testing...'
-                            : appContext.hostMode === 'embedded'
-                              ? 'Test local mainnet'
-                              : 'Test connection'}
+                          {runtimeTestState.status === 'testing' ? 'Testing...' : 'Test connection'}
                         </button>
                         <button
                           onClick={handleSaveSettings}
                           className="solid-action justify-center"
-                          disabled={appContext.hostMode === 'embedded'}
                         >
-                          {appContext.hostMode === 'embedded' ? 'Managed locally' : 'Save runtime'}
+                          Save runtime
                         </button>
                       </div>
 
@@ -4486,7 +4527,7 @@ function App() {
                             <SettingsStatusPill status={runtimeTestState.status} />
                           </div>
                           <div className="text-[12px] text-gray-500 mt-2 break-all">
-                            {settingsState.runtimeBaseUrl}
+                            {settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.runtimeBaseUrl}
                           </div>
                           <div className="text-[13px] text-gray-600 mt-3">
                             {runtimeTestState.message}
@@ -4495,243 +4536,43 @@ function App() {
                       ) : null}
                     </div>
                   </div>
-                ) : settingsSection === 'llm' ? (
-                  <div className="space-y-8">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="panel-eyebrow">Settings</div>
-                        <div className="panel-title">LLM</div>
-                      </div>
-                      <button onClick={handleSaveSettings} className="solid-action">
-                        Save providers
-                      </button>
-                    </div>
-
-                    <div className="settings-section-card space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="text-[12px] text-gray-500 break-all">
-                          Secrets · {settingsState.secretsFilePath || '~/.aevatar/secrets.json'}
-                        </div>
-                        <button
-                          onClick={() => handleCreateProvider()}
-                          className="solid-action !px-3"
-                        >
-                          <Plus size={14} /> Add provider
-                        </button>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="search-field flex-1 min-w-[260px]">
-                          <Search size={14} className="text-gray-400" />
-                          <input
-                            className="search-input"
-                            placeholder="Search providers"
-                            value={providerSearch}
-                            onChange={event => setProviderSearch(event.target.value)}
-                          />
-                        </div>
-                        {getFeaturedProviderTypes(settingsState.providerTypes).slice(0, 5).map(type => (
-                          <button
-                            key={type.id}
-                            onClick={() => handleCreateProvider(type.id)}
-                            className="chip-button"
-                          >
-                            {type.displayName}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-                        <div className="space-y-2 rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-                          {filteredProviders.length === 0 ? (
-                            <div className="empty-card">No providers matched</div>
-                          ) : filteredProviders.map(provider => (
-                            <button
-                              key={provider.key}
-                              onClick={() => setSelectedProviderKey(provider.key)}
-                              className="w-full text-left rounded-[18px] border border-[#EEEAE4] bg-white px-3 py-3 transition-colors hover:bg-[#FAF8F4]"
-                              style={selectedProviderKey === provider.key ? selectedSurfaceStyle : undefined}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-[13px] font-semibold text-gray-800 truncate">{provider.providerName}</div>
-                                <span
-                                  className="text-[10px] uppercase tracking-wide text-gray-400"
-                                  style={settingsState.defaultProviderName === provider.providerName ? { color: 'var(--accent-text)' } : undefined}
-                                >
-                                  {settingsState.defaultProviderName === provider.providerName ? 'default' : provider.providerType}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-gray-400 mt-1 truncate">{provider.model || provider.displayName}</div>
-                            </button>
-                          ))}
-                        </div>
-
-                        {selectedProvider ? (
-                          <div className="space-y-3 rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-5">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-[15px] font-semibold text-gray-800">{selectedProvider.providerName || 'Provider'}</div>
-                                <div className="text-[11px] text-gray-400">{selectedProvider.displayName}</div>
-                              </div>
-                              <button
-                                onClick={() => handleDeleteProvider(selectedProvider.key)}
-                                className="panel-icon-button text-red-500 hover:bg-red-50"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-
-                            <InputField
-                              label="Instance name"
-                              value={selectedProvider.providerName}
-                              disabled={usesFixedProviderName(selectedProvider.providerType)}
-                              onChange={value => {
-                                const previousName = selectedProvider.providerName;
-                                updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  providerName: value,
-                                }));
-                                setSettingsState(prev => ({
-                                  ...prev,
-                                  defaultProviderName: prev.defaultProviderName === previousName ? value : prev.defaultProviderName,
-                                }));
-                              }}
-                            />
-                            {usesFixedProviderName(selectedProvider.providerType) ? (
-                              <div className="text-[11px] text-gray-400 -mt-1">
-                                NyxID Gateway uses the fixed provider name <code>nyxid</code>. Manage your LLM API keys on NyxID.
-                              </div>
-                            ) : null}
-
-                            <div>
-                              <label className="field-label">Provider type</label>
-                              <select
-                                className="panel-input mt-1"
-                                value={selectedProvider.providerType}
-                                onChange={event => {
-                                  const nextType = event.target.value;
-                                  const previousName = selectedProvider.providerName;
-                                  updateProvider(selectedProvider.key, provider => {
-                                    const previousType = providerTypeMap.get(provider.providerType);
-                                    const nextProfile = providerTypeMap.get(nextType);
-                                    const shouldReplaceEndpoint = !provider.endpoint || provider.endpoint === (previousType?.defaultEndpoint || '');
-                                    const shouldReplaceModel = !provider.model || provider.model === (previousType?.defaultModel || '');
-                                    const nextProviderName = resolveProviderNameForType(
-                                      nextType,
-                                      provider.key,
-                                      provider.providerName,
-                                      settingsState.providers,
-                                    );
-                                    return {
-                                      ...provider,
-                                      providerName: nextProviderName,
-                                      providerType: nextType,
-                                      displayName: nextProfile?.displayName || nextType,
-                                      category: nextProfile?.category || 'configured',
-                                      description: nextProfile?.description || '',
-                                      endpoint: shouldReplaceEndpoint ? (nextProfile?.defaultEndpoint || '') : provider.endpoint,
-                                      model: shouldReplaceModel ? (nextProfile?.defaultModel || '') : provider.model,
-                                    };
-                                  });
-                                  const nextProviderName = resolveProviderNameForType(
-                                    nextType,
-                                    selectedProvider.key,
-                                    selectedProvider.providerName,
-                                    settingsState.providers,
-                                  );
-                                  setSettingsState(prev => ({
-                                    ...prev,
-                                    defaultProviderName: prev.defaultProviderName === previousName ? nextProviderName : prev.defaultProviderName,
-                                  }));
-                                }}
-                              >
-                                {settingsState.providerTypes.map(type => (
-                                  <option key={type.id} value={type.id}>{type.displayName}</option>
-                                ))}
-                              </select>
-                            </div>
-
-                            {usesFixedProviderName(selectedProvider.providerType) ? (
-                              <>
-                                <InputField
-                                  label="Default model"
-                                  value={selectedProvider.model}
-                                  onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                    ...provider,
-                                    model: value,
-                                  }))}
-                                />
-                                <div className="rounded-[14px] border border-[#D6E4F0] bg-[#F0F6FB] px-4 py-3 text-[12px] text-[#3B6B96] leading-relaxed">
-                                  NyxID Gateway uses your NyxID login credentials to access the LLM providers you've connected on NyxID.
-                                  No API key or endpoint configuration is needed here. The model name determines which provider is used
-                                  (e.g. <code className="bg-white/60 px-1 rounded">gpt-4o</code> → OpenAI, <code className="bg-white/60 px-1 rounded">claude-sonnet-4-5-20250929</code> → Anthropic).
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div className="grid grid-cols-2 gap-2">
-                                  <InputField
-                                    label="Model"
-                                    value={selectedProvider.model}
-                                    onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                      ...provider,
-                                      model: value,
-                                    }))}
-                                  />
-                                  <InputField
-                                    label="Endpoint"
-                                    value={selectedProvider.endpoint}
-                                    onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                      ...provider,
-                                      endpoint: value,
-                                    }))}
-                                  />
-                                </div>
-
-                                <TextAreaField
-                                  label="API key"
-                                  value={selectedProvider.apiKey}
-                                  rows={4}
-                                  onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                    ...provider,
-                                    apiKey: value,
-                                    apiKeyConfigured: Boolean(value.trim()),
-                                  }))}
-                                />
-                              </>
-                            )}
-
-                            <label
-                              className="inline-flex items-center gap-2 rounded-[14px] border border-[#E5E1DA] bg-white px-3 py-2 text-[12px] text-gray-600"
-                              style={settingsState.defaultProviderName === selectedProvider.providerName ? accentToggleStyle : undefined}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={settingsState.defaultProviderName === selectedProvider.providerName}
-                                onChange={event => setSettingsState(prev => ({
-                                  ...prev,
-                                  defaultProviderName: event.target.checked ? selectedProvider.providerName : '',
-                                }))}
-                              />
-                              Use as default
-                            </label>
-                          </div>
-                        ) : (
-                          <EmptyPanel
-                            icon={<Bot size={18} className="text-gray-300" />}
-                            title="No provider selected"
-                            copy="Add a provider or choose one from the list."
-                          />
-                        )}
-                      </div>
-                    </div>
-                  </div>
                 ) : settingsSection === 'cloud-config' ? (
                   <CloudConfigSection
                     userConfigState={userConfigState}
                     setUserConfigState={setUserConfigState}
                     flash={flash}
                   />
+                ) : settingsSection === 'skills' ? (
+                  <div className="max-w-[920px] space-y-8">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="panel-eyebrow">Settings</div>
+                        <div className="panel-title">Skills</div>
+                        <div className="text-[13px] text-gray-500 mt-1">Connect to your Ornn skill library. Skills are automatically available to all agents via tool calling.</div>
+                      </div>
+                      <button onClick={handleSaveSettings} className="solid-action">Save</button>
+                    </div>
+                    <div className="settings-section-card space-y-5">
+                      <div className="section-heading">Ornn Platform</div>
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
+                        <div>
+                          <label className="field-label">Ornn Base URL</label>
+                          <input className="panel-input mt-1" value={settingsState.ornnBaseUrl} onChange={e => { setSettingsState(prev => ({ ...prev, ornnBaseUrl: e.target.value })); setOrnnTestState({ status: 'idle', message: '' }); }} placeholder={DEFAULT_ORNN_BASE_URL} />
+                        </div>
+                        <button onClick={async () => { setOrnnTestState({ status: 'testing', message: '' }); const ok = await api.ornn.checkHealth(settingsState.ornnBaseUrl || DEFAULT_ORNN_BASE_URL); setOrnnTestState(ok ? { status: 'success', message: 'Connected to Ornn.' } : { status: 'error', message: 'Cannot reach Ornn.' }); }} className="ghost-action justify-center" disabled={ornnTestState.status === 'testing'}>{ornnTestState.status === 'testing' ? 'Testing...' : 'Test connection'}</button>
+                        <a href={settingsState.ornnBaseUrl || DEFAULT_ORNN_BASE_URL} target="_blank" rel="noopener noreferrer" className="solid-action justify-center !no-underline">Open Ornn Platform</a>
+                      </div>
+                      {ornnTestState.status !== 'idle' ? (<div className="settings-status-card"><div className="flex items-center justify-between gap-3"><div className="text-[13px] font-semibold text-gray-800">{ornnTestState.status === 'success' ? 'Connected' : ornnTestState.status === 'testing' ? 'Testing...' : 'Failed'}</div><SettingsStatusPill status={ornnTestState.status} /></div><div className="text-[13px] text-gray-600 mt-2">{ornnTestState.message}</div></div>) : null}
+                      <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3 text-[13px] text-gray-600">Agents automatically get <strong>ornn_search_skills</strong> and <strong>ornn_use_skill</strong> tools. To manage skills, use the Ornn platform.</div>
+                    </div>
+                    <div className="settings-section-card space-y-5">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="section-heading">Your Skills</div>
+                        <button onClick={async () => { setOrnnSkillsLoading(true); try { const r = await api.ornn.searchSkills(settingsState.ornnBaseUrl || DEFAULT_ORNN_BASE_URL, '', 'mixed', 1, 100); setOrnnSkillsCache(r.items); } catch { flash('Failed to load skills.', 'error'); } finally { setOrnnSkillsLoading(false); } }} className="ghost-action text-[12px]" disabled={ornnSkillsLoading}>{ornnSkillsLoading ? 'Loading...' : 'Refresh'}</button>
+                      </div>
+                      {ornnSkillsCache.length === 0 ? (<div className="text-[13px] text-gray-400">{ornnSkillsLoading ? 'Loading...' : 'Click Refresh to load skills from Ornn.'}</div>) : (<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ornnSkillsCache.map(s => (<div key={s.guid || s.name} className="rounded-[14px] border border-[#EAE4DB] bg-white p-3 space-y-1"><div className="flex items-center justify-between gap-2"><div className="text-[13px] font-semibold text-gray-800 truncate">{s.name}</div><span className="text-[10px] uppercase tracking-wide text-gray-400">{s.isPrivate ? 'private' : 'public'}</span></div><div className="text-[12px] text-gray-500 line-clamp-2">{s.description}</div></div>))}</div>)}
+                    </div>
+                  </div>
                 ) : (
                   <div className="max-w-[920px] space-y-8">
                     <div className="flex items-start justify-between gap-4">

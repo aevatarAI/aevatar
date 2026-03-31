@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2, UserCircle, Pencil } from 'lucide-react';
 import type { ConfigStore } from '../useConfigStore';
 import type { RoleState } from '../../studio';
+import * as api from '../../api';
 import EditorDrawer from '../EditorDrawer';
 
 type Props = {
@@ -11,6 +12,13 @@ type Props = {
 
 export default function RolesEditor({ store, flash }: Props) {
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [ornnSkills, setOrnnSkills] = useState<api.OrnnSkillSummary[]>([]);
+
+  useEffect(() => {
+    // Try to load ornn skills on mount
+    const ornnUrl = (typeof window !== 'undefined' && localStorage.getItem('aevatar.ornnBaseUrl')) || 'https://ornn.chrono-ai.fun';
+    api.ornn.searchSkills(ornnUrl, '', 'mixed', 1, 100).then(r => setOrnnSkills(r.items)).catch(() => {});
+  }, []);
 
   const editingRole = editingKey ? store.roles.find(r => r.key === editingKey) : null;
 
@@ -121,6 +129,7 @@ export default function RolesEditor({ store, flash }: Props) {
             role={editingRole}
             onChange={patch => store.updateRole(editingRole.key, patch)}
             connectorNames={store.connectors.map(c => c.name)}
+            ornnSkills={ornnSkills}
           />
         )}
       </EditorDrawer>
@@ -132,8 +141,11 @@ function RoleForm(props: {
   role: RoleState;
   onChange: (patch: Partial<RoleState>) => void;
   connectorNames: string[];
+  ornnSkills: api.OrnnSkillSummary[];
 }) {
-  const { role, onChange, connectorNames } = props;
+  const { role, onChange, connectorNames, ornnSkills } = props;
+  const skillsMode = role.ornnSkillsMode || 'all';
+  const selectedSkills = role.ornnSelectedSkills || [];
 
   return (
     <div className="space-y-4">
@@ -190,6 +202,34 @@ function RoleForm(props: {
             onChange={e => onChange({ connectorsText: e.target.value })}
             placeholder="One connector name per line..."
           />
+        )}
+      </div>
+
+      <div>
+        <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Ornn Skills</label>
+        <div className="mt-2 flex items-center gap-2 mb-2">
+          <button type="button" onClick={() => onChange({ ornnSkillsMode: 'all', ornnSelectedSkills: [] })} className={`rounded-lg px-3 py-1.5 text-[12px] font-medium border transition-colors ${skillsMode === 'all' ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-white border-[#E6E3DE] text-gray-500 hover:bg-gray-50'}`}>All skills</button>
+          <button type="button" onClick={() => onChange({ ornnSkillsMode: 'selected' })} className={`rounded-lg px-3 py-1.5 text-[12px] font-medium border transition-colors ${skillsMode === 'selected' ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-white border-[#E6E3DE] text-gray-500 hover:bg-gray-50'}`}>Selected only</button>
+        </div>
+        {skillsMode === 'selected' ? (
+          ornnSkills.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {ornnSkills.map(skill => {
+                const name = skill.name || '';
+                const active = selectedSkills.includes(name);
+                return (
+                  <button key={skill.guid || name} type="button" onClick={() => {
+                    const next = active ? selectedSkills.filter(s => s !== name) : [...selectedSkills, name];
+                    onChange({ ornnSelectedSkills: next });
+                  }} className={`rounded-lg px-3 py-1.5 text-[12px] font-medium border transition-colors ${active ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-white border-[#E6E3DE] text-gray-500 hover:bg-gray-50'}`}>{name}</button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-[12px] text-gray-400">Load skills from Settings &rarr; Skills first</div>
+          )
+        ) : (
+          <div className="text-[12px] text-gray-400">All user Ornn skills are available to this role.</div>
         )}
       </div>
     </div>

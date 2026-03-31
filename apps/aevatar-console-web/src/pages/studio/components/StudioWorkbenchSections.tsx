@@ -5627,7 +5627,7 @@ export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
   onAddDirectory,
   onRemoveDirectory,
 }) => {
-  const canEditRuntime = hostMode === 'proxy';
+  const canEditRuntime = true;
   const canManageDirectories = workflowStorageMode === 'workspace';
   const runtimeBaseUrl =
     settingsDraft?.runtimeBaseUrl ?? workspaceSettings.data?.runtimeBaseUrl ?? '';

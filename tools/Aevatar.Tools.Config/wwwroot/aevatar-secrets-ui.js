@@ -126,7 +126,8 @@
     $("viewConfigJson") && $("viewConfigJson").classList.toggle("hidden", view !== "configjson");
     $("viewAgents") && $("viewAgents").classList.toggle("hidden", view !== "agents");
     $("viewAgentEdit") && $("viewAgentEdit").classList.toggle("hidden", view !== "agentedit");
-    
+    $("viewOrnn") && $("viewOrnn").classList.toggle("hidden", view !== "ornn");
+
     updateSidebarActive(view);
   }
 
@@ -143,6 +144,7 @@
       configjson: "navConfigRaw",
       agents: "navAgents",
       agentedit: "navAgents",
+      ornn: "navOrnn",
     };
     
     document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
@@ -909,6 +911,109 @@ steps:
     } catch (e) {
       setAgentEditMsg(e && e.message ? e.message : String(e), "err");
     }
+  }
+
+  // ─── Ornn Skills ───
+
+  function setOrnnMsg(msg, tone) {
+    const el = $("ornnMsg");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.className = "msg" + (tone ? " " + tone : "");
+  }
+
+  async function openOrnn() {
+    setView("ornn");
+    setOrnnMsg("");
+    // Load current Ornn:BaseUrl from config.json
+    try {
+      const res = await fetch("/api/ornn");
+      const json = await res.json().catch(() => ({}));
+      $("ornnBaseUrlInput").value = json.baseUrl || "";
+      const link = $("ornnOpenLink");
+      if (link) link.href = json.baseUrl || "https://ornn.chrono-ai.fun";
+    } catch {
+      $("ornnBaseUrlInput").value = "";
+    }
+    // Load skills preview
+    loadOrnnSkills();
+  }
+
+  async function loadOrnnSkills() {
+    const list = $("ornnSkillsList");
+    if (!list) return;
+    list.innerHTML = '<div class="item placeholder"><div class="item-main"><div class="item-desc">Loading skills from Ornn...</div></div></div>';
+
+    try {
+      const res = await fetch("/api/ornn/skills");
+      const json = await res.json().catch(() => ({}));
+      const items = json.items || [];
+
+      if (items.length === 0) {
+        list.innerHTML = '<div class="item placeholder"><div class="item-main"><div class="item-desc">No skills found. Create skills on the Ornn platform.</div></div></div>';
+        return;
+      }
+
+      list.innerHTML = items.map(skill => {
+        const vis = skill.isPrivate ? "🔒 private" : "🌐 public";
+        const cat = skill.metadata && skill.metadata.category ? skill.metadata.category : "";
+        const tags = skill.metadata && skill.metadata.tag ? skill.metadata.tag.join(", ") : "";
+        const desc = skill.description || "";
+        return `<div class="item">
+          <div class="item-main">
+            <div class="item-title">${escH(skill.name || "(unnamed)")}</div>
+            <div class="item-desc">${escH(desc)}</div>
+            <div class="item-meta">${escH(vis)}${cat ? " · " + escH(cat) : ""}${tags ? " · " + escH(tags) : ""}</div>
+          </div>
+        </div>`;
+      }).join("");
+    } catch (e) {
+      list.innerHTML = `<div class="item placeholder"><div class="item-main"><div class="item-desc">Failed to load: ${escH(e.message || String(e))}</div></div></div>`;
+    }
+  }
+
+  async function saveOrnn() {
+    const baseUrl = safeText($("ornnBaseUrlInput").value).trim();
+    try {
+      const res = await fetch("/api/ornn", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseUrl }),
+      });
+      const json = await res.json().catch(() => null);
+      if (json && json.ok) {
+        setOrnnMsg("Saved.", "ok");
+        const link = $("ornnOpenLink");
+        if (link) link.href = baseUrl || "https://ornn.chrono-ai.fun";
+        loadOrnnSkills();
+      } else {
+        setOrnnMsg(json && json.error ? json.error : "Save failed.", "err");
+      }
+    } catch (e) {
+      setOrnnMsg(e.message || String(e), "err");
+    }
+  }
+
+  async function testOrnn() {
+    const baseUrl = safeText($("ornnBaseUrlInput").value).trim() || "https://ornn.chrono-ai.fun";
+    setOrnnMsg("Testing...", "");
+    try {
+      const res = await fetch("/api/ornn/test?" + new URLSearchParams({ baseUrl }));
+      const json = await res.json().catch(() => ({}));
+      if (json.ok) {
+        setOrnnMsg("Connected to Ornn platform.", "ok");
+      } else {
+        setOrnnMsg(json.error || "Cannot reach Ornn. Check URL.", "err");
+      }
+    } catch (e) {
+      setOrnnMsg(e.message || String(e), "err");
+    }
+  }
+
+  function escH(str) {
+    const d = document.createElement("div");
+    d.textContent = str;
+    return d.innerHTML;
   }
 
   function updateSubmitEnabled() {
@@ -2144,6 +2249,11 @@ steps:
     if ($("navSecretsRaw")) $("navSecretsRaw").onclick = () => openRawJson();
     if ($("navConfigRaw")) $("navConfigRaw").onclick = () => openConfigJson();
     if ($("navAgents")) $("navAgents").onclick = () => openAgents();
+    if ($("navOrnn")) $("navOrnn").onclick = () => openOrnn();
+    if ($("ornnBackBtn")) $("ornnBackBtn").onclick = () => setView("list");
+    if ($("ornnCloseBtn")) $("ornnCloseBtn").onclick = () => setView("list");
+    if ($("ornnSaveBtn")) $("ornnSaveBtn").onclick = () => saveOrnn();
+    if ($("ornnTestBtn")) $("ornnTestBtn").onclick = () => testOrnn();
 
     $("toggleKeyBtn").onclick = () => {
       // Existing key draft: toggle reveal via API; draft mode toggles input type.

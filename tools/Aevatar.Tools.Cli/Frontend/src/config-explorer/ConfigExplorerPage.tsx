@@ -1,4 +1,4 @@
-import { Save } from 'lucide-react';
+import { Save, Loader2 } from 'lucide-react';
 import { useConfigStore } from './useConfigStore';
 import FileTree from './FileTree';
 import EditorPanel from './EditorPanel';
@@ -64,7 +64,10 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
         {/* Left: File Tree */}
         <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-4">
           {store.loading ? (
-            <div className="py-8 text-center text-[13px] text-gray-400">Loading...</div>
+            <div className="py-8 flex flex-col items-center justify-center gap-2 text-[13px] text-gray-400">
+              <Loader2 size={24} className="animate-spin text-gray-400" />
+              <span>Loading...</span>
+            </div>
           ) : (
             <FileTree
               scopeId={scopeId}
@@ -78,7 +81,10 @@ export default function ConfigExplorerPage({ scopeId, flash }: Props) {
         {/* Right: Editor */}
         <div className="min-h-0 overflow-y-auto p-6">
           {store.loading ? (
-            <div className="py-8 text-center text-[13px] text-gray-400">Loading...</div>
+            <div className="py-8 flex flex-col items-center justify-center gap-2 text-[13px] text-gray-400">
+              <Loader2 size={28} className="animate-spin text-gray-400" />
+              <span>Loading...</span>
+            </div>
           ) : (
             <EditorPanel store={store} flash={flash} />
           )}

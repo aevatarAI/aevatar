@@ -31,7 +31,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
         var storageOptions = options.Value.ResolveRootDirectory();
         _appDataDirectory = storageOptions.RootDirectory;
         _defaultRuntimeBaseUrl = string.IsNullOrWhiteSpace(storageOptions.DefaultRuntimeBaseUrl)
-            ? "http://127.0.0.1:5100"
+            ? "https://aevatar-console-backend-api.aevatar.ai"
             : storageOptions.DefaultRuntimeBaseUrl.Trim().TrimEnd('/');
         _forceLocalRuntime = storageOptions.ForceLocalRuntime;
         _aevatarHomeDirectory = ResolveAevatarHomeDirectory();
@@ -963,7 +963,7 @@ public sealed class FileStudioWorkspaceStore : IStudioWorkspaceStore
 
     private sealed class PersistedWorkspaceSettings
     {
-        public string RuntimeBaseUrl { get; set; } = "http://127.0.0.1:5100";
+        public string RuntimeBaseUrl { get; set; } = "https://aevatar-console-backend-api.aevatar.ai";
 
         public string AppearanceTheme { get; set; } = "blue";
 

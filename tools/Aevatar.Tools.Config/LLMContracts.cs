@@ -16,6 +16,7 @@ sealed record SetSecretRequest(string? Key, string? Value);
 sealed record RemoveSecretRequest(string? Key);
 sealed record WorkflowFileRequest(string? Content);
 sealed record AgentFileRequest(string? Content);
+sealed record OrnnConfigRequest(string? BaseUrl);
 
 enum LLMProviderKind
 {

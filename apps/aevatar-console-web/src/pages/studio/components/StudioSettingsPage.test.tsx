@@ -30,7 +30,7 @@ const providers: StudioProviderSettings[] = [
     category: 'llm',
     description: 'Default local provider',
     model: 'gpt-5.4',
-    endpoint: 'http://127.0.0.1:5100',
+    endpoint: 'https://aevatar-console-backend-api.aevatar.ai',
     apiKey: '',
     apiKeyConfigured: true,
   },
@@ -48,7 +48,7 @@ const providers: StudioProviderSettings[] = [
 ];
 
 const workspaceSettings: StudioWorkspaceSettings = {
-  runtimeBaseUrl: 'http://127.0.0.1:5100',
+  runtimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
   directories: [
     {
       directoryId: 'dir-1',
@@ -61,9 +61,9 @@ const workspaceSettings: StudioWorkspaceSettings = {
 
 function createBaseProps(overrides: Partial<SettingsProps> = {}): SettingsProps {
   const runtimeTestResult: StudioRuntimeTestResult = {
-    runtimeBaseUrl: 'http://127.0.0.1:5100',
+    runtimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
     reachable: true,
-    checkedUrl: 'http://127.0.0.1:5100/health',
+    checkedUrl: 'https://aevatar-console-backend-api.aevatar.ai/health',
     statusCode: 200,
     message: 'Runtime responded successfully',
   };
@@ -82,7 +82,7 @@ function createBaseProps(overrides: Partial<SettingsProps> = {}): SettingsProps 
       data: {},
     },
     settingsDraft: {
-      runtimeBaseUrl: 'http://127.0.0.1:5100',
+      runtimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
       defaultProviderName: 'tornado',
       providerTypes,
       providers,

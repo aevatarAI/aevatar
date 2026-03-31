@@ -15,7 +15,7 @@ function createProps(overrides = {}) {
       isError: false,
       error: null,
       data: {
-        runtimeBaseUrl: 'http://127.0.0.1:5100',
+        runtimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
         directories: [],
       },
     },

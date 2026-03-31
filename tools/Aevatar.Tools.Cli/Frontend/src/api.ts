@@ -424,6 +424,28 @@ export const scope = {
       }),
     }),
 
+  /** PUT /api/scopes/{scopeId}/binding — bind a static GAgent as default scope service */
+  bindGAgent: (
+    scopeId: string,
+    actorTypeName: string,
+    preferredActorId?: string,
+    displayName?: string,
+  ) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'gagent',
+        ...(displayName ? { displayName } : {}),
+        gagent: {
+          actorTypeName,
+          preferredActorId: preferredActorId || null,
+          endpoints: [
+            { endpointId: 'chat', displayName: 'Chat', kind: 'chat', requestTypeUrl: '', responseTypeUrl: '', description: '' },
+          ],
+        },
+      }),
+    }),
+
   /** POST /api/scopes/{scopeId}/workflow/draft-run — draft run with inline bundle, SSE */
   streamDraftRun: (
     scopeId: string,
@@ -553,6 +575,51 @@ export const gagent = {
 function enc(value: string) {
   return encodeURIComponent(value.trim());
 }
+
+/* ─── Ornn Skills Platform ─── */
+export type OrnnSkillSummary = {
+  guid?: string;
+  name?: string;
+  description?: string;
+  isPrivate?: boolean;
+  metadata?: { category?: string; tag?: string[] };
+};
+
+export type OrnnSearchResult = {
+  total: number;
+  totalPages: number;
+  page: number;
+  pageSize: number;
+  items: OrnnSkillSummary[];
+};
+
+export const ornn = {
+  /** Search skills on the Ornn platform directly (bearer token auth). */
+  searchSkills: async (
+    ornnBaseUrl: string,
+    query = '',
+    scope = 'mixed',
+    page = 1,
+    pageSize = 50,
+  ): Promise<OrnnSearchResult> => {
+    const url = `${ornnBaseUrl.replace(/\/+$/, '')}/api/web/skill-search?query=${encodeURIComponent(query)}&mode=keyword&scope=${encodeURIComponent(scope)}&page=${page}&pageSize=${pageSize}`;
+    const res = await fetch(url, { headers: { ...getAuthHeaders() } });
+    if (!res.ok) throw { status: res.status, message: `Ornn search failed: ${res.statusText}` };
+    const json = await res.json();
+    return json?.data || { total: 0, totalPages: 0, page: 1, pageSize, items: [] };
+  },
+
+  /** Check Ornn health / connectivity. */
+  checkHealth: async (ornnBaseUrl: string): Promise<boolean> => {
+    try {
+      const url = `${ornnBaseUrl.replace(/\/+$/, '')}/api/web/skill-search?query=&scope=public&page=1&pageSize=1`;
+      const res = await fetch(url, { headers: { ...getAuthHeaders() }, signal: AbortSignal.timeout(5000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};
 
 export const app = {
   getContext: () => request<any>('/app/context'),

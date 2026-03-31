@@ -429,8 +429,8 @@ export default function ScopePage() {
   const [draftYaml, setDraftYaml] = useState(DEFAULT_CHAT_WORKFLOW_YAML);
   const [showYamlInput, setShowYamlInput] = useState(false);
 
-  // Conversations (for NyxID)
-  const [currentActorId, setCurrentActorId] = useState('');
+  // NyxID Chat: track whether we've ensured the scope binding this session
+  const nyxidChatBoundRef = useRef(false);
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -466,13 +466,10 @@ export default function ScopePage() {
 
   const activeService = services.find(s => s.id === selectedService) || services[0];
 
-  // Create conversation for NyxID Chat
-  const ensureConversation = useCallback(async () => {
-    if (currentActorId) return currentActorId;
-    const result = await api.nyxidChat.createConversation(scopeId);
-    setCurrentActorId(result.actorId);
-    return result.actorId;
-  }, [scopeId, currentActorId]);
+  // Reset NyxID Chat binding flag when scope changes
+  useEffect(() => {
+    nyxidChatBoundRef.current = false;
+  }, [scopeId]);
 
   // ── Send message ──
   const handleSend = useCallback(async (text: string) => {
@@ -510,8 +507,6 @@ export default function ScopePage() {
       });
     };
 
-    let capturedActorId = '';
-
     const onFrame = (frame: any) => {
       const evt = normalizeBackendSseFrame(frame);
       if (!evt) return;
@@ -519,13 +514,6 @@ export default function ScopePage() {
       setDebugEvents([...events]);
 
       switch (evt.type) {
-        case 'RUN_STARTED': {
-          // Capture the actor ID so subsequent NyxID chat turns reuse the same actor.
-          const threadId = String((evt as any).threadId || (evt as any).actorId || '');
-          if (threadId) capturedActorId = threadId;
-          break;
-        }
-
         case 'TEXT_MESSAGE_CONTENT': {
           const delta = String(evt.delta || '');
           contentText += delta;
@@ -603,18 +591,18 @@ export default function ScopePage() {
 
     try {
       if (activeService.kind === 'nyxid-chat') {
-        // Use NyxIdChatGAgent for proper conversation history and Bearer token forwarding.
-        // Pass the existing actorId so history accumulates across turns.
-        await api.gagent.streamDraftRun(
-          scopeId,
-          'Aevatar.NyxId.Chat.NyxIdChatGAgent',
-          text,
-          currentActorId || undefined,
-          onFrame,
-          controller.signal,
-        );
-        // Persist the actor ID for subsequent turns.
-        if (capturedActorId && !currentActorId) setCurrentActorId(capturedActorId);
+        // Bind NyxIdChatGAgent as default scope service on first use (idempotent PUT).
+        // preferredActorId ensures the same actor is reused for conversation history.
+        if (!nyxidChatBoundRef.current) {
+          await api.scope.bindGAgent(
+            scopeId,
+            'Aevatar.NyxId.Chat.NyxIdChatGAgent',
+            `NyxIdChat:${scopeId}`,
+            'NyxID Chat',
+          );
+          nyxidChatBoundRef.current = true;
+        }
+        await api.scope.streamDefaultChat(scopeId, text, undefined, onFrame, controller.signal);
       } else if (activeService.kind === 'draft-run') {
         const yamls = draftYaml.trim() ? [draftYaml.trim()] : undefined;
         if (yamls) {
@@ -627,12 +615,18 @@ export default function ScopePage() {
       } else {
         await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal);
       }
-      updateAssistant({
-        status: 'complete', events, steps: [...steps], toolCalls: [...toolCalls], thinking,
+      // Only mark complete if no error was already set by RUN_ERROR during streaming.
+      setMessages(prev => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === 'assistant' && last.status !== 'error') {
+          updated[updated.length - 1] = { ...last, status: 'complete', events, steps: [...steps], toolCalls: [...toolCalls], thinking };
+        }
+        return updated;
       });
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
-        const errorText = e?.message || String(e);
+        const errorText = e?.message || e?.code || JSON.stringify(e);
         updateAssistant({
           status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
         });
@@ -641,7 +635,7 @@ export default function ScopePage() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, activeService, ensureConversation, draftYaml]);
+  }, [scopeId, isStreaming, activeService, draftYaml]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -650,7 +644,7 @@ export default function ScopePage() {
   const handleNewChat = useCallback(() => {
     setMessages([]);
     setDebugEvents([]);
-    setCurrentActorId('');
+    nyxidChatBoundRef.current = false;
   }, []);
 
   if (!scopeId) {

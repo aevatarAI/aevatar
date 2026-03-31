@@ -55,6 +55,8 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         {
             Endpoint = _gatewayEndpoint,
         };
+        // Add logging policy to capture the actual HTTP request URL for debugging
+        options.AddPolicy(new NyxIdRequestLoggingPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(resolvedModel).AsIChatClient();
         return new MEAILLMProvider(Name, chatClient, _logger);
@@ -78,10 +80,21 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveModel(LLMRequest request)
     {
+        // Priority 1: per-request model override from metadata (user's configured default model)
+        var metadataModel = TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
         var requestedModel = request.Model?.Trim();
-        return string.IsNullOrWhiteSpace(requestedModel)
-            ? _defaultModel
-            : requestedModel;
+        var metadataKeyCount = request.Metadata?.Count ?? -1;
+
+        var resolved = !string.IsNullOrWhiteSpace(metadataModel)
+            ? metadataModel
+            : !string.IsNullOrWhiteSpace(requestedModel)
+                ? requestedModel
+                : _defaultModel;
+
+        Console.Error.WriteLine(
+            $"[NyxIdLLM.ResolveModel] metadataModel={metadataModel ?? "<null>"}, requestModel={requestedModel ?? "<null>"}, default={_defaultModel}, resolved={resolved}, metadataKeys={metadataKeyCount}");
+
+        return resolved;
     }
 
     private string ResolveAccessToken(LLMRequest request)
@@ -89,12 +102,18 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         // Priority 1: per-user token from request metadata (user's NyxID login token)
         var userToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
         if (!string.IsNullOrWhiteSpace(userToken))
+        {
+            Console.Error.WriteLine($"[NyxIdLLM.ResolveAccessToken] Using per-request token (len={userToken.Length})");
             return userToken;
+        }
 
         // Priority 2: static/configured token (fallback for background tasks)
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
+        {
+            Console.Error.WriteLine($"[NyxIdLLM.ResolveAccessToken] Using configured/fallback token (len={configuredToken.Length})");
             return configuredToken;
+        }
 
         throw new InvalidOperationException(
             $"NyxID access token is not available for provider '{Name}'. " +
@@ -115,5 +134,25 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                 nameof(gatewayEndpoint));
 
         return new Uri(endpoint.ToString().TrimEnd('/') + "/", UriKind.Absolute);
+    }
+}
+
+/// <summary>
+/// Pipeline policy that logs the actual HTTP request URL and response status for debugging.
+/// </summary>
+internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.PipelinePolicy
+{
+    public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
+    {
+        Console.Error.WriteLine($"[NyxIdLLM.HTTP] {message.Request.Method} {message.Request.Uri}");
+        ProcessNext(message, pipeline, currentIndex);
+        Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response: {message.Response?.Status}");
+    }
+
+    public override async ValueTask ProcessAsync(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
+    {
+        Console.Error.WriteLine($"[NyxIdLLM.HTTP] {message.Request.Method} {message.Request.Uri}");
+        await ProcessNextAsync(message, pipeline, currentIndex);
+        Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response: {message.Response?.Status}");
     }
 }

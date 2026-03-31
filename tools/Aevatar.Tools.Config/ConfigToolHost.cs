@@ -304,6 +304,66 @@ public static class ConfigToolHost
             }
         });
 
+        // Ornn.
+        app.MapGet("/api/ornn", (HttpContext http, ConfigOperations ops) =>
+        {
+            if (!IsLocal(http)) return Results.Forbid();
+            ops.TryGetConfigJson("Ornn:BaseUrl", out var baseUrl);
+            return Results.Json(new { ok = true, baseUrl = baseUrl ?? "" });
+        });
+        app.MapPost("/api/ornn", async (HttpContext http, ConfigOperations ops) =>
+        {
+            if (!IsLocal(http)) return Results.Forbid();
+            var req = await http.Request.ReadFromJsonAsync<OrnnConfigRequest>(cancellationToken);
+            var url = req?.BaseUrl?.Trim() ?? "";
+            if (!string.IsNullOrEmpty(url))
+                ops.SetConfigJson("Ornn:BaseUrl", url);
+            else
+                ops.RemoveConfigJson("Ornn:BaseUrl");
+            return Results.Json(new { ok = true });
+        });
+        app.MapGet("/api/ornn/test", async (HttpContext http) =>
+        {
+            if (!IsLocal(http)) return Results.Forbid();
+            var baseUrl = http.Request.Query["baseUrl"].FirstOrDefault() ?? "https://ornn.chrono-ai.fun";
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                var res = await client.GetAsync($"{baseUrl.TrimEnd('/')}/api/web/skill-search?query=&scope=public&page=1&pageSize=1", cancellationToken);
+                return res.IsSuccessStatusCode
+                    ? Results.Json(new { ok = true })
+                    : Results.Json(new { ok = false, error = $"HTTP {(int)res.StatusCode}" });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { ok = false, error = ex.Message });
+            }
+        });
+        app.MapGet("/api/ornn/skills", async (HttpContext http, ConfigOperations ops) =>
+        {
+            if (!IsLocal(http)) return Results.Forbid();
+            ops.TryGetConfigJson("Ornn:BaseUrl", out var baseUrl);
+            if (string.IsNullOrWhiteSpace(baseUrl))
+                return Results.Json(new { ok = true, items = Array.Empty<object>(), total = 0 });
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var url = $"{baseUrl.TrimEnd('/')}/api/web/skill-search?query=&mode=keyword&scope=public&page=1&pageSize=50";
+                var res = await client.GetAsync(url, cancellationToken);
+                if (!res.IsSuccessStatusCode)
+                    return Results.Json(new { ok = false, error = $"HTTP {(int)res.StatusCode}", items = Array.Empty<object>() });
+                var json = await res.Content.ReadAsStringAsync(cancellationToken);
+                var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("data", out var data))
+                    return Results.Json(new { ok = true, items = data.GetProperty("items"), total = data.GetProperty("total").GetInt32() });
+                return Results.Json(new { ok = true, items = Array.Empty<object>(), total = 0 });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { ok = false, error = ex.Message, items = Array.Empty<object>() });
+            }
+        });
+
         // LLM.
         app.MapGet("/api/llm/providers", (ISecretsStore secrets, HttpContext http) => IsLocal(http)
             ? Results.Json(new { ok = true, providers = ProviderCatalog.BuildProviderTypes(secrets) })

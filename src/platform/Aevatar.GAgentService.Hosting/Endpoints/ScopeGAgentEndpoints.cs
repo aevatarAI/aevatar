@@ -241,6 +241,22 @@ public static class ScopeGAgentEndpoints
             if (!string.IsNullOrWhiteSpace(bearerToken))
                 chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
 
+            // Forward the user's preferred model from their config.
+            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            if (userConfigStore != null)
+            {
+                try
+                {
+                    var userConfig = await userConfigStore.GetAsync(ct);
+                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                }
+                catch
+                {
+                    // Best-effort
+                }
+            }
+
             var envelope = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -362,13 +378,17 @@ public static class ScopeGAgentEndpoints
         if (payload.Is(AiTextEnd.Descriptor))
         {
             var ai = payload.Unpack<AiTextEnd>();
-            // RoleGAgent embeds LLM errors in TextMessageEnd.Content with a sentinel prefix.
-            // Surface them as RunError so the frontend can display them.
-            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-            if (!string.IsNullOrEmpty(ai.Content) &&
-                ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+            // RoleGAgent embeds LLM errors in TextMessageEnd.Content.
+            // With timeoutMs > 0: prefixed with "[[AEVATAR_LLM_ERROR]]"
+            // With timeoutMs = 0 (default): "LLM request failed: <message>"
+            // Any non-empty content here is either an error or unexpected — surface as RunError.
+            // Normal streaming text arrives via TextMessageContentEvent, not here.
+            if (!string.IsNullOrEmpty(ai.Content))
             {
-                var errorMessage = ai.Content[llmErrorPrefix.Length..].Trim();
+                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+                var errorMessage = ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal)
+                    ? ai.Content[llmErrorPrefix.Length..].Trim()
+                    : ai.Content.Trim();
                 return new AGUIEvent
                 {
                     RunError = new RunErrorEvent { Message = errorMessage },

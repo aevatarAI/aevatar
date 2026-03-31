@@ -174,7 +174,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "[{Role}] LLM request failed. session={SessionId}", RoleName, request.SessionId);
+            Logger.LogWarning(ex,
+                "[{Role}] LLM request failed. session={SessionId}, provider={Provider}, model={Model}, metadataKeys=[{MetadataKeys}]",
+                RoleName,
+                request.SessionId,
+                EffectiveConfig.ProviderName,
+                EffectiveConfig.Model ?? "<default>",
+                request.Metadata.Count > 0 ? string.Join(",", request.Metadata.Keys) : "<none>");
             replayRecord = SessionReplayRecord.FromFailure(
                 useWorkflowFailureMarker
                     ? BuildLlmFailureContent(ex.Message)

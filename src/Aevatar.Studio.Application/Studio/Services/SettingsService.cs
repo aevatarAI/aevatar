@@ -165,7 +165,7 @@ public sealed class SettingsService
     private static string NormalizeRuntimeBaseUrl(string url)
     {
         var normalized = string.IsNullOrWhiteSpace(url)
-            ? "http://127.0.0.1:5100"
+            ? "https://aevatar-console-backend-api.aevatar.ai"
             : url.Trim();
 
         return normalized.TrimEnd('/');
