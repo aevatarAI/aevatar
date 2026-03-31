@@ -145,7 +145,7 @@ public static class ServiceCollectionExtensions
         var standardProviders = configuredProviders
             .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
             .ToList();
-        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName, secretsStoreAccessor);
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName);
         if (standardProviders.Count == 0)
             return nyxIdFactory;
 
@@ -251,8 +251,7 @@ public static class ServiceCollectionExtensions
 
     private static NyxIdLLMProviderFactory BuildNyxIdFactory(
         IEnumerable<ConfiguredProvider> configuredProviders,
-        string defaultName,
-        Func<IAevatarSecretsStore> secretsStoreAccessor)
+        string defaultName)
     {
         var factory = new NyxIdLLMProviderFactory();
         foreach (var provider in configuredProviders)
@@ -268,9 +267,9 @@ public static class ServiceCollectionExtensions
                 provider.Name,
                 provider.Model,
                 provider.Endpoint,
-                () => secretsStoreAccessor().Get("NyxId:AccessToken")?.Trim()
-                     ?? secretsStoreAccessor().GetApiKey(provider.Name)
-                     ?? provider.ApiKey);
+                // NyxID gateway token comes exclusively from per-request metadata
+                // (the caller's Bearer token). No local secrets fallback.
+                static () => null);
         }
 
         factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));

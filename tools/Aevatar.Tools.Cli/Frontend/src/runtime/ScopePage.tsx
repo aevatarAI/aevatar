@@ -844,80 +844,138 @@ export default function ScopePage() {
     { id: 'raw', label: 'Raw' },
   ];
 
-  // Query tab state
+  // ── Query tab: inspect scope state ──
+  type QueryTarget = 'binding' | 'services' | 'workflows' | 'actor';
+  const [queryTarget, setQueryTarget] = useState<QueryTarget>('binding');
   const [queryActorId, setQueryActorId] = useState('');
   const [queryResult, setQueryResult] = useState<string | null>(null);
   const [queryLoading, setQueryLoading] = useState(false);
 
-  // Execute tab state
-  const [executePrompt, setExecutePrompt] = useState('');
-  const [executeYamls, setExecuteYamls] = useState('');
-  const [executeResult, setExecuteResult] = useState<string | null>(null);
-  const [executeLoading, setExecuteLoading] = useState(false);
-
-  // Raw tab state
-  const [rawMethod, setRawMethod] = useState('GET');
-  const [rawPath, setRawPath] = useState(`/scopes/${scopeId}/binding`);
-  const [rawBody, setRawBody] = useState('');
-  const [rawResult, setRawResult] = useState<string | null>(null);
-  const [rawLoading, setRawLoading] = useState(false);
+  const queryTargets: { id: QueryTarget; label: string; description: string }[] = [
+    { id: 'binding', label: 'Scope Binding', description: 'Current default service binding for this scope' },
+    { id: 'services', label: 'Services', description: 'All services bound to this scope' },
+    { id: 'workflows', label: 'Workflows', description: 'Deployed workflows in this scope' },
+    { id: 'actor', label: 'Actor Snapshot', description: 'Query a specific actor by ID' },
+  ];
 
   const handleQuerySubmit = async () => {
-    if (!queryActorId.trim()) return;
     setQueryLoading(true);
+    setQueryResult(null);
     try {
-      const snapshot = await api.scope.getActorSnapshot(queryActorId.trim());
-      setQueryResult(JSON.stringify(snapshot, null, 2));
+      let data: any;
+      switch (queryTarget) {
+        case 'binding':
+          data = await api.scope.getBinding(scopeId);
+          break;
+        case 'services':
+          data = await api.scope.listServices(scopeId, 100);
+          break;
+        case 'workflows':
+          data = await api.workspace.listWorkflows();
+          break;
+        case 'actor':
+          if (!queryActorId.trim()) { setQueryLoading(false); return; }
+          data = await api.scope.getActorSnapshot(queryActorId.trim());
+          break;
+      }
+      setQueryResult(JSON.stringify(data, null, 2));
     } catch (e: any) {
-      setQueryResult(JSON.stringify(e, null, 2));
+      setQueryResult(JSON.stringify({ error: e?.message || e }, null, 2));
     } finally {
       setQueryLoading(false);
     }
   };
 
-  const handleExecuteSubmit = async () => {
-    if (!executePrompt.trim()) return;
-    setExecuteLoading(true);
-    setExecuteResult(null);
+  // ── Execute tab: invoke service endpoints ──
+  const [invokeEndpointId, setInvokeEndpointId] = useState('chat');
+  const [invokeBody, setInvokeBody] = useState('{\n  "prompt": ""\n}');
+  const [invokeEvents, setInvokeEvents] = useState<Array<{ type: string; data: any }>>([]);
+  const [invokeLoading, setInvokeLoading] = useState(false);
+  const invokeAbortRef = useRef<AbortController | null>(null);
+
+  const handleInvokeSubmit = async () => {
+    if (!scopeId) return;
+    setInvokeLoading(true);
+    setInvokeEvents([]);
+    const controller = new AbortController();
+    invokeAbortRef.current = controller;
+    const collected: Array<{ type: string; data: any }> = [];
     try {
-      const yamls = executeYamls.trim() ? [executeYamls.trim()] : undefined;
-      let result = '';
-      await api.scope.streamDraftRun(scopeId, executePrompt.trim(), yamls, (frame) => {
-        const evt = normalizeBackendSseFrame(frame);
-        if (evt) {
-          result += JSON.stringify(evt) + '\n';
-          setExecuteResult(result);
+      const parsed = JSON.parse(invokeBody);
+      const prompt = parsed.prompt || '';
+      if (activeService.kind === 'nyxid-chat') {
+        if (!nyxidChatBoundRef.current) {
+          await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', `NyxIdChat:${scopeId}`, 'NyxID Chat');
+          nyxidChatBoundRef.current = true;
         }
-      });
-      if (!result) setExecuteResult('(no events received)');
+        await api.scope.streamDefaultChat(scopeId, prompt, parsed.sessionId, (frame) => {
+          const evt = normalizeBackendSseFrame(frame);
+          if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
+        }, controller.signal);
+      } else if (activeService.kind === 'service') {
+        await api.scope.streamInvoke(scopeId, activeService.id, prompt, (frame) => {
+          const evt = normalizeBackendSseFrame(frame);
+          if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
+        }, controller.signal);
+      } else {
+        const yamls = parsed.workflowYamls;
+        await api.scope.streamDraftRun(scopeId, prompt, yamls, (frame) => {
+          const evt = normalizeBackendSseFrame(frame);
+          if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
+        }, controller.signal);
+      }
+      if (collected.length === 0) collected.push({ type: 'info', data: { message: 'No events received' } });
+      setInvokeEvents([...collected]);
     } catch (e: any) {
-      setExecuteResult(prev => (prev || '') + '\nError: ' + JSON.stringify(e, null, 2));
+      if (e?.name !== 'AbortError') {
+        collected.push({ type: 'ERROR', data: { message: e?.message || JSON.stringify(e) } });
+        setInvokeEvents([...collected]);
+      }
     } finally {
-      setExecuteLoading(false);
+      setInvokeLoading(false);
+      invokeAbortRef.current = null;
     }
   };
+
+  const handleInvokeStop = () => { invokeAbortRef.current?.abort(); };
+
+  // ── Raw tab: API console ──
+  const [rawMethod, setRawMethod] = useState('GET');
+  const [rawPath, setRawPath] = useState(`/scopes/${scopeId}/binding`);
+  const [rawBody, setRawBody] = useState('');
+  const [rawResult, setRawResult] = useState<{ status: number; statusText: string; body: string } | null>(null);
+  const [rawLoading, setRawLoading] = useState(false);
+
+  const rawShortcuts = [
+    { label: 'Binding', path: `/scopes/${scopeId}/binding`, method: 'GET' },
+    { label: 'Services', path: `/services?tenantId=${scopeId}&appId=default&namespace=default&take=20`, method: 'GET' },
+    { label: 'Workflows', path: `/scopes/${scopeId}/workflows`, method: 'GET' },
+    { label: 'GAgent Types', path: `/scopes/gagent-types`, method: 'GET' },
+    { label: 'Auth Session', path: `/auth/me`, method: 'GET' },
+  ];
 
   const handleRawSubmit = async () => {
     if (!rawPath.trim()) return;
     setRawLoading(true);
+    setRawResult(null);
     try {
       const opts: RequestInit = { method: rawMethod };
       if (rawMethod !== 'GET' && rawBody.trim()) {
         opts.body = rawBody;
         opts.headers = { 'Content-Type': 'application/json' };
       }
-      const token = (await import('../auth/nyxid')).getAccessToken();
+      const token = nyxid.getAccessToken();
       if (token) {
         opts.headers = { ...opts.headers as Record<string, string>, Authorization: `Bearer ${token}` };
       }
       const res = await fetch(`/api${rawPath.startsWith('/') ? '' : '/'}${rawPath}`, opts);
-      const contentType = res.headers.get('content-type') || '';
-      const text = contentType.includes('json')
+      const ct = res.headers.get('content-type') || '';
+      const body = ct.includes('json')
         ? JSON.stringify(await res.json(), null, 2)
         : await res.text();
-      setRawResult(`HTTP ${res.status} ${res.statusText}\n\n${text}`);
+      setRawResult({ status: res.status, statusText: res.statusText, body });
     } catch (e: any) {
-      setRawResult(`Error: ${e?.message || JSON.stringify(e)}`);
+      setRawResult({ status: 0, statusText: 'Network Error', body: e?.message || JSON.stringify(e) });
     } finally {
       setRawLoading(false);
     }
@@ -986,31 +1044,60 @@ export default function ScopePage() {
 
       {/* Body */}
       {activeEndpoint === 'query' ? (
-        <div className="flex-1 min-h-0 flex flex-col bg-[#F2F1EE]">
-          <div className="max-w-3xl mx-auto w-full p-6 space-y-4">
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Actor ID</label>
+        /* ── Query: inspect scope state ── */
+        <div className="flex-1 min-h-0 overflow-auto bg-[#F2F1EE]">
+          <div className="max-w-3xl mx-auto w-full p-6 space-y-5">
+            {/* Target selector */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {queryTargets.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => { setQueryTarget(t.id); setQueryResult(null); }}
+                  className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+                    queryTarget === t.id
+                      ? 'border-[#18181B] bg-white shadow-sm'
+                      : 'border-[#E6E3DE] bg-white/60 hover:bg-white'
+                  }`}
+                >
+                  <div className={`text-[12px] font-semibold ${queryTarget === t.id ? 'text-gray-800' : 'text-gray-500'}`}>{t.label}</div>
+                  <div className="text-[10px] text-gray-400 mt-0.5 line-clamp-1">{t.description}</div>
+                </button>
+              ))}
+            </div>
+
+            {/* Actor ID input (only for actor target) */}
+            {queryTarget === 'actor' && (
               <div className="flex gap-2">
                 <input
                   className="flex-1 rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  placeholder="actor-id"
+                  placeholder="Enter actor ID..."
                   value={queryActorId}
                   onChange={e => setQueryActorId(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleQuerySubmit()}
                 />
-                <button
-                  onClick={handleQuerySubmit}
-                  disabled={queryLoading || !queryActorId.trim()}
-                  className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
-                >
-                  {queryLoading ? 'Loading...' : 'Query'}
-                </button>
               </div>
-            </div>
+            )}
+
+            <button
+              onClick={handleQuerySubmit}
+              disabled={queryLoading || (queryTarget === 'actor' && !queryActorId.trim())}
+              className="rounded-lg bg-[#18181B] px-5 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
+            >
+              {queryLoading ? 'Loading...' : `Query ${queryTargets.find(t => t.id === queryTarget)?.label}`}
+            </button>
+
             {queryResult != null && (
-              <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Result</label>
-                <pre className="rounded-[14px] border border-[#E6E3DE] bg-white p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[60vh]">
+              <div className="rounded-[16px] border border-[#E6E3DE] bg-white overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E6E3DE] bg-[#FAFAF8]">
+                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Result</span>
+                  <button
+                    onClick={() => navigator.clipboard?.writeText(queryResult)}
+                    className="text-[11px] text-gray-400 hover:text-gray-600"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <pre className="p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[55vh]">
                   {queryResult}
                 </pre>
               </div>
@@ -1018,94 +1105,181 @@ export default function ScopePage() {
           </div>
         </div>
       ) : activeEndpoint === 'execute' ? (
-        <div className="flex-1 min-h-0 flex flex-col bg-[#F2F1EE]">
-          <div className="max-w-3xl mx-auto w-full p-6 space-y-4">
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Prompt</label>
-              <input
-                className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                placeholder="Enter a prompt for the workflow..."
-                value={executePrompt}
-                onChange={e => setExecutePrompt(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleExecuteSubmit()}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Workflow YAML (optional)</label>
+        /* ── Execute: invoke service endpoint with streaming ── */
+        <div className="flex-1 min-h-0 overflow-auto bg-[#F2F1EE]">
+          <div className="max-w-3xl mx-auto w-full p-6 space-y-5">
+            <div className="rounded-[16px] border border-[#E6E3DE] bg-white p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[13px] font-semibold text-gray-700">Invoke: {activeService.label}</div>
+                  <div className="text-[11px] text-gray-400">
+                    Endpoint: <span className="font-mono">{invokeEndpointId}:stream</span>
+                    {' · Kind: '}<span className="font-mono">{activeService.kind}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[11px] text-gray-400">Endpoint</label>
+                  <input
+                    className="w-24 rounded-md border border-[#E6E3DE] bg-[#FAFAF8] px-2 py-1 text-[12px] font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    value={invokeEndpointId}
+                    onChange={e => setInvokeEndpointId(e.target.value)}
+                  />
+                </div>
+              </div>
               <textarea
                 rows={6}
-                className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
-                placeholder="Paste a workflow YAML to run as draft..."
-                value={executeYamls}
-                onChange={e => setExecuteYamls(e.target.value)}
+                className="w-full rounded-lg border border-[#E6E3DE] bg-[#FAFAF8] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
+                value={invokeBody}
+                onChange={e => setInvokeBody(e.target.value)}
+                spellCheck={false}
               />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleInvokeSubmit}
+                  disabled={invokeLoading}
+                  className="rounded-lg bg-[#18181B] px-5 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
+                >
+                  {invokeLoading ? 'Streaming...' : 'Invoke'}
+                </button>
+                {invokeLoading && (
+                  <button
+                    onClick={handleInvokeStop}
+                    className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-100 transition-colors"
+                  >
+                    Stop
+                  </button>
+                )}
+              </div>
             </div>
-            <button
-              onClick={handleExecuteSubmit}
-              disabled={executeLoading || !executePrompt.trim()}
-              className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
-            >
-              {executeLoading ? 'Running...' : 'Execute'}
-            </button>
-            {executeResult != null && (
-              <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Event Stream</label>
-                <pre className="rounded-[14px] border border-[#E6E3DE] bg-white p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[50vh]">
-                  {executeResult}
-                </pre>
+
+            {invokeEvents.length > 0 && (
+              <div className="rounded-[16px] border border-[#E6E3DE] bg-white overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E6E3DE] bg-[#FAFAF8]">
+                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+                    Events ({invokeEvents.length})
+                  </span>
+                  <button
+                    onClick={() => setInvokeEvents([])}
+                    className="text-[11px] text-gray-400 hover:text-gray-600"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="divide-y divide-[#F0EDE8] max-h-[50vh] overflow-auto">
+                  {invokeEvents.map((evt, i) => (
+                    <div key={i} className="px-4 py-2.5 hover:bg-[#FAFAF8]">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          evt.type === 'ERROR' || evt.type === 'RUN_ERROR'
+                            ? 'bg-red-100 text-red-600'
+                            : evt.type.includes('CONTENT')
+                            ? 'bg-blue-50 text-blue-600'
+                            : evt.type.includes('STEP')
+                            ? 'bg-amber-50 text-amber-600'
+                            : evt.type.includes('TOOL')
+                            ? 'bg-violet-50 text-violet-600'
+                            : 'bg-gray-100 text-gray-500'
+                        }`}>
+                          {evt.type}
+                        </span>
+                        <span className="text-[10px] text-gray-300">#{i + 1}</span>
+                      </div>
+                      <pre className="text-[11px] text-gray-600 font-mono whitespace-pre-wrap line-clamp-3">
+                        {evt.type === 'TEXT_MESSAGE_CONTENT'
+                          ? String(evt.data?.delta || '')
+                          : JSON.stringify(evt.data, null, 2)}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
         </div>
       ) : activeEndpoint === 'raw' ? (
-        <div className="flex-1 min-h-0 flex flex-col bg-[#F2F1EE]">
-          <div className="max-w-3xl mx-auto w-full p-6 space-y-4">
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Request</label>
+        /* ── Raw: API console ── */
+        <div className="flex-1 min-h-0 overflow-auto bg-[#F2F1EE]">
+          <div className="max-w-3xl mx-auto w-full p-6 space-y-5">
+            {/* Shortcuts */}
+            <div className="flex flex-wrap gap-1.5">
+              {rawShortcuts.map(s => (
+                <button
+                  key={s.label}
+                  onClick={() => { setRawPath(s.path); setRawMethod(s.method); setRawResult(null); }}
+                  className={`rounded-full border px-3 py-1 text-[11px] font-medium transition-colors ${
+                    rawPath === s.path
+                      ? 'border-[#18181B] bg-[#18181B] text-white'
+                      : 'border-[#E6E3DE] bg-white text-gray-500 hover:bg-[#FAF8F4]'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Request */}
+            <div className="rounded-[16px] border border-[#E6E3DE] bg-white p-4 space-y-3">
               <div className="flex gap-2">
                 <select
                   value={rawMethod}
                   onChange={e => setRawMethod(e.target.value)}
-                  className="rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  className="rounded-lg border border-[#E6E3DE] bg-[#FAFAF8] px-2 py-2 text-[12px] font-mono font-semibold text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
                 >
                   <option value="GET">GET</option>
                   <option value="POST">POST</option>
                   <option value="PUT">PUT</option>
                   <option value="DELETE">DELETE</option>
                 </select>
-                <input
-                  className="flex-1 rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                  placeholder="/scopes/{scopeId}/..."
-                  value={rawPath}
-                  onChange={e => setRawPath(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleRawSubmit()}
-                />
+                <div className="flex-1 flex items-center gap-0 rounded-lg border border-[#E6E3DE] bg-[#FAFAF8] overflow-hidden">
+                  <span className="pl-3 text-[12px] font-mono text-gray-400 select-none">/api</span>
+                  <input
+                    className="flex-1 bg-transparent px-1 py-2 text-[12px] font-mono text-gray-700 focus:outline-none"
+                    value={rawPath}
+                    onChange={e => setRawPath(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleRawSubmit()}
+                  />
+                </div>
                 <button
                   onClick={handleRawSubmit}
                   disabled={rawLoading || !rawPath.trim()}
-                  className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
+                  className="rounded-lg bg-[#18181B] px-5 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
                 >
-                  {rawLoading ? 'Sending...' : 'Send'}
+                  {rawLoading ? '...' : 'Send'}
                 </button>
               </div>
-            </div>
-            {rawMethod !== 'GET' && (
-              <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Body (JSON)</label>
+              {rawMethod !== 'GET' && (
                 <textarea
-                  rows={8}
-                  className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
+                  rows={6}
+                  className="w-full rounded-lg border border-[#E6E3DE] bg-[#FAFAF8] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
                   placeholder='{"key": "value"}'
                   value={rawBody}
                   onChange={e => setRawBody(e.target.value)}
                 />
-              </div>
-            )}
+              )}
+            </div>
+
+            {/* Response */}
             {rawResult != null && (
-              <div className="space-y-2">
-                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Response</label>
-                <pre className="rounded-[14px] border border-[#E6E3DE] bg-white p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[50vh]">
-                  {rawResult}
+              <div className="rounded-[16px] border border-[#E6E3DE] bg-white overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E6E3DE] bg-[#FAFAF8]">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block w-2 h-2 rounded-full ${
+                      rawResult.status >= 200 && rawResult.status < 300 ? 'bg-green-500' :
+                      rawResult.status >= 400 ? 'bg-red-500' : 'bg-amber-500'
+                    }`} />
+                    <span className="text-[12px] font-mono font-semibold text-gray-600">
+                      {rawResult.status} {rawResult.statusText}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => navigator.clipboard?.writeText(rawResult.body)}
+                    className="text-[11px] text-gray-400 hover:text-gray-600"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <pre className="p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[55vh]">
+                  {rawResult.body}
                 </pre>
               </div>
             )}

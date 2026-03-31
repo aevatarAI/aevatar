@@ -4,6 +4,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -238,6 +239,10 @@ public sealed class WorkflowRunGAgent
                 },
                 CancellationToken.None);
         }
+
+        // Propagate per-request metadata (e.g. NyxID token, model override)
+        // to execution items so that inner LLM steps can forward them.
+        PropagateRequestMetadataToExecutionItems(request.Metadata);
 
         await EnsureAgentTreeAsync();
 
@@ -980,6 +985,22 @@ public sealed class WorkflowRunGAgent
         await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);
         InstallCognitiveModules();
         return WorkflowCompilationResult.Success(parsed);
+    }
+
+    private static readonly string[] PropagatedMetadataKeys =
+    [
+        LLMRequestMetadataKeys.NyxIdAccessToken,
+        LLMRequestMetadataKeys.ModelOverride,
+    ];
+
+    private void PropagateRequestMetadataToExecutionItems(
+        Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        foreach (var key in PropagatedMetadataKeys)
+        {
+            if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+                _executionItems[key] = value.Trim();
+        }
     }
 
     private static string ResolveScopeId(
