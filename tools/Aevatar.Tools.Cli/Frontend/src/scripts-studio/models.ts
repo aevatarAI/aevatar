@@ -146,6 +146,8 @@ export type ScriptPromotionDecision = {
   } | null;
 };
 
+export type ScriptRunMode = 'chat' | 'script';
+
 export type ScriptDraft = {
   key: string;
   scriptId: string;
@@ -153,6 +155,7 @@ export type ScriptDraft = {
   baseRevision: string;
   reason: string;
   input: string;
+  runMode: ScriptRunMode;
   package: ScriptPackage;
   selectedFilePath: string;
   definitionActorId: string;
@@ -160,6 +163,7 @@ export type ScriptDraft = {
   updatedAtUtc: string;
   lastSourceHash: string;
   lastRun: DraftRunResult | null;
+  lastChatResponse: string | null;
   lastSnapshot: ScriptReadModelSnapshot | null;
   lastPromotion: ScriptPromotionDecision | null;
   scopeDetail: ScopedScriptDetail | null;

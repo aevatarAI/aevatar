@@ -1,4 +1,5 @@
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
@@ -469,7 +470,7 @@ public static class ScopeServiceEndpoints
         }
     }
 
-    private static Task HandleInvokeDefaultChatStreamAsync(
+    private static async Task HandleInvokeDefaultChatStreamAsync(
         HttpContext http,
         string scopeId,
         StreamScopeServiceHttpRequest request,
@@ -479,21 +480,87 @@ public static class ScopeServiceEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] IOptions<ScopeWorkflowCapabilityOptions> options,
-        CancellationToken ct) =>
-        HandleInvokeStreamAsync(
-            http,
-            scopeId,
-            ResolveDefaultScopeServiceId(options.Value),
-            "chat",
-            request,
-            appId: null,
-            resolutionService,
-            admissionAuthorizer,
-            chatRunService,
-            actorRuntime,
-            subscriptionProvider,
-            options,
-            ct);
+        CancellationToken ct)
+    {
+        // Try to resolve a bound default service first.
+        // If none is bound, fall back to a built-in simple llm_call workflow (draft-run).
+        var serviceId = ResolveDefaultScopeServiceId(options.Value);
+        var identity = BuildScopeServiceIdentity(options.Value, scopeId, serviceId);
+        var hasBoundService = await resolutionService.HasServiceAsync(identity, ct);
+
+        if (hasBoundService)
+        {
+            await HandleInvokeStreamAsync(
+                http,
+                scopeId,
+                serviceId,
+                "chat",
+                request,
+                appId: null,
+                resolutionService,
+                admissionAuthorizer,
+                chatRunService,
+                actorRuntime,
+                subscriptionProvider,
+                options,
+                ct);
+            return;
+        }
+
+        // No service bound — run a built-in default chat workflow as draft-run.
+        try
+        {
+            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+                return;
+
+            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var chatRequest = new WorkflowChatRunRequest(
+                Prompt: request.Prompt?.Trim() ?? string.Empty,
+                WorkflowName: null,
+                ActorId: null,
+                SessionId: request.SessionId,
+                WorkflowYamls: [DefaultChatWorkflowYaml],
+                Metadata: scopedHeaders,
+                ScopeId: scopeId);
+
+            await WorkflowCapabilityEndpoints.HandleChat(
+                http,
+                new ChatInput
+                {
+                    Prompt = chatRequest.Prompt,
+                    WorkflowYamls = chatRequest.WorkflowYamls,
+                    SessionId = chatRequest.SessionId,
+                    ScopeId = scopeId,
+                    Metadata = scopedHeaders,
+                },
+                chatRunService,
+                ct);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await WriteJsonErrorResponseAsync(
+                http,
+                StatusCodes.Status400BadRequest,
+                "INVALID_SERVICE_STREAM_REQUEST",
+                ex.Message,
+                ct);
+        }
+    }
+
+    private const string DefaultChatWorkflowYaml = """
+        name: default_chat
+        description: Built-in default single-turn chat.
+        roles:
+          - id: assistant
+            name: Assistant
+            system_prompt: |
+              You are a helpful assistant.
+        steps:
+          - id: answer
+            type: llm_call
+            role: assistant
+            parameters: {}
+        """;
 
     private static Task<IResult> HandleInvokeDefaultAsync(
         HttpContext http,
@@ -928,16 +995,24 @@ public static class ScopeServiceEndpoints
             },
             ct);
 
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = prompt,
+            SessionId = sessionId ?? string.Empty,
+            ScopeId = scopeId,
+        };
+
+        // Forward the caller's Bearer token so NyxID-backed GAgents can pass it
+        // to the NyxID LLM gateway. Other LLM providers ignore this metadata key.
+        var bearerToken = ExtractBearerToken(http);
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(new ChatRequestEvent
-            {
-                Prompt = prompt,
-                SessionId = sessionId ?? string.Empty,
-                ScopeId = scopeId,
-            }),
+            Payload = Any.Pack(chatRequest),
             Route = new EnvelopeRoute
             {
                 Direct = new DirectRoute { TargetActorId = actor.Id },
@@ -1791,6 +1866,17 @@ public static class ScopeServiceEndpoints
         http.Response.StatusCode = statusCode;
         http.Response.ContentType = "application/json";
         await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(authHeader))
+            return null;
+
+        return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authHeader["Bearer ".Length..].Trim()
+            : null;
     }
 
     public sealed record InvokeScopeServiceHttpRequest(

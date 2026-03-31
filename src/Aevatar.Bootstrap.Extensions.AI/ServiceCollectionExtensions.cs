@@ -6,6 +6,7 @@ using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.Ornn;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
@@ -27,6 +28,8 @@ public sealed class AevatarAIFeatureOptions
     public bool FailoverPreferDeepSeekAsFallbackDefault { get; set; } = true;
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
+    public bool EnableOrnnSkills { get; set; }
+    public string? OrnnBaseUrl { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
     public string? NyxIdGatewayEndpoint { get; set; }
@@ -60,6 +63,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableSkills)
             RegisterSkills(services, options);
+
+        if (options.EnableOrnnSkills)
+            RegisterOrnnSkills(services, options);
 
         return services;
     }
@@ -580,5 +586,13 @@ public static class ServiceCollectionExtensions
             foreach (var directory in options.SkillDirectories)
                 skillOptions.ScanDirectory(directory);
         });
+    }
+
+    private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
+            return;
+
+        services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
     }
 }

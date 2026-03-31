@@ -14,6 +14,7 @@
     <ProjectReference Include="..\Aevatar.AI.LLMProviders.NyxId\Aevatar.AI.LLMProviders.NyxId.csproj" />
     <ProjectReference Include="..\Aevatar.AI.LLMProviders.Tornado\Aevatar.AI.LLMProviders.Tornado.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>

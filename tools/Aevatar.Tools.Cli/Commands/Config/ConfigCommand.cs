@@ -26,6 +26,7 @@ internal static class ConfigCommand
         command.AddCommand(CreateWorkflowsCommand(jsonOption, quietOption, yesOption));
         command.AddCommand(CreateConnectorsCommand(jsonOption, quietOption, yesOption));
         command.AddCommand(CreateMcpCommand(jsonOption, quietOption, yesOption));
+        command.AddCommand(CreateOrnnCommand(jsonOption, quietOption, yesOption));
 
         return command;
     }
@@ -567,6 +568,37 @@ internal static class ConfigCommand
         command.AddCommand(validateCommand);
         command.AddCommand(importCommand);
         command.AddCommand(exportCommand);
+        return command;
+    }
+
+    private static Command CreateOrnnCommand(Option<bool> jsonOption, Option<bool> quietOption, Option<bool> yesOption)
+    {
+        var command = new Command("ornn", "Manage Ornn skill platform configuration.");
+
+        var getUrlCommand = new Command("get-url", "Show configured Ornn base URL.");
+        SetCommandHandler(getUrlCommand, context =>
+            Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.ConfigJsonGetAsync("Ornn:BaseUrl", ct)));
+
+        var setUrlCommand = new Command("set-url", "Set Ornn base URL.");
+        var urlArg = new Argument<string>("url", "Ornn base URL (e.g. https://ornn.example.com).");
+        setUrlCommand.AddArgument(urlArg);
+        SetCommandHandler(setUrlCommand, context =>
+            Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.ConfigJsonSetAsync(
+                "Ornn:BaseUrl",
+                context.ParseResult.GetValueForArgument(urlArg),
+                false,
+                ct)));
+
+        var clearUrlCommand = new Command("clear-url", "Remove Ornn base URL from config.");
+        SetCommandHandler(clearUrlCommand, context =>
+            Run(context, jsonOption, quietOption, ct => ConfigCommandHandlers.ConfigJsonRemoveAsync(
+                "Ornn:BaseUrl",
+                context.ParseResult.GetValueForOption(yesOption),
+                ct)));
+
+        command.AddCommand(getUrlCommand);
+        command.AddCommand(setUrlCommand);
+        command.AddCommand(clearUrlCommand);
         return command;
     }
 

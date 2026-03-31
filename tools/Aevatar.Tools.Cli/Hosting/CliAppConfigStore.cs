@@ -103,6 +103,36 @@ internal static class CliAppConfigStore
         return true;
     }
 
+    /// <summary>
+    /// 从 ~/.aevatar/config.json 按冒号分隔的键路径读取字符串值。
+    /// 例如 "Ornn:BaseUrl" 读取 { "Ornn": { "BaseUrl": "..." } }。
+    /// </summary>
+    public static string? TryGetConfigValue(string colonSeparatedKey)
+    {
+        JsonObject root;
+        try { root = LoadRootObject(); }
+        catch { return null; }
+
+        var segments = colonSeparatedKey.Split(':');
+        JsonNode? node = root;
+        foreach (var segment in segments[..^1])
+        {
+            if (node is not JsonObject obj || obj[segment] is not JsonObject child)
+                return null;
+            node = child;
+        }
+
+        if (node is JsonObject parent &&
+            parent[segments[^1]] is JsonValue val &&
+            val.TryGetValue<string>(out var raw) &&
+            !string.IsNullOrWhiteSpace(raw))
+        {
+            return raw.Trim();
+        }
+
+        return null;
+    }
+
     public static bool TryNormalizeApiBaseUrl(
         string? rawUrl,
         out string normalizedUrl,

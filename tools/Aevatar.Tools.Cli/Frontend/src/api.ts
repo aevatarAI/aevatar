@@ -564,7 +564,7 @@ export const app = {
   getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
   getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
   saveScript: (data: any) => request<any>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
-  runDraftScript: (data: any) => request<any>('/app/scripts/draft-run', { method: 'POST', body: JSON.stringify(data) }),
+  runDraftScript: (scopeId: string, data: any) => request<any>(`/scopes/${enc(scopeId)}/scripts/draft-run`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export const scripts = {

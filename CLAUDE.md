@@ -120,6 +120,7 @@
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
 - `docs/`：架构文档；`workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
+- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
 
 ## 构建与运行
 

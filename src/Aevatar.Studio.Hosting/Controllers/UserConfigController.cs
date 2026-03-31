@@ -123,8 +123,9 @@ public sealed class UserConfigController : ControllerBase
                 .Where(p => string.Equals(p.Status, "ready", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
-            // Also fetch user's AI Services (custom endpoints like Mimo)
+            // Also fetch user's AI Services (custom endpoints), excluding known non-LLM services
             var userServices = await FetchUserServicesAsync(authorityBase, bearerToken, cancellationToken);
+            userServices = userServices.Where(s => !IsNonLlmService(s.Slug)).ToList();
             foreach (var svc in userServices)
             {
                 // Add as provider for display
@@ -264,6 +265,24 @@ public sealed class UserConfigController : ControllerBase
 
         var results = await Task.WhenAll(tasks);
         return results.SelectMany(r => r).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// Slug keywords that indicate a non-LLM infrastructure service.
+    /// </summary>
+    private static readonly string[] NonLlmServiceKeywords =
+    [
+        "sisyphus", "chrono-storage", "chrono-sandbox", "chrono-graph",
+        "ornn", "admin", "webhook", "n8n", "grafana", "prometheus",
+    ];
+
+    private static bool IsNonLlmService(string slug)
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+            return true;
+
+        var lower = slug.ToLowerInvariant();
+        return NonLlmServiceKeywords.Any(kw => lower.Contains(kw, StringComparison.Ordinal));
     }
 
     private string? ResolveNyxIdAuthorityBase()

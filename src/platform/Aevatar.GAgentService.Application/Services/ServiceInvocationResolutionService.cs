@@ -32,6 +32,13 @@ public sealed class ServiceInvocationResolutionService
         _artifactStore = artifactStore ?? throw new ArgumentNullException(nameof(artifactStore));
     }
 
+    public async Task<bool> HasServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var definition = await _catalogQueryReader.GetAsync(identity, ct);
+        return definition != null;
+    }
+
     public async Task<ServiceInvocationResolvedTarget> ResolveAsync(
         ServiceInvocationRequest request,
         CancellationToken ct = default)

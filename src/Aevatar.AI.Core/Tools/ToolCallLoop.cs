@@ -42,6 +42,21 @@ public sealed class ToolCallLoop
         ILLMProvider provider, List<ChatMessage> messages,
         LLMRequest baseRequest, int maxRounds, CancellationToken ct)
     {
+        AgentToolRequestContext.CurrentMetadata = baseRequest.Metadata;
+        try
+        {
+        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    private async Task<string?> ExecuteCoreAsync(
+        ILLMProvider provider, List<ChatMessage> messages,
+        LLMRequest baseRequest, int maxRounds, CancellationToken ct)
+    {
         for (var round = 0; round < maxRounds; round++)
         {
             var callId = ComposeRoundCallId(baseRequest.RequestId, round);

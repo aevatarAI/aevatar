@@ -10,6 +10,26 @@ import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo } from './chatT
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
 
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+/** Built-in default workflow YAML — must match the backend fallback in ScopeServiceEndpoints. */
+const DEFAULT_CHAT_WORKFLOW_YAML = `\
+name: default_chat
+description: Built-in default single-turn chat.
+
+roles:
+  - id: assistant
+    name: Assistant
+    system_prompt: |
+      You are a helpful assistant.
+
+steps:
+  - id: answer
+    type: llm_call
+    role: assistant
+    parameters: {}
+`;
+
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
 function genId() {
@@ -406,7 +426,7 @@ export default function ScopePage() {
   const [selectedService, setSelectedService] = useState('__default-chat__');
 
   // Draft Run YAML (optional)
-  const [draftYaml, setDraftYaml] = useState('');
+  const [draftYaml, setDraftYaml] = useState(DEFAULT_CHAT_WORKFLOW_YAML);
   const [showYamlInput, setShowYamlInput] = useState(false);
 
   // Conversations (for NyxID)
@@ -490,6 +510,8 @@ export default function ScopePage() {
       });
     };
 
+    let capturedActorId = '';
+
     const onFrame = (frame: any) => {
       const evt = normalizeBackendSseFrame(frame);
       if (!evt) return;
@@ -497,6 +519,13 @@ export default function ScopePage() {
       setDebugEvents([...events]);
 
       switch (evt.type) {
+        case 'RUN_STARTED': {
+          // Capture the actor ID so subsequent NyxID chat turns reuse the same actor.
+          const threadId = String((evt as any).threadId || (evt as any).actorId || '');
+          if (threadId) capturedActorId = threadId;
+          break;
+        }
+
         case 'TEXT_MESSAGE_CONTENT': {
           const delta = String(evt.delta || '');
           contentText += delta;
@@ -574,8 +603,18 @@ export default function ScopePage() {
 
     try {
       if (activeService.kind === 'nyxid-chat') {
-        const actorId = await ensureConversation();
-        await api.nyxidChat.streamMessage(scopeId, actorId, text, onFrame, controller.signal);
+        // Use NyxIdChatGAgent for proper conversation history and Bearer token forwarding.
+        // Pass the existing actorId so history accumulates across turns.
+        await api.gagent.streamDraftRun(
+          scopeId,
+          'Aevatar.NyxId.Chat.NyxIdChatGAgent',
+          text,
+          currentActorId || undefined,
+          onFrame,
+          controller.signal,
+        );
+        // Persist the actor ID for subsequent turns.
+        if (capturedActorId && !currentActorId) setCurrentActorId(capturedActorId);
       } else if (activeService.kind === 'draft-run') {
         const yamls = draftYaml.trim() ? [draftYaml.trim()] : undefined;
         if (yamls) {
@@ -666,19 +705,29 @@ export default function ScopePage() {
         </div>
       </header>
 
-      {/* Optional YAML input for draft-run */}
+      {/* Workflow YAML editor for draft-run */}
       {activeService.kind === 'draft-run' && showYamlInput && (
         <div className="flex-shrink-0 border-b border-[#E6E3DE] bg-[#FAFAF8] px-4 py-3">
           <div className="max-w-3xl mx-auto">
-            <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
-              Workflow YAML (optional — leave empty to use scope binding)
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                Workflow YAML
+              </label>
+              {draftYaml !== DEFAULT_CHAT_WORKFLOW_YAML && (
+                <button
+                  onClick={() => setDraftYaml(DEFAULT_CHAT_WORKFLOW_YAML)}
+                  className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium"
+                >
+                  Reset to default
+                </button>
+              )}
+            </div>
             <textarea
-              rows={4}
-              className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[12px] font-mono focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
+              rows={12}
+              className="w-full rounded-lg border border-[#E6E3DE] bg-white px-4 py-3 text-[12px] leading-[1.6] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
               value={draftYaml}
               onChange={e => setDraftYaml(e.target.value)}
-              placeholder="Paste workflow YAML here..."
+              spellCheck={false}
             />
           </div>
         </div>

@@ -26,6 +26,7 @@ import type {
   DraftRunResult,
   ScriptPackage,
   ScriptDraft,
+  ScriptRunMode,
   StudioEditorView,
   ScriptPromotionDecision,
   ScriptReadModelSnapshot,
@@ -60,7 +61,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Aevatar.Scripting.Abstractions;
 using Aevatar.Scripting.Abstractions.Behaviors;
-using Aevatar.Tools.Cli.Hosting;
+using Aevatar.Studio.Application.Scripts.Contracts;
 
 public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
 {
@@ -218,6 +219,7 @@ function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraf
     baseRevision: seed.baseRevision || '',
     reason: seed.reason || '',
     input: seed.input || '',
+    runMode: seed.runMode || 'chat',
     package: normalizedPackage.package,
     selectedFilePath: selectedEntry?.path || normalizedPackage.package.entrySourcePath || 'Behavior.cs',
     definitionActorId: seed.definitionActorId || '',
@@ -225,6 +227,7 @@ function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraf
     updatedAtUtc: seed.updatedAtUtc || now,
     lastSourceHash: seed.lastSourceHash || '',
     lastRun: seed.lastRun || null,
+    lastChatResponse: seed.lastChatResponse || null,
     lastSnapshot: seed.lastSnapshot || null,
     lastPromotion: seed.lastPromotion || null,
     scopeDetail: seed.scopeDetail || null,
@@ -260,6 +263,7 @@ function readStoredDrafts(): ScriptDraft[] {
         baseRevision: String(item?.baseRevision || ''),
         reason: String(item?.reason || ''),
         input: String(item?.input || ''),
+        runMode: (item?.runMode === 'script' ? 'script' : 'chat') as ScriptRunMode,
         package: normalizedPackage.package,
         selectedFilePath: selectedEntry?.path || normalizedPackage.package.entrySourcePath || 'Behavior.cs',
         definitionActorId: normalizedPackage.migrated ? '' : String(item?.definitionActorId || ''),
@@ -267,6 +271,7 @@ function readStoredDrafts(): ScriptDraft[] {
         updatedAtUtc: String(item?.updatedAtUtc || new Date().toISOString()),
         lastSourceHash: normalizedPackage.migrated ? '' : String(item?.lastSourceHash || ''),
         lastRun: normalizedPackage.migrated ? null : item?.lastRun || null,
+        lastChatResponse: normalizedPackage.migrated ? null : item?.lastChatResponse ?? null,
         lastSnapshot: normalizedPackage.migrated ? null : item?.lastSnapshot || null,
         lastPromotion: normalizedPackage.migrated ? null : item?.lastPromotion || null,
         scopeDetail: normalizedPackage.migrated ? null : item?.scopeDetail || null,
@@ -716,7 +721,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     setSelectedRuntimeActorId(selectedDraft.lastSnapshot?.actorId || selectedDraft.runtimeActorId || '');
     setSelectedProposalId(selectedDraft.lastPromotion?.proposalId || '');
 
-    if (resultView === 'runtime' && (selectedDraft.lastRun || selectedDraft.lastSnapshot)) {
+    if (resultView === 'runtime' && (selectedDraft.lastRun || selectedDraft.lastChatResponse || selectedDraft.lastSnapshot)) {
       return;
     }
 
@@ -728,7 +733,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
-    if (selectedDraft.lastRun || selectedDraft.lastSnapshot) {
+    if (selectedDraft.lastRun || selectedDraft.lastChatResponse || selectedDraft.lastSnapshot) {
       setResultView('runtime');
       return;
     }
@@ -1306,6 +1311,8 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
+    const runMode = selectedDraft.runMode || 'chat';
+
     const normalizedPackage = normalizeDraftPackageForAppRuntime(selectedDraft.package);
     const persistedSource = serializePersistedSource(normalizedPackage.package);
     if (!persistedSource.trim()) {
@@ -1325,6 +1332,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         runtimeActorId: '',
         lastSourceHash: '',
         lastRun: null,
+        lastChatResponse: null,
         lastSnapshot: null,
         lastPromotion: null,
         scopeDetail: null,
@@ -1338,38 +1346,87 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     setRunPending(true);
     try {
-      const response = await api.app.runDraftScript({
-        scriptId,
-        scriptRevision: revision,
-        package: normalizedPackage.package,
-        input: inputText,
-        definitionActorId: normalizedPackage.migrated ? '' : selectedDraft.definitionActorId,
-        runtimeActorId: normalizedPackage.migrated ? '' : selectedDraft.runtimeActorId,
-      }) as DraftRunResult;
-
-      updateDraft(selectedDraft.key, draft => ({
-        ...draft,
-        input: inputText,
-        scriptId: response.scriptId || scriptId,
-        revision: response.scriptRevision || revision,
-        definitionActorId: response.definitionActorId || draft.definitionActorId,
-        runtimeActorId: response.runtimeActorId || draft.runtimeActorId,
-        lastSourceHash: response.sourceHash || draft.lastSourceHash,
-        lastRun: response,
-      }));
-
-      setRunModalOpen(false);
-      setResultView('runtime');
-      openWorkspaceSection('activity');
-      setSelectedRuntimeActorId(response.runtimeActorId || '');
-      const snapshot = await waitForSnapshot(response.runtimeActorId || '');
-      await loadRuntimeSnapshots(true);
-      onFlash(snapshot ? 'Draft run completed' : 'Draft accepted. Runtime snapshot is catching up.', snapshot ? 'success' : 'info');
+      if (runMode === 'chat') {
+        await handleRunDraftChat(inputText);
+      } else {
+        await handleRunDraftScript(inputText, scriptId, revision, normalizedPackage);
+      }
     } catch (error: any) {
       onFlash(error?.message || 'Draft run failed', 'error');
     } finally {
       setRunPending(false);
     }
+  }
+
+  async function handleRunDraftChat(inputText: string) {
+    const scopeId = appContext.scopeId;
+    if (!scopeId) {
+      onFlash('Scope is not resolved. Configure a scope to use chat mode.', 'error');
+      return;
+    }
+
+    let accumulated = '';
+    await api.scope.streamDefaultChat(scopeId, inputText, undefined, (frame: any) => {
+      if (frame.textMessageContent?.delta) {
+        accumulated += frame.textMessageContent.delta;
+      } else if (frame.type === 'TEXT_MESSAGE_CONTENT' && frame.delta) {
+        accumulated += frame.delta;
+      } else if (frame.runError?.message || (frame.type === 'RUN_ERROR' && frame.message)) {
+        const msg = frame.runError?.message || frame.message;
+        accumulated += `\n[Error] ${msg}`;
+      }
+    });
+
+    updateDraft(selectedDraft!.key, draft => ({
+      ...draft,
+      lastChatResponse: accumulated || '(no response)',
+    }));
+
+    setRunModalOpen(false);
+    setResultView('runtime');
+    openWorkspaceSection('activity');
+    onFlash('Chat run completed', 'success');
+  }
+
+  async function handleRunDraftScript(
+    inputText: string,
+    scriptId: string,
+    revision: string,
+    normalizedPackage: ReturnType<typeof normalizeDraftPackageForAppRuntime>,
+  ) {
+    const scopeId = appContext.scopeId;
+    if (!scopeId) {
+      onFlash('Scope is not resolved. Configure a scope to use script draft-run.', 'error');
+      return;
+    }
+
+    const response = await api.app.runDraftScript(scopeId, {
+      scriptId,
+      scriptRevision: revision,
+      package: normalizedPackage.package,
+      input: inputText,
+      definitionActorId: normalizedPackage.migrated ? '' : selectedDraft!.definitionActorId,
+      runtimeActorId: normalizedPackage.migrated ? '' : selectedDraft!.runtimeActorId,
+    }) as DraftRunResult;
+
+    updateDraft(selectedDraft!.key, draft => ({
+      ...draft,
+      input: inputText,
+      scriptId: response.scriptId || scriptId,
+      revision: response.scriptRevision || revision,
+      definitionActorId: response.definitionActorId || draft.definitionActorId,
+      runtimeActorId: response.runtimeActorId || draft.runtimeActorId,
+      lastSourceHash: response.sourceHash || draft.lastSourceHash,
+      lastRun: response,
+    }));
+
+    setRunModalOpen(false);
+    setResultView('runtime');
+    openWorkspaceSection('activity');
+    setSelectedRuntimeActorId(response.runtimeActorId || '');
+    const snapshot = await waitForSnapshot(response.runtimeActorId || '');
+    await loadRuntimeSnapshots(true);
+    onFlash(snapshot ? 'Draft run completed' : 'Draft accepted. Runtime snapshot is catching up.', snapshot ? 'success' : 'info');
   }
 
   async function handlePromote() {
@@ -1546,7 +1603,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     ? `${snapshotView.status || 'updated'} · ${snapshotView.output || 'output pending'}`
     : selectedDraft.lastRun
       ? `Accepted · ${selectedDraft.lastRun.runId}`
-      : 'Run the draft to materialize output.';
+      : selectedDraft.lastChatResponse != null
+        ? `Chat · ${selectedDraft.lastChatResponse.slice(0, 60)}${selectedDraft.lastChatResponse.length > 60 ? '...' : ''}`
+        : 'Run the draft to materialize output.';
   const saveSummary = scopeBacked
     ? activeCatalog
       ? `${activeCatalog.scriptId} · ${activeCatalog.activeRevision}`
@@ -1608,12 +1667,38 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
   function renderResultDetailContent() {
     if (resultView === 'runtime') {
-      if (!(selectedDraft.lastRun || activeRuntimeSnapshot)) {
+      if (!(selectedDraft.lastRun || selectedDraft.lastChatResponse || activeRuntimeSnapshot)) {
         return (
           <EmptyState
             title="No runtime output yet"
             copy="Run the current draft. The materialized read model will appear here."
           />
+        );
+      }
+
+      if (selectedDraft.lastChatResponse != null && !selectedDraft.lastRun && !activeRuntimeSnapshot) {
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[14px] font-semibold text-gray-800">Chat response</div>
+                <div className="mt-1 text-[12px] text-gray-400">via scope default chat endpoint</div>
+              </div>
+              <div className="rounded-full border border-[#E5DED3] bg-white px-3 py-1 text-[11px] uppercase tracking-[0.14em] text-gray-500">
+                completed
+              </div>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                <div className="section-heading">Input</div>
+                <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{selectedDraft.input || '-'}</pre>
+              </div>
+              <div className="rounded-[20px] border border-[#EEEAE4] bg-white p-4">
+                <div className="section-heading">Output</div>
+                <pre className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-6 text-gray-700">{selectedDraft.lastChatResponse || '-'}</pre>
+              </div>
+            </div>
+          </div>
         );
       }
 
@@ -1913,9 +1998,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
           <StudioResultCard
             active={resultView === 'runtime'}
             title="Draft Run"
-            meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
+            meta={activeRuntimeSnapshot ? formatDateTime(activeRuntimeSnapshot.updatedAt) : selectedDraft.lastRun ? formatDateTime(selectedDraft.updatedAtUtc) : selectedDraft.lastChatResponse != null ? formatDateTime(selectedDraft.updatedAtUtc) : 'Not run yet'}
             summary={runtimeSummary}
-            status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : '')}
+            status={snapshotView.status || (selectedDraft.lastRun?.accepted ? 'accepted' : selectedDraft.lastChatResponse != null ? 'completed' : '')}
             onClick={() => setResultView('runtime')}
           />
           <StudioResultCard
@@ -2499,16 +2584,31 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         )}
       >
         <div className="space-y-4">
+          <div>
+            <label className="field-label">Run Mode</label>
+            <select
+              className="panel-input mt-1"
+              value={selectedDraft.runMode || 'chat'}
+              onChange={event => updateDraft(selectedDraft.key, draft => ({
+                ...draft,
+                runMode: event.target.value as ScriptRunMode,
+              }))}
+            >
+              <option value="chat">Chat (default)</option>
+              <option value="script">Script Draft Run</option>
+            </select>
+          </div>
           <div className="rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] px-4 py-4 text-[12px] leading-6 text-gray-600">
-            This input is passed into the script through <code className="rounded bg-white px-1.5 py-0.5 text-[11px]">AppScriptCommand</code>.
-            The execution result will appear in the Activity dialog.
+            {(selectedDraft.runMode || 'chat') === 'chat'
+              ? <>The input is sent as a prompt to the scope&apos;s default chat endpoint. The response will appear in the Activity dialog.</>
+              : <>This input is passed into the script through <code className="rounded bg-white px-1.5 py-0.5 text-[11px]">AppScriptCommand</code>. The execution result will appear in the Activity dialog.</>}
           </div>
           <div>
             <label className="field-label">{selectedDraft.scriptId}</label>
             <textarea
               rows={7}
               className="panel-textarea mt-1 run-prompt-textarea"
-              placeholder="Enter the draft input to execute"
+              placeholder={(selectedDraft.runMode || 'chat') === 'chat' ? 'Enter a prompt' : 'Enter the draft input to execute'}
               value={runInputDraft}
               onChange={event => setRunInputDraft(event.target.value)}
             />

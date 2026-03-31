@@ -37,6 +37,7 @@ internal static class AppCommand
         command.AddCommand(AppBindingsCommand.Create(urlOption));
         command.AddCommand(AppInvokeCommand.Create(urlOption));
         command.AddCommand(AppLogsCommand.Create(urlOption));
+        command.AddCommand(OrnnSkillsCommand.Create());
 
         return command;
     }

@@ -45,6 +45,8 @@ public static class AevatarPlatformHostBuilderExtensions
                 aiOptions.EnableMEAIProviders = true;
                 aiOptions.EnableMCPTools = true;
                 aiOptions.EnableSkills = true;
+                aiOptions.EnableOrnnSkills = true;
+                aiOptions.OrnnBaseUrl = builder.Configuration["Ornn:BaseUrl"];
                 options.ConfigureAIFeatures?.Invoke(aiOptions);
             });
         }

@@ -34,6 +34,7 @@
     <Project Path="src\Aevatar.AI.LLMProviders.Tornado\Aevatar.AI.LLMProviders.Tornado.csproj" />
     <Project Path="src\Aevatar.AI.Projection\Aevatar.AI.Projection.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
+    <Project Path="src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />

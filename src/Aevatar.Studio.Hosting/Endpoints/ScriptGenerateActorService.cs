@@ -145,7 +145,7 @@ internal sealed class ScriptGeneratePromptCatalog
         using System.Threading.Tasks;
         using Aevatar.Scripting.Abstractions;
         using Aevatar.Scripting.Abstractions.Behaviors;
-        using Aevatar.Studio.Hosting.Endpoints;
+        using Aevatar.Studio.Application.Scripts.Contracts;
 
         public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScriptReadModel>
         {

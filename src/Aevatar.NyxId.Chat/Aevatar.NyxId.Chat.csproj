@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\Aevatar.AI.LLMProviders.NyxId\Aevatar.AI.LLMProviders.NyxId.csproj" />
   </ItemGroup>
   <ItemGroup>

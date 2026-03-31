@@ -18,6 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
     <!-- aevatar chat command needs Workflow SDK to run workflows locally -->
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />

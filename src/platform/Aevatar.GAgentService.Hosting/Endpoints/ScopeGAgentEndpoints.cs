@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Presentation.AGUI;
@@ -234,6 +235,12 @@ public static class ScopeGAgentEndpoints
                 ScopeId = scopeId,
             };
 
+            // Forward caller's Bearer token so NyxID-backed GAgents can pass it
+            // to the NyxID LLM gateway. Other LLM providers ignore this metadata key.
+            var bearerToken = ExtractBearerToken(http);
+            if (!string.IsNullOrWhiteSpace(bearerToken))
+                chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+
             var envelope = new EventEnvelope
             {
                 Id = Guid.NewGuid().ToString("N"),
@@ -355,6 +362,19 @@ public static class ScopeGAgentEndpoints
         if (payload.Is(AiTextEnd.Descriptor))
         {
             var ai = payload.Unpack<AiTextEnd>();
+            // RoleGAgent embeds LLM errors in TextMessageEnd.Content with a sentinel prefix.
+            // Surface them as RunError so the frontend can display them.
+            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+            if (!string.IsNullOrEmpty(ai.Content) &&
+                ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+            {
+                var errorMessage = ai.Content[llmErrorPrefix.Length..].Trim();
+                return new AGUIEvent
+                {
+                    RunError = new RunErrorEvent { Message = errorMessage },
+                };
+            }
+
             return new AGUIEvent
             {
                 TextMessageEnd = new Presentation.AGUI.TextMessageEndEvent
@@ -488,6 +508,16 @@ public static class ScopeGAgentEndpoints
                 .LogWarning(ex, "Failed to remove GAgent actor from storage");
             return Results.Ok();
         }
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(authHeader))
+            return null;
+        return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authHeader["Bearer ".Length..].Trim()
+            : null;
     }
 
     private static async Task WriteJsonErrorAsync(HttpResponse response, string code, string message, CancellationToken ct)
