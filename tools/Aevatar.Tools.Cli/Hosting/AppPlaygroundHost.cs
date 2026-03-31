@@ -9,7 +9,8 @@ internal static class AppPlaygroundHost
         int port,
         string apiBaseUrl,
         bool noBrowser,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TaskCompletionSource<string>? startedSignal = null)
     {
         var baseDir = AppContext.BaseDirectory;
         var webRootCandidates = new[]
@@ -44,6 +45,7 @@ internal static class AppPlaygroundHost
 
         app.Lifetime.ApplicationStarted.Register(() =>
         {
+            startedSignal?.TrySetResult(url);
             if (!noBrowser)
                 OpenBrowser(url);
         });
@@ -146,7 +148,21 @@ internal static class AppPlaygroundHost
         }
 
         app.MapFallbackToFile("index.html");
-        await app.RunAsync(cancellationToken);
+
+        try
+        {
+            await app.RunAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            startedSignal?.TrySetCanceled(cancellationToken);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            startedSignal?.TrySetException(ex);
+            throw;
+        }
     }
 
     private static void PrintBanner(string url, string apiBaseUrl, string webRootPath)

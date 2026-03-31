@@ -1,4 +1,8 @@
+using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -45,7 +49,8 @@ public static class NyxIdChatEndpoints
         string scopeId,
         string actorId,
         NyxIdChatStreamRequest request,
-        [FromServices] ILLMProviderFactory providerFactory,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -54,8 +59,6 @@ public static class NyxIdChatEndpoints
 
         try
         {
-            var provider = providerFactory.GetProvider("nyxid");
-
             var accessToken = ExtractBearerToken(http);
             if (string.IsNullOrWhiteSpace(accessToken))
             {
@@ -70,36 +73,78 @@ public static class NyxIdChatEndpoints
                 return;
             }
 
+            // Get or create the actor
+            var actor = await actorRuntime.GetAsync(actorId)
+                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+
+            // Set up SSE response
+            await writer.StartAsync(ct);
+
             var messageId = Guid.NewGuid().ToString("N");
-            var llmRequest = new LLMRequest
-            {
-                Messages =
-                [
-                    ChatMessage.System(NyxIdChatSystemPrompt.Value),
-                    ChatMessage.User(prompt),
-                ],
-                Metadata = new Dictionary<string, string>
+            await writer.WriteRunStartedAsync(actorId, ct);
+
+            // Subscribe to actor events and map to SSE frames
+            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var ctr = ct.Register(() => tcs.TrySetCanceled());
+
+            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+                actor.Id,
+                async envelope =>
                 {
-                    [LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken,
+                    try
+                    {
+                        await MapAndWriteEventAsync(envelope, messageId, writer);
+
+                        // Detect completion
+                        if (envelope.Payload is not null && envelope.Payload.Is(TextMessageEndEvent.Descriptor))
+                        {
+                            tcs.TrySetResult();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+                },
+                ct);
+
+            // Build and dispatch ChatRequestEvent to the actor
+            var chatRequest = new ChatRequestEvent
+            {
+                Prompt = prompt,
+                SessionId = request.SessionId ?? messageId,
+                ScopeId = scopeId,
+            };
+            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
+
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(chatRequest),
+                Route = new EnvelopeRoute
+                {
+                    Direct = new DirectRoute { TargetActorId = actor.Id },
                 },
             };
 
-            await writer.WriteRunStartedAsync(actorId, ct);
-            await writer.WriteTextStartAsync(messageId, ct);
+            await actor.HandleEventAsync(envelope, ct);
 
-            await foreach (var chunk in provider.ChatStreamAsync(llmRequest, ct))
+            // Wait for completion or timeout
+            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
+
+            if (completedTask == tcs.Task)
             {
-                if (!string.IsNullOrEmpty(chunk.DeltaContent))
-                {
-                    await writer.WriteTextDeltaAsync(chunk.DeltaContent, ct);
-                }
+                await writer.WriteRunFinishedAsync(CancellationToken.None);
             }
-
-            await writer.WriteTextEndAsync(messageId, ct);
-            await writer.WriteRunFinishedAsync(ct);
+            else
+            {
+                await writer.WriteRunErrorAsync("Request timed out.", CancellationToken.None);
+            }
         }
         catch (OperationCanceledException)
         {
+            // Client disconnected
         }
         catch (Exception ex)
         {
@@ -109,7 +154,62 @@ public static class NyxIdChatEndpoints
                 http.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 return;
             }
+
             await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// Maps AI event envelope payloads to NyxIdChat SSE frames.
+    /// </summary>
+    private static async ValueTask MapAndWriteEventAsync(
+        EventEnvelope envelope,
+        string messageId,
+        NyxIdChatSseWriter writer)
+    {
+        var payload = envelope.Payload;
+        if (payload is null)
+            return;
+
+        if (payload.Is(TextMessageStartEvent.Descriptor))
+        {
+            await writer.WriteTextStartAsync(messageId, CancellationToken.None);
+        }
+        else if (payload.Is(TextMessageContentEvent.Descriptor))
+        {
+            var evt = payload.Unpack<TextMessageContentEvent>();
+            if (!string.IsNullOrEmpty(evt.Delta))
+                await writer.WriteTextDeltaAsync(evt.Delta, CancellationToken.None);
+        }
+        else if (payload.Is(ToolCallEvent.Descriptor))
+        {
+            var evt = payload.Unpack<ToolCallEvent>();
+            await writer.WriteToolCallAsync(evt.ToolName, evt.CallId, CancellationToken.None);
+        }
+        else if (payload.Is(TextMessageEndEvent.Descriptor))
+        {
+            var evt = payload.Unpack<TextMessageEndEvent>();
+
+            // Check for LLM error markers
+            if (!string.IsNullOrEmpty(evt.Content))
+            {
+                const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+                const string llmFailedPrefix = "LLM request failed:";
+                if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+                {
+                    await writer.WriteRunErrorAsync(
+                        evt.Content[llmErrorPrefix.Length..].Trim(), CancellationToken.None);
+                    return;
+                }
+
+                if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+                {
+                    await writer.WriteRunErrorAsync(evt.Content.Trim(), CancellationToken.None);
+                    return;
+                }
+            }
+
+            await writer.WriteTextEndAsync(messageId, CancellationToken.None);
         }
     }
 

@@ -133,6 +133,29 @@
   background-color: #111b2d;
 }
 
+.studio-shell[data-color-mode="dark"] .bg-\[\#FAFAF8\],
+.studio-shell[data-color-mode="dark"] .bg-\[\#FAFAF9\],
+.studio-shell[data-color-mode="dark"] .bg-\[\#FFFCF8\],
+.studio-shell[data-color-mode="dark"] .bg-\[\#FFF9F4\],
+.studio-shell[data-color-mode="dark"] .bg-\[\#F7F5F2\] {
+  background-color: #111b2d;
+}
+
+.studio-shell[data-color-mode="dark"] .bg-gray-50,
+.studio-shell[data-color-mode="dark"] .bg-gray-100 {
+  background-color: #162236;
+}
+
+.studio-shell[data-color-mode="dark"] .hover\:bg-gray-50:hover,
+.studio-shell[data-color-mode="dark"] .hover\:bg-\[\#F7F5F2\]:hover,
+.studio-shell[data-color-mode="dark"] .hover\:bg-\[\#FFF9F4\]:hover {
+  background-color: #1a2940;
+}
+
+.studio-shell[data-color-mode="dark"] .border-gray-200 {
+  border-color: #223047;
+}
+
 .studio-shell[data-color-mode="dark"] .border-\[\#E6E3DE\],
 .studio-shell[data-color-mode="dark"] .border-\[\#EEEAE4\],
 .studio-shell[data-color-mode="dark"] .border-\[\#E5E1DA\],
@@ -159,6 +182,22 @@
 
 .studio-shell[data-color-mode="dark"] .text-gray-300 {
   color: #64748b;
+}
+
+.studio-shell[data-color-mode="dark"] .text-pink-600 {
+  color: #f472b6;
+}
+
+.studio-shell[data-color-mode="dark"] .shadow-indigo-200 {
+  --tw-shadow-color: rgba(99, 102, 241, 0.15);
+}
+
+.studio-shell[data-color-mode="dark"] .bg-\[\#18181B\] {
+  background-color: #334155;
+}
+
+.studio-shell[data-color-mode="dark"] .hover\:bg-\[\#333\]:hover {
+  background-color: #475569;
 }
 
 .studio-shell[data-color-mode="dark"] .hover\:bg-\[\#FAF8F4\]:hover,

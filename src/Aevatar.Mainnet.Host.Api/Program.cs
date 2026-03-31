@@ -3,6 +3,7 @@ using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.NyxId.Chat;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -33,6 +34,12 @@ builder.AddStudioCapability();
 builder.Services.AddNyxIdAuthentication();
 builder.AddAevatarAuthentication();
 builder.Services.AddNyxIdChat();
+builder.Services.AddNyxIdTools(o =>
+{
+    o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
+                ?? builder.Configuration["Cli:App:NyxId:Authority"]
+                ?? builder.Configuration["Aevatar:Authentication:Authority"];
+});
 
 var app = builder.Build();
 

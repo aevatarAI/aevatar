@@ -129,6 +129,7 @@ public static class ScopeGAgentEndpoints
         GAgentDraftRunHttpRequest request,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -165,14 +166,30 @@ public static class ScopeGAgentEndpoints
                 : request.PreferredActorId.Trim();
 
             IActor actor;
+            bool isNewActor;
             if (preferredId is not null)
             {
                 var existing = await actorRuntime.GetAsync(preferredId);
                 actor = existing ?? await actorRuntime.CreateAsync(agentType, preferredId, ct);
+                isNewActor = existing is null;
             }
             else
             {
                 actor = await actorRuntime.CreateAsync(agentType, null, ct);
+                isNewActor = true;
+            }
+
+            // Persist newly created actor to chrono-storage so it appears in actors.json
+            if (isNewActor)
+            {
+                try
+                {
+                    await actorStore.AddActorAsync(request.ActorTypeName.Trim(), actor.Id, ct);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to persist actor {ActorId} to actor store", actor.Id);
+                }
             }
 
             // Set up SSE response
@@ -378,21 +395,27 @@ public static class ScopeGAgentEndpoints
         if (payload.Is(AiTextEnd.Descriptor))
         {
             var ai = payload.Unpack<AiTextEnd>();
-            // RoleGAgent embeds LLM errors in TextMessageEnd.Content.
-            // With timeoutMs > 0: prefixed with "[[AEVATAR_LLM_ERROR]]"
-            // With timeoutMs = 0 (default): "LLM request failed: <message>"
-            // Any non-empty content here is either an error or unexpected — surface as RunError.
-            // Normal streaming text arrives via TextMessageContentEvent, not here.
+            // RoleGAgent embeds LLM errors in TextMessageEnd.Content with known prefixes.
+            // Normal completion content also arrives here (duplicate of already-streamed deltas) — ignore it.
             if (!string.IsNullOrEmpty(ai.Content))
             {
                 const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                var errorMessage = ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal)
-                    ? ai.Content[llmErrorPrefix.Length..].Trim()
-                    : ai.Content.Trim();
-                return new AGUIEvent
+                const string llmFailedPrefix = "LLM request failed:";
+                if (ai.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
                 {
-                    RunError = new RunErrorEvent { Message = errorMessage },
-                };
+                    return new AGUIEvent
+                    {
+                        RunError = new RunErrorEvent { Message = ai.Content[llmErrorPrefix.Length..].Trim() },
+                    };
+                }
+
+                if (ai.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+                {
+                    return new AGUIEvent
+                    {
+                        RunError = new RunErrorEvent { Message = ai.Content.Trim() },
+                    };
+                }
             }
 
             return new AGUIEvent

@@ -7,7 +7,6 @@ namespace Aevatar.Tools.Cli.Tests;
 
 public sealed class AppPlaygroundHostTests : IAsyncDisposable
 {
-    private const int TestPort = 0; // OS-assigned
     private CancellationTokenSource? _cts;
     private Task? _hostTask;
     private string? _baseUrl;
@@ -19,27 +18,11 @@ public sealed class AppPlaygroundHostTests : IAsyncDisposable
         var port = GetAvailablePort();
         _cts = new CancellationTokenSource();
         var apiBaseUrl = $"http://localhost:{backendPort}";
+        var startedSignal = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _hostTask = AppPlaygroundHost.RunAsync(port, apiBaseUrl, noBrowser: true, _cts.Token);
-
-        // Wait for the host to start accepting requests.
-        _baseUrl = $"http://localhost:{port}";
-        using var client = new HttpClient();
-        for (var i = 0; i < 30; i++)
-        {
-            try
-            {
-                var response = await client.GetAsync($"{_baseUrl}/api/health");
-                if (response.IsSuccessStatusCode)
-                    return _baseUrl;
-            }
-            catch (HttpRequestException)
-            {
-            }
-            await Task.Delay(100);
-        }
-
-        throw new TimeoutException($"AppPlaygroundHost did not start within 3s on port {port}");
+        _hostTask = AppPlaygroundHost.RunAsync(port, apiBaseUrl, noBrowser: true, _cts.Token, startedSignal);
+        _baseUrl = await startedSignal.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        return _baseUrl;
     }
 
     public async ValueTask DisposeAsync()

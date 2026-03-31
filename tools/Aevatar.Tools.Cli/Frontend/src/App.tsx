@@ -36,6 +36,7 @@ import {
   GitBranch,
   Globe,
   LayoutGrid,
+  Loader2,
   LogOut,
   Moon,
   Maximize2,
@@ -699,41 +700,6 @@ function createUniqueProviderName(providerType: string, providers: ProviderDraft
   return candidate;
 }
 
-function resolveProviderNameForType(
-  providerType: string,
-  currentProviderKey: string,
-  currentProviderName: string,
-  providers: ProviderDraft[],
-) {
-  const fixed = getFixedProviderName(providerType);
-  if (!fixed) {
-    return currentProviderName;
-  }
-
-  const occupied = providers.some(provider =>
-    provider.key !== currentProviderKey
-    && provider.providerName.trim().toLowerCase() === fixed);
-
-  return occupied ? currentProviderName : fixed;
-}
-
-function getFeaturedProviderTypes(providerTypes: ProviderTypeOption[]) {
-  const seen = new Set<string>();
-  return providerTypes.filter(type => {
-    if (!type.recommended && !usesFixedProviderName(type.id)) {
-      return false;
-    }
-
-    const normalizedId = type.id.trim().toLowerCase();
-    if (seen.has(normalizedId)) {
-      return false;
-    }
-
-    seen.add(normalizedId);
-    return true;
-  });
-}
-
 function createUniqueRoleId(existingRoles: RoleState[], base = 'role') {
   const normalizedBase = (base || 'role').replace(/[^a-z0-9_]+/gi, '_').toLowerCase() || 'role';
   const used = new Set(existingRoles.map(role => role.id.trim().toLowerCase()).filter(Boolean));
@@ -876,8 +842,7 @@ function App() {
   const [showDirectoryForm, setShowDirectoryForm] = useState(false);
 
   const [settingsState, setSettingsState] = useState<StudioSettingsState>(createEmptyStudioSettings());
-  const [providerSearch, setProviderSearch] = useState('');
-  const [selectedProviderKey, setSelectedProviderKey] = useState<string | null>(null);
+  const [, setSelectedProviderKey] = useState<string | null>(null);
 
   const [workflowMeta, setWorkflowMeta] = useState<WorkflowMetaState>(createEmptyWorkflowMeta());
   const [roles, setRoles] = useState<RoleState[]>(createDefaultRoles());
@@ -1002,11 +967,6 @@ function App() {
   const selectedCatalogRole = roleCatalog.find(role => role.key === selectedCatalogRoleKey) || null;
   const connectorCatalogIsRemote = connectorsMeta.filePath.startsWith('chrono-storage://');
   const roleCatalogIsRemote = rolesMeta.filePath.startsWith('chrono-storage://');
-  const selectedProvider = settingsState.providers.find(provider => provider.key === selectedProviderKey) || null;
-  const providerTypeMap = useMemo(
-    () => new Map(settingsState.providerTypes.map(item => [item.id, item])),
-    [settingsState.providerTypes],
-  );
   const currentWorkflowExecutions = executions.filter(item => {
     const currentName = normalizeWorkflowName(workflowMeta.name);
     return !currentName || normalizeWorkflowName(item.workflowName) === currentName;
@@ -2990,62 +2950,6 @@ function App() {
     }
   }
 
-  function handleCreateProvider(providerTypeId?: string) {
-    const type = providerTypeId || settingsState.providerTypes.find(item => item.recommended)?.id || settingsState.providerTypes[0]?.id || 'openai';
-    const fixedName = getFixedProviderName(type);
-    if (fixedName) {
-      const existing = settingsState.providers.find(provider =>
-        provider.providerName.trim().toLowerCase() === fixedName);
-      if (existing) {
-        setSelectedProviderKey(existing.key);
-        openSettingsPage('runtime');
-        return;
-      }
-    }
-
-    const provider = createProviderDraft(type, settingsState.providerTypes, settingsState.providers);
-    setSettingsState(prev => ({
-      ...prev,
-      providers: [provider, ...prev.providers],
-      defaultProviderName: prev.defaultProviderName || provider.providerName,
-    }));
-    setSelectedProviderKey(provider.key);
-    openSettingsPage('runtime');
-  }
-
-  function updateProvider(providerKey: string, updater: (provider: ProviderDraft) => ProviderDraft) {
-    setSettingsState(prev => {
-      const nextProviders = prev.providers.map(provider => {
-        if (provider.key !== providerKey) {
-          return provider;
-        }
-
-        return updater(provider);
-      });
-
-      return {
-        ...prev,
-        providers: nextProviders,
-      };
-    });
-  }
-
-  function handleDeleteProvider(providerKey: string) {
-    setSettingsState(prev => {
-      const removing = prev.providers.find(provider => provider.key === providerKey);
-      const nextProviders = prev.providers.filter(provider => provider.key !== providerKey);
-      const nextDefaultProviderName = removing && prev.defaultProviderName === removing.providerName
-        ? nextProviders[0]?.providerName || ''
-        : prev.defaultProviderName;
-      setSelectedProviderKey(nextProviders[0]?.key || null);
-      return {
-        ...prev,
-        providers: nextProviders,
-        defaultProviderName: nextDefaultProviderName,
-      };
-    });
-  }
-
   function updateSelectedNode(updater: (node: Node<StudioNodeData>) => Node<StudioNodeData>) {
     if (!selectedNodeId) {
       return;
@@ -3246,21 +3150,6 @@ function App() {
   const filteredWorkflowCatalogRoles = roleCatalog.filter(role => matchesRoleQuery(role, workflowRoleSearch));
   const filteredWorkflowRoles = roles.filter(role => matchesRoleQuery(role, workflowRoleSearch));
 
-  const filteredProviders = settingsState.providers.filter(provider => {
-    const query = providerSearch.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-
-    return [
-      provider.providerName,
-      provider.providerType,
-      provider.displayName,
-      provider.model,
-      provider.endpoint,
-    ].join(' ').toLowerCase().includes(query);
-  });
-
   const selectedNodeOutgoingEdges = selectedNode
     ? edges.filter(edge => edge.source === selectedNode.id)
     : [];
@@ -3283,11 +3172,6 @@ function App() {
   const selectedIconSurfaceStyle = {
     background: 'var(--accent-icon-surface)',
     color: 'var(--accent)',
-  } as const;
-  const accentToggleStyle = {
-    borderColor: 'var(--accent-border)',
-    background: 'var(--accent-soft-end)',
-    color: 'var(--accent-text)',
   } as const;
   const authProviderLabel = authSession.providerDisplayName || 'NyxID';
   const authAccountLabel = authSession.name || authSession.email || authProviderLabel;
@@ -6021,28 +5905,35 @@ function CloudConfigSection(props: {
       </div>
 
       {/* Providers status */}
-      {readyProviders.length > 0 && (
+      {(userConfigState.modelsLoading || readyProviders.length > 0) && (
         <div className="settings-section-card space-y-3">
           <div className="section-heading">Connected providers</div>
-          <div className="flex flex-wrap gap-2">
-            {userConfigState.providers.map(p => (
-              <span
-                key={p.provider_slug}
-                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium ${
-                  p.status === 'ready'
-                    ? 'bg-green-50 text-green-700'
-                    : p.status === 'expired'
-                    ? 'bg-amber-50 text-amber-700'
-                    : 'bg-gray-100 text-gray-400'
-                }`}
-              >
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${
-                  p.status === 'ready' ? 'bg-green-500' : p.status === 'expired' ? 'bg-amber-500' : 'bg-gray-300'
-                }`} />
-                {p.provider_name}
-              </span>
-            ))}
-          </div>
+          {userConfigState.modelsLoading ? (
+            <div className="flex items-center gap-2 py-2 text-[12px] text-gray-400">
+              <Loader2 size={16} className="animate-spin" />
+              <span>Loading providers...</span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {userConfigState.providers.map(p => (
+                <span
+                  key={p.provider_slug}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium ${
+                    p.status === 'ready'
+                      ? 'bg-green-50 text-green-700'
+                      : p.status === 'expired'
+                      ? 'bg-amber-50 text-amber-700'
+                      : 'bg-gray-100 text-gray-400'
+                  }`}
+                >
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                    p.status === 'ready' ? 'bg-green-500' : p.status === 'expired' ? 'bg-amber-500' : 'bg-gray-300'
+                  }`} />
+                  {p.provider_name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

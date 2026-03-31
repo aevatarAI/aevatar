@@ -22,6 +22,7 @@
     <File Path="Directory.Build.props" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Aevatar.AI.ToolProviders.NyxId/Aevatar.AI.ToolProviders.NyxId.csproj" />
     <Project Path="src/Aevatar.CQRS.Projection.Runtime.Abstractions/Aevatar.CQRS.Projection.Runtime.Abstractions.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />

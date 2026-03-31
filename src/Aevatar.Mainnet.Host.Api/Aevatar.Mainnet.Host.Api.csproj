@@ -14,5 +14,6 @@
     <ProjectReference Include="..\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
     <ProjectReference Include="..\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
     <ProjectReference Include="..\Aevatar.NyxId.Chat\Aevatar.NyxId.Chat.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
   </ItemGroup>
 </Project>

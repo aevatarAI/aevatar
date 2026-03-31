@@ -1,0 +1,178 @@
+using System.Net.Http.Headers;
+using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace Aevatar.AI.ToolProviders.NyxId;
+
+/// <summary>HTTP client for calling NyxID REST API endpoints.</summary>
+public sealed class NyxIdApiClient
+{
+    private readonly HttpClient _http;
+    private readonly NyxIdToolOptions _options;
+    private readonly ILogger _logger;
+
+    public NyxIdApiClient(
+        NyxIdToolOptions options,
+        HttpClient? httpClient = null,
+        ILogger<NyxIdApiClient>? logger = null)
+    {
+        _options = options;
+        _http = httpClient ?? new HttpClient();
+        _logger = logger ?? NullLogger<NyxIdApiClient>.Instance;
+    }
+
+    // ─── Account ───
+
+    public Task<string> GetCurrentUserAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/users/me", ct);
+
+    // ─── Catalog ───
+
+    public Task<string> ListCatalogAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/catalog", ct);
+
+    public Task<string> GetCatalogEntryAsync(string token, string slug, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/catalog/{Uri.EscapeDataString(slug)}", ct);
+
+    // ─── AI Services (unified /keys) ───
+
+    public Task<string> ListServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/keys", ct);
+
+    public Task<string> GetServiceAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> DeleteServiceAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── Proxy ───
+
+    public async Task<string> ProxyRequestAsync(
+        string token,
+        string slug,
+        string path,
+        string method,
+        string? body,
+        Dictionary<string, string>? extraHeaders,
+        CancellationToken ct)
+    {
+        var baseUrl = GetBaseUrl();
+        var normalizedPath = path.TrimStart('/');
+        var url = $"{baseUrl}/api/v1/proxy/s/{Uri.EscapeDataString(slug)}/{normalizedPath}";
+
+        var httpMethod = new HttpMethod(method.ToUpperInvariant());
+        using var request = new HttpRequestMessage(httpMethod, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        if (extraHeaders != null)
+        {
+            foreach (var (key, value) in extraHeaders)
+                request.Headers.TryAddWithoutValidation(key, value);
+        }
+
+        if (!string.IsNullOrEmpty(body) && httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head)
+        {
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        }
+
+        return await SendAsync(request, ct);
+    }
+
+    // ─── API Keys ───
+
+    public Task<string> ListApiKeysAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/api-keys", ct);
+
+    public Task<string> CreateApiKeyAsync(string token, string requestBody, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/api-keys", requestBody, ct);
+
+    // ─── Nodes ───
+
+    public Task<string> ListNodesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/nodes", ct);
+
+    public Task<string> GetNodeAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> DeleteNodeAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── Approvals ───
+
+    public Task<string> ListApprovalsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/approvals/requests", ct);
+
+    public Task<string> DecideApprovalAsync(string token, string id, string decisionBody, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}/decide", decisionBody, ct);
+
+    public Task<string> ListApprovalServiceConfigsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/approvals/service-configs", ct);
+
+    // ─── Notifications ───
+
+    public Task<string> GetNotificationSettingsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/notifications/settings", ct);
+
+    // ─── LLM ───
+
+    public Task<string> GetLlmStatusAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/llm/status", ct);
+
+    // ─── HTTP helpers ───
+
+    private string GetBaseUrl() =>
+        _options.BaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("NyxID base URL is not configured.");
+
+    private async Task<string> GetAsync(string token, string path, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await SendAsync(request, ct);
+    }
+
+    private async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await SendAsync(request, ct);
+    }
+
+    private async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Delete, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        return await SendAsync(request, ct);
+    }
+
+    private async Task<string> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        try
+        {
+            using var response = await _http.SendAsync(request, ct);
+            var content = await response.Content.ReadAsStringAsync(ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "NyxID API request failed: {Method} {Url} -> {Status}",
+                    request.Method, request.RequestUri, (int)response.StatusCode);
+                return $"{{\"error\": true, \"status\": {(int)response.StatusCode}, \"body\": {EscapeJsonString(content)}}}";
+            }
+
+            return content;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "NyxID API request exception: {Method} {Url}", request.Method, request.RequestUri);
+            return $"{{\"error\": true, \"message\": {EscapeJsonString(ex.Message)}}}";
+        }
+    }
+
+    private static string EscapeJsonString(string value) =>
+        System.Text.Json.JsonSerializer.Serialize(value);
+}
