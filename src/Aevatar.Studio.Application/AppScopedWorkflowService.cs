@@ -26,6 +26,7 @@ public sealed class AppScopedWorkflowService
     private readonly IScopeWorkflowCommandPort? _workflowCommandPort;
     private readonly IWorkflowActorBindingReader? _workflowActorBindingReader;
     private readonly IServiceRevisionArtifactStore? _artifactStore;
+    private readonly IServiceLifecycleQueryPort? _serviceLifecycleQueryPort;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
 
@@ -35,7 +36,8 @@ public sealed class AppScopedWorkflowService
         IScopeWorkflowQueryPort? workflowQueryPort = null,
         IScopeWorkflowCommandPort? workflowCommandPort = null,
         IWorkflowActorBindingReader? workflowActorBindingReader = null,
-        IServiceRevisionArtifactStore? artifactStore = null)
+        IServiceRevisionArtifactStore? artifactStore = null,
+        IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
@@ -43,6 +45,7 @@ public sealed class AppScopedWorkflowService
         _workflowCommandPort = workflowCommandPort;
         _workflowActorBindingReader = workflowActorBindingReader;
         _artifactStore = artifactStore;
+        _serviceLifecycleQueryPort = serviceLifecycleQueryPort;
     }
 
     public async Task<IReadOnlyList<WorkflowSummary>> ListAsync(
@@ -88,11 +91,36 @@ public sealed class AppScopedWorkflowService
             // try the artifact store which is written synchronously during save.
             if (string.IsNullOrWhiteSpace(yaml) &&
                 _artifactStore != null &&
-                !string.IsNullOrWhiteSpace(workflow.ServiceKey) &&
-                !string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
+                !string.IsNullOrWhiteSpace(workflow.ServiceKey))
             {
-                var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
-                yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
+                // Try with known revision ID.
+                if (!string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
+                {
+                    var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
+                    yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
+                }
+
+                // If revision ID is empty (deployment snapshot not ready yet),
+                // scan for the latest revision via the service lifecycle query.
+                if (string.IsNullOrWhiteSpace(yaml) && _workflowQueryPort != null)
+                {
+                    var identity = new ServiceIdentity
+                    {
+                        TenantId = normalizedScopeId,
+                        AppId = "default",
+                        Namespace = "default",
+                        ServiceId = normalizedWorkflowId,
+                    };
+                    var svc = await _serviceLifecycleQueryPort?.GetServiceAsync(identity, ct);
+                    var revId = svc?.ActiveServingRevisionId;
+                    if (string.IsNullOrWhiteSpace(revId))
+                        revId = svc?.DefaultServingRevisionId;
+                    if (!string.IsNullOrWhiteSpace(revId))
+                    {
+                        var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, revId, ct);
+                        yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
+                    }
+                }
             }
 
             return ToWorkflowFileResponse(

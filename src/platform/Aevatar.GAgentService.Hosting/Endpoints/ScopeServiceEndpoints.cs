@@ -175,7 +175,8 @@ public static class ScopeServiceEndpoints
                             .ToArray()),
                     request.DisplayName,
                     request.RevisionId,
-                    request.AppId),
+                    request.AppId,
+                    request.ServiceId),
                 ct);
             return Results.Ok(result);
         }
@@ -1947,7 +1948,8 @@ public static class ScopeServiceEndpoints
         ScopeBindingGAgentHttpRequest? GAgent = null,
         string? DisplayName = null,
         string? RevisionId = null,
-        string? AppId = null);
+        string? AppId = null,
+        string? ServiceId = null);
 
     public sealed record ScopeBindingWorkflowHttpRequest(
         IReadOnlyList<string>? WorkflowYamls);

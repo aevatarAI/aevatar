@@ -5,6 +5,7 @@ using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
+using Aevatar.GAgents.ChatbotClassifier;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -36,6 +37,7 @@ builder.Services.AddNyxIdAuthentication();
 builder.AddAevatarAuthentication();
 builder.Services.AddNyxIdChat();
 builder.Services.AddStreamingProxy();
+builder.Services.AddChatbotClassifier();
 builder.Services.AddNyxIdTools(o =>
 {
     o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]

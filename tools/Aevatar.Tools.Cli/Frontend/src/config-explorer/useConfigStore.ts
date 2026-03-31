@@ -11,7 +11,7 @@ import {
   createEmptyConnector,
   createUniqueConnectorName,
 } from '../studio';
-import type { ConfigFile, GAgentType, ActorGroup, ProviderInfo, WorkflowEntry } from './types';
+import type { ConfigFile, ProviderInfo, WorkflowEntry, ScriptEntry } from './types';
 import type { ConversationMeta, StoredChatMessage } from '../runtime/chatTypes';
 
 export type ConfigStore = ReturnType<typeof useConfigStore>;
@@ -35,10 +35,6 @@ export function useConfigStore(scopeId: string) {
   const [connectorsSaving, setConnectorsSaving] = useState(false);
   const connectorsSnap = useRef('');
 
-  // ── actors.json ──
-  const [actorGroups, setActorGroups] = useState<ActorGroup[]>([]);
-  const [actorTypes, setActorTypes] = useState<GAgentType[]>([]);
-
   // ── LLM models ──
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [supportedModels, setSupportedModels] = useState<string[]>([]);
@@ -48,6 +44,9 @@ export function useConfigStore(scopeId: string) {
   const [workflows, setWorkflows] = useState<WorkflowEntry[]>([]);
   const [selectedWorkflowYaml, setSelectedWorkflowYaml] = useState<string | null>(null);
   const [workflowLoading, setWorkflowLoading] = useState(false);
+
+  // ── Scripts ──
+  const [scripts, setScripts] = useState<ScriptEntry[]>([]);
 
   // ── Chat history ──
   const [chatConversations, setChatConversations] = useState<ConversationMeta[]>([]);
@@ -71,16 +70,15 @@ export function useConfigStore(scopeId: string) {
   // ── Load all data ──
   const loadAll = useCallback(async () => {
     setLoading(true);
-    const [configRes, rolesRes, connectorsRes, actorsRes, typesRes, modelsRes, chatRes, workflowsRes] =
+    const [configRes, rolesRes, connectorsRes, modelsRes, chatRes, workflowsRes, scriptsRes] =
       await Promise.allSettled([
         api.userConfig.get(),
         api.roles.getCatalog(),
         api.connectors.getCatalog(),
-        scopeId ? api.gagent.listActors(scopeId) : Promise.resolve([]),
-        api.gagent.listTypes(),
         api.userConfig.models(),
         scopeId ? api.chatHistory.getIndex(scopeId) : Promise.resolve({ conversations: [] }),
         api.workspace.listWorkflows(),
+        api.app.listScripts(true),
       ]);
 
     // config — store as raw JSON
@@ -104,16 +102,6 @@ export function useConfigStore(scopeId: string) {
       connectorsSnap.current = JSON.stringify(list);
     }
 
-    // actors
-    if (actorsRes.status === 'fulfilled') {
-      setActorGroups(actorsRes.value ?? []);
-    }
-
-    // types
-    if (typesRes.status === 'fulfilled') {
-      setActorTypes(typesRes.value ?? []);
-    }
-
     // models
     if (modelsRes.status === 'fulfilled' && modelsRes.value) {
       setProviders(modelsRes.value.providers ?? []);
@@ -135,6 +123,18 @@ export function useConfigStore(scopeId: string) {
         updatedAtUtc: w.updatedAtUtc || w.UpdatedAtUtc || '',
         description: w.description || w.Description || '',
       })));
+    }
+
+    // scripts
+    if (scriptsRes.status === 'fulfilled' && Array.isArray(scriptsRes.value)) {
+      setScripts(scriptsRes.value
+        .filter((d: any) => d?.script?.scriptId)
+        .map((d: any) => ({
+          scriptId: d.script.scriptId || '',
+          activeRevision: d.script.activeRevision || '',
+          updatedAt: d.script.updatedAt || '',
+          sourceText: d.source?.sourceText || '',
+        })));
     }
 
     setLoading(false);
@@ -249,14 +249,6 @@ export function useConfigStore(scopeId: string) {
     setConnectors(prev => prev.filter(c => c.key !== key));
   }
 
-  // ── Actor mutations (immediate API, read + delete only) ──
-  async function removeActor(gagentType: string, actorId: string) {
-    if (!scopeId) return;
-    await api.gagent.removeActor(scopeId, gagentType, actorId);
-    const data = await api.gagent.listActors(scopeId);
-    setActorGroups(data ?? []);
-  }
-
   // ── Chat history mutations ──
   async function deleteChatConversation(convId: string) {
     if (!scopeId) return;
@@ -298,11 +290,6 @@ export function useConfigStore(scopeId: string) {
     removeConnector,
     saveConnectors,
 
-    // actors
-    actorGroups,
-    actorTypes,
-    removeActor,
-
     // models
     providers,
     supportedModels,
@@ -312,6 +299,9 @@ export function useConfigStore(scopeId: string) {
     workflows,
     selectedWorkflowYaml,
     workflowLoading,
+
+    // scripts
+    scripts,
 
     // chat history
     chatConversations,

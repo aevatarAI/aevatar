@@ -3,13 +3,13 @@ import type { ConfigStore } from './useConfigStore';
 import ConfigEditor from './editors/ConfigEditor';
 import RolesEditor from './editors/RolesEditor';
 import ConnectorsEditor from './editors/ConnectorsEditor';
-import ActorsEditor from './editors/ActorsEditor';
 import ChatHistoryViewer from './editors/ChatHistoryViewer';
 
 type Props = {
   store: ConfigStore;
   flash: (msg: string, type: 'success' | 'error') => void;
   onOpenWorkflowInStudio?: (workflowId: string) => void;
+  onOpenScriptInStudio?: (scriptId: string) => void;
 };
 
 function WorkflowViewer({ store, onOpenWorkflowInStudio }: { store: ConfigStore; onOpenWorkflowInStudio?: (workflowId: string) => void }) {
@@ -54,7 +54,49 @@ function WorkflowViewer({ store, onOpenWorkflowInStudio }: { store: ConfigStore;
   );
 }
 
-export default function EditorPanel({ store, flash, onOpenWorkflowInStudio }: Props) {
+function ScriptViewer({ store, onOpenScriptInStudio }: { store: ConfigStore; onOpenScriptInStudio?: (scriptId: string) => void }) {
+  const scriptId = store.selectedFile.replace('script:', '');
+  const script = store.scripts.find(s => s.scriptId === scriptId);
+
+  if (!script) {
+    return <div className="text-[13px] text-gray-400">Script not found.</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-[15px] font-semibold text-gray-800">{script.scriptId}.cs</div>
+          <div className="text-[11px] text-gray-400 mt-1">
+            Revision: {script.activeRevision} · Updated: {script.updatedAt ? new Date(script.updatedAt).toLocaleString() : 'unknown'}
+          </div>
+        </div>
+        {onOpenScriptInStudio && (
+          <button
+            onClick={() => onOpenScriptInStudio(scriptId)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] transition-colors"
+          >
+            <ExternalLink size={12} />
+            Open in Script Studio
+          </button>
+        )}
+      </div>
+      {script.sourceText ? (
+        <pre className="rounded-[14px] border border-[#E6E3DE] bg-[#FAFAF9] p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto max-h-[70vh] overflow-y-auto">
+          {script.sourceText}
+        </pre>
+      ) : (
+        <div className="text-[13px] text-gray-400">Source code not available. The script may need to be promoted first.</div>
+      )}
+    </div>
+  );
+}
+
+export default function EditorPanel({ store, flash, onOpenWorkflowInStudio, onOpenScriptInStudio }: Props) {
+  if (store.selectedFile.startsWith('script:')) {
+    return <ScriptViewer store={store} onOpenScriptInStudio={onOpenScriptInStudio} />;
+  }
+
   if (store.selectedFile.startsWith('workflow:')) {
     return <WorkflowViewer store={store} onOpenWorkflowInStudio={onOpenWorkflowInStudio} />;
   }
@@ -71,8 +113,6 @@ export default function EditorPanel({ store, flash, onOpenWorkflowInStudio }: Pr
       return <RolesEditor store={store} flash={flash} />;
     case 'connectors.json':
       return <ConnectorsEditor store={store} flash={flash} />;
-    case 'actors.json':
-      return <ActorsEditor store={store} flash={flash} />;
     default:
       return null;
   }

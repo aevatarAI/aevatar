@@ -36,7 +36,8 @@ public sealed record ScopeBindingUpsertRequest(
     ScopeBindingGAgentSpec? GAgent = null,
     string? DisplayName = null,
     string? RevisionId = null,
-    string? AppId = null);
+    string? AppId = null,
+    string? ServiceId = null);
 
 public sealed record ScopeBindingWorkflowResult(
     string WorkflowName,

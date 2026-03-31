@@ -31,16 +31,24 @@ export type ToolCallInfo = {
   result?: string;
 };
 
+export type ServiceEndpoint = {
+  endpointId: string;
+  displayName: string;
+  kind: string;
+};
+
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: 'nyxid-chat' | 'service' | 'draft-run';
+  kind: 'nyxid-chat' | 'service';
+  endpoints: ServiceEndpoint[];
 };
 
 /* ─── Chat History Persistence Types ─── */
 
 export type ConversationMeta = {
   id: string;
+  actorId?: string;
   title: string;
   serviceId: string;
   serviceKind: string;

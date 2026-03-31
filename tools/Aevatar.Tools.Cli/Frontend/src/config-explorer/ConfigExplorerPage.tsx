@@ -10,9 +10,10 @@ type Props = {
   initialFolder?: string | null;
   onInitialFolderConsumed?: () => void;
   onOpenWorkflowInStudio?: (workflowId: string) => void;
+  onOpenScriptInStudio?: (scriptId: string) => void;
 };
 
-export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onInitialFolderConsumed, onOpenWorkflowInStudio }: Props) {
+export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onInitialFolderConsumed, onOpenWorkflowInStudio, onOpenScriptInStudio }: Props) {
   const store = useConfigStore(scopeId);
 
   useEffect(() => {
@@ -86,7 +87,9 @@ export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onIn
               isDirty={store.isDirty}
               chatConversations={store.chatConversations}
               workflows={store.workflows}
+              scripts={store.scripts}
               onOpenWorkflowInStudio={onOpenWorkflowInStudio}
+              onOpenScriptInStudio={onOpenScriptInStudio}
               initialFolder={initialFolder}
             />
           )}
@@ -100,7 +103,7 @@ export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onIn
               <span>Loading...</span>
             </div>
           ) : (
-            <EditorPanel store={store} flash={flash} onOpenWorkflowInStudio={onOpenWorkflowInStudio} />
+            <EditorPanel store={store} flash={flash} onOpenWorkflowInStudio={onOpenWorkflowInStudio} onOpenScriptInStudio={onOpenScriptInStudio} />
           )}
         </div>
       </section>

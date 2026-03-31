@@ -842,7 +842,7 @@ function App() {
   const [executionPrompt, setExecutionPrompt] = useState('');
   const [runModalOpen, setRunModalOpen] = useState(false);
   const [runScopeId, setRunScopeId] = useState(() => nyxid.loadSession()?.user.sub || '');
-  const [_runServiceId, _setRunServiceId] = useState('');
+  const [bindServiceId, setBindServiceId] = useState('');
   const [bindScopeModalOpen, setBindScopeModalOpen] = useState(false);
   const [bindScopePending, setBindScopePending] = useState(false);
   const [draftRunEvents, setDraftRunEvents] = useState<any[]>([]);
@@ -2127,9 +2127,10 @@ function App() {
         flash('No workflow YAML to bind', 'error');
         return;
       }
-      const result = await api.scope.bindWorkflow(scopeId, [yamlContent], workflowMeta.name.trim() || undefined);
+      const sid = bindServiceId.trim() || undefined;
+      const result = await api.scope.bindWorkflow(scopeId, [yamlContent], workflowMeta.name.trim() || undefined, sid);
       setBindScopeModalOpen(false);
-      flash(`Scope bound: serviceId=${result?.serviceId || 'default'}, revision=${result?.revisionId || 'latest'}`, 'success');
+      flash(`Bound as service "${sid || 'default'}". Revision: ${result?.revisionId || 'latest'}`, 'success');
     } catch (error: any) {
       flash(error?.message || 'Bind scope failed', 'error');
     } finally {
@@ -3271,6 +3272,7 @@ function App() {
             initialFolder={explorerInitialFolder}
             onInitialFolderConsumed={() => setExplorerInitialFolder(null)}
             onOpenWorkflowInStudio={(workflowId: string) => { void openWorkflow(workflowId); }}
+            onOpenScriptInStudio={() => { setWorkspacePage('scripts'); }}
           />
         ) : workspacePage === 'gagents' ? (
           <GAgentPage />
@@ -4534,13 +4536,23 @@ function App() {
       >
         <div className="space-y-3">
           <div className="text-[12px] text-gray-500">
-            Binds the current workflow as the default scope service (<code>serviceId=default</code>).
-            After binding, you can invoke it from <strong>Scope → Invoke</strong>.
+            Binds the current workflow as a scope service. After binding, invoke it from <strong>Console</strong> by selecting the service.
           </div>
-          <div className="rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-4 py-3 text-[13px]">
+          <div className="space-y-2">
+            <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Service ID</label>
+            <input
+              className="w-full rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              placeholder="default"
+              value={bindServiceId}
+              onChange={e => setBindServiceId(e.target.value)}
+            />
+            <div className="text-[10px] text-gray-400">
+              Invoke path: <code className="text-gray-500">/services/{bindServiceId.trim() || 'default'}/invoke/chat:stream</code>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-4 py-3 text-[13px] space-y-0.5">
             <div><span className="text-gray-400">Scope:</span> <strong>{runScopeId || '(not logged in)'}</strong></div>
             <div><span className="text-gray-400">Workflow:</span> <strong>{workflowMeta.name || 'draft'}</strong></div>
-            <div><span className="text-gray-400">Target:</span> <code>PUT /api/scopes/{'{scopeId}'}/binding</code></div>
           </div>
         </div>
       </ModalShell>

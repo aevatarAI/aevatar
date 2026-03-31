@@ -38,6 +38,7 @@ export default function GAgentPage() {
   // Bind state
   const [binding, setBinding] = useState(false);
   const [bindResult, setBindResult] = useState('');
+  const [bindServiceId, setBindServiceId] = useState('');
   const [extraEndpoints, setExtraEndpoints] = useState<ExtraEndpoint[]>([]);
   const [newEp, setNewEp] = useState<ExtraEndpoint>({ endpointId: '', displayName: '', kind: 'command', requestTypeUrl: '', description: '' });
   const [showAddEp, setShowAddEp] = useState(false);
@@ -99,49 +100,15 @@ export default function GAgentPage() {
     setBinding(true);
     setBindResult('');
     try {
-      // Combine auto-discovered endpoints with any user-added extra endpoints.
-      const discoveredEps = (selectedType.endpoints ?? [])
-        .filter(ep => ep.endpointId !== 'chat') // Backend always injects chat; avoid duplicates.
-        .map(ep => ({
-          endpointId: ep.endpointId,
-          displayName: ep.displayName || ep.endpointId,
-          kind: ep.kind,
-          requestTypeUrl: ep.requestTypeUrl || null,
-          responseTypeUrl: null,
-          description: ep.description || null,
-        }));
-      const userEps = extraEndpoints.map(ep => ({
-        endpointId: ep.endpointId,
-        displayName: ep.displayName || ep.endpointId,
-        kind: ep.kind,
-        requestTypeUrl: ep.requestTypeUrl || null,
-        responseTypeUrl: null,
-        description: ep.description || null,
-      }));
-      // Merge: discovered first, then user-added (skip duplicates by endpointId).
-      const seenIds = new Set(discoveredEps.map(e => e.endpointId));
-      const allEndpoints = [...discoveredEps, ...userEps.filter(e => !seenIds.has(e.endpointId))];
-
-      const res = await fetch(`/api/scopes/${encodeURIComponent(scopeId)}/binding`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${nyxid.getAccessToken() || ''}`,
-        },
-        body: JSON.stringify({
-          implementationKind: 'gagent',
-          gAgent: {
-            actorTypeName: `${selectedType.fullName}, ${selectedType.assemblyName}`,
-            preferredActorId: effectiveActorId || null,
-            endpoints: allEndpoints,
-          },
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.message || `Bind failed (${res.status})`);
-      }
-      setBindResult(`Bound "${selectedType.typeName}" as scope service.`);
+      const serviceId = bindServiceId.trim() || selectedType.typeName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      await api.scope.bindGAgent(
+        scopeId,
+        `${selectedType.fullName}, ${selectedType.assemblyName}`,
+        effectiveActorId || undefined,
+        selectedType.typeName,
+        serviceId,
+      );
+      setBindResult(`Bound "${selectedType.typeName}" as service "${serviceId}".`);
     } catch (e: any) {
       setBindResult(`Error: ${e?.message || String(e)}`);
     } finally {
@@ -274,6 +241,7 @@ export default function GAgentPage() {
                   setLastActorId('');
                   setExtraEndpoints([]);
                   setShowAddEp(false);
+                  setBindServiceId('');
                 }}
                 className={`w-full text-left px-4 py-3 border-b border-[#F0EDE8] transition-colors ${
                   selectedType?.fullName === t.fullName
@@ -434,6 +402,19 @@ export default function GAgentPage() {
                     )}
                   </div>
 
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Service ID</label>
+                    <input
+                      className="w-full rounded-lg border border-[#E6E3DE] bg-[#FAFAF9] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      placeholder={selectedType?.typeName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'my-service'}
+                      value={bindServiceId}
+                      onChange={e => setBindServiceId(e.target.value)}
+                    />
+                    <div className="text-[10px] text-gray-400">
+                      Used to invoke: <span className="font-mono">/services/<span className="text-gray-600">{bindServiceId.trim() || selectedType?.typeName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || '...'}</span>/invoke/chat:stream</span>
+                    </div>
+                  </div>
+
                   <div className="flex items-center gap-3">
                     <button
                       onClick={handleBind}
@@ -449,7 +430,7 @@ export default function GAgentPage() {
                     )}
                   </div>
                   <p className="text-[11px] text-gray-400 mt-1">
-                    Binds this GAgent as the default scope service. The chat endpoint is always included. After binding, use the Scope chat tab to interact.
+                    Binds this GAgent as a named service with its own Service ID. The chat endpoint is always included. After binding, use the Console to invoke it.
                   </p>
                 </div>
 

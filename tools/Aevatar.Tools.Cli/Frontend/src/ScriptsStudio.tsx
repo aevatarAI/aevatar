@@ -7,6 +7,7 @@ import {
   Code2,
   Copy,
   FileText,
+  Globe,
   Play,
   RefreshCw,
   Rows3,
@@ -205,6 +206,14 @@ function normalizeDraftPackageForAppRuntime(rawPackage?: ScriptPackage | null, r
   };
 }
 
+function bumpRevision(revision: string): string {
+  const match = revision.match(/^(.+?)(\d+)$/);
+  if (match) {
+    return `${match[1]}${Number(match[2]) + 1}`;
+  }
+  return `${revision}-2`;
+}
+
 function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraft {
   const now = new Date().toISOString();
   const normalizedPackage = normalizeDraftPackageForAppRuntime(seed.package);
@@ -263,7 +272,7 @@ function readStoredDrafts(): ScriptDraft[] {
         baseRevision: String(item?.baseRevision || ''),
         reason: String(item?.reason || ''),
         input: String(item?.input || ''),
-        runMode: (item?.runMode === 'script' ? 'script' : 'chat') as ScriptRunMode,
+        runMode: 'script' as ScriptRunMode,
         package: normalizedPackage.package,
         selectedFilePath: selectedEntry?.path || normalizedPackage.package.entrySourcePath || 'Behavior.cs',
         definitionActorId: normalizedPackage.migrated ? '' : String(item?.definitionActorId || ''),
@@ -394,13 +403,18 @@ function hydrateDraftFromScopeDetail(detail: ScopedScriptDetail, index: number, 
     existing?.selectedFilePath || normalizedPackage.package.entrySourcePath,
   );
   const scriptId = detail.script?.scriptId || existing?.scriptId || `script-${index}`;
-  const revision = detail.script?.activeRevision || detail.source?.revision || existing?.revision || `draft-rev-${index}`;
+  const baseRevision = detail.script?.activeRevision || detail.source?.revision || existing?.baseRevision || '';
+  const revision = existing?.revision && existing.revision !== baseRevision
+    ? existing.revision
+    : baseRevision
+      ? bumpRevision(baseRevision)
+      : `draft-rev-${index}`;
 
   return createDraft(index, {
     key: existing?.key,
     scriptId,
     revision,
-    baseRevision: detail.script?.activeRevision || detail.source?.revision || existing?.baseRevision || '',
+    baseRevision,
     reason: existing?.reason || '',
     input: existing?.input || '',
     package: normalizedPackage.package,
@@ -449,6 +463,9 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
   const [askAiGeneratedFilePath, setAskAiGeneratedFilePath] = useState('');
   const [askAiTargetDraftKey, setAskAiTargetDraftKey] = useState<string | null>(null);
   const [askAiPending, setAskAiPending] = useState(false);
+  const [bindModalOpen, setBindModalOpen] = useState(false);
+  const [bindServiceId, setBindServiceId] = useState('');
+  const [bindPending, setBindPending] = useState(false);
   const [runModalOpen, setRunModalOpen] = useState(false);
   const [runInputDraft, setRunInputDraft] = useState('');
   const [validationPending, setValidationPending] = useState(false);
@@ -1214,6 +1231,24 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
   }
 
+  async function handleConfirmBindScript() {
+    const scopeId = appContext.scopeId;
+    if (!scopeId || !selectedDraft) return;
+    const scriptId = selectedDraft.scriptId;
+    if (!scriptId) { onFlash('Save the script first', 'error'); return; }
+    setBindPending(true);
+    try {
+      const sid = bindServiceId.trim() || scriptId;
+      await api.scope.bindScript(scopeId, scriptId, scriptId, sid);
+      setBindModalOpen(false);
+      onFlash(`Bound script "${scriptId}" as service "${sid}"`, 'success');
+    } catch (e: any) {
+      onFlash(e?.message || 'Bind failed', 'error');
+    } finally {
+      setBindPending(false);
+    }
+  }
+
   async function handleSaveScript() {
     if (!selectedDraft) {
       return;
@@ -1311,7 +1346,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
-    const runMode = selectedDraft.runMode || 'chat';
+    const runMode = 'script' as ScriptRunMode;
 
     const normalizedPackage = normalizeDraftPackageForAppRuntime(selectedDraft.package);
     const persistedSource = serializePersistedSource(normalizedPackage.package);
@@ -2142,6 +2177,15 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </button>
               <button
                 type="button"
+                onClick={() => setBindModalOpen(true)}
+                data-tooltip="Bind as Service"
+                aria-label="Bind as Service"
+                className="panel-icon-button header-toolbar-action"
+              >
+                <Globe size={15} />
+              </button>
+              <button
+                type="button"
                 onClick={openRunModal}
                 data-tooltip="Run"
                 aria-label="Run script"
@@ -2584,35 +2628,64 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         )}
       >
         <div className="space-y-4">
-          <div>
-            <label className="field-label">Run Mode</label>
-            <select
-              className="panel-input mt-1"
-              value={selectedDraft.runMode || 'chat'}
-              onChange={event => updateDraft(selectedDraft.key, draft => ({
-                ...draft,
-                runMode: event.target.value as ScriptRunMode,
-              }))}
-            >
-              <option value="chat">Chat (default)</option>
-              <option value="script">Script Draft Run</option>
-            </select>
-          </div>
           <div className="rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] px-4 py-4 text-[12px] leading-6 text-gray-600">
-            {(selectedDraft.runMode || 'chat') === 'chat'
-              ? <>The input is sent as a prompt to the scope&apos;s default chat endpoint. The response will appear in the Activity dialog.</>
-              : <>This input is passed into the script through <code className="rounded bg-white px-1.5 py-0.5 text-[11px]">AppScriptCommand</code>. The execution result will appear in the Activity dialog.</>}
+            This input is passed into the script through <code className="rounded bg-white px-1.5 py-0.5 text-[11px]">AppScriptCommand</code>. The execution result will appear in the Activity dialog.
           </div>
           <div>
             <label className="field-label">{selectedDraft.scriptId}</label>
             <textarea
               rows={7}
               className="panel-textarea mt-1 run-prompt-textarea"
-              placeholder={(selectedDraft.runMode || 'chat') === 'chat' ? 'Enter a prompt' : 'Enter the draft input to execute'}
+              placeholder="Enter the draft input to execute"
               value={runInputDraft}
               onChange={event => setRunInputDraft(event.target.value)}
             />
           </div>
+        </div>
+      </ScriptsStudioModal>
+
+      <ScriptsStudioModal
+        open={bindModalOpen}
+        eyebrow="Service"
+        title="Bind as Service"
+        onClose={() => setBindModalOpen(false)}
+        actions={(
+          <>
+            <button type="button" onClick={() => setBindModalOpen(false)} className="ghost-action">Cancel</button>
+            <button type="button" onClick={() => { void handleConfirmBindScript(); }} disabled={bindPending || !appContext.scopeId || !selectedDraft?.scopeDetail?.script} className="solid-action">
+              <Globe size={14} /> {bindPending ? 'Binding...' : 'Bind'}
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="text-[12px] text-gray-500">
+            Binds the current script as a scope service. After binding, invoke it from <strong>Console</strong>.
+            The script must be <strong>promoted</strong> first (use the Promote button in the toolbar).
+          </div>
+          <div className="space-y-2">
+            <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Service ID</label>
+            <input
+              className="w-full rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              placeholder={selectedDraft?.scriptId || 'my-script'}
+              value={bindServiceId}
+              onChange={e => setBindServiceId(e.target.value)}
+            />
+            <div className="text-[10px] text-gray-400">
+              Invoke: <code className="text-gray-500">/services/{bindServiceId.trim() || selectedDraft?.scriptId || '...'}/invoke/chat:stream</code>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-4 py-3 text-[13px] space-y-0.5">
+            <div><span className="text-gray-400">Script:</span> <strong>{selectedDraft?.scriptId || '(unsaved)'}</strong></div>
+            <div><span className="text-gray-400">Name:</span> <strong>{selectedDraft?.scriptId || 'draft'}</strong></div>
+            <div><span className="text-gray-400">Scope:</span> <strong>{appContext.scopeId || '(not logged in)'}</strong></div>
+          </div>
+          {!appContext.scopeId && (
+            <div className="text-[12px] text-amber-600">Sign in with NyxID to bind services.</div>
+          )}
+          {appContext.scopeId && !selectedDraft?.scopeDetail?.script && (
+            <div className="text-[12px] text-amber-600">This script has not been promoted yet. Use the Promote button first.</div>
+          )}
         </div>
       </ScriptsStudioModal>
 

@@ -422,35 +422,59 @@ export const scope = {
   getBinding: (scopeId: string) =>
     request<any>(`/scopes/${enc(scopeId)}/binding`),
 
-  /** PUT /api/scopes/{scopeId}/binding — bind workflow as default scope service */
-  bindWorkflow: (scopeId: string, workflowYamls: string[], displayName?: string) =>
+  /** PUT /api/scopes/{scopeId}/binding — bind workflow as a scope service */
+  bindWorkflow: (scopeId: string, workflowYamls: string[], displayName?: string, serviceId?: string) =>
     request<any>(`/scopes/${enc(scopeId)}/binding`, {
       method: 'PUT',
       body: JSON.stringify({
         implementationKind: 'workflow',
         ...(displayName ? { displayName } : {}),
+        ...(serviceId ? { serviceId } : {}),
         workflowYamls,
       }),
     }),
 
-  /** PUT /api/scopes/{scopeId}/binding — bind a static GAgent as default scope service */
+  /** PUT /api/scopes/{scopeId}/binding — bind a static GAgent as a scope service */
   bindGAgent: (
     scopeId: string,
     actorTypeName: string,
     preferredActorId?: string,
     displayName?: string,
+    serviceId?: string,
   ) =>
     request<any>(`/scopes/${enc(scopeId)}/binding`, {
       method: 'PUT',
       body: JSON.stringify({
         implementationKind: 'gagent',
         ...(displayName ? { displayName } : {}),
+        ...(serviceId ? { serviceId } : {}),
         gagent: {
           actorTypeName,
           preferredActorId: preferredActorId || null,
           endpoints: [
             { endpointId: 'chat', displayName: 'Chat', kind: 'chat', requestTypeUrl: '', responseTypeUrl: '', description: '' },
           ],
+        },
+      }),
+    }),
+
+  /** PUT /api/scopes/{scopeId}/binding — bind a script as a scope service */
+  bindScript: (
+    scopeId: string,
+    scriptId: string,
+    displayName?: string,
+    serviceId?: string,
+    scriptRevision?: string,
+  ) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'script',
+        ...(displayName ? { displayName } : {}),
+        ...(serviceId ? { serviceId } : {}),
+        script: {
+          scriptId,
+          ...(scriptRevision ? { scriptRevision } : {}),
         },
       }),
     }),
@@ -484,17 +508,18 @@ export const scope = {
     );
   },
 
-  /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream — service invoke, SSE */
+  /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream — service invoke, SSE */
   streamInvoke: (
     scopeId: string,
     serviceId: string,
     prompt: string,
     onFrame?: (frame: any) => void,
     signal?: AbortSignal,
+    endpointId: string = 'chat',
   ) => {
     const body: any = { prompt };
     return streamSse(
-      `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/chat:stream`,
+      `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/${enc(endpointId)}:stream`,
       body, onFrame ?? (() => {}), signal,
     );
   },

@@ -1,4 +1,4 @@
-export type ConfigFile = 'config.json' | 'roles.json' | 'connectors.json' | 'actors.json' | `chat-history:${string}` | `workflow:${string}`;
+export type ConfigFile = 'config.json' | 'roles.json' | 'connectors.json' | `chat-history:${string}` | `workflow:${string}` | `script:${string}`;
 
 export type WorkflowEntry = {
   workflowId: string;
@@ -9,8 +9,12 @@ export type WorkflowEntry = {
   description: string;
 };
 
-export type GAgentType = { typeName: string; fullName: string; assemblyName: string };
-export type ActorGroup = { gAgentType: string; actorIds: string[] };
+export type ScriptEntry = {
+  scriptId: string;
+  activeRevision: string;
+  updatedAt: string;
+  sourceText: string;
+};
 
 export type ProviderInfo = {
   provider_slug: string;

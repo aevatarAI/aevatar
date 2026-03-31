@@ -20,6 +20,7 @@
 
     <ItemGroup>
         <Protobuf Include="agent_messages.proto" GrpcServices="None" />
+        <Protobuf Include="ExternalLinks/external_link_messages.proto" GrpcServices="None" />
     </ItemGroup>
 
 </Project>

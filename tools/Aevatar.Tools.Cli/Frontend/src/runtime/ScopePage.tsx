@@ -12,24 +12,6 @@ import * as nyxid from '../auth/nyxid';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-/** Built-in default workflow YAML — must match the backend fallback in ScopeServiceEndpoints. */
-const DEFAULT_CHAT_WORKFLOW_YAML = `\
-name: default_chat
-description: Built-in default single-turn chat.
-
-roles:
-  - id: assistant
-    name: Assistant
-    system_prompt: |
-      You are a helpful assistant.
-
-steps:
-  - id: answer
-    type: llm_call
-    role: assistant
-    parameters: {}
-`;
-
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
 function genId() {
@@ -484,6 +466,8 @@ function ConversationSidebar({
             >
               <div className="text-[13px] font-medium text-gray-700 truncate pr-6">{conv.title || 'Untitled'}</div>
               <div className="text-[11px] text-gray-400 mt-0.5">
+                {conv.serviceId && <span className="font-mono text-gray-500">{conv.serviceId}</span>}
+                {conv.serviceId ? ' · ' : ''}
                 {conv.messageCount} msg{conv.messageCount !== 1 ? 's' : ''}
                 {' · '}
                 {formatRelativeTime(conv.updatedAt)}
@@ -525,13 +509,10 @@ export default function ScopePage() {
 
   // Services
   const [services, setServices] = useState<ServiceOption[]>([
-    { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat' },
+    { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
   ]);
   const [selectedService, setSelectedService] = useState('nyxid-chat');
 
-  // Draft Run YAML (optional)
-  const [draftYaml, setDraftYaml] = useState(DEFAULT_CHAT_WORKFLOW_YAML);
-  const [showYamlInput] = useState(false);
 
   // NyxID Chat: track whether we've ensured the scope binding this session
   const nyxidChatBoundRef = useRef(false);
@@ -555,16 +536,21 @@ export default function ScopePage() {
     if (!scopeId) return;
     api.scope.listServices(scopeId).then(svcList => {
       const base: ServiceOption[] = [
-        { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat' },
+        { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
       ];
       if (Array.isArray(svcList)) {
         const builtinIds = new Set(base.map(b => b.id));
         for (const s of svcList) {
           const sid = s?.serviceId || s?.ServiceId;
           const name = s?.displayName || s?.DisplayName || sid;
+          const eps = (s?.endpoints || s?.Endpoints || []).map((ep: any) => ({
+            endpointId: ep?.endpointId || ep?.EndpointId || '',
+            displayName: ep?.displayName || ep?.DisplayName || ep?.endpointId || '',
+            kind: ep?.kind || ep?.Kind || 'command',
+          }));
           const isDuplicate = builtinIds.has(sid)
             || base.some(b => b.label === name);
-          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind: 'service' });
+          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind: 'service', endpoints: eps });
         }
       }
       setServices(base);
@@ -577,6 +563,17 @@ export default function ScopePage() {
   }, [messages]);
 
   const activeService = services.find(s => s.id === selectedService) || services[0];
+
+  // Auto-create new chat when switching services
+  const prevServiceRef = useRef(selectedService);
+  useEffect(() => {
+    if (prevServiceRef.current !== selectedService) {
+      prevServiceRef.current = selectedService;
+      setMessages([]);
+      setDebugEvents([]);
+      setActiveConvId(null);
+    }
+  }, [selectedService]);
 
   // Reset NyxID Chat binding flag when scope changes
   useEffect(() => {
@@ -594,7 +591,14 @@ export default function ScopePage() {
   // Save current conversation to chrono-storage (called after streaming completes)
   const saveCurrentConversation = useCallback((msgs: ChatMessage[]) => {
     if (!scopeId || msgs.length === 0) return;
-    const convId = activeConvId || `conv-${genId()}`;
+    // Actor ID = conversation identity.
+    // nyxid-chat: deterministic (same actor reused, server-side history).
+    // Other services: unique per conversation (new actor per chat session).
+    const actorId = activeService.kind === 'nyxid-chat'
+      ? `NyxIdChat:${scopeId}`
+      : `${activeService.id}:${genId()}`;
+    // Conversation ID = actor ID
+    const convId = activeConvId || actorId;
     const firstUserMsg = msgs.find(m => m.role === 'user');
     const title = (firstUserMsg?.content || 'Untitled').slice(0, 60);
     const now = new Date().toISOString();
@@ -608,6 +612,7 @@ export default function ScopePage() {
       }));
     const meta: ConversationMeta = {
       id: convId,
+      actorId,
       title,
       serviceId: activeService.id,
       serviceKind: activeService.kind,
@@ -748,7 +753,8 @@ export default function ScopePage() {
 
     try {
       if (activeService.kind === 'nyxid-chat') {
-        // Bind NyxIdChatGAgent as default scope service on first use (idempotent PUT).
+        // Bind NyxIdChatGAgent as a named service on first use (idempotent PUT).
+        // serviceId='nyxid-chat' ensures it doesn't overwrite other bindings.
         // preferredActorId ensures the same actor is reused for conversation history.
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
@@ -756,19 +762,11 @@ export default function ScopePage() {
             'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
             `NyxIdChat:${scopeId}`,
             'NyxID Chat',
+            'nyxid-chat',
           );
           nyxidChatBoundRef.current = true;
         }
-        await api.scope.streamDefaultChat(scopeId, text, undefined, onFrame, controller.signal);
-      } else if (activeService.kind === 'draft-run') {
-        const yamls = draftYaml.trim() ? [draftYaml.trim()] : undefined;
-        if (yamls) {
-          // Draft run with explicit YAML
-          await api.scope.streamDraftRun(scopeId, text, yamls, onFrame, controller.signal);
-        } else {
-          // No YAML — use scope-level default chat stream
-          await api.scope.streamDefaultChat(scopeId, text, undefined, onFrame, controller.signal);
-        }
+        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal);
       } else {
         await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal);
       }
@@ -794,7 +792,7 @@ export default function ScopePage() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, activeService, draftYaml, saveCurrentConversation]);
+  }, [scopeId, isStreaming, activeService, saveCurrentConversation]);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -810,6 +808,12 @@ export default function ScopePage() {
   const handleSelectConversation = useCallback(async (convId: string) => {
     if (!scopeId || convId === activeConvId) return;
     try {
+      // Restore the service that was used for this conversation
+      const conv = conversations.find(c => c.id === convId);
+      if (conv?.serviceId && conv.serviceId !== selectedService) {
+        prevServiceRef.current = conv.serviceId; // prevent auto-clear
+        setSelectedService(conv.serviceId);
+      }
       const msgs = await api.chatHistory.getConversation(scopeId, convId);
       setMessages(msgs.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
@@ -819,7 +823,7 @@ export default function ScopePage() {
       setActiveConvId(convId);
       setDebugEvents([]);
     } catch { /* ignore */ }
-  }, [scopeId, activeConvId]);
+  }, [scopeId, activeConvId, conversations, selectedService]);
 
   const handleDeleteConversation = useCallback(async (convId: string) => {
     if (!scopeId) return;
@@ -887,7 +891,14 @@ export default function ScopePage() {
   };
 
   // ── Execute tab: invoke service endpoints ──
+  const activeEndpoints = activeService?.endpoints ?? [];
   const [invokeEndpointId, setInvokeEndpointId] = useState('chat');
+  // Auto-set endpoint when service changes
+  useEffect(() => {
+    if (activeEndpoints.length > 0 && !activeEndpoints.some(ep => ep.endpointId === invokeEndpointId)) {
+      setInvokeEndpointId(activeEndpoints[0].endpointId);
+    }
+  }, [activeService?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const [invokeBody, setInvokeBody] = useState('{\n  "prompt": ""\n}');
   const [invokeEvents, setInvokeEvents] = useState<Array<{ type: string; data: any }>>([]);
   const [invokeLoading, setInvokeLoading] = useState(false);
@@ -903,27 +914,15 @@ export default function ScopePage() {
     try {
       const parsed = JSON.parse(invokeBody);
       const prompt = parsed.prompt || '';
-      if (activeService.kind === 'nyxid-chat') {
-        if (!nyxidChatBoundRef.current) {
-          await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', `NyxIdChat:${scopeId}`, 'NyxID Chat');
-          nyxidChatBoundRef.current = true;
-        }
-        await api.scope.streamDefaultChat(scopeId, prompt, parsed.sessionId, (frame) => {
-          const evt = normalizeBackendSseFrame(frame);
-          if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
-        }, controller.signal);
-      } else if (activeService.kind === 'service') {
-        await api.scope.streamInvoke(scopeId, activeService.id, prompt, (frame) => {
-          const evt = normalizeBackendSseFrame(frame);
-          if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
-        }, controller.signal);
-      } else {
-        const yamls = parsed.workflowYamls;
-        await api.scope.streamDraftRun(scopeId, prompt, yamls, (frame) => {
-          const evt = normalizeBackendSseFrame(frame);
-          if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
-        }, controller.signal);
+      const serviceId = activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id;
+      if (activeService.kind === 'nyxid-chat' && !nyxidChatBoundRef.current) {
+        await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', `NyxIdChat:${scopeId}`, 'NyxID Chat', 'nyxid-chat');
+        nyxidChatBoundRef.current = true;
       }
+      await api.scope.streamInvoke(scopeId, serviceId, prompt, (frame) => {
+        const evt = normalizeBackendSseFrame(frame);
+        if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
+      }, controller.signal, invokeEndpointId);
       if (collected.length === 0) collected.push({ type: 'info', data: { message: 'No events received' } });
       setInvokeEvents([...collected]);
     } catch (e: any) {
@@ -1119,11 +1118,23 @@ export default function ScopePage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <label className="text-[11px] text-gray-400">Endpoint</label>
-                  <input
-                    className="w-24 rounded-md border border-[#E6E3DE] bg-[#FAFAF8] px-2 py-1 text-[12px] font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={invokeEndpointId}
-                    onChange={e => setInvokeEndpointId(e.target.value)}
-                  />
+                  {activeEndpoints.length > 1 ? (
+                    <select
+                      className="rounded-md border border-[#E6E3DE] bg-[#FAFAF8] px-2 py-1 text-[12px] font-mono text-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      value={invokeEndpointId}
+                      onChange={e => setInvokeEndpointId(e.target.value)}
+                    >
+                      {activeEndpoints.map(ep => (
+                        <option key={ep.endpointId} value={ep.endpointId}>
+                          {ep.endpointId} ({ep.kind})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="text-[12px] font-mono text-gray-500 bg-[#FAFAF8] border border-[#E6E3DE] rounded-md px-2 py-1">
+                      {activeEndpoints[0]?.endpointId || invokeEndpointId}
+                    </span>
+                  )}
                 </div>
               </div>
               <textarea
@@ -1301,34 +1312,6 @@ export default function ScopePage() {
         {/* Chat Column */}
         <div className="flex-1 min-h-0 flex flex-col">
 
-      {/* Workflow YAML editor for draft-run */}
-      {activeService.kind === 'draft-run' && showYamlInput && (
-        <div className="flex-shrink-0 border-b border-[#E6E3DE] bg-[#FAFAF8] px-4 py-3">
-          <div className="max-w-3xl mx-auto">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                Workflow YAML
-              </label>
-              {draftYaml !== DEFAULT_CHAT_WORKFLOW_YAML && (
-                <button
-                  onClick={() => setDraftYaml(DEFAULT_CHAT_WORKFLOW_YAML)}
-                  className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium"
-                >
-                  Reset to default
-                </button>
-              )}
-            </div>
-            <textarea
-              rows={12}
-              className="w-full rounded-lg border border-[#E6E3DE] bg-white px-4 py-3 text-[12px] leading-[1.6] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
-              value={draftYaml}
-              onChange={e => setDraftYaml(e.target.value)}
-              spellCheck={false}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Chat Area */}
       <div className="flex-1 min-h-0 overflow-auto bg-[#FAFAF8]">
         <div className="max-w-3xl mx-auto py-6 px-4 space-y-5">
@@ -1343,9 +1326,7 @@ export default function ScopePage() {
                 {activeService.label}
               </div>
               <div className="text-[13px] text-gray-400 max-w-sm">
-                {activeService.kind === 'draft-run'
-                  ? 'Chat with the scope\'s default service. Toggle YAML to use a custom workflow.'
-                  : activeService.kind === 'nyxid-chat'
+                {activeService.kind === 'nyxid-chat'
                   ? 'Chat with NyxID about services, credentials, and configuration.'
                   : `Invoke the "${activeService.label}" service with a chat message.`}
               </div>
@@ -1375,9 +1356,7 @@ export default function ScopePage() {
             disabled={!scopeId}
           />
           <div className="mt-1.5 text-center text-[11px] text-gray-300">
-            {activeService.kind === 'draft-run'
-              ? (draftYaml.trim() ? 'Draft Run (custom YAML)' : 'Service: default')
-              : activeService.kind === 'service' ? `Service: ${activeService.id}` : 'NyxID Chat'}
+            Service: {activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id}
             {' · Scope: '}{scopeId.slice(0, 16)}...
           </div>
         </div>

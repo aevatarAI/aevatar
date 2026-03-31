@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Aevatar.Studio.Infrastructure.Storage;
 using Aevatar.Scripting.Hosting.CapabilityApi;
@@ -13,6 +14,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Hosting;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
@@ -744,12 +746,13 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
+            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
             var result = await generator.GenerateAsync(
                 new WorkflowGenerateRequest(
                     request.Prompt.Trim(),
                     request.CurrentYaml,
                     request.AvailableWorkflowNames,
-                    request.Metadata),
+                    metadata),
                 (delta, token) => WriteSseFrameAsync(http.Response, new
                 {
                     type = "TEXT_MESSAGE_REASONING",
@@ -865,11 +868,12 @@ internal static class StudioEndpoints
         try
         {
             await StartSseAsync(http.Response, ct);
+            var metadata = await InjectLLMMetadataAsync(http, request.Metadata, ct);
             var result = await generator.GenerateAsync(
                 new ScriptGenerateRequest(
                     request.Prompt.Trim(),
                     request.CurrentSource,
-                    request.Metadata,
+                    metadata,
                     request.CurrentPackage,
                     request.CurrentFilePath),
                 (delta, token) => WriteSseFrameAsync(http.Response, new
@@ -996,6 +1000,49 @@ internal static class StudioEndpoints
             var length = Math.Min(size, text.Length - index);
             yield return text.Substring(index, length);
         }
+    }
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(authHeader))
+            return null;
+        return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authHeader["Bearer ".Length..].Trim()
+            : null;
+    }
+
+    private static async Task<Dictionary<string, string>> InjectLLMMetadataAsync(
+        HttpContext http,
+        IReadOnlyDictionary<string, string>? clientMetadata,
+        CancellationToken ct)
+    {
+        var metadata = clientMetadata != null
+            ? new Dictionary<string, string>(clientMetadata)
+            : new Dictionary<string, string>();
+
+        // Forward caller's Bearer token so NyxID-backed providers can authenticate.
+        var bearerToken = ExtractBearerToken(http);
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+            metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+
+        // Forward the user's preferred model from their config.
+        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+        if (userConfigStore != null)
+        {
+            try
+            {
+                var userConfig = await userConfigStore.GetAsync(ct);
+                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                    metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+            }
+            catch
+            {
+                // Best-effort
+            }
+        }
+
+        return metadata;
     }
 
     internal sealed record AppScriptDraftRunRequest(
