@@ -55,7 +55,7 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         {
             Endpoint = _gatewayEndpoint,
         };
-        options.AddPolicy(new NyxIdRequestLoggingPolicy(_logger), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
+        options.AddPolicy(new NyxIdRequestLoggingPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(resolvedModel).AsIChatClient();
         return new MEAILLMProvider(Name, chatClient, _logger);
@@ -139,10 +139,6 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 /// </summary>
 internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.PipelinePolicy
 {
-    private readonly ILogger _logger;
-
-    public NyxIdRequestLoggingPolicy(ILogger logger) => _logger = logger;
-
     public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
     {
         LogRequest(message);
@@ -157,22 +153,22 @@ internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.
         LogResponse(message);
     }
 
-    private void LogRequest(System.ClientModel.Primitives.PipelineMessage message)
+    private static void LogRequest(System.ClientModel.Primitives.PipelineMessage message)
     {
-        _logger.LogWarning("[NyxIdLLM.HTTP] {Method} {Uri}", message.Request.Method, message.Request.Uri);
+        Console.Error.WriteLine($"[NyxIdLLM.HTTP] {message.Request.Method} {message.Request.Uri}");
         foreach (var header in message.Request.Headers)
         {
             var val = header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
                 ? header.Value?[..Math.Min(header.Value.Length, 30)] + "..."
                 : header.Value;
-            _logger.LogWarning("[NyxIdLLM.HTTP]   {Key}: {Value}", header.Key, val);
+            Console.Error.WriteLine($"[NyxIdLLM.HTTP]   {header.Key}: {val}");
         }
     }
 
-    private void LogResponse(System.ClientModel.Primitives.PipelineMessage message)
+    private static void LogResponse(System.ClientModel.Primitives.PipelineMessage message)
     {
         var status = message.Response?.Status;
-        _logger.LogWarning("[NyxIdLLM.HTTP] Response: {Status}", status);
+        Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response: {status}");
         if (status is >= 400)
         {
             try
@@ -180,7 +176,7 @@ internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.
                 using var reader = new StreamReader(message.Response!.ContentStream!, leaveOpen: true);
                 var body = reader.ReadToEnd();
                 message.Response.ContentStream!.Position = 0;
-                _logger.LogWarning("[NyxIdLLM.HTTP] Response body: {Body}", body);
+                Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response body: {body}");
             }
             catch
             {
