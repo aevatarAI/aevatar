@@ -23,19 +23,19 @@ const stripStyle: React.CSSProperties = {
   backdropFilter: "blur(8px)",
   background: "var(--ant-color-bg-container)",
   border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 14,
+  borderRadius: 12,
   display: "flex",
-  gap: 12,
+  gap: 10,
   justifyContent: "space-between",
-  minHeight: 64,
-  padding: "12px 16px",
+  minHeight: 58,
+  padding: "10px 12px",
 };
 
 const metricsWrapStyle: React.CSSProperties = {
   display: "flex",
   flex: 1,
   flexWrap: "wrap",
-  gap: 8,
+  gap: 6,
   minWidth: 0,
 };
 
@@ -43,23 +43,23 @@ const metricPillStyle: React.CSSProperties = {
   alignItems: "flex-start",
   background: "var(--ant-color-fill-quaternary)",
   border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 12,
+  borderRadius: 10,
   display: "flex",
   flexDirection: "column",
-  gap: 4,
-  minWidth: 108,
-  padding: "8px 10px",
+  gap: 3,
+  minWidth: 96,
+  padding: "6px 8px",
 };
 
 const metricLabelStyle: React.CSSProperties = {
   color: "var(--ant-color-text-secondary)",
-  fontSize: 12,
+  fontSize: 11,
   lineHeight: 1,
 };
 
 const metricValueStyle: React.CSSProperties = {
   color: "var(--ant-color-text)",
-  fontSize: 13,
+  fontSize: 12,
   fontWeight: 600,
   lineHeight: 1.3,
 };
@@ -69,7 +69,7 @@ const actionWrapStyle: React.CSSProperties = {
   display: "flex",
   flex: "0 0 auto",
   flexWrap: "wrap",
-  gap: 8,
+  gap: 6,
   justifyContent: "flex-end",
 };
 
@@ -93,62 +93,69 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
 
   return (
     <div style={stripStyle}>
-    <div style={metricsWrapStyle}>
-      <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Status</Typography.Text>
-        <Space size={6}>
-          <Badge status={statusTone} />
-          <Typography.Text style={metricValueStyle}>
-            {runStatusLabel}
+      <div style={metricsWrapStyle}>
+        <div style={metricPillStyle}>
+          <Typography.Text style={metricLabelStyle}>Status</Typography.Text>
+          <Space size={6}>
+            <Badge status={statusTone} />
+            <Typography.Text style={metricValueStyle}>
+              {runStatusLabel}
+            </Typography.Text>
+          </Space>
+        </div>
+
+        <div style={metricPillStyle}>
+          <Typography.Text style={metricLabelStyle}>Run ID</Typography.Text>
+          <Typography.Text code style={metricValueStyle}>
+            {runId}
           </Typography.Text>
-        </Space>
+        </div>
+
+        <div style={metricPillStyle}>
+          <Typography.Text style={metricLabelStyle}>Elapsed</Typography.Text>
+          <Typography.Text style={metricValueStyle}>{elapsedLabel}</Typography.Text>
+        </div>
+
+        <div style={metricPillStyle}>
+          <Typography.Text style={metricLabelStyle}>Endpoint</Typography.Text>
+          <Typography.Text style={metricValueStyle}>
+            {endpointId || "chat"}
+          </Typography.Text>
+        </div>
+
+        <div style={metricPillStyle}>
+          <Typography.Text style={metricLabelStyle}>Transport</Typography.Text>
+          <Tag color="processing">
+            {transportLabel}
+          </Tag>
+        </div>
+
+        <div style={metricPillStyle}>
+          <Typography.Text style={metricLabelStyle}>Activity</Typography.Text>
+          <Typography.Text style={metricValueStyle}>
+            {messageCount} msg · {eventCount} evt · {activeStepCount} active
+          </Typography.Text>
+        </div>
       </div>
 
-      <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Run ID</Typography.Text>
-        <Typography.Text code style={metricValueStyle}>
-          {runId}
-        </Typography.Text>
+      <div style={actionWrapStyle}>
+        <Button
+          size="small"
+          onClick={onOpenInspector}
+          type={hasPendingInteraction ? "primary" : "default"}
+        >
+          {hasPendingInteraction ? "Interaction pending" : "Inspector"}
+        </Button>
+        <Button
+          danger
+          size="small"
+          type="primary"
+          disabled={!isRunLive}
+          onClick={onAbort}
+        >
+          Abort
+        </Button>
       </div>
-
-      <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Elapsed</Typography.Text>
-        <Typography.Text style={metricValueStyle}>{elapsedLabel}</Typography.Text>
-      </div>
-
-      <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Endpoint</Typography.Text>
-        <Typography.Text style={metricValueStyle}>
-          {endpointId || "chat"}
-        </Typography.Text>
-      </div>
-
-      <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Transport</Typography.Text>
-        <Tag color="processing">
-          {transportLabel}
-        </Tag>
-      </div>
-
-      <div style={metricPillStyle}>
-        <Typography.Text style={metricLabelStyle}>Activity</Typography.Text>
-        <Typography.Text style={metricValueStyle}>
-          {messageCount} msg · {eventCount} evt · {activeStepCount} active
-        </Typography.Text>
-      </div>
-    </div>
-
-    <div style={actionWrapStyle}>
-      <Button
-        onClick={onOpenInspector}
-        type={hasPendingInteraction ? "primary" : "default"}
-      >
-        {hasPendingInteraction ? "Interaction pending" : "Inspector"}
-      </Button>
-      <Button danger type="primary" disabled={!isRunLive} onClick={onAbort}>
-        Abort
-      </Button>
-    </div>
     </div>
   );
 };

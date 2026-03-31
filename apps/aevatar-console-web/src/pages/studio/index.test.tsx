@@ -1708,6 +1708,22 @@ describe("StudioPage", () => {
     );
   });
 
+  it("opens the scripts workspace when the route only carries a script id", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      features: {
+        ...defaultStudioAppContext.features,
+        scripts: true,
+      },
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+
+    renderStudioPage("/studio?script=script-alpha");
+
+    expect(await screen.findByLabelText("Script ID")).toBeTruthy();
+  });
+
   it("opens the Studio run dialog for a valid draft before the execution prompt is filled", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,

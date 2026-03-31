@@ -33,14 +33,29 @@ describe("OverviewPage", () => {
 
     expect(container.textContent).toContain("Overview");
     expect(container.textContent).toContain(
-      "Start from the current project for scope-first workflow, script, and binding flows. Runtime and platform diagnostics stay grouped under Operator Tools."
+      "A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
     );
-    expect(container.textContent).toContain("Current project");
-    expect(container.textContent).toContain("Operator Tools");
-    expect(container.textContent).toContain("Enter Current Project");
-    expect(container.textContent).toContain("Open Studio");
-    expect(container.textContent).toContain("Runtime tools");
-    expect(container.textContent).toContain("Platform operator views");
+    expect(container.textContent).toContain("Command Path");
+    expect(container.textContent).toContain("Operator Shortcuts");
+    expect(container.textContent).toContain(
+      "Anchor work to a project"
+    );
+    expect(container.textContent).toContain(
+      "Promote a capability"
+    );
+    expect(container.textContent).toContain(
+      "Operate the runtime"
+    );
+    expect(container.textContent).toContain("State Board");
+    expect(container.textContent).toContain("Human Loop");
+    expect(container.textContent).toContain("Live Actors");
+    expect(container.textContent).toContain("Open Projects");
+    expect(container.textContent).toContain("Open workflow workspace");
+    expect(container.textContent).toContain("Open Runs");
+    expect(container.textContent).toContain("Open Invoke Lab");
+    expect(container.textContent).toContain("Open governance");
+    expect(container.textContent).toContain("Workflow sources");
+    expect(container.textContent).toContain("Runtime attention");
     expect(container.textContent).not.toContain("Start preferred workflow");
     expect(container.textContent).not.toContain("Preferred workflow");
     expect(container.textContent).not.toContain("Open Runtime Observability");

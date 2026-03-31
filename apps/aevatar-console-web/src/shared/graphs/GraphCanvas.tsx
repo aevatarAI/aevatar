@@ -212,7 +212,7 @@ function StudioWorkflowNode({
               whiteSpace: 'nowrap',
             }}
           >
-            <span style={{ color: '#9CA3AF' }}>role:</span> {data.targetRole}
+            <span style={{ color: 'var(--ant-color-text-tertiary)' }}>role:</span> {data.targetRole}
           </div>
         ) : null}
         <div

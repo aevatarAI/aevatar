@@ -104,6 +104,7 @@ export const summaryFieldStyle: CSSProperties = {
 export const summaryFieldLabelStyle: CSSProperties = {
   color: 'var(--ant-color-text-secondary)',
   fontSize: 12,
+  fontWeight: 500,
 };
 
 export const summaryMetricGridStyle: CSSProperties = {
@@ -128,6 +129,7 @@ export const summaryMetricValueStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   lineHeight: 1.35,
+  overflowWrap: 'anywhere',
 };
 
 export const cardListStyle: CSSProperties = {

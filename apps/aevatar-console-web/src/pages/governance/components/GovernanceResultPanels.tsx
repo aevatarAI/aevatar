@@ -134,6 +134,7 @@ export const GovernanceSummaryPanel: React.FC<GovernanceSummaryPanelProps> = ({
   const fields: GovernanceSummaryField[] = [
     { label: 'Service', value: draft.serviceId },
     { label: 'Tenant', value: draft.tenantId },
+    { label: 'App', value: draft.appId },
     { label: 'Namespace', value: draft.namespace },
     revisionId ? { label: 'Revision', value: revisionId } : null,
     ...extraFields,

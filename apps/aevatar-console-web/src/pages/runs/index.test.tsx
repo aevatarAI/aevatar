@@ -131,10 +131,10 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Open runtime console guide" })
     );
     expect(
-      screen.getByRole("button", { name: "Open Runtime Catalog" })
+      screen.getByRole("button", { name: "Catalog" })
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Open Runtime Explorer" })
+      screen.getByRole("button", { name: "Explorer" })
     ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Open observability hub" })
@@ -206,6 +206,7 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
+    await screen.findByDisplayValue("Run the draft");
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamDraftRun).toHaveBeenCalledWith(
         "scope-1",
@@ -259,6 +260,7 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
+    await screen.findByDisplayValue("hello observed run");
     await waitFor(() => {
       expect(mockReset).toHaveBeenCalled();
       expect(mockDispatch).toHaveBeenCalledTimes(2);

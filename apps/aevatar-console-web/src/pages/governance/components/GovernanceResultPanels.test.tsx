@@ -14,6 +14,7 @@ describe('GovernanceResultPanels', () => {
         description="Inspect raw binding targets and attached policies."
         draft={{
           tenantId: 'tenant-a',
+          appId: 'app-main',
           namespace: 'ops',
           serviceId: 'svc-payments',
           revisionId: '',
@@ -35,6 +36,7 @@ describe('GovernanceResultPanels', () => {
     expect(screen.getByText('Binding catalog')).toBeInTheDocument();
     expect(screen.getByText('svc-payments')).toBeInTheDocument();
     expect(screen.getByText('tenant-a')).toBeInTheDocument();
+    expect(screen.getByText('app-main')).toBeInTheDocument();
     expect(screen.getByText('2026-03-25 08:00:00 UTC')).toBeInTheDocument();
     expect(screen.getByText('Bindings')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
@@ -44,15 +46,15 @@ describe('GovernanceResultPanels', () => {
   it('renders a lightweight selection notice', () => {
     render(
       <GovernanceSelectionNotice
-        title="Select a platform service"
-        description="Load a platform service identity before opening the raw governance catalog."
+        title="Select a service"
+        description="Load a service context before opening the Governance catalog."
       />,
     );
 
-    expect(screen.getByText('Select a platform service')).toBeInTheDocument();
+    expect(screen.getByText('Select a service')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Load a platform service identity before opening the raw governance catalog.',
+        'Load a service context before opening the Governance catalog.',
       ),
     ).toBeInTheDocument();
   });

@@ -60,6 +60,7 @@ describe("RunsInspectorPane", () => {
     const actorSnapshot: WorkflowActorSnapshot = {
       actorId: "actor-1",
       completedSteps: 2,
+      completionStatusValue: 1,
       lastCommandId: "cmd-1",
       lastError: "",
       lastEventId: "evt-9",

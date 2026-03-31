@@ -256,7 +256,7 @@ const workflowBrowserStyle: React.CSSProperties = {
 const workflowSectionCopyStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.6,
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
 };
 
 const workflowPanelIconButtonStyle: React.CSSProperties = {
@@ -265,7 +265,7 @@ const workflowPanelIconButtonStyle: React.CSSProperties = {
   borderRadius: 999,
   border: '1px solid #E5E1DA',
   background: '#FFFFFF',
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -304,7 +304,7 @@ const workflowDirectoryPathStyle: React.CSSProperties = {
   display: 'block',
   fontSize: 11,
   lineHeight: 1.6,
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
   marginTop: 4,
   maxWidth: '100%',
   overflow: 'hidden',
@@ -372,7 +372,7 @@ const workflowToggleButtonStyle: React.CSSProperties = {
   border: 0,
   cursor: 'pointer',
   background: 'transparent',
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -449,7 +449,7 @@ const workflowCardIconStyle: React.CSSProperties = {
   height: 48,
   borderRadius: 16,
   background: '#F3F0EA',
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -475,7 +475,7 @@ const workflowCardMetaLineStyle: React.CSSProperties = {
   marginTop: 4,
   fontSize: 12,
   lineHeight: 1.6,
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
 };
 
 const workflowCardDescriptionStyle: React.CSSProperties = {
@@ -591,7 +591,7 @@ const studioInfoPopoverButtonStyle: React.CSSProperties = {
   borderRadius: 999,
   border: 0,
   background: 'transparent',
-  color: '#9CA3AF',
+  color: 'var(--ant-color-text-tertiary)',
   cursor: 'pointer',
   transition: 'background 0.18s ease, color 0.18s ease',
 };
@@ -1539,7 +1539,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                                   ...workflowPanelIconButtonStyle,
                                   width: 32,
                                   height: 32,
-                                  color: '#9CA3AF',
+                                  color: 'var(--ant-color-text-tertiary)',
                                 }}
                               >
                                 <span style={{ display: 'none' }}>Remove</span>
@@ -1626,7 +1626,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
           <div style={workflowToolbarSurfaceStyle}>
             <div style={workflowToolbarLayoutStyle}>
               <div style={workflowSearchFieldStyle}>
-                <SearchOutlined style={{ color: '#9CA3AF' }} />
+                <SearchOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
                 <input
                   aria-label="Search workflows"
                   placeholder="Search workflows"
@@ -2176,7 +2176,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           <div>
             <div
               style={{
-                color: '#9CA3AF',
+                color: 'var(--ant-color-text-tertiary)',
                 fontSize: 11,
                 letterSpacing: '0.16em',
                 textTransform: 'uppercase',
@@ -2291,7 +2291,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                       </div>
                       <span
                         style={{
-                          color: '#9CA3AF',
+                          color: 'var(--ant-color-text-tertiary)',
                           fontSize: 10,
                           letterSpacing: '0.08em',
                           textTransform: 'uppercase',
@@ -2300,7 +2300,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                         {execution.status}
                       </span>
                     </div>
-                    <div style={{ color: '#9CA3AF', fontSize: 11, marginTop: 4 }}>
+                    <div style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 11, marginTop: 4 }}>
                       {formatDurationBetween(
                         execution.startedAtUtc,
                         execution.completedAtUtc,
@@ -2373,13 +2373,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                               <CheckOutlined /> Copied
                             </span>
                           ) : null}
-                          <div style={{ color: '#9CA3AF', fontSize: 11 }}>
+                          <div style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 11 }}>
                             {formatDateTime(log.timestamp)}
                           </div>
                         </div>
                       </div>
                       {log.meta ? (
-                        <div style={{ color: '#9CA3AF', fontSize: 11, marginTop: 4 }}>
+                        <div style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 11, marginTop: 4 }}>
                           {log.meta}
                         </div>
                       ) : null}
@@ -2413,7 +2413,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                       <div>
                         <div
                           style={{
-                            color: '#9CA3AF',
+                            color: 'var(--ant-color-text-tertiary)',
                             fontSize: 11,
                             letterSpacing: '0.14em',
                             textTransform: 'uppercase',
@@ -2958,6 +2958,8 @@ export type StudioEditorPageProps = {
   readonly onResetDraft: () => void;
   readonly onSaveDraft: () => void;
   readonly onPublishWorkflow: () => void;
+  readonly onOpenProjectOverview: () => void;
+  readonly onOpenProjectInvoke: () => void;
   readonly onBindGAgent: (input: {
     displayName?: string;
     actorTypeName: string;
@@ -3042,6 +3044,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   onWorkflowImportChange,
   onSaveDraft,
   onPublishWorkflow,
+  onOpenProjectOverview,
+  onOpenProjectInvoke,
   onBindGAgent,
   onActivateBindingRevision,
   onRunInConsole,
@@ -3068,6 +3072,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     x: 420,
     y: 220,
   });
+  const hasResolvedProject = Boolean(resolvedScopeId);
+  const hasNamedDraft = Boolean(draftWorkflowName.trim() && draftYaml.trim());
 
   const filteredPrimitiveCategories = React.useMemo(() => {
     const keyword = nodePaletteSearch.trim().toLowerCase();
@@ -3460,6 +3466,114 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
   const editorStatusItems: React.ReactNode[] = [];
 
+  if (!hasResolvedProject) {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="recommended-project-step"
+        type="warning"
+        title="Next step: resolve the current project"
+        description="This workflow path only becomes a real project flow after Studio resolves the current project scope. Once resolved, save the asset, run the draft, then bind the project."
+      />,
+    );
+  } else if (!hasNamedDraft) {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="recommended-draft-step"
+        type="warning"
+        title="Next step: finish the workflow draft"
+        description="Add a workflow name and valid YAML first. Then save the asset before you run the draft or bind the project."
+      />,
+    );
+  } else if (isDraftDirty && canSaveWorkflow) {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="recommended-save-step"
+        type="info"
+        title="Next step: Save asset"
+        description="Save stores this workflow as a named project asset. That keeps the project catalog in sync before you verify the draft or publish the default binding."
+        action={
+          <Space wrap>
+            <Button type="primary" onClick={onSaveDraft} loading={savePending}>
+              Save asset
+            </Button>
+          </Space>
+        }
+      />,
+    );
+  } else if (saveNotice?.type === 'success') {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="recommended-run-step"
+        type="success"
+        title="Next step: Run draft"
+        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the project so Project Invoke can use the published entrypoint."
+        action={
+          <Space wrap>
+            <Button
+              type="primary"
+              onClick={onRunInConsole}
+              disabled={!canOpenRunWorkflow}
+            >
+              Run draft
+            </Button>
+            <Button
+              onClick={onPublishWorkflow}
+              loading={publishPending}
+              disabled={!canPublishWorkflow}
+            >
+              Bind project
+            </Button>
+          </Space>
+        }
+      />,
+    );
+  } else if (!scopeBinding?.available) {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="recommended-bind-step"
+        type="warning"
+        title="Next step: Bind project"
+        description="The workflow asset is ready, but Project Invoke still has no active default project binding. Bind this workflow when you want the published project path to use it."
+        action={
+          <Space wrap>
+            <Button
+              type="primary"
+              onClick={onPublishWorkflow}
+              loading={publishPending}
+              disabled={!canPublishWorkflow}
+            >
+              Bind project
+            </Button>
+            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
+          </Space>
+        }
+      />,
+    );
+  } else {
+    editorStatusItems.push(
+      <StudioNoticeCard
+        key="recommended-invoke-step"
+        type="success"
+        title="Next step: Open Project Invoke"
+        description="The default project binding is already active. Move to Project Invoke to test the published entrypoint, then continue in Runs for the full event trace."
+        action={
+          <Space wrap>
+            <Button type="primary" onClick={onOpenProjectInvoke}>
+              Open Project Invoke
+            </Button>
+            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
+            <Button
+              onClick={onRunInConsole}
+              disabled={!canOpenRunWorkflow}
+            >
+              Run draft
+            </Button>
+          </Space>
+        }
+      />,
+    );
+  }
+
   if (saveNotice) {
     editorStatusItems.push(
       <StudioNoticeCard
@@ -3684,7 +3798,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   onClick={onRunInConsole}
                   disabled={!resolvedScopeId}
                 >
-                  Open runs
+                  Run draft
                 </Button>
                 <Button
                   icon={<RobotOutlined />}
@@ -3699,7 +3813,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   disabled={!canPublishWorkflow}
                   onClick={onPublishWorkflow}
                 >
-                  Bind scope
+                  Bind project
                 </Button>
                 <Button
                   type="text"
@@ -4235,7 +4349,7 @@ const pageHeaderStyle: React.CSSProperties = {
 
 const sidebarMetaTextStyle: React.CSSProperties = {
   fontSize: 11,
-  color: '#9ca3af',
+  color: 'var(--ant-color-text-tertiary)',
   wordBreak: 'break-all',
 };
 
@@ -4250,7 +4364,7 @@ const catalogListItemTitleStyle: React.CSSProperties = {
 
 const catalogListItemMetaStyle: React.CSSProperties = {
   fontSize: 11,
-  color: '#9ca3af',
+  color: 'var(--ant-color-text-tertiary)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -4507,7 +4621,7 @@ export const StudioRolesPage: React.FC<StudioRolesPageProps> = ({
             </div>
 
             <div className="search-field">
-              <SearchOutlined style={{ color: '#9ca3af' }} />
+              <SearchOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
               <input
                 className="search-input"
                 placeholder="Search roles"
@@ -5040,7 +5154,7 @@ export const StudioConnectorsPage: React.FC<StudioConnectorsPageProps> = ({
             </div>
 
             <div className="search-field">
-              <SearchOutlined style={{ color: '#9ca3af' }} />
+              <SearchOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
               <input
                 className="search-input"
                 placeholder="Search connectors"

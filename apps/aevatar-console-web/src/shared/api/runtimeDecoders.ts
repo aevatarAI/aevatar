@@ -602,6 +602,10 @@ function decodeWorkflowActorSnapshot(
     actorId: expectString(record.actorId, `${label}.actorId`),
     workflowName: expectString(record.workflowName, `${label}.workflowName`),
     lastCommandId: expectString(record.lastCommandId, `${label}.lastCommandId`),
+    completionStatusValue: expectNumber(
+      record.completionStatus ?? record.completionStatusValue,
+      `${label}.completionStatusValue`
+    ),
     stateVersion: expectNumber(record.stateVersion, `${label}.stateVersion`),
     lastEventId: expectString(record.lastEventId, `${label}.lastEventId`),
     lastUpdatedAt: expectString(record.lastUpdatedAt, `${label}.lastUpdatedAt`),

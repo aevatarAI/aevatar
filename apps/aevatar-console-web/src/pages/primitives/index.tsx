@@ -1,80 +1,28 @@
-import {
-  PageContainer,
-  ProCard,
-  ProTable,
-} from "@ant-design/pro-components";
-import type { ProColumns } from "@ant-design/pro-components";
+import { BuildOutlined, EyeOutlined } from "@ant-design/icons";
+import { ProList } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@/shared/navigation/history";
-import {
-  buildRuntimeRunsHref,
-  buildRuntimeWorkflowsHref,
-} from "@/shared/navigation/runtimeRoutes";
-import {
-  Alert,
-  Button,
-  Col,
-  Empty,
-  Input,
-  Row,
-  Select,
-  Space,
-  Tag,
-  Typography,
-} from "antd";
+import { Button, Empty, Input, List, Select, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
-import type {
-  WorkflowPrimitiveDescriptor,
-  WorkflowPrimitiveParameterDescriptor,
-} from "@/shared/models/runtime/query";
+import { history } from "@/shared/navigation/history";
+import { buildRuntimeWorkflowsHref } from "@/shared/navigation/runtimeRoutes";
+import type { WorkflowPrimitiveDescriptor } from "@/shared/models/runtime/query";
+import {
+  AevatarContextDrawer,
+  AevatarInspectorEmpty,
+  AevatarPageShell,
+  AevatarPanel,
+  AevatarStatusTag,
+  AevatarWorkbenchLayout,
+} from "@/shared/ui/aevatarPageShells";
 import {
   cardListActionStyle,
-  cardListHeaderStyle,
-  cardListItemStyle,
-  cardListMainStyle,
-  cardListStyle,
-  cardStackStyle,
-  compactPanelHeight,
-  compactTableCardProps,
-  embeddedPanelStyle,
-  fillCardStyle,
-  moduleCardProps,
-  summaryFieldGridStyle,
   summaryFieldLabelStyle,
-  summaryFieldStyle,
-  summaryMetricGridStyle,
   summaryMetricStyle,
   summaryMetricValueStyle,
-  stretchColumnStyle,
 } from "@/shared/ui/proComponents";
-import { describeError } from "@/shared/ui/errorText";
 
-type PrimitiveLibraryRow = WorkflowPrimitiveDescriptor & {
-  key: string;
-  aliasSummary: string;
-  parameterCount: number;
-  exampleWorkflowCount: number;
-};
-
-type PrimitiveSummaryRecord = {
-  category: string;
-  aliasCount: number;
-  parameterCount: number;
-  exampleWorkflowCount: number;
-};
-
-type SummaryFieldProps = {
-  label: string;
-  value: React.ReactNode;
-};
-
-type SummaryMetricProps = {
-  label: string;
-  value: React.ReactNode;
-};
-
-function readInitialPrimitiveSelection(): string {
+function readPrimitiveSelection(): string {
   if (typeof window === "undefined") {
     return "";
   }
@@ -84,70 +32,156 @@ function readInitialPrimitiveSelection(): string {
   );
 }
 
-const parameterColumns: ProColumns<WorkflowPrimitiveParameterDescriptor>[] = [
-  {
-    title: "Name",
-    dataIndex: "name",
-    width: 180,
-  },
-  {
-    title: "Type",
-    dataIndex: "type",
-    width: 120,
-  },
-  {
-    title: "Required",
-    dataIndex: "required",
-    width: 120,
-    render: (_, record) => (
-      <Tag color={record.required ? "error" : "default"}>
-        {record.required ? "Required" : "Optional"}
-      </Tag>
-    ),
-  },
-  {
-    title: "Default",
-    dataIndex: "default",
-    width: 180,
-    render: (_, record) => record.default || "n/a",
-  },
-  {
-    title: "Enum",
-    dataIndex: "enumValues",
-    width: 180,
-    render: (_, record) =>
-      record.enumValues.length > 0 ? record.enumValues.join(", ") : "n/a",
-  },
-  {
-    title: "Description",
-    dataIndex: "description",
-    ellipsis: true,
-  },
-];
+function buildPrimitivesHref(primitiveName: string): string {
+  const params = new URLSearchParams();
+  if (primitiveName.trim()) {
+    params.set("primitive", primitiveName.trim());
+  }
+  const query = params.toString();
+  return query ? `/runtime/primitives?${query}` : "/runtime/primitives";
+}
 
-const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
-  <div style={summaryFieldStyle}>
-    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
-    {typeof value === "string" || typeof value === "number" ? (
-      <Typography.Text>{value}</Typography.Text>
-    ) : (
-      value
-    )}
-  </div>
-);
+function buildPrimitiveSummary(primitive: WorkflowPrimitiveDescriptor): string {
+  const description = primitive.description.trim();
+  if (description) {
+    return description;
+  }
 
-const SummaryMetric: React.FC<SummaryMetricProps> = ({ label, value }) => (
+  return primitive.aliases.length > 0
+    ? `Aliases: ${primitive.aliases.join(", ")}`
+    : "Ready to inspect parameter contracts and example workflow coverage.";
+}
+
+const PrimitiveSummaryMetric: React.FC<{
+  label: string;
+  value: React.ReactNode;
+}> = ({ label, value }) => (
   <div style={summaryMetricStyle}>
     <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
     <Typography.Text style={summaryMetricValueStyle}>{value}</Typography.Text>
   </div>
 );
 
+const PrimitiveCatalogCard: React.FC<{
+  onInspect: () => void;
+  onOpenExample: () => void;
+  primitive: WorkflowPrimitiveDescriptor;
+}> = ({ onInspect, onOpenExample, primitive }) => {
+  const summary = buildPrimitiveSummary(primitive);
+  const hasExampleWorkflow = primitive.exampleWorkflows.length > 0;
+
+  return (
+    <div
+      aria-label={`Inspect primitive ${primitive.name}`}
+      onClick={onInspect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onInspect();
+        }
+      }}
+      role="button"
+      style={{
+        background: "var(--ant-color-bg-container)",
+        border: "1px solid var(--ant-color-border-secondary)",
+        borderRadius: 14,
+        boxShadow: "0 12px 28px rgba(15, 23, 42, 0.06)",
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        gap: 16,
+        padding: 18,
+        width: "100%",
+      }}
+      tabIndex={0}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          justifyContent: "space-between",
+        }}
+      >
+        <Space wrap size={[8, 8]}>
+          <AevatarStatusTag domain="governance" status="ready" />
+          <Typography.Text style={{ color: "var(--ant-color-text-tertiary)" }}>
+            {primitive.category}
+          </Typography.Text>
+        </Space>
+        <Typography.Text style={{ color: "var(--ant-color-text-tertiary)" }}>
+          {primitive.aliases.length} aliases
+        </Typography.Text>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <Typography.Text strong style={{ fontSize: 16, lineHeight: 1.4 }}>
+          {primitive.name}
+        </Typography.Text>
+        <Typography.Paragraph
+          ellipsis={{ rows: 2, tooltip: summary }}
+          style={{
+            color: "var(--ant-color-text-secondary)",
+            margin: 0,
+          }}
+        >
+          {summary}
+        </Typography.Paragraph>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 10,
+          gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+          width: "100%",
+        }}
+      >
+        <PrimitiveSummaryMetric label="Category" value={primitive.category} />
+        <PrimitiveSummaryMetric
+          label="Parameters"
+          value={`${primitive.parameters.length} defined`}
+        />
+        <PrimitiveSummaryMetric
+          label="Examples"
+          value={`${primitive.exampleWorkflows.length} linked`}
+        />
+      </div>
+
+      <div style={cardListActionStyle}>
+        <Button
+          icon={<EyeOutlined />}
+          onClick={(event) => {
+            event.stopPropagation();
+            onInspect();
+          }}
+        >
+          Inspect
+        </Button>
+        <Button
+          disabled={!hasExampleWorkflow}
+          icon={<BuildOutlined />}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (hasExampleWorkflow) {
+              onOpenExample();
+            }
+          }}
+          type="primary"
+        >
+          Example workflow
+        </Button>
+      </div>
+    </div>
+  );
+};
+
 const PrimitivesPage: React.FC = () => {
   const [keyword, setKeyword] = useState("");
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPrimitiveName, setSelectedPrimitiveName] = useState(
-    readInitialPrimitiveSelection()
+    readPrimitiveSelection(),
   );
 
   const primitivesQuery = useQuery({
@@ -155,25 +189,16 @@ const PrimitivesPage: React.FC = () => {
     queryFn: () => runtimeQueryApi.listPrimitives(),
   });
 
-  const primitiveRows = useMemo<PrimitiveLibraryRow[]>(
-    () =>
-      (primitivesQuery.data ?? []).map((primitive) => ({
-        ...primitive,
-        key: primitive.name,
-        aliasSummary:
-          primitive.aliases.length > 0 ? primitive.aliases.join(", ") : "n/a",
-        parameterCount: primitive.parameters.length,
-        exampleWorkflowCount: primitive.exampleWorkflows.length,
-      })),
-    [primitivesQuery.data]
-  );
-
+  const primitiveRows = primitivesQuery.data ?? [];
   const categoryOptions = useMemo(
     () =>
       Array.from(new Set(primitiveRows.map((item) => item.category)))
         .sort((left, right) => left.localeCompare(right))
-        .map((category) => ({ label: category, value: category })),
-    [primitiveRows]
+        .map((category) => ({
+          label: category,
+          value: category,
+        })),
+    [primitiveRows],
   );
 
   const filteredRows = useMemo(() => {
@@ -191,324 +216,247 @@ const PrimitivesPage: React.FC = () => {
         return true;
       }
 
-      return [item.name, item.category, item.description, item.aliasSummary]
+      return [item.name, item.category, item.description, item.aliases.join(" ")]
         .join(" ")
         .toLowerCase()
         .includes(normalizedKeyword);
     });
   }, [keyword, primitiveRows, selectedCategories]);
 
-  useEffect(() => {
-    if (filteredRows.length === 0) {
-      setSelectedPrimitiveName("");
-      return;
-    }
-
-    if (
-      !selectedPrimitiveName ||
-      !filteredRows.some((item) => item.name === selectedPrimitiveName)
-    ) {
-      setSelectedPrimitiveName(filteredRows[0].name);
-    }
-  }, [filteredRows, selectedPrimitiveName]);
+  const selectedPrimitive =
+    filteredRows.find((item) => item.name === selectedPrimitiveName) ??
+    primitiveRows.find((item) => item.name === selectedPrimitiveName) ??
+    null;
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const url = new URL(window.location.href);
-    if (selectedPrimitiveName) {
-      url.searchParams.set("primitive", selectedPrimitiveName);
-    } else {
-      url.searchParams.delete("primitive");
-    }
-    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    history.replace(buildPrimitivesHref(selectedPrimitiveName));
   }, [selectedPrimitiveName]);
 
-  const selectedPrimitive = useMemo(
-    () => primitiveRows.find((item) => item.name === selectedPrimitiveName),
-    [primitiveRows, selectedPrimitiveName]
-  );
-
-  const summaryRecord = useMemo<PrimitiveSummaryRecord | undefined>(() => {
-    if (!selectedPrimitive) {
-      return undefined;
-    }
-
-    return {
-      category: selectedPrimitive.category,
-      aliasCount: selectedPrimitive.aliases.length,
-      parameterCount: selectedPrimitive.parameters.length,
-      exampleWorkflowCount: selectedPrimitive.exampleWorkflows.length,
-    };
-  }, [selectedPrimitive]);
-
-  const libraryColumns = useMemo<ProColumns<PrimitiveLibraryRow>[]>(
-    () => [
-      {
-        title: "Primitive",
-        dataIndex: "name",
-        width: 180,
-      },
-      {
-        title: "Category",
-        dataIndex: "category",
-        width: 140,
-      },
-      {
-        title: "Aliases",
-        dataIndex: "aliasSummary",
-        ellipsis: true,
-      },
-      {
-        title: "Params",
-        dataIndex: "parameterCount",
-        width: 100,
-        valueType: "digit",
-      },
-      {
-        title: "Examples",
-        dataIndex: "exampleWorkflowCount",
-        width: 100,
-        valueType: "digit",
-      },
-    ],
-    []
-  );
-
   return (
-    <PageContainer
-      title="Runtime Primitives"
-      content="Browse the backend-authored runtime primitive view, including normalized parameters and example workflow references."
+    <AevatarPageShell
+      content="Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector."
+      title="Primitive Library"
     >
-      <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} xl={10} style={stretchColumnStyle}>
-          <ProCard
-            title="Primitive library"
-            {...moduleCardProps}
-            style={fillCardStyle}
-          >
-            <div style={cardStackStyle}>
+      <AevatarWorkbenchLayout
+        rail={
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <AevatarPanel
+              description="Filter by category or keyword without leaving the viewport."
+              title="Filter Library"
+            >
               <div
                 style={{
-                  ...embeddedPanelStyle,
-                  background: "var(--ant-color-fill-quaternary)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                  width: "100%",
                 }}
               >
-                <Typography.Text strong>Runtime-backed browser</Typography.Text>
-                <Typography.Paragraph
-                  style={{ margin: "8px 0 0" }}
-                  type="secondary"
+                <Input
+                  onChange={(event) => setKeyword(event.target.value)}
+                  placeholder="Search primitive, category, or alias"
+                  style={{ width: "100%" }}
+                  value={keyword}
+                />
+                <Select
+                  mode="multiple"
+                  onChange={setSelectedCategories}
+                  options={categoryOptions}
+                  placeholder="Filter categories"
+                  style={{ width: "100%" }}
+                  value={selectedCategories}
+                />
+                <Button
+                  onClick={() => {
+                    setKeyword("");
+                    setSelectedCategories([]);
+                    setSelectedPrimitiveName("");
+                  }}
                 >
-                  This page is powered by the formal `/api/primitives` view
-                  instead of stitching capability and catalog data in the
-                  browser.
-                </Typography.Paragraph>
+                  Reset filters
+                </Button>
               </div>
+            </AevatarPanel>
 
-              <Input.Search
-                allowClear
-                placeholder="Filter by name, alias, category, or description"
-                value={keyword}
-                onChange={(event) => setKeyword(event.target.value)}
-              />
-
-              <Select
-                mode="multiple"
-                allowClear
-                value={selectedCategories}
-                options={categoryOptions}
-                style={{ width: "100%" }}
-                placeholder="Filter categories"
-                onChange={(value) => setSelectedCategories(value)}
-              />
-
-              <ProTable<PrimitiveLibraryRow>
-                rowKey="key"
-                search={false}
-                options={false}
-                pagination={{ pageSize: 8, showSizeChanger: false }}
-                columns={libraryColumns}
-                dataSource={filteredRows}
-                loading={primitivesQuery.isLoading}
-                cardProps={compactTableCardProps}
-                scroll={{ x: 860, y: compactPanelHeight }}
-                onRow={(record) => ({
-                  onClick: () => setSelectedPrimitiveName(record.name),
-                })}
-                rowClassName={(record) =>
-                  record.name === selectedPrimitiveName
-                    ? "ant-table-row-selected"
-                    : ""
-                }
-                locale={{
-                  emptyText: (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="No primitives match the current filters."
-                    />
-                  ),
-                }}
-              />
-            </div>
-          </ProCard>
-        </Col>
-
-        <Col xs={24} xl={14} style={stretchColumnStyle}>
-          <ProCard
-            title={
-              selectedPrimitive
-                ? `Primitive detail · ${selectedPrimitive.name}`
-                : "Primitive detail"
-            }
-            {...moduleCardProps}
-            style={fillCardStyle}
+            <AevatarPanel title="Library Digest">
+              <Space direction="vertical" size={6}>
+                <Typography.Text strong>
+                  {filteredRows.length} primitives in view
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  {categoryOptions.length} categories ·{" "}
+                  {filteredRows.reduce(
+                    (count, primitive) => count + primitive.parameters.length,
+                    0,
+                  )}{" "}
+                  parameters surfaced
+                </Typography.Text>
+              </Space>
+            </AevatarPanel>
+          </div>
+        }
+        stage={
+          <AevatarPanel
+            description="A card-flow library lets you scan categories and examples without collapsing into parameter tables."
+            title="Runtime Primitives"
           >
-            {primitivesQuery.isError ? (
-              <Alert
-                showIcon
-                type="error"
-                title="Failed to load primitive library"
-                description={describeError(primitivesQuery.error)}
-              />
-            ) : !selectedPrimitive ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="Select a primitive to inspect its details."
-              />
-            ) : (
-              <div style={cardStackStyle}>
-                <Typography.Paragraph style={{ marginBottom: 0 }}>
-                  {selectedPrimitive.description}
-                </Typography.Paragraph>
+            <ProList<WorkflowPrimitiveDescriptor>
+              dataSource={filteredRows}
+              grid={{ gutter: 16, column: 1 }}
+              locale={{
+                emptyText: (
+                  <Empty
+                    description="No primitives matched the current filter."
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  />
+                ),
+              }}
+              pagination={{ defaultPageSize: 8, showSizeChanger: false }}
+              renderItem={(primitive) => (
+                <List.Item style={{ border: "none", padding: 0 }}>
+                  <PrimitiveCatalogCard
+                    onInspect={() => setSelectedPrimitiveName(primitive.name)}
+                    onOpenExample={() =>
+                      history.push(
+                        buildRuntimeWorkflowsHref({
+                          workflow: primitive.exampleWorkflows[0],
+                        }),
+                      )
+                    }
+                    primitive={primitive}
+                  />
+                </List.Item>
+              )}
+              rowKey="name"
+              split={false}
+            />
+          </AevatarPanel>
+        }
+      />
 
+      <AevatarContextDrawer
+        onClose={() => setSelectedPrimitiveName("")}
+        open={Boolean(selectedPrimitiveName)}
+        subtitle="Primitive contract"
+        title={selectedPrimitive?.name || selectedPrimitiveName || "Primitive"}
+      >
+        {!selectedPrimitive ? (
+          <AevatarInspectorEmpty description="Choose a primitive to inspect its parameter contract and example workflow coverage." />
+        ) : (
+          <>
+            <AevatarPanel
+              description="Primitive description and aliases remain concise so the drawer stays decision-oriented."
+              title="Definition"
+            >
+              <Space direction="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
-                  <Tag color="processing">{selectedPrimitive.category}</Tag>
-                  {selectedPrimitive.aliases.map((alias) => (
-                    <Tag key={alias}>{alias}</Tag>
+                  <AevatarStatusTag domain="governance" status="ready" />
+                  <Typography.Text type="secondary">
+                    {selectedPrimitive.category}
+                  </Typography.Text>
+                </Space>
+                <Typography.Text>
+                  {selectedPrimitive.description || "No primitive description."}
+                </Typography.Text>
+                <Typography.Text type="secondary">
+                  Aliases:{" "}
+                  {selectedPrimitive.aliases.length > 0
+                    ? selectedPrimitive.aliases.join(", ")
+                    : "None"}
+                </Typography.Text>
+              </Space>
+            </AevatarPanel>
+
+            <AevatarPanel
+              description="Parameter contracts move here so the library stage can stay lightweight."
+              title="Parameters"
+            >
+              {selectedPrimitive.parameters.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {selectedPrimitive.parameters.map((parameter) => (
+                    <div
+                      key={parameter.name}
+                      style={{
+                        border: "1px solid var(--ant-color-border-secondary)",
+                        borderRadius: 12,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                        padding: 12,
+                      }}
+                    >
+                      <Space wrap size={[8, 8]}>
+                        <Typography.Text strong>{parameter.name}</Typography.Text>
+                        <AevatarStatusTag
+                          domain="governance"
+                          label={parameter.required ? "Required" : "Optional"}
+                          status={parameter.required ? "ready" : "draft"}
+                        />
+                        <Typography.Text type="secondary">
+                          {parameter.type}
+                        </Typography.Text>
+                      </Space>
+                      <Typography.Text type="secondary">
+                        {parameter.description || "No parameter description."}
+                      </Typography.Text>
+                      <Typography.Text type="secondary">
+                        Default: {parameter.default || "n/a"}
+                      </Typography.Text>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Empty
+                  description="This primitive does not declare parameters."
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              )}
+            </AevatarPanel>
+
+            <AevatarPanel
+              description="Examples form the bridge from primitive library to workflow design."
+              title="Example Coverage"
+            >
+              {selectedPrimitive.exampleWorkflows.length > 0 ? (
+                <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  {selectedPrimitive.exampleWorkflows.map((workflowName) => (
+                    <div
+                      key={workflowName}
+                      style={{
+                        border: "1px solid var(--ant-color-border-secondary)",
+                        borderRadius: 12,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        padding: 12,
+                      }}
+                    >
+                      <Typography.Text strong>{workflowName}</Typography.Text>
+                      <Button
+                        onClick={() =>
+                          history.push(
+                            buildRuntimeWorkflowsHref({
+                              workflow: workflowName,
+                            }),
+                          )
+                        }
+                      >
+                        Open workflow
+                      </Button>
+                    </div>
                   ))}
                 </Space>
-
-                {summaryRecord ? (
-                  <div style={cardStackStyle}>
-                    <div style={summaryFieldGridStyle}>
-                      <SummaryField
-                        label="Category"
-                        value={summaryRecord.category}
-                      />
-                    </div>
-                    <div style={summaryMetricGridStyle}>
-                      <SummaryMetric
-                        label="Aliases"
-                        value={summaryRecord.aliasCount}
-                      />
-                      <SummaryMetric
-                        label="Parameters"
-                        value={summaryRecord.parameterCount}
-                      />
-                      <SummaryMetric
-                        label="Example workflows"
-                        value={summaryRecord.exampleWorkflowCount}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-
-                <div style={embeddedPanelStyle}>
-                  <Typography.Text strong>Parameters</Typography.Text>
-                  <div style={{ marginTop: 12 }}>
-                    <ProTable<WorkflowPrimitiveParameterDescriptor>
-                      rowKey="name"
-                      search={false}
-                      options={false}
-                      pagination={false}
-                      columns={parameterColumns}
-                      dataSource={selectedPrimitive.parameters}
-                      cardProps={compactTableCardProps}
-                      scroll={{ x: 820 }}
-                      locale={{
-                        emptyText: (
-                          <Empty
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description="This primitive does not declare parameters."
-                          />
-                        ),
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div style={embeddedPanelStyle}>
-                  <Typography.Text strong>Example workflows</Typography.Text>
-                  <div style={{ marginTop: 12 }}>
-                    {selectedPrimitive.exampleWorkflows.length > 0 ? (
-                      <div style={cardListStyle}>
-                        {selectedPrimitive.exampleWorkflows.map((name) => (
-                          <div key={name} style={cardListItemStyle}>
-                            <div style={cardListHeaderStyle}>
-                              <div style={cardListMainStyle}>
-                                <Typography.Text strong>{name}</Typography.Text>
-                                <Typography.Paragraph
-                                  style={{ margin: 0 }}
-                                  type="secondary"
-                                >
-                                  Open {name} in the runtime workflow library,
-                                  launch a run, or jump to scope-owned
-                                  published assets.
-                                </Typography.Paragraph>
-                              </div>
-                            </div>
-                            <div style={cardListActionStyle}>
-                              <Button
-                                type="link"
-                                onClick={() =>
-                                  history.push(
-                                    buildRuntimeWorkflowsHref({
-                                      workflow: name,
-                                      tab: "yaml",
-                                    })
-                                  )
-                                }
-                              >
-                                Inspect runtime
-                              </Button>
-                              <Button
-                                type="link"
-                                onClick={() =>
-                                  history.push(
-                                    buildRuntimeRunsHref({
-                                      workflow: name,
-                                    })
-                                  )
-                                }
-                              >
-                                Run
-                              </Button>
-                              <Button
-                                type="link"
-                                onClick={() => history.push("/scopes/workflows")}
-                              >
-                                Scope assets
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description="No example workflows are currently advertised for this primitive."
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </ProCard>
-        </Col>
-      </Row>
-    </PageContainer>
+              ) : (
+                <Empty
+                  description="No example workflows were attached."
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              )}
+            </AevatarPanel>
+          </>
+        )}
+      </AevatarContextDrawer>
+    </AevatarPageShell>
   );
 };
 
