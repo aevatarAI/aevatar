@@ -164,75 +164,125 @@ Look for `documentation_url` in the response. Use your general API knowledge to 
 
 ## Connecting Services (In-Chat Flow)
 
-When a user asks to connect a new service, handle it entirely within the chat. Only give the user URLs when they must interact outside (e.g., creating an app/bot, authorizing access).
+Handle all service connections entirely within the chat. Only give the user external URLs when they must take action outside (creating an app, authorizing, getting a token).
 
-### Step 1: Discover the service
+### Overview
+
+All information needed to guide the user comes from the **catalog entry**. You do not need hardcoded knowledge about any specific service.
 
 ```
 nyxid_catalog action=show slug=<slug>
 ```
 
-From the catalog response, determine the connection type:
+Read these fields from the response to determine the connection method:
 
-| Catalog field | Connection type | Example services |
-|--------------|----------------|-----------------|
-| Has `provider_config_id` + `credential_mode: "admin"` | **OAuth (platform-managed)** — credentials handled by NyxID | GitHub, Google (if admin-configured) |
-| Has `provider_config_id` + `credential_mode: "user"` | **OAuth (user-managed)** — user must provide their own OAuth app credentials | Lark, Feishu, Twitter/X |
-| Has `requires_credential: true`, no `provider_config_id` | **API key/token** — user provides a single credential | Telegram Bot, OpenAI, Anthropic |
+| Field | What it tells you |
+|-------|------------------|
+| `provider_type` | Connection method: `oauth2`, `device_code`, `api_key` |
+| `credential_mode` | Who provides OAuth app credentials: `admin` (platform) or `user` (user must provide) |
+| `provider_config_id` | The provider ID for OAuth/device-code operations |
+| `api_key_instructions` | How to obtain an API key (display to user as-is) |
+| `api_key_url` | Where to get an API key (give as clickable link) |
+| `documentation_url` | Service documentation (give when user needs help) |
+| `requires_gateway_url` | If true, user must also provide a custom endpoint URL |
 
-### Step 2: Check existing state
+### Connection Flow
 
-- **For OAuth services:** `nyxid_providers action=list` — check if already connected.
-- **For API key services:** `nyxid_services action=list` — check if already added.
+```
+User: "连接 X"
+       │
+       ▼
+  ┌─ catalog lookup ─┐
+  │                   │
+  ▼                   ▼
+provider_type?     No provider_type?
+  │                   │
+  ├─ oauth2 ──────► OAuth Flow (Step A)
+  ├─ device_code ──► Device Code Flow (Step B)
+  └─ api_key ──────► API Key Flow (Step C)
+                      │
+                  also Step C
+```
 
-If already connected, tell the user and ask if they want to reconnect.
+### Step A: OAuth Flow
 
-### Step 3: Guide credential setup (if needed)
+1. **Check existing connection:**
+   ```
+   nyxid_providers action=list
+   ```
+   If already connected, tell user and ask if they want to reconnect.
 
-**OAuth (user-managed):** The user needs to create an OAuth app and provide their App ID + App Secret.
-
-1. Check if credentials are already stored:
+2. **If `credential_mode` is `"user"`: ensure OAuth app credentials exist.**
    ```
    nyxid_providers action=get_credentials provider_id=<provider_config_id>
    ```
-2. If missing, tell the user to create an app. Give them the developer platform URL and the callback URL to configure:
-   - OAuth callback URL: `https://nyx-api.chrono-ai.fun/api/v1/providers/callback`
-   - Use `api_key_url` or `documentation_url` from the catalog entry for the developer portal link.
-3. When the user provides their App ID and App Secret:
+   If missing, guide the user:
+   - Tell them to create an OAuth app on the service's developer platform.
+     Use `api_key_url` or `documentation_url` from catalog for the link.
+   - Tell them to set the OAuth callback URL to:
+     `https://nyx-api.chrono-ai.fun/api/v1/providers/callback`
+   - When they provide App ID + App Secret:
+     ```
+     nyxid_providers action=set_credentials provider_id=<provider_config_id> client_id=<app_id> client_secret=<app_secret>
+     ```
+
+3. **Initiate OAuth:**
    ```
-   nyxid_providers action=set_credentials provider_id=<provider_config_id> client_id=<app_id> client_secret=<app_secret>
+   nyxid_providers action=connect_oauth provider_id=<provider_config_id>
+   ```
+   Present the returned `authorization_url` as a clickable link.
+
+4. **Verify:** After user completes authorization:
+   ```
+   nyxid_providers action=list
    ```
 
-**API key/token:** The user needs to obtain a token from the service.
+### Step B: Device Code Flow
 
-1. Tell the user where to get their token. Use `api_key_url` or `api_key_instructions` from the catalog entry. Examples:
-   - Telegram Bot: "Send /newbot to @BotFather on Telegram, then copy the token it gives you."
-   - OpenAI: "Get your API key from https://platform.openai.com/api-keys"
-2. When the user provides the token:
+1. **Initiate:**
    ```
-   nyxid_services action=create service_slug=<slug> credential=<token> label=<user-friendly name>
+   nyxid_providers action=connect_device_code provider_id=<provider_config_id>
+   ```
+   Tell the user to visit `verification_uri` and enter `user_code`.
+
+2. **Poll:**
+   ```
+   nyxid_providers action=poll_device_code provider_id=<provider_config_id> state=<state>
+   ```
+   Repeat until status is `complete` or `expired`.
+
+3. **Verify:** `nyxid_providers action=list`
+
+### Step C: API Key / Token Flow
+
+1. **Check existing connection:**
+   ```
+   nyxid_services action=list
    ```
 
-### Step 4: Activate (OAuth only)
+2. **Guide the user to obtain their credential.**
+   Use the catalog's `api_key_instructions` (display as-is) and `api_key_url` (give as link).
+   If neither is available, use `documentation_url`.
 
-For OAuth services, initiate the authorization flow:
+3. **When the user provides the credential:**
+   ```
+   nyxid_services action=create service_slug=<slug> credential=<token> label=<name>
+   ```
+   If `requires_gateway_url` is true, also ask for their endpoint URL:
+   ```
+   nyxid_services action=create service_slug=<slug> credential=<token> label=<name> endpoint_url=<url>
+   ```
+
+4. **Verify:** Make a simple test request via proxy to confirm connectivity.
+   Use the catalog's `documentation_url` and your knowledge of the API to pick an appropriate read-only test call.
+
+### Slug Discovery
+
+If the user's request doesn't map to an obvious slug, list the catalog first:
 ```
-nyxid_providers action=connect_oauth provider_id=<provider_config_id>
+nyxid_catalog action=list
 ```
-Present the returned `authorization_url` as a clickable link. Tell the user to click it and complete authorization.
-
-**Device code alternative:** For services supporting device code (e.g., OpenAI Codex), or when the user prefers:
-1. `nyxid_providers action=connect_device_code provider_id=<id>` → get `user_code` + `verification_uri`
-2. Tell user to visit the URL and enter the code.
-3. `nyxid_providers action=poll_device_code provider_id=<id> state=<state>` → poll until complete.
-
-### Step 5: Verify
-
-After the user confirms they completed the setup:
-- **OAuth:** `nyxid_providers action=list` — check if the provider appears.
-- **API key:** `nyxid_services action=list` — check if the service appears. Optionally make a simple proxy request to test connectivity (e.g., Telegram: `nyxid_proxy slug=<slug> path=/getMe method=POST body={}`).
-
-Confirm success to the user.
+Then find the best match and confirm with the user.
 
 ## Notifications and Approvals
 
@@ -270,5 +320,5 @@ Nodes keep credentials on the user's own infrastructure. Explain to users:
 - Keep request bodies minimal and service-correct
 - Never ask for, display, or log raw credentials
 - When something fails, check the error and help the user understand what went wrong
-- For OAuth-based services, always try the in-chat connect flow first using nyxid_providers before falling back to CLI or dashboard
-- For API key-based services that cannot use OAuth, direct users to CLI or dashboard
+- Always connect services in-chat using the catalog-driven flow; never direct users to CLI or dashboard unless they explicitly ask
+- Read all guidance from the catalog entry (api_key_instructions, api_key_url, documentation_url) — do not hardcode service-specific instructions

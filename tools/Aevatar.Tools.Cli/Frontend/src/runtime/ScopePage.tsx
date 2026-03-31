@@ -531,7 +531,7 @@ export default function ScopePage() {
 
   // Draft Run YAML (optional)
   const [draftYaml, setDraftYaml] = useState(DEFAULT_CHAT_WORKFLOW_YAML);
-  const [showYamlInput, setShowYamlInput] = useState(false);
+  const [showYamlInput] = useState(false);
 
   // NyxID Chat: track whether we've ensured the scope binding this session
   const nyxidChatBoundRef = useRef(false);
@@ -555,17 +555,13 @@ export default function ScopePage() {
     if (!scopeId) return;
     api.scope.listServices(scopeId).then(svcList => {
       const base: ServiceOption[] = [
-        { id: '__default-chat__', label: 'Default Chat', kind: 'draft-run' },
         { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat' },
       ];
       if (Array.isArray(svcList)) {
-        // Built-in service IDs that already have hardcoded entries above.
         const builtinIds = new Set(base.map(b => b.id));
         for (const s of svcList) {
           const sid = s?.serviceId || s?.ServiceId;
           const name = s?.displayName || s?.DisplayName || sid;
-          // Skip services whose displayName matches a built-in entry (e.g. "NyxID Chat")
-          // to avoid duplicates when the backend returns a previously bound service.
           const isDuplicate = builtinIds.has(sid)
             || base.some(b => b.label === name);
           if (sid && !isDuplicate) base.push({ id: sid, label: name, kind: 'service' });
@@ -838,14 +834,94 @@ export default function ScopePage() {
     } catch { /* ignore */ }
   }, [scopeId, activeConvId]);
 
-  // Endpoint tabs — currently only 'chat' is functional; others are placeholders
-  const [activeEndpoint, setActiveEndpoint] = useState<'chat' | 'query' | 'execute' | 'raw'>('chat');
-  const endpointTabs: { id: 'chat' | 'query' | 'execute' | 'raw'; label: string }[] = [
+  // Endpoint tabs
+  type EndpointTab = 'chat' | 'query' | 'execute' | 'raw';
+  const [activeEndpoint, setActiveEndpoint] = useState<EndpointTab>('chat');
+  const endpointTabs: { id: EndpointTab; label: string }[] = [
     { id: 'chat', label: 'Chat' },
     { id: 'query', label: 'Query' },
     { id: 'execute', label: 'Execute' },
     { id: 'raw', label: 'Raw' },
   ];
+
+  // Query tab state
+  const [queryActorId, setQueryActorId] = useState('');
+  const [queryResult, setQueryResult] = useState<string | null>(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+
+  // Execute tab state
+  const [executePrompt, setExecutePrompt] = useState('');
+  const [executeYamls, setExecuteYamls] = useState('');
+  const [executeResult, setExecuteResult] = useState<string | null>(null);
+  const [executeLoading, setExecuteLoading] = useState(false);
+
+  // Raw tab state
+  const [rawMethod, setRawMethod] = useState('GET');
+  const [rawPath, setRawPath] = useState(`/scopes/${scopeId}/binding`);
+  const [rawBody, setRawBody] = useState('');
+  const [rawResult, setRawResult] = useState<string | null>(null);
+  const [rawLoading, setRawLoading] = useState(false);
+
+  const handleQuerySubmit = async () => {
+    if (!queryActorId.trim()) return;
+    setQueryLoading(true);
+    try {
+      const snapshot = await api.scope.getActorSnapshot(queryActorId.trim());
+      setQueryResult(JSON.stringify(snapshot, null, 2));
+    } catch (e: any) {
+      setQueryResult(JSON.stringify(e, null, 2));
+    } finally {
+      setQueryLoading(false);
+    }
+  };
+
+  const handleExecuteSubmit = async () => {
+    if (!executePrompt.trim()) return;
+    setExecuteLoading(true);
+    setExecuteResult(null);
+    try {
+      const yamls = executeYamls.trim() ? [executeYamls.trim()] : undefined;
+      let result = '';
+      await api.scope.streamDraftRun(scopeId, executePrompt.trim(), yamls, (frame) => {
+        const evt = normalizeBackendSseFrame(frame);
+        if (evt) {
+          result += JSON.stringify(evt) + '\n';
+          setExecuteResult(result);
+        }
+      });
+      if (!result) setExecuteResult('(no events received)');
+    } catch (e: any) {
+      setExecuteResult(prev => (prev || '') + '\nError: ' + JSON.stringify(e, null, 2));
+    } finally {
+      setExecuteLoading(false);
+    }
+  };
+
+  const handleRawSubmit = async () => {
+    if (!rawPath.trim()) return;
+    setRawLoading(true);
+    try {
+      const opts: RequestInit = { method: rawMethod };
+      if (rawMethod !== 'GET' && rawBody.trim()) {
+        opts.body = rawBody;
+        opts.headers = { 'Content-Type': 'application/json' };
+      }
+      const token = (await import('../auth/nyxid')).getAccessToken();
+      if (token) {
+        opts.headers = { ...opts.headers as Record<string, string>, Authorization: `Bearer ${token}` };
+      }
+      const res = await fetch(`/api${rawPath.startsWith('/') ? '' : '/'}${rawPath}`, opts);
+      const contentType = res.headers.get('content-type') || '';
+      const text = contentType.includes('json')
+        ? JSON.stringify(await res.json(), null, 2)
+        : await res.text();
+      setRawResult(`HTTP ${res.status} ${res.statusText}\n\n${text}`);
+    } catch (e: any) {
+      setRawResult(`Error: ${e?.message || JSON.stringify(e)}`);
+    } finally {
+      setRawLoading(false);
+    }
+  };
 
   if (!scopeId) {
     return (
@@ -871,16 +947,6 @@ export default function ScopePage() {
           <div className="flex items-center gap-3">
             <div className="text-[14px] font-semibold text-gray-800">Console</div>
             <ServiceSelector services={services} selected={selectedService} onSelect={setSelectedService} />
-            {activeService.kind === 'draft-run' && (
-              <button
-                onClick={() => setShowYamlInput(v => !v)}
-                className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  showYamlInput ? 'border-indigo-300 bg-indigo-50 text-indigo-600' : 'border-[#E6E3DE] text-gray-400 hover:text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                YAML
-              </button>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -919,22 +985,130 @@ export default function ScopePage() {
       </header>
 
       {/* Body */}
-      {activeEndpoint !== 'chat' ? (
-        <div className="flex-1 min-h-0 flex items-center justify-center bg-[#F2F1EE]">
-          <div className="text-center max-w-sm">
-            <div className="text-[32px] text-gray-300 mb-3">
-              {activeEndpoint === 'query' ? '?' : activeEndpoint === 'execute' ? '>' : '{ }'}
+      {activeEndpoint === 'query' ? (
+        <div className="flex-1 min-h-0 flex flex-col bg-[#F2F1EE]">
+          <div className="max-w-3xl mx-auto w-full p-6 space-y-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Actor ID</label>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  placeholder="actor-id"
+                  value={queryActorId}
+                  onChange={e => setQueryActorId(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleQuerySubmit()}
+                />
+                <button
+                  onClick={handleQuerySubmit}
+                  disabled={queryLoading || !queryActorId.trim()}
+                  className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
+                >
+                  {queryLoading ? 'Loading...' : 'Query'}
+                </button>
+              </div>
             </div>
-            <div className="text-[15px] font-semibold text-gray-600 mb-1">
-              {activeEndpoint === 'query' ? 'Query Endpoint' : activeEndpoint === 'execute' ? 'Execute Endpoint' : 'Raw Request'}
+            {queryResult != null && (
+              <div className="space-y-2">
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Result</label>
+                <pre className="rounded-[14px] border border-[#E6E3DE] bg-white p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[60vh]">
+                  {queryResult}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : activeEndpoint === 'execute' ? (
+        <div className="flex-1 min-h-0 flex flex-col bg-[#F2F1EE]">
+          <div className="max-w-3xl mx-auto w-full p-6 space-y-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Prompt</label>
+              <input
+                className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                placeholder="Enter a prompt for the workflow..."
+                value={executePrompt}
+                onChange={e => setExecutePrompt(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleExecuteSubmit()}
+              />
             </div>
-            <div className="text-[13px] text-gray-400">
-              {activeEndpoint === 'query'
-                ? 'Send queries to a bound service and view structured results. Coming soon.'
-                : activeEndpoint === 'execute'
-                ? 'Trigger service execution and track progress. Coming soon.'
-                : 'Send raw JSON requests and inspect responses. Coming soon.'}
+            <div className="space-y-2">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Workflow YAML (optional)</label>
+              <textarea
+                rows={6}
+                className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
+                placeholder="Paste a workflow YAML to run as draft..."
+                value={executeYamls}
+                onChange={e => setExecuteYamls(e.target.value)}
+              />
             </div>
+            <button
+              onClick={handleExecuteSubmit}
+              disabled={executeLoading || !executePrompt.trim()}
+              className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
+            >
+              {executeLoading ? 'Running...' : 'Execute'}
+            </button>
+            {executeResult != null && (
+              <div className="space-y-2">
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Event Stream</label>
+                <pre className="rounded-[14px] border border-[#E6E3DE] bg-white p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[50vh]">
+                  {executeResult}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : activeEndpoint === 'raw' ? (
+        <div className="flex-1 min-h-0 flex flex-col bg-[#F2F1EE]">
+          <div className="max-w-3xl mx-auto w-full p-6 space-y-4">
+            <div className="space-y-2">
+              <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Request</label>
+              <div className="flex gap-2">
+                <select
+                  value={rawMethod}
+                  onChange={e => setRawMethod(e.target.value)}
+                  className="rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                >
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="DELETE">DELETE</option>
+                </select>
+                <input
+                  className="flex-1 rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  placeholder="/scopes/{scopeId}/..."
+                  value={rawPath}
+                  onChange={e => setRawPath(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleRawSubmit()}
+                />
+                <button
+                  onClick={handleRawSubmit}
+                  disabled={rawLoading || !rawPath.trim()}
+                  className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-30 transition-colors"
+                >
+                  {rawLoading ? 'Sending...' : 'Send'}
+                </button>
+              </div>
+            </div>
+            {rawMethod !== 'GET' && (
+              <div className="space-y-2">
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Body (JSON)</label>
+                <textarea
+                  rows={8}
+                  className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y"
+                  placeholder='{"key": "value"}'
+                  value={rawBody}
+                  onChange={e => setRawBody(e.target.value)}
+                />
+              </div>
+            )}
+            {rawResult != null && (
+              <div className="space-y-2">
+                <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Response</label>
+                <pre className="rounded-[14px] border border-[#E6E3DE] bg-white p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-auto max-h-[50vh]">
+                  {rawResult}
+                </pre>
+              </div>
+            )}
           </div>
         </div>
       ) : (

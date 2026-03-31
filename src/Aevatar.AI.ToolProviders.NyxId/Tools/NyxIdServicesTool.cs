@@ -43,6 +43,10 @@ public sealed class NyxIdServicesTool : IAgentTool
             "label": {
               "type": "string",
               "description": "User-friendly label for the service (for 'create')"
+            },
+            "endpoint_url": {
+              "type": "string",
+              "description": "Custom endpoint URL for self-hosted services (for 'create', e.g. OpenClaw gateway URL)"
             }
           },
           "required": ["action"]
@@ -60,6 +64,7 @@ public sealed class NyxIdServicesTool : IAgentTool
         string? serviceSlug = null;
         string? credential = null;
         string? label = null;
+        string? endpointUrl = null;
 
         try
         {
@@ -74,6 +79,8 @@ public sealed class NyxIdServicesTool : IAgentTool
                 credential = c.GetString();
             if (doc.RootElement.TryGetProperty("label", out var l))
                 label = l.GetString();
+            if (doc.RootElement.TryGetProperty("endpoint_url", out var eu))
+                endpointUrl = eu.GetString();
         }
         catch { /* use defaults */ }
 
@@ -84,17 +91,28 @@ public sealed class NyxIdServicesTool : IAgentTool
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteServiceAsync(token, id, ct),
             "create" when !string.IsNullOrWhiteSpace(serviceSlug) && !string.IsNullOrWhiteSpace(credential) =>
-                await _client.CreateServiceAsync(token,
-                    JsonSerializer.Serialize(new
-                    {
-                        service_slug = serviceSlug,
-                        credential,
-                        label = label ?? serviceSlug,
-                    }), ct),
+                await CreateServiceAsync(token, serviceSlug, credential, label, endpointUrl, ct),
 
             "show" or "delete" => "Error: 'id' is required for this action.",
             "create" => "Error: 'service_slug' and 'credential' are required for create.",
             _ => await _client.ListServicesAsync(token, ct),
         };
+    }
+
+    private async Task<string> CreateServiceAsync(
+        string token, string serviceSlug, string credential, string? label, string? endpointUrl,
+        CancellationToken ct)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["service_slug"] = serviceSlug,
+            ["credential"] = credential,
+            ["label"] = label ?? serviceSlug,
+        };
+
+        if (!string.IsNullOrWhiteSpace(endpointUrl))
+            payload["endpoint_url"] = endpointUrl;
+
+        return await _client.CreateServiceAsync(token, JsonSerializer.Serialize(payload), ct);
     }
 }

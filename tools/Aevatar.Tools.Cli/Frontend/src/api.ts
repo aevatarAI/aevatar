@@ -83,8 +83,17 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   }
 
   if (res.status === 204) return undefined as T;
+  // Handle empty body (e.g. DELETE returning 200 with Content-Length: 0)
+  const contentLength = res.headers.get('content-length');
+  if (contentLength === '0' || (!contentType && contentLength === '0')) return undefined as T;
   if (isJsonContentType(contentType)) {
     return res.json();
+  }
+  // No Content-Type but body might be empty — try to read and return if empty
+  if (!contentType) {
+    const text = await res.text();
+    if (!text.trim()) return undefined as T;
+    try { return JSON.parse(text); } catch { /* fall through */ }
   }
 
   if (res.redirected) {
