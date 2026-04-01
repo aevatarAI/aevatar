@@ -145,6 +145,8 @@ public sealed class HttpConnector : IConnector
             if (_authorizationProvider != null)
                 await _authorizationProvider.ApplyAsync(msg, timeoutCts.Token);
 
+            ApplyRequestMetadataAuthorization(msg, request.Metadata);
+
             if (request.Parameters.TryGetValue("content_type", out var contentType) &&
                 !string.IsNullOrWhiteSpace(contentType))
             {
@@ -361,5 +363,24 @@ public sealed class HttpConnector : IConnector
             error = "payload schema violation: invalid JSON";
             return false;
         }
+    }
+
+    private static void ApplyRequestMetadataAuthorization(
+        HttpRequestMessage request,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (request.Headers.Authorization != null || metadata == null || metadata.Count == 0)
+            return;
+
+        if (!metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization) ||
+            string.IsNullOrWhiteSpace(authorization))
+        {
+            return;
+        }
+
+        if (!AuthenticationHeaderValue.TryParse(authorization.Trim(), out var parsed))
+            return;
+
+        request.Headers.Authorization = parsed;
     }
 }

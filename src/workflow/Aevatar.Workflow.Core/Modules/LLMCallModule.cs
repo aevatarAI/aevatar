@@ -412,6 +412,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             TimeoutMs = timeoutMs,
         };
         CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)

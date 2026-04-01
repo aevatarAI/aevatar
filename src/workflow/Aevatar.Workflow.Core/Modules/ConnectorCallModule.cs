@@ -133,6 +133,7 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
                     : request.RunId;
                 var connectorRequest = new ConnectorRequest
                 {
+                    Metadata = ExtractConnectorMetadata(ctx),
                     RunId = runId,
                     StepId = request.StepId,
                     Connector = connectorName,
@@ -484,4 +485,19 @@ public sealed partial class ConnectorCallModule : IEventModule<IWorkflowExecutio
         string.Equals(raw, "1", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "true", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(raw, "yes", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyDictionary<string, string> ExtractConnectorMetadata(
+        IWorkflowExecutionContext ctx)
+    {
+        if (ConnectorAuthorizationRuntimeItemsAccess.TryGetAuthorization(ctx, out var authorization) &&
+            !string.IsNullOrWhiteSpace(authorization))
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = authorization.Trim(),
+            };
+        }
+
+        return new Dictionary<string, string>();
+    }
 }

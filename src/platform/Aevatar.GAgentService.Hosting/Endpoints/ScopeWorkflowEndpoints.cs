@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Presentation.AGUI;
@@ -519,7 +520,11 @@ public static class ScopeWorkflowEndpoints
         {
             var auth = http.Request.Headers.Authorization.FirstOrDefault();
             if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-                scopedHeaders["nyxid.access_token"] = auth["Bearer ".Length..].Trim();
+            {
+                var bearerToken = auth["Bearer ".Length..].Trim();
+                scopedHeaders["nyxid.access_token"] = bearerToken;
+                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+            }
         }
 
         return scopedHeaders;
