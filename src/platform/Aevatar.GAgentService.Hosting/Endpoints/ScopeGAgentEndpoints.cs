@@ -403,6 +403,8 @@ public static class ScopeGAgentEndpoints
                     var userConfig = await userConfigStore.GetAsync(ct);
                     if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
                         chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
                 }
                 catch
                 {

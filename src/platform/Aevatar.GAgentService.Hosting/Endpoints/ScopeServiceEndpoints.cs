@@ -83,7 +83,7 @@ public static class ScopeServiceEndpoints
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -517,7 +517,7 @@ public static class ScopeServiceEndpoints
             if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: request.Prompt?.Trim() ?? string.Empty,
                 WorkflowName: null,
@@ -861,7 +861,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -1031,6 +1031,8 @@ public static class ScopeServiceEndpoints
                 var userConfig = await userConfigStore.GetAsync(ct);
                 if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
                     chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                    chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
             }
             catch
             {
@@ -1728,10 +1730,11 @@ public static class ScopeServiceEndpoints
             throw new InvalidOperationException("Workflow service has no active definition actor.");
     }
 
-    private static Dictionary<string, string> BuildScopedHeaders(
+    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null)
+        HttpContext? http = null,
+        CancellationToken cancellationToken = default)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -1739,6 +1742,25 @@ public static class ScopeServiceEndpoints
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         InjectBearerToken(http, scopedHeaders);
+        if (http != null)
+        {
+            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            if (userConfigStore != null)
+            {
+                try
+                {
+                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
+                }
+                catch
+                {
+                    // Best-effort; fall back to provider defaults if config unavailable.
+                }
+            }
+        }
         return scopedHeaders;
     }
 
