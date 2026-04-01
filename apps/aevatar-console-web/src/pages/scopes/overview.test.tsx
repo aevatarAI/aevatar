@@ -110,6 +110,15 @@ jest.mock('@/shared/studio/api', () => ({
           preparedAt: '2026-03-26T07:01:00Z',
           publishedAt: '2026-03-26T07:02:00Z',
           retiredAt: null,
+          workflowName: 'Workspace Demo',
+          workflowDefinitionActorId: 'definition://workflow/workspace-demo',
+          inlineWorkflowCount: 1,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+          staticPreferredActorId: '',
         },
         {
           revisionId: 'rev-1',
@@ -128,6 +137,15 @@ jest.mock('@/shared/studio/api', () => ({
           preparedAt: '2026-03-25T07:01:00Z',
           publishedAt: '2026-03-25T07:02:00Z',
           retiredAt: null,
+          workflowName: 'Workspace Demo v1',
+          workflowDefinitionActorId: 'definition://workflow/workspace-demo-v1',
+          inlineWorkflowCount: 1,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+          staticPreferredActorId: '',
         },
       ],
     })),
@@ -136,6 +154,12 @@ jest.mock('@/shared/studio/api', () => ({
       serviceId: 'default',
       displayName: 'Workspace Demo',
       revisionId: 'rev-1',
+    })),
+    retireScopeBindingRevision: jest.fn(async () => ({
+      scopeId: 'scope-a',
+      serviceId: 'default',
+      revisionId: 'rev-1',
+      status: 'Retiring',
     })),
   },
 }));
@@ -152,6 +176,7 @@ describe('ScopeOverviewPage', () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
     expect(await screen.findByText('Scope Status Board')).toBeTruthy();
+    expect(await screen.findByText('Current Binding')).toBeTruthy();
     expect(await screen.findByText('Revision Rollout')).toBeTruthy();
     expect(screen.getByText('Revision Rollout')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
@@ -175,6 +200,23 @@ describe('ScopeOverviewPage', () => {
 
     await waitFor(() => {
       expect(studioApi.activateScopeBindingRevision).toHaveBeenCalledWith({
+        scopeId: 'scope-a',
+        revisionId: 'rev-1',
+      });
+    });
+  });
+
+  it('retires a historical revision from the overview page', async () => {
+    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+
+    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
+    const retireButtons = await screen.findAllByRole('button', {
+      name: 'Retire',
+    });
+    fireEvent.click(retireButtons[1]);
+
+    await waitFor(() => {
+      expect(studioApi.retireScopeBindingRevision).toHaveBeenCalledWith({
         scopeId: 'scope-a',
         revisionId: 'rev-1',
       });

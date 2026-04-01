@@ -250,6 +250,15 @@ export interface StudioScopeBindingRevision {
   readonly preparedAt: string | null;
   readonly publishedAt: string | null;
   readonly retiredAt: string | null;
+  readonly workflowName: string;
+  readonly workflowDefinitionActorId: string;
+  readonly inlineWorkflowCount: number;
+  readonly scriptId: string;
+  readonly scriptRevision: string;
+  readonly scriptDefinitionActorId: string;
+  readonly scriptSourceHash: string;
+  readonly staticActorTypeName: string;
+  readonly staticPreferredActorId: string;
 }
 
 export interface StudioScopeBindingStatus {
@@ -272,6 +281,75 @@ export interface StudioScopeBindingActivationResult {
   readonly serviceId: string;
   readonly displayName: string;
   readonly revisionId: string;
+}
+
+export interface StudioScopeBindingRetirementResult {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly revisionId: string;
+  readonly status: string;
+}
+
+export function describeStudioScopeBindingRevisionTarget(
+  revision: StudioScopeBindingRevision | null | undefined,
+): string {
+  if (!revision) {
+    return 'Not configured';
+  }
+
+  switch (normalizeStudioScopeBindingImplementationKind(revision.implementationKind)) {
+    case 'workflow':
+      return revision.workflowName || 'Workflow';
+    case 'script':
+      return revision.scriptId || 'Script';
+    case 'gagent':
+      return revision.staticActorTypeName || 'GAgent';
+    default:
+      return 'Unknown';
+  }
+}
+
+export function describeStudioScopeBindingRevisionContext(
+  revision: StudioScopeBindingRevision | null | undefined,
+): string {
+  if (!revision) {
+    return '';
+  }
+
+  switch (normalizeStudioScopeBindingImplementationKind(revision.implementationKind)) {
+    case 'workflow':
+      if (revision.workflowDefinitionActorId) {
+        return revision.workflowDefinitionActorId;
+      }
+      if (revision.inlineWorkflowCount > 0) {
+        return `${revision.inlineWorkflowCount} inline workflow${revision.inlineWorkflowCount === 1 ? '' : 's'}`;
+      }
+      return '';
+    case 'script':
+      if (revision.scriptRevision && revision.scriptSourceHash) {
+        return `${revision.scriptRevision} · ${revision.scriptSourceHash}`;
+      }
+      return revision.scriptRevision || revision.scriptSourceHash || '';
+    case 'gagent':
+      return revision.staticPreferredActorId || '';
+    default:
+      return '';
+  }
+}
+
+export function getStudioScopeBindingCurrentRevision(
+  status: StudioScopeBindingStatus | null | undefined,
+): StudioScopeBindingRevision | null {
+  if (!status?.revisions?.length) {
+    return null;
+  }
+
+  return (
+    status.revisions.find((revision) => revision.isActiveServing) ||
+    status.revisions.find((revision) => revision.isDefaultServing) ||
+    status.revisions[0] ||
+    null
+  );
 }
 
 export interface StudioScopeScriptBindingInput {

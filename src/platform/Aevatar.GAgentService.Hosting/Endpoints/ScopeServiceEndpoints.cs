@@ -4,6 +4,7 @@ using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
@@ -1740,7 +1741,11 @@ public static class ScopeServiceEndpoints
             return;
         var auth = http.Request.Headers.Authorization.FirstOrDefault();
         if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            metadata["nyxid.access_token"] = auth["Bearer ".Length..].Trim();
+        {
+            var bearerToken = auth["Bearer ".Length..].Trim();
+            metadata["nyxid.access_token"] = bearerToken;
+            metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+        }
     }
 
     private static bool IsRunBoundToScopeService(

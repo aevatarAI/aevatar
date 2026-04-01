@@ -299,6 +299,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
               value={formatRunRouteLabel(
                 runSummaryRecord.routeName,
                 runSummaryRecord.endpointId,
+                runSummaryRecord.endpointKind,
               )}
             />
             <SummaryMetric

@@ -140,6 +140,9 @@ describe("RunsPage", () => {
       screen.queryByRole("button", { name: "Open observability hub" })
     ).toBeNull();
     expect(screen.getByRole("button", { name: "Inspector" })).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("Describe the task to run.")
+    ).toBeTruthy();
     expect(container.textContent).toContain("Launch rail");
     expect(container.textContent).toContain("Run trace");
     expect(container.textContent).toContain("Inspector");
@@ -349,7 +352,7 @@ describe("RunsPage", () => {
     expect(mockedRuntimeRunsApi.streamDraftRun).not.toHaveBeenCalled();
   });
 
-  it("routes chat runs through the selected workflow service when route is provided", async () => {
+  it("routes chat runs through the selected workflow service when endpoint kind is chat", async () => {
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([
       {
         name: "direct",
@@ -370,7 +373,7 @@ describe("RunsPage", () => {
     window.history.replaceState(
       {},
       "",
-      "/runtime/runs?scopeId=scope-1&route=direct&prompt=Run%20it"
+      "/runtime/runs?scopeId=scope-1&route=direct&endpointId=support-chat&endpointKind=chat&prompt=Run%20it"
     );
 
     renderWithQueryClient(React.createElement(RunsPage));
@@ -390,5 +393,6 @@ describe("RunsPage", () => {
         }
       );
     });
+    expect(mockedRuntimeRunsApi.invokeEndpoint).not.toHaveBeenCalled();
   });
 });

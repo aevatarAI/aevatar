@@ -6,6 +6,11 @@ import type {
 import { Button, Space, Tag, Typography } from "antd";
 import React from "react";
 import { loadStoredAuthSession } from "@/shared/auth/session";
+import {
+  type RunEndpointKind,
+  normalizeRunEndpointKind,
+  resolveRunEndpointId,
+} from "@/shared/runs/endpointKinds";
 import type { RecentRunEntry } from "@/shared/runs/recentRuns";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { RunTransport } from "./runEventPresentation";
@@ -16,6 +21,7 @@ export type RunFormValues = {
   scopeId?: string;
   serviceOverrideId?: string;
   endpointId?: string;
+  endpointKind?: RunEndpointKind;
   payloadTypeUrl?: string;
   payloadBase64?: string;
   actorId?: string;
@@ -73,6 +79,7 @@ export type RunSummaryRecord = {
   transport: RunTransport;
   routeName: string;
   endpointId: string;
+  endpointKind: RunEndpointKind;
   actorId: string;
   commandId: string;
   runId: string;
@@ -200,7 +207,11 @@ export const runSummaryColumns: ProDescriptionsItemProps<RunSummaryRecord>[] = [
     title: "Route",
     dataIndex: "routeName",
     render: (_, record) =>
-      formatRunRouteLabel(record.routeName, record.endpointId),
+      formatRunRouteLabel(
+        record.routeName,
+        record.endpointId,
+        record.endpointKind
+      ),
   },
   {
     title: "Actor",
@@ -558,13 +569,19 @@ export const recentRunColumns: ProColumns<RecentRunTableRow>[] = [
     title: "Route",
     dataIndex: "routeName",
     ellipsis: true,
-    render: (_, record) => formatRunRouteLabel(record.routeName, record.endpointId),
+    render: (_, record) =>
+      formatRunRouteLabel(
+        record.routeName,
+        record.endpointId,
+        record.endpointKind
+      ),
   },
   {
     title: "Endpoint",
     dataIndex: "endpointId",
     ellipsis: true,
-    render: (_, record) => record.endpointId || "chat",
+    render: (_, record) =>
+      resolveRunEndpointId(record.endpointKind, record.endpointId),
   },
   {
     title: "Status",
@@ -620,12 +637,20 @@ export function trimOptional(value?: string | null): string | undefined {
 export function formatRunRouteLabel(
   routeName?: string | null,
   endpointId?: string | null,
+  endpointKind?: string | null,
 ): string {
   const normalizedRouteName = trimOptional(routeName);
-  const normalizedEndpointId = trimOptional(endpointId) ?? "chat";
+  const normalizedEndpointKind = normalizeRunEndpointKind(
+    endpointKind,
+    endpointId
+  );
+  const normalizedEndpointId = resolveRunEndpointId(
+    normalizedEndpointKind,
+    endpointId
+  );
 
-  if (normalizedEndpointId === "chat") {
-    return normalizedRouteName || "chat";
+  if (normalizedEndpointKind === "chat") {
+    return normalizedRouteName || normalizedEndpointId || "chat";
   }
 
   return normalizedRouteName &&
@@ -687,6 +712,7 @@ export function readInitialRunFormValues(): RunFormValues {
       routeName: defaultRunRouteName,
       scopeId: defaultScopeId,
       serviceOverrideId: undefined,
+      endpointKind: "chat",
       endpointId: "chat",
       payloadTypeUrl: undefined,
       payloadBase64: undefined,
@@ -696,17 +722,27 @@ export function readInitialRunFormValues(): RunFormValues {
   }
 
   const params = new URLSearchParams(window.location.search);
-    return {
-      prompt: params.get("prompt") ?? "",
-      routeName:
-        trimOptional(params.get("route")) ??
-        trimOptional(params.get("workflow")) ??
-        defaultRunRouteName,
-      scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
-      serviceOverrideId:
-        trimOptional(params.get("serviceOverrideId")) ??
+  const requestedEndpointKind = trimOptional(params.get("endpointKind"));
+  const requestedEndpointId = trimOptional(params.get("endpointId"));
+  const endpointKind =
+    requestedEndpointKind || requestedEndpointId
+      ? normalizeRunEndpointKind(requestedEndpointKind, requestedEndpointId)
+      : "chat";
+  return {
+    prompt: params.get("prompt") ?? "",
+    routeName:
+      trimOptional(params.get("route")) ??
+      trimOptional(params.get("workflow")) ??
+      defaultRunRouteName,
+    scopeId: trimOptional(params.get("scopeId")) ?? defaultScopeId,
+    serviceOverrideId:
+      trimOptional(params.get("serviceOverrideId")) ??
       trimOptional(params.get("serviceId")),
-    endpointId: trimOptional(params.get("endpointId")) ?? "chat",
+    endpointKind,
+    endpointId: resolveRunEndpointId(
+      endpointKind,
+      requestedEndpointId
+    ),
     payloadTypeUrl: trimOptional(params.get("payloadTypeUrl")),
     payloadBase64: trimOptional(params.get("payloadBase64")),
     actorId: trimOptional(params.get("actorId")),

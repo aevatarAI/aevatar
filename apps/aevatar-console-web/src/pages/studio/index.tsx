@@ -71,6 +71,7 @@ import {
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
+import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
 import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import type {
   StudioConnectorDefinition,
@@ -79,6 +80,7 @@ import type {
   StudioProviderSettings,
   StudioProviderType,
   StudioRoleDefinition,
+  StudioScopeGAgentEndpointInput,
   StudioRuntimeTestResult,
   StudioValidationFinding,
   StudioWorkflowDocument,
@@ -950,6 +952,8 @@ const StudioPage: React.FC = () => {
   const [publishNotice, setPublishNotice] = useState<StudioNotice | null>(null);
   const [bindingActivationRevisionId, setBindingActivationRevisionId] =
     useState('');
+  const [bindingRetirementRevisionId, setBindingRetirementRevisionId] =
+    useState('');
   const [workflowImportPending, setWorkflowImportPending] = useState(false);
   const [workflowImportNotice, setWorkflowImportNotice] =
     useState<StudioNotice | null>(null);
@@ -1155,6 +1159,18 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-scope-binding', resolvedStudioScopeId],
     enabled: studioHostReady && Boolean(resolvedStudioScopeId),
     queryFn: () => studioApi.getScopeBinding(resolvedStudioScopeId),
+  });
+  const gAgentTypesQuery = useQuery({
+    queryKey: ['studio-runtime-gagent-types'],
+    enabled: studioHostReady,
+    retry: false,
+    queryFn: () => runtimeGAgentApi.listTypes(),
+  });
+  const gAgentActorsQuery = useQuery({
+    queryKey: ['studio-runtime-gagent-actors', resolvedStudioScopeId],
+    enabled: studioHostReady && Boolean(resolvedStudioScopeId),
+    retry: false,
+    queryFn: () => runtimeGAgentApi.listActors(resolvedStudioScopeId),
   });
   const runtimePrimitivesQuery = useQuery({
     queryKey: ['studio-runtime-primitives'],
@@ -2130,7 +2146,16 @@ const StudioPage: React.FC = () => {
     displayName?: string;
     actorTypeName: string;
     preferredActorId?: string;
-    endpointId: string;
+    endpoints?: Array<{
+      endpointId: string;
+      displayName?: string;
+      kind?: 'command' | 'chat';
+      requestTypeUrl?: string;
+      responseTypeUrl?: string;
+      description?: string;
+    }>;
+    openRunsEndpointId?: string;
+    endpointId?: string;
     endpointDisplayName?: string;
     requestTypeUrl?: string;
     responseTypeUrl?: string;
@@ -2142,9 +2167,50 @@ const StudioPage: React.FC = () => {
   }) => {
     const scopeId = resolvedStudioScopeId;
     const actorTypeName = input.actorTypeName.trim();
-    const endpointId = input.endpointId.trim();
-    const payloadTypeUrl =
-      input.requestTypeUrl?.trim() || getStringValueTypeUrl();
+    const normalizedEndpoints: StudioScopeGAgentEndpointInput[] = (
+      input.endpoints?.length
+        ? input.endpoints
+        : input.endpointId?.trim()
+        ? [
+            {
+              endpointId: input.endpointId,
+              displayName: input.endpointDisplayName,
+              kind: 'command',
+              requestTypeUrl: input.requestTypeUrl,
+              responseTypeUrl: input.responseTypeUrl,
+              description: input.description,
+            },
+          ]
+        : []
+    )
+      .map((endpoint) => {
+        const endpointId = trimOptional(endpoint.endpointId);
+        const kind: StudioScopeGAgentEndpointInput['kind'] =
+          endpoint.kind === 'chat' ? 'chat' : 'command';
+        const requestTypeUrl = trimOptional(endpoint.requestTypeUrl);
+        const responseTypeUrl = trimOptional(endpoint.responseTypeUrl);
+        const description = trimOptional(endpoint.description);
+        return {
+          endpointId,
+          displayName:
+            trimOptional(endpoint.displayName) || endpointId || undefined,
+          kind,
+          requestTypeUrl:
+            requestTypeUrl || (kind === 'command' ? getStringValueTypeUrl() : undefined),
+          responseTypeUrl: responseTypeUrl || undefined,
+          description: description || undefined,
+        };
+      })
+      .filter((endpoint) => endpoint.endpointId.length > 0);
+    const launchEndpoint =
+      normalizedEndpoints.find(
+        (endpoint) =>
+          endpoint.endpointId === trimOptional(input.openRunsEndpointId),
+      ) ||
+      normalizedEndpoints[0] ||
+      null;
+    const launchPayloadTypeUrl =
+      trimOptional(launchEndpoint?.requestTypeUrl) || getStringValueTypeUrl();
 
     if (!scopeId) {
       setPublishNotice({
@@ -2162,17 +2228,18 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    if (!endpointId) {
+    if (normalizedEndpoints.length === 0) {
       setPublishNotice({
         type: 'error',
-        message: 'Endpoint ID is required before opening GAgent runs.',
+        message: 'At least one endpoint is required before binding a GAgent service.',
       });
       return;
     }
 
     if (
       options?.openRuns &&
-      !isAutoEncodableTextPayloadTypeUrl(payloadTypeUrl) &&
+      launchEndpoint?.kind !== 'chat' &&
+      !isAutoEncodableTextPayloadTypeUrl(launchPayloadTypeUrl) &&
       !input.payloadBase64?.trim()
     ) {
       setPublishNotice({
@@ -2188,49 +2255,59 @@ const StudioPage: React.FC = () => {
     try {
       const result = await studioApi.bindScopeGAgent({
         scopeId,
-        displayName: input.displayName?.trim() || endpointId,
+        displayName:
+          input.displayName?.trim() ||
+          launchEndpoint?.displayName?.trim() ||
+          launchEndpoint?.endpointId ||
+          actorTypeName,
         actorTypeName,
         preferredActorId: input.preferredActorId?.trim() || undefined,
-        endpoints: [
-          {
-            endpointId,
-            displayName: input.endpointDisplayName?.trim() || endpointId,
-            kind: 'command',
-            requestTypeUrl: payloadTypeUrl,
-            responseTypeUrl: input.responseTypeUrl?.trim() || undefined,
-            description: input.description?.trim() || undefined,
-          },
-        ],
+        endpoints: normalizedEndpoints,
       });
       await queryClient.invalidateQueries({
         queryKey: ['studio-scope-binding', scopeId],
       });
 
       if (options?.openRuns) {
-        const draftKey = saveEndpointInvocationDraftPayload({
-          endpointId,
-          prompt: input.prompt?.trim() || '',
-          payloadTypeUrl,
-          payloadBase64: input.payloadBase64?.trim() || undefined,
-        });
-        if (!draftKey) {
-          throw new Error('Failed to prepare the GAgent run draft.');
-        }
+        const launchEndpointKind =
+          launchEndpoint?.kind === 'chat' ? 'chat' : 'command';
+        if (launchEndpoint?.kind === 'chat') {
+          history.push(
+            buildRuntimeRunsHref({
+              scopeId,
+              endpointId: launchEndpoint.endpointId,
+              endpointKind: launchEndpointKind,
+              prompt: input.prompt?.trim() || undefined,
+            }),
+          );
+        } else if (launchEndpoint) {
+          const draftKey = saveEndpointInvocationDraftPayload({
+            endpointId: launchEndpoint.endpointId,
+            endpointKind: launchEndpointKind,
+            prompt: input.prompt?.trim() || '',
+            payloadTypeUrl: launchPayloadTypeUrl,
+            payloadBase64: input.payloadBase64?.trim() || undefined,
+          });
+          if (!draftKey) {
+            throw new Error('Failed to prepare the GAgent run draft.');
+          }
 
-        history.push(
-          buildRuntimeRunsHref({
-            scopeId,
-            endpointId,
-            prompt: input.prompt?.trim() || undefined,
-            draftKey,
-          }),
-        );
+          history.push(
+            buildRuntimeRunsHref({
+              scopeId,
+              endpointId: launchEndpoint.endpointId,
+              endpointKind: launchEndpointKind,
+              prompt: input.prompt?.trim() || undefined,
+              draftKey,
+            }),
+          );
+        }
       }
 
       setPublishNotice({
         type: 'success',
         message: options?.openRuns
-          ? `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} and opened Runs for endpoint ${endpointId}.`
+          ? `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} and opened Runs for endpoint ${launchEndpoint?.endpointId || normalizedEndpoints[0]?.endpointId || 'run'}.`
           : `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} on revision ${result.revisionId}.`,
       });
     } catch (error) {
@@ -2282,6 +2359,45 @@ const StudioPage: React.FC = () => {
       });
     } finally {
       setBindingActivationRevisionId('');
+    }
+  };
+
+  const handleRetireBindingRevision = async (revisionId: string) => {
+    const scopeId = resolvedStudioScopeId;
+    const normalizedRevisionId = revisionId.trim();
+    if (!scopeId || !normalizedRevisionId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope and revision before retiring a binding.',
+      });
+      return;
+    }
+
+    setBindingRetirementRevisionId(normalizedRevisionId);
+    setPublishNotice(null);
+
+    try {
+      const result = await studioApi.retireScopeBindingRevision({
+        scopeId,
+        revisionId: normalizedRevisionId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+      setPublishNotice({
+        type: 'success',
+        message: `Scope ${result.scopeId} accepted revision ${result.revisionId} for retirement.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to retire the selected binding revision.',
+      });
+    } finally {
+      setBindingRetirementRevisionId('');
     }
   };
 
@@ -4068,7 +4184,14 @@ const StudioPage: React.FC = () => {
           scopeBinding={scopeBindingQuery.data}
           scopeBindingLoading={scopeBindingQuery.isLoading}
           scopeBindingError={scopeBindingQuery.isError ? scopeBindingQuery.error : null}
+          gAgentTypes={gAgentTypesQuery.data ?? []}
+          gAgentTypesLoading={gAgentTypesQuery.isLoading}
+          gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
+          gAgentActorGroups={gAgentActorsQuery.data ?? []}
+          gAgentActorsLoading={gAgentActorsQuery.isLoading}
+          gAgentActorsError={gAgentActorsQuery.isError ? gAgentActorsQuery.error : null}
           bindingActivationRevisionId={bindingActivationRevisionId}
+          bindingRetirementRevisionId={bindingRetirementRevisionId}
           onSwitchStudioView={setStudioView}
           onExportDraft={() => void handleExportDraft()}
           onSelectGraphNode={(nodeId) => {
@@ -4128,6 +4251,9 @@ const StudioPage: React.FC = () => {
           }
           onActivateBindingRevision={(revisionId) =>
             void handleActivateBindingRevision(revisionId)
+          }
+          onRetireBindingRevision={(revisionId) =>
+            void handleRetireBindingRevision(revisionId)
           }
           onInspectPublishedWorkflow={() =>
             history.push(

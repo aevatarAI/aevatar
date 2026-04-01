@@ -1,5 +1,6 @@
 import { Badge, Button, Space, Tag, Typography } from "antd";
 import React from "react";
+import type { RunEndpointKind } from "@/shared/runs/endpointKinds";
 import type { RunTransport } from "../runEventPresentation";
 
 type RunsStatusStripProps = {
@@ -16,6 +17,7 @@ type RunsStatusStripProps = {
   statusTone: "success" | "processing" | "error" | "default";
   transport: RunTransport;
   endpointId: string;
+  endpointKind: RunEndpointKind;
 };
 
 const stripStyle: React.CSSProperties = {
@@ -87,9 +89,10 @@ const RunsStatusStrip: React.FC<RunsStatusStripProps> = ({
   statusTone,
   transport,
   endpointId,
+  endpointKind,
 }) => {
   const transportLabel =
-    endpointId && endpointId !== "chat" ? "INVOKE" : transport.toUpperCase();
+    endpointKind === "chat" ? transport.toUpperCase() : "INVOKE";
 
   return (
     <div style={stripStyle}>

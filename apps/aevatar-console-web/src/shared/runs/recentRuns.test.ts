@@ -61,6 +61,7 @@ describe('recentRuns', () => {
     });
 
     expect(loadRecentRuns()[0]?.routeName).toBe('');
+    expect(loadRecentRuns()[0]?.endpointKind).toBe('chat');
   });
 
   it('keeps reading legacy workflowName and serviceId fields', () => {
@@ -82,6 +83,7 @@ describe('recentRuns', () => {
         id: 'cmd-legacy',
         routeName: 'direct',
         serviceOverrideId: 'svc-1',
+        endpointKind: 'chat',
       }),
     ]);
   });

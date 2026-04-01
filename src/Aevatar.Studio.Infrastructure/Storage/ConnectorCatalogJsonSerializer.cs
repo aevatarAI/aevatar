@@ -89,6 +89,7 @@ internal static class ConnectorCatalogJsonSerializer
                     item => item.Key,
                     item => item.Value,
                     StringComparer.OrdinalIgnoreCase),
+                Auth = ToConnectorAuthJsonConfig(connector.Http.Auth),
             },
             Cli = new CliConnectorJsonConfig
             {
@@ -106,11 +107,17 @@ internal static class ConnectorCatalogJsonSerializer
             {
                 ServerName = connector.Mcp.ServerName,
                 Command = connector.Mcp.Command,
+                Url = connector.Mcp.Url,
                 Arguments = connector.Mcp.Arguments.ToArray(),
                 Environment = connector.Mcp.Environment.ToDictionary(
                     item => item.Key,
                     item => item.Value,
                     StringComparer.OrdinalIgnoreCase),
+                AdditionalHeaders = connector.Mcp.AdditionalHeaders.ToDictionary(
+                    item => item.Key,
+                    item => item.Value,
+                    StringComparer.OrdinalIgnoreCase),
+                Auth = ToConnectorAuthJsonConfig(connector.Mcp.Auth),
                 DefaultTool = connector.Mcp.DefaultTool,
                 AllowedTools = connector.Mcp.AllowedTools.ToArray(),
                 AllowedInputKeys = connector.Mcp.AllowedInputKeys.ToArray(),
@@ -119,10 +126,9 @@ internal static class ConnectorCatalogJsonSerializer
 
     private static IReadOnlyList<StoredConnectorDefinition> ParseConnectors(JsonElement root)
     {
-        if (!TryGetPropertyIgnoreCase(root, "connectors", out var connectorsNode))
-        {
-            return [];
-        }
+        var connectorsNode = TryGetPropertyIgnoreCase(root, "connectors", out var configuredNode)
+            ? configuredNode
+            : root;
 
         var results = new List<StoredConnectorDefinition>();
         if (connectorsNode.ValueKind == JsonValueKind.Array)
@@ -219,7 +225,8 @@ internal static class ConnectorCatalogJsonSerializer
                 AllowedMethods: ReadStringArray(node, "allowedMethods"),
                 AllowedPaths: ReadStringArray(node, "allowedPaths"),
                 AllowedInputKeys: ReadStringArray(node, "allowedInputKeys"),
-                DefaultHeaders: ReadStringMap(node, "defaultHeaders"));
+                DefaultHeaders: ReadStringMap(node, "defaultHeaders"),
+                Auth: TryGetPropertyIgnoreCase(node, "auth", out var authNode) ? ParseAuthConfig(authNode) : EmptyAuthConfig());
 
     private static StoredCliConnectorConfig ParseCliConfig(JsonElement node) =>
         node.ValueKind != JsonValueKind.Object
@@ -238,14 +245,27 @@ internal static class ConnectorCatalogJsonSerializer
             : new StoredMcpConnectorConfig(
                 ServerName: ReadString(node, "serverName"),
                 Command: ReadString(node, "command"),
+                Url: ReadString(node, "url"),
                 Arguments: ReadStringArray(node, "arguments"),
                 Environment: ReadStringMap(node, "environment"),
+                AdditionalHeaders: ReadStringMap(node, "additionalHeaders"),
+                Auth: TryGetPropertyIgnoreCase(node, "auth", out var authNode) ? ParseAuthConfig(authNode) : EmptyAuthConfig(),
                 DefaultTool: ReadString(node, "defaultTool"),
                 AllowedTools: ReadStringArray(node, "allowedTools"),
                 AllowedInputKeys: ReadStringArray(node, "allowedInputKeys"));
 
+    private static StoredConnectorAuthConfig ParseAuthConfig(JsonElement node) =>
+        node.ValueKind != JsonValueKind.Object
+            ? EmptyAuthConfig()
+            : new StoredConnectorAuthConfig(
+                Type: ReadString(node, "type"),
+                TokenUrl: ReadString(node, "tokenUrl"),
+                ClientId: ReadString(node, "clientId"),
+                ClientSecret: ReadString(node, "clientSecret"),
+                Scope: ReadString(node, "scope"));
+
     private static StoredHttpConnectorConfig EmptyHttpConfig() =>
-        new(string.Empty, [], [], [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+        new(string.Empty, [], [], [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), EmptyAuthConfig());
 
     private static StoredCliConnectorConfig EmptyCliConfig() =>
         new(string.Empty, [], [], [], string.Empty, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
@@ -254,11 +274,17 @@ internal static class ConnectorCatalogJsonSerializer
         new(
             string.Empty,
             string.Empty,
+            string.Empty,
             [],
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            EmptyAuthConfig(),
             string.Empty,
             [],
             []);
+
+    private static StoredConnectorAuthConfig EmptyAuthConfig() =>
+        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 
     private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
     {
@@ -362,6 +388,16 @@ internal static class ConnectorCatalogJsonSerializer
         return result;
     }
 
+    private static ConnectorAuthJsonConfig ToConnectorAuthJsonConfig(StoredConnectorAuthConfig auth) =>
+        new()
+        {
+            Type = auth.Type,
+            TokenUrl = auth.TokenUrl,
+            ClientId = auth.ClientId,
+            ClientSecret = auth.ClientSecret,
+            Scope = auth.Scope,
+        };
+
     private sealed class ConnectorJsonDocument
     {
         [JsonPropertyName("connectors")]
@@ -420,6 +456,9 @@ internal static class ConnectorCatalogJsonSerializer
 
         [JsonPropertyName("defaultHeaders")]
         public Dictionary<string, string> DefaultHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        [JsonPropertyName("auth")]
+        public ConnectorAuthJsonConfig Auth { get; set; } = new();
     }
 
     private sealed class CliConnectorJsonConfig
@@ -451,11 +490,20 @@ internal static class ConnectorCatalogJsonSerializer
         [JsonPropertyName("command")]
         public string Command { get; set; } = string.Empty;
 
+        [JsonPropertyName("url")]
+        public string Url { get; set; } = string.Empty;
+
         [JsonPropertyName("arguments")]
         public string[] Arguments { get; set; } = [];
 
         [JsonPropertyName("environment")]
         public Dictionary<string, string> Environment { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        [JsonPropertyName("additionalHeaders")]
+        public Dictionary<string, string> AdditionalHeaders { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+        [JsonPropertyName("auth")]
+        public ConnectorAuthJsonConfig Auth { get; set; } = new();
 
         [JsonPropertyName("defaultTool")]
         public string DefaultTool { get; set; } = string.Empty;
@@ -465,5 +513,23 @@ internal static class ConnectorCatalogJsonSerializer
 
         [JsonPropertyName("allowedInputKeys")]
         public string[] AllowedInputKeys { get; set; } = [];
+    }
+
+    private sealed class ConnectorAuthJsonConfig
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = string.Empty;
+
+        [JsonPropertyName("tokenUrl")]
+        public string TokenUrl { get; set; } = string.Empty;
+
+        [JsonPropertyName("clientId")]
+        public string ClientId { get; set; } = string.Empty;
+
+        [JsonPropertyName("clientSecret")]
+        public string ClientSecret { get; set; } = string.Empty;
+
+        [JsonPropertyName("scope")]
+        public string Scope { get; set; } = string.Empty;
     }
 }

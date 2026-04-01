@@ -6,6 +6,7 @@ import type {
   StudioConnectorDraftResponse,
   StudioScopeBindingActivationResult,
   StudioScopeBindingImplementationKind,
+  StudioScopeBindingRetirementResult,
   StudioScopeBindingRevision,
   StudioScopeBindingTargetKind,
   StudioScopeGAgentBindingInput,
@@ -334,6 +335,43 @@ function decodeStudioScopeBindingRevision(
       ["retiredAt", "RetiredAt"],
       `${label}.retiredAt`
     ),
+    workflowName:
+      readOptionalString(record, ["workflowName", "WorkflowName"]) || "",
+    workflowDefinitionActorId:
+      readOptionalString(record, [
+        "workflowDefinitionActorId",
+        "WorkflowDefinitionActorId",
+      ]) || "",
+    inlineWorkflowCount:
+      record.inlineWorkflowCount === undefined &&
+      record.InlineWorkflowCount === undefined
+        ? 0
+        : readNumber(
+            record,
+            ["inlineWorkflowCount", "InlineWorkflowCount"],
+            `${label}.inlineWorkflowCount`
+          ),
+    scriptId:
+      readOptionalString(record, ["scriptId", "ScriptId"]) || "",
+    scriptRevision:
+      readOptionalString(record, ["scriptRevision", "ScriptRevision"]) || "",
+    scriptDefinitionActorId:
+      readOptionalString(record, [
+        "scriptDefinitionActorId",
+        "ScriptDefinitionActorId",
+      ]) || "",
+    scriptSourceHash:
+      readOptionalString(record, ["scriptSourceHash", "ScriptSourceHash"]) || "",
+    staticActorTypeName:
+      readOptionalString(record, [
+        "staticActorTypeName",
+        "StaticActorTypeName",
+      ]) || "",
+    staticPreferredActorId:
+      readOptionalString(record, [
+        "staticPreferredActorId",
+        "StaticPreferredActorId",
+      ]) || "",
   };
 }
 
@@ -844,6 +882,24 @@ export const studioApi = {
       )}/binding/revisions/${encodeURIComponent(
         input.revisionId.trim()
       )}:activate`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      }
+    );
+  },
+
+  retireScopeBindingRevision(input: {
+    scopeId: string;
+    revisionId: string;
+  }): Promise<StudioScopeBindingRetirementResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        input.scopeId.trim()
+      )}/binding/revisions/${encodeURIComponent(
+        input.revisionId.trim()
+      )}:retire`,
       {
         method: "POST",
         headers: JSON_HEADERS,
