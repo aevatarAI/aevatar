@@ -15,6 +15,7 @@ namespace Aevatar.AI.Core.Chat;
 /// <summary>Chat 执行运行时。调 LLM，管理历史，集成 Middleware。</summary>
 public sealed class ChatRuntime
 {
+    private const int DefaultMaxToolRounds = 10;
     private readonly Func<ILLMProvider> _providerFactory;
     private readonly ChatHistory _history;
     private readonly ToolCallLoop _toolLoop;
@@ -98,7 +99,14 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         CancellationToken ct = default) =>
-        ChatStreamAsync(userMessage, requestId: null, metadata: null, ct);
+        ChatStreamAsync(userMessage, DefaultMaxToolRounds, requestId: null, metadata: null, ct);
+
+    /// <summary>流式 Chat，允许显式控制 tool calling 轮数。</summary>
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        string userMessage,
+        int maxToolRounds,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userMessage, maxToolRounds, requestId: null, metadata: null, ct);
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
@@ -107,8 +115,28 @@ public sealed class ChatRuntime
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        await foreach (var chunk in ChatStreamAsync(
+                           userMessage,
+                           DefaultMaxToolRounds,
+                           requestId,
+                           metadata,
+                           ct))
+        {
+            yield return chunk;
+        }
+    }
+
+    /// <summary>流式 Chat，显式传入稳定 request id / metadata / tool 调用轮数。</summary>
+    public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        string userMessage,
+        int maxToolRounds,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var runToken = linkedCts.Token;
+        var effectiveMaxToolRounds = maxToolRounds > 0 ? maxToolRounds : DefaultMaxToolRounds;
 
         var channel = Channel.CreateBounded<LLMStreamChunk>(new BoundedChannelOptions(_streamBufferCapacity)
         {
@@ -145,88 +173,82 @@ public sealed class ChatRuntime
                     runContext.Items["gen_ai.provider.name"] = provider.Name;
                     // Build messages from a local snapshot + pending user message instead of mutating _history.
                     var messages = BuildMessagesWithPending(baseRequest, userMsg);
+                    string? finalContent = null;
 
-                    var request = new LLMRequest
+                    for (var round = 0; round < effectiveMaxToolRounds; round++)
                     {
-                        Messages = messages,
-                        RequestId = baseRequest.RequestId,
-                        Metadata = baseRequest.Metadata,
-                        Tools = baseRequest.Tools,
-                        Model = baseRequest.Model,
-                        Temperature = baseRequest.Temperature,
-                        MaxTokens = baseRequest.MaxTokens,
-                    };
-
-                    var llmCallContext = new LLMCallContext
-                    {
-                        Request = request,
-                        Provider = provider,
-                        CancellationToken = runToken,
-                        IsStreaming = true,
-                    };
-                    AnnotateRequestIdentity(llmCallContext);
-
-                    string? streamedContent = null;
-                    TokenUsage? streamedUsage = null;
-                    IReadOnlyList<ToolCall>? streamedToolCalls = null;
-
-                    await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
-                    {
-                        if (llmCallContext.Terminate) return;
-
-                        var full = new StringBuilder();
-                        TokenUsage? usage = null;
-                        var toolCalls = new StreamingToolCallAccumulator();
-
-                        await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, runToken))
+                        var roundRequest = new LLMRequest
                         {
-                            var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, ref usage);
-                            if (normalizedChunk == null)
-                                continue;
-
-                            await channel.Writer.WriteAsync(normalizedChunk, runToken);
-                            wroteOutput = true;
-                        }
-
-                        streamedContent = full.Length > 0 ? full.ToString() : null;
-                        streamedUsage = usage;
-                        var finalizedToolCalls = toolCalls.BuildToolCalls();
-                        streamedToolCalls = finalizedToolCalls.Count > 0 ? finalizedToolCalls : null;
-                        llmCallContext.Response = new LLMResponse
-                        {
-                            Content = streamedContent,
-                            Usage = streamedUsage,
-                            ToolCalls = streamedToolCalls,
+                            Messages = [..messages],
+                            RequestId = baseRequest.RequestId,
+                            Metadata = ToolCallLoop.BuildPerCallMetadata(
+                                baseRequest.Metadata,
+                                ToolCallLoop.ComposeRoundCallId(baseRequest.RequestId, round)),
+                            Tools = baseRequest.Tools,
+                            Model = baseRequest.Model,
+                            Temperature = baseRequest.Temperature,
+                            MaxTokens = baseRequest.MaxTokens,
                         };
-                    });
+                        var roundResult = await StreamLlmRoundAsync(
+                            provider,
+                            roundRequest,
+                            channel.Writer,
+                            runToken,
+                            () => wroteOutput = true);
 
-                    if (llmCallContext.Terminate)
-                    {
-                        streamedContent = llmCallContext.Response?.Content;
-                        streamedUsage = llmCallContext.Response?.Usage;
-                        streamedToolCalls = llmCallContext.Response?.ToolCalls;
-
-                        if (llmCallContext.Response != null)
+                        if (roundResult.Terminated)
                         {
-                            foreach (var chunk in BuildSyntheticChunks(llmCallContext.Response))
-                            {
-                                await channel.Writer.WriteAsync(chunk, runToken);
-                                wroteOutput = true;
-                            }
+                            AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ToolCalls);
+                            finalContent = roundResult.Content;
+                            break;
                         }
-                    }
 
-                    if (!string.IsNullOrEmpty(streamedContent) || streamedToolCalls is { Count: > 0 })
-                    {
-                        pendingHistoryMessages.Add(new ChatMessage
+                        if (roundResult.ToolCalls is not { Count: > 0 })
+                        {
+                            AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, toolCalls: null);
+                            finalContent = roundResult.Content;
+                            break;
+                        }
+
+                        var assistantToolCallMessage = new ChatMessage
                         {
                             Role = "assistant",
-                            Content = streamedContent,
-                            ToolCalls = streamedToolCalls,
-                        });
+                            ToolCalls = roundResult.ToolCalls,
+                        };
+                        messages.Add(assistantToolCallMessage);
+                        pendingHistoryMessages.Add(assistantToolCallMessage);
+
+                        var toolMessageStartIndex = messages.Count;
+                        await _toolLoop.ExecuteToolCallsAsync(roundResult.ToolCalls, messages, baseRequest.Metadata, runToken);
+                        for (var index = toolMessageStartIndex; index < messages.Count; index++)
+                            pendingHistoryMessages.Add(messages[index]);
                     }
 
-                    runContext.Result = streamedContent;
+                    if (finalContent == null)
+                    {
+                        var finalRequest = new LLMRequest
+                        {
+                            Messages = [..messages],
+                            RequestId = baseRequest.RequestId,
+                            Metadata = ToolCallLoop.BuildPerCallMetadata(
+                                baseRequest.Metadata,
+                                ToolCallLoop.ComposeFinalCallId(baseRequest.RequestId)),
+                            Tools = null,
+                            Model = baseRequest.Model,
+                            Temperature = baseRequest.Temperature,
+                            MaxTokens = baseRequest.MaxTokens,
+                        };
+                        var finalRound = await StreamLlmRoundAsync(
+                            provider,
+                            finalRequest,
+                            channel.Writer,
+                            runToken,
+                            () => wroteOutput = true);
+                        AppendAssistantMessage(messages, pendingHistoryMessages, finalRound.Content, toolCalls: null);
+                        finalContent = finalRound.Content;
+                    }
+
+                    runContext.Result = finalContent;
                 });
 
                 if (runContext.Terminate && runContext.Result != null && !wroteOutput)
@@ -268,6 +290,106 @@ public sealed class ChatRuntime
                     _history.Add(msg);
             }
         }
+    }
+
+    private async Task<StreamingRoundResult> StreamLlmRoundAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        ChannelWriter<LLMStreamChunk> writer,
+        CancellationToken ct,
+        Action markOutputWritten)
+    {
+        var llmHookContext = new AIGAgentExecutionHookContext { LLMRequest = request };
+        if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmHookContext, ct);
+
+        var llmCallContext = new LLMCallContext
+        {
+            Request = request,
+            Provider = provider,
+            CancellationToken = ct,
+            IsStreaming = true,
+        };
+        AnnotateRequestIdentity(llmCallContext);
+
+        string? streamedContent = null;
+        TokenUsage? streamedUsage = null;
+        IReadOnlyList<ToolCall>? streamedToolCalls = null;
+
+        await MiddlewarePipeline.RunLLMCallAsync(_llmMiddlewares, llmCallContext, async () =>
+        {
+            if (llmCallContext.Terminate) return;
+
+            var full = new StringBuilder();
+            TokenUsage? usage = null;
+            var toolCalls = new StreamingToolCallAccumulator();
+
+            await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, ct))
+            {
+                var normalizedChunk = NormalizeStreamChunk(chunk, toolCalls, full, ref usage);
+                if (normalizedChunk == null)
+                    continue;
+
+                await writer.WriteAsync(normalizedChunk, ct);
+                markOutputWritten();
+            }
+
+            streamedContent = full.Length > 0 ? full.ToString() : null;
+            streamedUsage = usage;
+            var finalizedToolCalls = toolCalls.BuildToolCalls();
+            streamedToolCalls = finalizedToolCalls.Count > 0 ? finalizedToolCalls : null;
+            llmCallContext.Response = new LLMResponse
+            {
+                Content = streamedContent,
+                Usage = streamedUsage,
+                ToolCalls = streamedToolCalls,
+            };
+        });
+
+        if (llmCallContext.Terminate)
+        {
+            streamedContent = llmCallContext.Response?.Content;
+            streamedUsage = llmCallContext.Response?.Usage;
+            streamedToolCalls = llmCallContext.Response?.ToolCalls;
+
+            if (llmCallContext.Response != null)
+            {
+                foreach (var chunk in BuildSyntheticChunks(llmCallContext.Response))
+                {
+                    await writer.WriteAsync(chunk, ct);
+                    markOutputWritten();
+                }
+            }
+        }
+
+        var response = llmCallContext.Response ?? new LLMResponse
+        {
+            Content = streamedContent,
+            Usage = streamedUsage,
+            ToolCalls = streamedToolCalls,
+        };
+        llmHookContext.LLMResponse = response;
+        if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmHookContext, ct);
+
+        return new StreamingRoundResult(response.Content, response.ToolCalls, llmCallContext.Terminate);
+    }
+
+    private static void AppendAssistantMessage(
+        List<ChatMessage> messages,
+        List<ChatMessage> pendingHistoryMessages,
+        string? content,
+        IReadOnlyList<ToolCall>? toolCalls)
+    {
+        if (string.IsNullOrEmpty(content) && toolCalls is not { Count: > 0 })
+            return;
+
+        var assistantMessage = new ChatMessage
+        {
+            Role = "assistant",
+            Content = content,
+            ToolCalls = toolCalls,
+        };
+        messages.Add(assistantMessage);
+        pendingHistoryMessages.Add(assistantMessage);
     }
 
     /// <summary>
@@ -400,4 +522,8 @@ public sealed class ChatRuntime
         return chunks;
     }
 
+    private sealed record StreamingRoundResult(
+        string? Content,
+        IReadOnlyList<ToolCall>? ToolCalls,
+        bool Terminated);
 }

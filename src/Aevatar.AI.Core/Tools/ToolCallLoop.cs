@@ -45,7 +45,7 @@ public sealed class ToolCallLoop
         AgentToolRequestContext.CurrentMetadata = baseRequest.Metadata;
         try
         {
-        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
+            return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
         }
         finally
         {
@@ -82,52 +82,7 @@ public sealed class ToolCallLoop
 
             // 记录 assistant tool_call 消息
             messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
-
-            // 执行每个 tool call
-            foreach (var call in response.ToolCalls!)
-            {
-                // ─── Hook: Tool Execute Start ───
-                var toolCtx = new AIGAgentExecutionHookContext
-                {
-                    ToolName = call.Name, ToolArguments = call.ArgumentsJson, ToolCallId = call.Id,
-                };
-                if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
-
-                var tool = _tools.Get(call.Name);
-                var toolCallContext = new ToolCallContext
-                {
-                    Tool = tool ?? new NullAgentTool(call.Name),
-                    ToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!,
-                    ToolCallId = call.Id,
-                    ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                    CancellationToken = ct,
-                };
-
-                await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-                {
-                    if (toolCallContext.Terminate) return;
-
-                    var resolvedCall = new ToolCall
-                    {
-                        Id = toolCallContext.ToolCallId,
-                        Name = toolCallContext.ToolName,
-                        ArgumentsJson = toolCallContext.ArgumentsJson,
-                    };
-
-                    var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
-                    toolCallContext.Result = result.Content;
-                });
-
-                var toolResult = toolCallContext.Result ?? $"Tool '{toolCallContext.ToolName}' returned no result";
-                if (toolCallContext.Terminate)
-                    messages.Add(ChatMessage.Tool(call.Id, toolCallContext.Result ?? "Tool call terminated by middleware"));
-                else
-                    messages.Add(BuildToolResultMessage(call.Id, toolResult));
-
-                // ─── Hook: Tool Execute End ───
-                toolCtx.ToolResult = toolResult;
-                if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
-            }
+            await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -148,6 +103,23 @@ public sealed class ToolCallLoop
         if (finalContent != null)
             messages.Add(ChatMessage.Assistant(finalContent));
         return finalContent;
+    }
+
+    internal async Task ExecuteToolCallsAsync(
+        IReadOnlyList<ToolCall> toolCalls,
+        List<ChatMessage> messages,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct)
+    {
+        AgentToolRequestContext.CurrentMetadata = metadata;
+        try
+        {
+            await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
     }
 
     private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
@@ -184,7 +156,7 @@ public sealed class ToolCallLoop
         return (response, llmCallContext.Terminate);
     }
 
-    private static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
+    internal static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
         IReadOnlyDictionary<string, string>? baseMetadata,
         string? callId)
     {
@@ -205,7 +177,7 @@ public sealed class ToolCallLoop
         return metadata;
     }
 
-    private static string? ComposeRoundCallId(string? baseRequestId, int round)
+    internal static string? ComposeRoundCallId(string? baseRequestId, int round)
     {
         if (string.IsNullOrWhiteSpace(baseRequestId))
             return null;
@@ -215,7 +187,7 @@ public sealed class ToolCallLoop
             : $"{baseRequestId}:tool-round:{round + 1}";
     }
 
-    private static string? ComposeFinalCallId(string? baseRequestId)
+    internal static string? ComposeFinalCallId(string? baseRequestId)
     {
         if (string.IsNullOrWhiteSpace(baseRequestId))
             return null;
@@ -344,6 +316,58 @@ public sealed class ToolCallLoop
 
         return null;
     }
+
+    private async Task ExecuteToolCallsCoreAsync(
+        IReadOnlyList<ToolCall> toolCalls,
+        List<ChatMessage> messages,
+        CancellationToken ct)
+    {
+        foreach (var call in toolCalls)
+        {
+            var toolCtx = new AIGAgentExecutionHookContext
+            {
+                ToolName = call.Name,
+                ToolArguments = call.ArgumentsJson,
+                ToolCallId = call.Id,
+            };
+            if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
+
+            var tool = _tools.Get(call.Name);
+            var toolCallContext = new ToolCallContext
+            {
+                Tool = tool ?? new NullAgentTool(call.Name),
+                ToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!,
+                ToolCallId = call.Id,
+                ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
+                CancellationToken = ct,
+            };
+
+            await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
+            {
+                if (toolCallContext.Terminate) return;
+
+                var resolvedCall = new ToolCall
+                {
+                    Id = toolCallContext.ToolCallId,
+                    Name = toolCallContext.ToolName,
+                    ArgumentsJson = toolCallContext.ArgumentsJson,
+                };
+
+                var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
+                toolCallContext.Result = result.Content;
+            });
+
+            var toolResult = toolCallContext.Result ?? $"Tool '{toolCallContext.ToolName}' returned no result";
+            if (toolCallContext.Terminate)
+                messages.Add(ChatMessage.Tool(call.Id, toolCallContext.Result ?? "Tool call terminated by middleware"));
+            else
+                messages.Add(BuildToolResultMessage(call.Id, toolResult));
+
+            toolCtx.ToolResult = toolResult;
+            if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
+        }
+    }
+
     private sealed class NullAgentTool(string name) : IAgentTool
     {
         public string Name => name;

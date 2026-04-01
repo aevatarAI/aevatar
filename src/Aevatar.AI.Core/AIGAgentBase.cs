@@ -194,7 +194,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, ct);
+        return _chat!.ChatStreamAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
@@ -205,7 +205,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, requestId, metadata, ct);
+        return _chat!.ChatStreamAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
     }
 
     /// <summary>注册单个工具。</summary>
