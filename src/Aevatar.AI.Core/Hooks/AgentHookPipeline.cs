@@ -65,6 +65,16 @@ public sealed class AgentHookPipeline
     public Task RunCompactEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
         RunAll(h => h.OnCompactEndAsync(ctx, ct), "OnCompactEnd");
 
+    // ─── 工具审批生命周期 ───
+
+    /// <summary>工具审批请求已发出。</summary>
+    public Task RunToolApprovalRequestedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnToolApprovalRequestedAsync(ctx, ct), "OnToolApprovalRequested");
+
+    /// <summary>工具审批完成。</summary>
+    public Task RunToolApprovalCompletedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnToolApprovalCompletedAsync(ctx, ct), "OnToolApprovalCompleted");
+
     // ─── 内部 ───
 
     private async Task RunAll(Func<IAIGAgentExecutionHook, Task> action, string phase)

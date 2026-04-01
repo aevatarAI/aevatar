@@ -51,4 +51,12 @@ public sealed class ExecutionTraceHook : IAIGAgentExecutionHook
 
     public Task OnCompactEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
     { _logger.LogInformation("[Trace] Compact End: ToolResults={Compacted}, Truncated={Truncated}, Summarized={Summarized}", ctx.Items.TryGetValue("compacted_tool_results", out var c) ? c : 0, ctx.Items.TryGetValue("truncated_messages", out var t) ? t : 0, ctx.Items.TryGetValue("summarized", out var s) ? s : false); return Task.CompletedTask; }
+
+    // ─── 工具审批 hook ───
+
+    public Task OnToolApprovalRequestedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+    { _logger.LogInformation("[Trace] Approval Requested: Tool={Tool}, Mode={Mode}", ctx.ToolName, ctx.Items.TryGetValue("approval_mode", out var m) ? m : "unknown"); return Task.CompletedTask; }
+
+    public Task OnToolApprovalCompletedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+    { _logger.LogInformation("[Trace] Approval Completed: Tool={Tool}, Decision={Decision}", ctx.ToolName, ctx.Items.TryGetValue("approval_decision", out var d) ? d : "unknown"); return Task.CompletedTask; }
 }

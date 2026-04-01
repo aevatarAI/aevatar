@@ -7,6 +7,7 @@ using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.ServiceInvoke;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
@@ -37,6 +38,10 @@ public sealed class AevatarAIFeatureOptions
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
+    public bool EnableServiceInvokeTools { get; set; }
+    public string? ServiceInvokeTenantId { get; set; }
+    public string? ServiceInvokeAppId { get; set; }
+    public string? ServiceInvokeNamespace { get; set; }
 }
 
 public static class ServiceCollectionExtensions
@@ -66,6 +71,9 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableOrnnSkills)
             RegisterOrnnSkills(services, options);
+
+        if (options.EnableServiceInvokeTools)
+            RegisterServiceInvokeTools(services, options);
 
         return services;
     }
@@ -561,6 +569,16 @@ public static class ServiceCollectionExtensions
 
             foreach (var directory in options.SkillDirectories)
                 skillOptions.ScanDirectory(directory);
+        });
+    }
+
+    private static void RegisterServiceInvokeTools(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        services.AddServiceInvokeTools(o =>
+        {
+            o.TenantId = options.ServiceInvokeTenantId;
+            o.AppId = options.ServiceInvokeAppId;
+            o.Namespace = options.ServiceInvokeNamespace;
         });
     }
 

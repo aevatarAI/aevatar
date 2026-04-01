@@ -63,6 +63,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
+    private readonly IToolApprovalHandler? _approvalHandler;
 
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
@@ -83,7 +84,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        IToolApprovalHandler? approvalHandler = null)
     {
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
         _additionalHooks = (additionalHooks ?? []).ToArray();
@@ -91,6 +93,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolSources = (toolSources ?? []).ToArray();
+        _approvalHandler = approvalHandler;
     }
 
     // ─── 初始化 ───
@@ -262,8 +265,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             _foundationHooksRegistered = true;
         }
 
+        // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
+        var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
+        if (_approvalHandler != null)
+            effectiveToolMiddlewares.Add(new Middleware.ToolApprovalMiddleware(_approvalHandler, _hooks));
+        effectiveToolMiddlewares.AddRange(_toolMiddlewares);
+
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, _toolMiddlewares, _llmMiddlewares, History.Budget);
+        var toolLoop = new ToolCallLoop(Tools, _hooks, effectiveToolMiddlewares, _llmMiddlewares, History.Budget);
         var compressionConfig = new Chat.ContextCompressionConfig(
             MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,
             CompressionThreshold: EffectiveConfig.CompressionThreshold,

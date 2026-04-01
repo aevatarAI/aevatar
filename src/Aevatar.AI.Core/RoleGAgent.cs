@@ -34,6 +34,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
+    private readonly Middleware.LocalApprovalHandler? _localApprovalHandler;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -41,16 +42,29 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        IToolApprovalHandler? approvalHandler = null)
         : base(
             llmProviderFactory,
             additionalHooks,
             agentMiddlewares,
             toolMiddlewares,
             llmMiddlewares,
-            toolSources)
+            toolSources,
+            approvalHandler)
     {
+        _localApprovalHandler = approvalHandler switch
+        {
+            Middleware.LocalApprovalHandler local => local,
+            Middleware.PriorityApprovalHandler => ExtractLocalHandler(approvalHandler),
+            _ => null,
+        };
     }
+
+    private static Middleware.LocalApprovalHandler? ExtractLocalHandler(IToolApprovalHandler handler) =>
+        handler is Middleware.PriorityApprovalHandler priority
+            ? priority.LocalHandler as Middleware.LocalApprovalHandler
+            : null;
 
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
@@ -59,6 +73,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     public async Task HandleInitializeRoleAgent(InitializeRoleAgentEvent evt)
     {
         await PersistDomainEventAsync(evt);
+    }
+
+    /// <summary>Handles tool approval decisions from the frontend.</summary>
+    [EventHandler]
+    public Task HandleToolApprovalDecision(ToolApprovalDecisionEvent evt)
+    {
+        _localApprovalHandler?.SubmitDecision(evt.RequestId, evt.Approved, evt.Reason);
+        return Task.CompletedTask;
     }
 
     /// <summary>Returns agent description.</summary>
@@ -156,6 +178,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var useWorkflowFailureMarker = timeoutMs > 0;
         using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
         var streamCt = timeoutCts?.Token ?? CancellationToken.None;
+
+        // 配置本地审批的 publish 回调（如果已启用）
+        _localApprovalHandler?.SetPublishCallback(async evt =>
+        {
+            evt.SessionId = request.SessionId;
+            await PublishAsync(evt, TopologyAudience.Parent);
+        });
 
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent

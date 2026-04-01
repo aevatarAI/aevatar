@@ -42,6 +42,7 @@
     <Project Path="src\Aevatar.AI.Projection\Aevatar.AI.Projection.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
+    <Project Path="src\Aevatar.AI.ToolProviders.ServiceInvoke\Aevatar.AI.ToolProviders.ServiceInvoke.csproj" />
     <Project Path="src\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
     <Project Path="src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <Project Path="src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
@@ -117,6 +118,7 @@
   <Folder Name="/test/">
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
+    <Project Path="test\Aevatar.AI.ToolProviders.ServiceInvoke.Tests\Aevatar.AI.ToolProviders.ServiceInvoke.Tests.csproj" />
     <Project Path="test\Aevatar.Bootstrap.Tests\Aevatar.Bootstrap.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Core.Tests\Aevatar.CQRS.Core.Tests.csproj" />
     <Project Path="test\Aevatar.CQRS.Projection.Core.Tests\Aevatar.CQRS.Projection.Core.Tests.csproj" />

@@ -54,7 +54,7 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
                 : string.Empty;
             var preferredLlmRoute = doc.RootElement.TryGetProperty("preferredLlmRoute", out var routeElement)
                 ? UserConfigLlmRoute.Normalize(routeElement.GetString())
-                : UserConfigLlmRouteDefaults.Auto;
+                : UserConfigLlmRouteDefaults.Gateway;
 
             var hasRuntimeMode = doc.RootElement.TryGetProperty("runtimeMode", out var runtimeModeElement);
             var hasLocalRuntimeBaseUrl = doc.RootElement.TryGetProperty("localRuntimeBaseUrl", out var localRuntimeElement);
@@ -80,7 +80,11 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
 
             if (string.IsNullOrWhiteSpace(legacyRuntimeBaseUrl))
             {
-                return CreateDefaultConfig() with { DefaultModel = defaultModel };
+                return CreateDefaultConfig() with
+                {
+                    DefaultModel = defaultModel,
+                    PreferredLlmRoute = preferredLlmRoute,
+                };
             }
 
             var normalizedLegacyRuntimeBaseUrl = legacyRuntimeBaseUrl.Trim().TrimEnd('/');
@@ -134,7 +138,7 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
     private UserConfig CreateDefaultConfig() =>
         new(
             DefaultModel: string.Empty,
-            PreferredLlmRoute: UserConfigLlmRouteDefaults.Auto,
+            PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
             RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
             LocalRuntimeBaseUrl: _defaultLocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: _defaultRemoteRuntimeBaseUrl);

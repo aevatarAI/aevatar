@@ -59,6 +59,26 @@ message AIAgentConfigOverrides {
   optional bool enable_summarization = 11;
 }
 
+// Agent → 前端：请求工具执行审批
+message ToolApprovalRequestEvent {
+  string request_id = 1;
+  string session_id = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string arguments_json = 5;
+  string approval_mode = 6;
+  bool is_destructive = 7;
+  int32 timeout_seconds = 8;
+}
+
+// 前端 → Agent：审批决策
+message ToolApprovalDecisionEvent {
+  string request_id = 1;
+  string session_id = 2;
+  bool approved = 3;
+  string reason = 4;
+}
+
 message RoleChatSessionState {
   string prompt = 1;
   bool completed = 2;

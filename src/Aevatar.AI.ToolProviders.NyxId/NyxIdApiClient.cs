@@ -170,6 +170,9 @@ public sealed class NyxIdApiClient
 
     // ─── Approvals (additions) ───
 
+    public Task<string> CreateApprovalRequestAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/approvals/requests", body, ct);
+
     public Task<string> GetApprovalAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}", ct);
 

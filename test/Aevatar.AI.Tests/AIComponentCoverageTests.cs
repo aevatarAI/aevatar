@@ -367,7 +367,7 @@ public class AIComponentCoverageTests
         Directory.CreateDirectory(dirB);
 
         File.WriteAllText(Path.Combine(dirA, "SKILL.md"), "# Writer Skill\n\nCreate concise text\n\nUse markdown.");
-        File.WriteAllText(Path.Combine(dirB, "SKILL.md"), "# Writer Skill\n\nRewrite text\n\nUse plain text.");
+        File.WriteAllText(Path.Combine(dirB, "SKILL.md"), "# Editor Skill\n\nRewrite text\n\nUse plain text.");
 
         try
         {

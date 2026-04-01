@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Tools;
@@ -379,6 +380,388 @@ public class ContextCompressorTests
     }
 
     // ═══════════════════════════════════════════════════════════
+    // CompactToolResults — edge cases
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void CompactToolResults_ShouldNotDeduplicateNonToolMessages()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("same content"),
+            ChatMessage.Assistant("same content"),
+            ChatMessage.Tool("tc-1", "same content"),
+        };
+
+        var modified = ContextCompressor.CompactToolResults(messages);
+
+        modified.Should().Be(0);
+        messages[0].Content.Should().Be("same content");
+        messages[1].Content.Should().Be("same content");
+        messages[2].Content.Should().Be("same content");
+    }
+
+    [Fact]
+    public void CompactToolResults_ShouldHandleNullContent()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new() { Role = "tool", ToolCallId = "tc-1", Content = null },
+            ChatMessage.Tool("tc-2", "result"),
+        };
+
+        var modified = ContextCompressor.CompactToolResults(messages);
+
+        modified.Should().Be(0);
+    }
+
+    [Fact]
+    public void CompactToolResults_ShouldDeduplicateAndTruncateIndependently()
+    {
+        var longContent = new string('a', 10000);
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.Tool("tc-1", longContent),
+            ChatMessage.Tool("tc-2", longContent),  // duplicate of oversized
+            ChatMessage.Tool("tc-3", "short"),
+        };
+
+        var modified = ContextCompressor.CompactToolResults(messages, maxToolResultLength: 4000);
+
+        modified.Should().Be(2); // first truncated, second deduplicated
+        messages[0].Content.Should().EndWith("...[compressed]");
+        messages[1].Content.Should().Contain("duplicate of tool call tc-1");
+        messages[2].Content.Should().Be("short");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TruncateByImportance — edge cases
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void TruncateByImportance_ShouldRemoveOldestLowPriorityMessagesFirst()
+    {
+        // Oldest messages with lowest recency score should be removed first
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.Assistant("old assistant msg"),  // index 0: low recency
+            ChatMessage.User("old user msg"),            // index 1: low recency, but user weight
+            ChatMessage.User("mid user msg"),            // index 2: medium recency
+            ChatMessage.User("newer user msg"),          // index 3: higher recency
+            ChatMessage.Assistant("recent answer"),      // protected (recent)
+            ChatMessage.User("latest"),                  // protected (recent)
+        };
+
+        ContextCompressor.TruncateByImportance(messages, targetCount: 4, preserveRecentCount: 2);
+
+        messages.Should().HaveCount(4);
+        // The oldest assistant message should be removed (lowest score: low recency + 1.5 weight)
+        messages.Should().NotContain(m => m.Content == "old assistant msg");
+        // Recent messages should survive
+        messages.Should().Contain(m => m.Content == "recent answer");
+        messages.Should().Contain(m => m.Content == "latest");
+    }
+
+    [Fact]
+    public void TruncateByImportance_ShouldRemoveAssistantToolCallWithItsResults()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("setup question"),
+            new()
+            {
+                Role = "assistant",
+                ToolCalls =
+                [
+                    new ToolCall { Id = "tc-a", Name = "search", ArgumentsJson = "{}" },
+                    new ToolCall { Id = "tc-b", Name = "read", ArgumentsJson = "{}" },
+                ],
+            },
+            ChatMessage.Tool("tc-a", "search result"),
+            ChatMessage.Tool("tc-b", "read result"),
+            ChatMessage.User("ok"),
+            ChatMessage.User("next question"),
+            ChatMessage.User("another"),
+            ChatMessage.Assistant("final answer"),
+        };
+
+        // Remove enough that the tool group should go
+        var removed = ContextCompressor.TruncateByImportance(messages, targetCount: 4, preserveRecentCount: 2);
+
+        removed.Should().BeGreaterThan(0);
+        // If assistant with tool_calls was removed, its tool results should also be gone
+        var hasAssistantToolCall = messages.Any(m => m.Role == "assistant" && m.ToolCalls?.Count > 0);
+        if (!hasAssistantToolCall)
+        {
+            messages.Should().NotContain(m => m.Role == "tool" && m.ToolCallId == "tc-a");
+            messages.Should().NotContain(m => m.Role == "tool" && m.ToolCallId == "tc-b");
+        }
+    }
+
+    [Fact]
+    public void TruncateByImportance_ShouldHandleAllSystemMessages()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("sys 1"),
+            ChatMessage.System("sys 2"),
+            ChatMessage.System("sys 3"),
+        };
+
+        var removed = ContextCompressor.TruncateByImportance(messages, targetCount: 1);
+
+        // All system messages are protected
+        removed.Should().Be(0);
+        messages.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void TruncateByImportance_ShouldHandleEmptyList()
+    {
+        var messages = new List<ChatMessage>();
+        ContextCompressor.TruncateByImportance(messages, targetCount: 5).Should().Be(0);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SummarizeOldestBlockAsync — edge cases
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task SummarizeOldestBlock_ShouldSkipSystemMessagesAtStart()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.System("system 1"),
+            ChatMessage.System("system 2"),
+        };
+        for (var i = 0; i < 14; i++)
+            messages.Add(ChatMessage.User($"msg-{i}"));
+
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = "Summary of user messages" },
+        ]);
+
+        var result = await ContextCompressor.SummarizeOldestBlockAsync(messages, provider, blockSize: 8);
+
+        result.Should().BeTrue();
+        // Both system messages should still be at the start
+        messages[0].Role.Should().Be("system");
+        messages[0].Content.Should().Be("system 1");
+        messages[1].Role.Should().Be("system");
+        messages[1].Content.Should().Be("system 2");
+        // Summary should follow
+        messages[2].Role.Should().Be("system");
+        messages[2].Content.Should().Contain("[Previous conversation summary]");
+    }
+
+    [Fact]
+    public async Task SummarizeOldestBlock_ShouldReturnFalseWhenProviderReturnsEmpty()
+    {
+        var messages = new List<ChatMessage>();
+        for (var i = 0; i < 16; i++)
+            messages.Add(ChatMessage.User($"msg-{i}"));
+
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = null },
+        ]);
+
+        var result = await ContextCompressor.SummarizeOldestBlockAsync(messages, provider, blockSize: 8);
+
+        result.Should().BeFalse();
+        messages.Should().HaveCount(16); // unchanged
+    }
+
+    [Fact]
+    public async Task SummarizeOldestBlock_ShouldIncludeToolMessagesInSummary()
+    {
+        var messages = new List<ChatMessage>
+        {
+            ChatMessage.User("search for cats"),
+            new()
+            {
+                Role = "assistant",
+                ToolCalls = [new ToolCall { Id = "tc-1", Name = "search", ArgumentsJson = """{"q":"cats"}""" }],
+            },
+            ChatMessage.Tool("tc-1", "Found 42 cats"),
+            ChatMessage.Assistant("I found 42 cats."),
+            ChatMessage.User("tell me more"),
+            ChatMessage.Assistant("Cats are great."),
+            ChatMessage.User("thanks"),
+            ChatMessage.Assistant("You're welcome."),
+            // These should survive (beyond blockSize)
+            ChatMessage.User("new topic"),
+            ChatMessage.User("msg A"),
+            ChatMessage.User("msg B"),
+            ChatMessage.User("msg C"),
+        };
+
+        LLMRequest? capturedRequest = null;
+        var provider = new CapturingLLMProvider(req =>
+        {
+            capturedRequest = req;
+            return new LLMResponse { Content = "User asked about cats, found 42 results." };
+        });
+
+        var result = await ContextCompressor.SummarizeOldestBlockAsync(messages, provider, blockSize: 8);
+
+        result.Should().BeTrue();
+        capturedRequest.Should().NotBeNull();
+        // The summarization request should contain the tool call info
+        capturedRequest!.Messages[1].Content.Should().Contain("tool");
+        capturedRequest.Messages[1].Content.Should().Contain("Found 42 cats");
+        messages.Should().HaveCount(5); // 1 summary + 4 remaining
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ChatHistory.Budget integration
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void ChatHistory_Budget_ShouldBeAccessible()
+    {
+        var history = new ChatHistory();
+        history.Budget.Should().NotBeNull();
+        history.Budget.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void ChatHistory_Clear_ShouldNotResetBudget()
+    {
+        var history = new ChatHistory();
+        history.Budget.RecordUsage(new TokenUsage(500, 100, 600));
+        history.Add(ChatMessage.User("hello"));
+        history.Clear();
+
+        history.Count.Should().Be(0);
+        // Budget is independent of message history
+        history.Budget.CallCount.Should().Be(1);
+        history.Budget.LastPromptTokens.Should().Be(500);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Integration: Compression does NOT fire when budget not exceeded
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task ChatRuntime_ShouldNotCompressWhenBudgetNotExceeded()
+    {
+        var hook = new CompactRecordingHook();
+        var pipeline = new AgentHookPipeline([hook]);
+        var history = new ChatHistory { MaxMessages = 100 };
+
+        // Record LOW token usage — under budget
+        history.Budget.RecordUsage(new TokenUsage(1000, 0, 1000));
+
+        for (var i = 0; i < 10; i++)
+            history.Add(ChatMessage.User($"msg {i}"));
+
+        var provider = new QueueLLMProvider([new LLMResponse { Content = "ok" }]);
+        var toolLoop = new ToolCallLoop(new ToolManager(), pipeline, budgetTracker: history.Budget);
+        var compressionConfig = new ContextCompressionConfig(
+            MaxPromptTokenBudget: 10000,
+            CompressionThreshold: 0.85);
+        var chat = new ChatRuntime(
+            providerFactory: () => provider,
+            history: history,
+            toolLoop: toolLoop,
+            hooks: pipeline,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = history.BuildMessages(null),
+                Tools = null,
+            },
+            compressionConfig: compressionConfig);
+
+        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+
+        hook.CompactStartCount.Should().Be(0);
+        hook.CompactEndCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ChatRuntime_ShouldNotCompressWhenBudgetDisabled()
+    {
+        var hook = new CompactRecordingHook();
+        var pipeline = new AgentHookPipeline([hook]);
+        var history = new ChatHistory { MaxMessages = 100 };
+
+        // Record HIGH token usage but budget = 0 (disabled)
+        history.Budget.RecordUsage(new TokenUsage(99999, 0, 99999));
+
+        var provider = new QueueLLMProvider([new LLMResponse { Content = "ok" }]);
+        var toolLoop = new ToolCallLoop(new ToolManager(), pipeline, budgetTracker: history.Budget);
+        var compressionConfig = new ContextCompressionConfig(MaxPromptTokenBudget: 0);
+        var chat = new ChatRuntime(
+            providerFactory: () => provider,
+            history: history,
+            toolLoop: toolLoop,
+            hooks: pipeline,
+            requestBuilder: () => new LLMRequest
+            {
+                Messages = history.BuildMessages(null),
+                Tools = null,
+            },
+            compressionConfig: compressionConfig);
+
+        await chat.ChatAsync("trigger", maxToolRounds: 1, ct: CancellationToken.None);
+
+        hook.CompactStartCount.Should().Be(0);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Integration: ToolCallLoop accumulates across rounds
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task ToolCallLoop_ShouldAccumulateTokenUsageAcrossRounds()
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                Usage = new TokenUsage(200, 50, 250),
+                ToolCalls =
+                [
+                    new ToolCall { Id = "tc-1", Name = "echo", ArgumentsJson = "{}" },
+                ],
+            },
+            new LLMResponse
+            {
+                Content = "done",
+                Usage = new TokenUsage(400, 100, 500),
+            },
+        ]);
+
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("echo", _ => "ok"));
+        var tracker = new TokenBudgetTracker();
+        var loop = new ToolCallLoop(tools, budgetTracker: tracker);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        await loop.ExecuteAsync(provider, messages, request, maxRounds: 3, CancellationToken.None);
+
+        tracker.CallCount.Should().Be(2);
+        tracker.LastPromptTokens.Should().Be(400);
+        tracker.CumulativePromptTokens.Should().Be(600); // 200 + 400
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ContextCompressionConfig defaults
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void ContextCompressionConfig_Defaults_ShouldBeDisabled()
+    {
+        var config = new ContextCompressionConfig();
+        config.MaxPromptTokenBudget.Should().Be(0);
+        config.CompressionThreshold.Should().Be(0.85);
+        config.EnableSummarization.Should().BeFalse();
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // Test Doubles
     // ═══════════════════════════════════════════════════════════
 
@@ -426,5 +809,31 @@ public class ContextCompressorTests
             CompactEndCount++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class CapturingLLMProvider(Func<LLMRequest, LLMResponse> handler) : ILLMProvider
+    {
+        public string Name => "capturing";
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
+            Task.FromResult(handler(request));
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
+
+    private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "delegate";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult(execute(argumentsJson));
     }
 }

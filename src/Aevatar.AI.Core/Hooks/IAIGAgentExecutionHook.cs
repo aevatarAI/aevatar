@@ -47,4 +47,12 @@ public interface IAIGAgentExecutionHook : IGAgentExecutionHook
 
     /// <summary>上下文压缩完成后。Items 中含 compacted_tool_results、truncated_messages、summarized。</summary>
     Task OnCompactEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) => Task.CompletedTask;
+
+    // ─── 工具审批生命周期 ───
+
+    /// <summary>工具审批请求已发出。Items 中含 approval_request_id、approval_mode。</summary>
+    Task OnToolApprovalRequestedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>工具审批完成。Items 中含 approval_decision、approval_reason。</summary>
+    Task OnToolApprovalCompletedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) => Task.CompletedTask;
 }

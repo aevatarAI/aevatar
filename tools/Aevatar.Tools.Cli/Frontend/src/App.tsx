@@ -200,7 +200,7 @@ type ProviderDraft = {
 };
 
 type RuntimeMode = 'remote' | 'local';
-type UserLlmRoute = 'auto' | 'gateway' | string;
+type UserLlmRoute = string;
 
 type UserConfigProviderStatus = {
   provider_slug: string;
@@ -263,8 +263,7 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 const DEFAULT_REMOTE_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
 const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:5080';
 const DEFAULT_RUNTIME_BASE_URL = DEFAULT_LOCAL_RUNTIME_URL;
-const USER_LLM_ROUTE_AUTO = 'auto';
-const USER_LLM_ROUTE_GATEWAY = 'gateway';
+const USER_LLM_ROUTE_GATEWAY = '';
 const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
@@ -280,8 +279,25 @@ function normalizeRuntimeUrl(value: unknown, fallback: string) {
 }
 
 function normalizeUserLlmRoute(value: unknown): UserLlmRoute {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized || USER_LLM_ROUTE_AUTO;
+  const normalized = String(value || '').trim();
+  if (!normalized || /^auto$/i.test(normalized) || /^gateway$/i.test(normalized)) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.includes('://') || normalized.startsWith('//')) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.startsWith('/')) {
+    return normalized;
+  }
+
+  return `/api/v1/proxy/s/${normalized.replace(/^\/+|\/+$/g, '')}`;
+}
+
+function routePathFromProviderSlug(slug: string) {
+  const normalized = String(slug || '').trim();
+  return normalized ? `/api/v1/proxy/s/${normalized}` : USER_LLM_ROUTE_GATEWAY;
 }
 
 function resolveUserRuntimeConfig(userConfigData?: any) {
@@ -837,7 +853,7 @@ function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [userConfigState, setUserConfigState] = useState<UserConfigState>({
     defaultModel: '',
-    preferredLlmRoute: USER_LLM_ROUTE_AUTO,
+    preferredLlmRoute: USER_LLM_ROUTE_GATEWAY,
     loading: false,
     providers: [],
     supportedModels: [],
@@ -1506,7 +1522,7 @@ function App() {
       hydrateSettings(settings, {
         ...runtimeConfig,
         defaultModel: userConfigData?.defaultModel || '',
-        preferredLlmRoute: userConfigData?.preferredLlmRoute || USER_LLM_ROUTE_AUTO,
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
       });
       setUserConfigState(prev => ({
         ...prev,
@@ -4971,23 +4987,11 @@ function CloudConfigSection(props: {
     [userConfigState.providers],
   );
 
-  const readyChronoLlmProvider = useMemo(
-    () => serviceProviders.find(p => p.provider_slug === 'chrono-llm' && p.status === 'ready') || null,
-    [serviceProviders],
-  );
-
   const preferredRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
-  const effectiveRoute = preferredRoute === USER_LLM_ROUTE_AUTO
-    ? (readyChronoLlmProvider ? readyChronoLlmProvider.provider_slug : USER_LLM_ROUTE_GATEWAY)
-    : preferredRoute;
+  const effectiveRoute = preferredRoute;
 
   const routeOptions = useMemo(() => {
     const options: Array<{ value: string; label: string; note?: string }> = [
-      {
-        value: USER_LLM_ROUTE_AUTO,
-        label: 'Auto',
-        note: readyChronoLlmProvider ? `Currently ${readyChronoLlmProvider.provider_name || 'chrono-llm'}` : 'Currently NyxID Gateway',
-      },
       {
         value: USER_LLM_ROUTE_GATEWAY,
         label: 'NyxID Gateway',
@@ -4997,16 +5001,17 @@ function CloudConfigSection(props: {
     const seen = new Set(options.map(option => option.value));
     for (const provider of serviceProviders) {
       const slug = provider.provider_slug;
-      if (!slug || seen.has(slug)) continue;
-      seen.add(slug);
+      const route = routePathFromProviderSlug(slug);
+      if (!slug || seen.has(route)) continue;
+      seen.add(route);
       options.push({
-        value: slug,
+        value: route,
         label: provider.provider_name || slug,
         note: provider.status === 'ready' ? 'Ready' : 'Unavailable',
       });
     }
 
-    if (!seen.has(preferredRoute) && preferredRoute !== USER_LLM_ROUTE_AUTO && preferredRoute !== USER_LLM_ROUTE_GATEWAY) {
+    if (!seen.has(preferredRoute) && preferredRoute !== USER_LLM_ROUTE_GATEWAY) {
       options.push({
         value: preferredRoute,
         label: preferredRoute,
@@ -5015,13 +5020,13 @@ function CloudConfigSection(props: {
     }
 
     return options;
-  }, [preferredRoute, readyChronoLlmProvider, serviceProviders]);
+  }, [preferredRoute, serviceProviders]);
 
   const groupedModels = useMemo(() => {
     const query = filterText.trim().toLowerCase();
     const providerOrder = effectiveRoute === USER_LLM_ROUTE_GATEWAY
       ? gatewayProviders
-      : userConfigState.providers.filter(provider => provider.provider_slug === effectiveRoute);
+      : userConfigState.providers.filter(provider => routePathFromProviderSlug(provider.provider_slug) === effectiveRoute);
 
     return providerOrder
       .map(provider => ({
@@ -5089,11 +5094,9 @@ function CloudConfigSection(props: {
           </select>
         </div>
         <div className="text-[11px] text-gray-400 leading-relaxed">
-          {preferredRoute === USER_LLM_ROUTE_AUTO
-            ? `Auto prefers chrono-llm when it is available and otherwise falls back to NyxID Gateway. It is currently using ${effectiveRouteLabel}.`
-            : preferredRoute === USER_LLM_ROUTE_GATEWAY
+          {preferredRoute === USER_LLM_ROUTE_GATEWAY
             ? 'All Aevatar chat requests will go through NyxID Gateway.'
-            : `${effectiveRouteLabel} will be used for Aevatar chat requests. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
+            : `${effectiveRouteLabel} will be used for Aevatar chat requests via ${preferredRoute}. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
         </div>
       </div>
 
