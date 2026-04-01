@@ -435,6 +435,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         };
         CopyPropagatedMetadata(ctx, chatRequest.Metadata);
         CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)

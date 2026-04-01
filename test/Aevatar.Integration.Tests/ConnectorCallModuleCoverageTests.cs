@@ -236,6 +236,60 @@ public sealed class ConnectorCallModuleCoverageTests
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-\"line\ntwo"}""");
     }
 
+    [Fact]
+    public async Task HandleAsync_WhenAssertResponsePathPassesAndPassThroughEnabled_ShouldKeepOriginalInput()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        registry.Register(new FixedResponseConnector("validator", """{"valid":true}"""));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-assert-pass",
+            StepType = "connector_call",
+            Input = """{"nodes":[{"temp_id":"new_0"}]}""",
+            Parameters =
+            {
+                ["connector"] = "validator",
+                ["assert_response_path"] = "valid",
+                ["pass_through_input"] = "true",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be(request.Input);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenAssertResponsePathFails_ShouldPublishFailure()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        registry.Register(new FixedResponseConnector("validator", """{"valid":false}"""));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-assert-fail",
+            StepType = "connector_call",
+            Input = """{"nodes":[{"temp_id":"new_0"}]}""",
+            Parameters =
+            {
+                ["connector"] = "validator",
+                ["assert_response_path"] = "valid",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("assertion failed");
+        completed.Error.Should().Contain("valid");
+    }
+
     private static TestEventHandlerContext CreateContext()
     {
         return new TestEventHandlerContext(
@@ -313,6 +367,23 @@ public sealed class ConnectorCallModuleCoverageTests
             {
                 Success = true,
                 Output = "ok",
+            });
+        }
+    }
+
+    private sealed class FixedResponseConnector(string name, string output) : IConnector
+    {
+        public string Name { get; } = name;
+        public string Type => "test";
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(new ConnectorResponse
+            {
+                Success = true,
+                Output = output,
             });
         }
     }

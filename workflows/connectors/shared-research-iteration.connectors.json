@@ -1,0 +1,62 @@
+{
+  "chrono_graph": {
+    "type": "http",
+    "enabled": true,
+    "timeoutMs": 60000,
+    "http": {
+      "baseUrl": "${NYXID_PROXY_BASE_URL}/api/v1/proxy/s/chrono-graph",
+      "allowedMethods": ["GET", "POST"],
+      "allowedPaths": [
+        "/snapshot",
+        "/nodes",
+        "/edges",
+        "/query"
+      ],
+      "defaultHeaders": {
+        "Content-Type": "application/json"
+      },
+      "auth": {
+        "type": "client_credentials",
+        "tokenUrl": "${NYXID_AUTH_TOKEN_URL}",
+        "clientId": "${NYXID_SA_CLIENT_ID}",
+        "clientSecret": "${NYXID_SA_CLIENT_SECRET}",
+        "scope": "proxy:*"
+      }
+    }
+  },
+  "nyxid_mcp": {
+    "type": "mcp",
+    "enabled": true,
+    "timeoutMs": 60000,
+    "mcp": {
+      "serverName": "nyxid",
+      "url": "${NYXID_MCP_URL}",
+      "auth": {
+        "type": "client_credentials",
+        "tokenUrl": "${NYXID_AUTH_TOKEN_URL}",
+        "clientId": "${NYXID_SA_CLIENT_ID}",
+        "clientSecret": "${NYXID_SA_CLIENT_SECRET}",
+        "scope": "proxy:*"
+      },
+      "allowedTools": [
+        "chrono-graph__get_snapshot",
+        "chrono-graph__create_nodes",
+        "chrono-graph__create_edges",
+        "chrono-graph__query"
+      ]
+    }
+  },
+  "format_validator": {
+    "type": "http",
+    "enabled": true,
+    "timeoutMs": 10000,
+    "http": {
+      "baseUrl": "${FORMAT_VALIDATOR_BASE_URL}",
+      "allowedMethods": ["POST"],
+      "allowedPaths": [
+        "/validate",
+        "/validate/*"
+      ]
+    }
+  }
+}

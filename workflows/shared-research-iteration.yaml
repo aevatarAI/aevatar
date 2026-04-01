@@ -1,0 +1,199 @@
+name: shared-research-iteration
+description: >
+  Single research iteration: pull black nodes, extract abstracts,
+  generate new knowledge via LLM, validate format, decompose claims,
+  verify with 3 verifiers in parallel, consensus, validate output,
+  and write verified nodes to graph. Fully flat - no sub-workflows.
+
+roles:
+  - id: researcher
+    name: Researcher
+    system_prompt: |
+      You are a knowledge researcher. You receive existing verified knowledge node IDs and
+      abstracts as ground truth. Generate new knowledge nodes to fill gaps.
+
+      You MUST output strict JSON in this exact format:
+      {
+        "nodes": [
+          {
+            "temp_id": "new_0",
+            "type": "theorem",
+            "abstract": "...",
+            "body": "..."
+          }
+        ],
+        "edges": [
+          { "type": "proves", "source": "new_0", "target": "new_1" }
+        ]
+      }
+
+      Rules:
+      - temp_id: use "new_0", "new_1", etc. for newly created nodes.
+      - type: must be one of: theorem, lemma, definition, proof, corollary, conjecture,
+        proposition, remark, conclusion, example, notation, axiom, observation, note.
+      - edge type: must be "proves" or "references".
+      - edge source/target: use temp_id for new nodes, or existing node UUID from the input.
+      - Put node fields like abstract/body as top-level JSON properties on each node, not under a nested properties object.
+      - Do NOT include sisyphus_status unless explicitly asked later.
+      - Output ONLY the JSON object, no markdown fences, no explanation.
+    connectors: [chrono_graph]
+
+  - id: decomposer
+    name: Decomposer
+    system_prompt: |
+      You are a claim decomposer. Given a knowledge claim, break it down into verifiable sub-claims.
+
+      For each sub-claim, identify:
+      1. The specific assertion being made
+      2. What evidence would support or refute it
+      3. The verification angle (logical, empirical, contextual)
+
+      Output the decomposition as a structured list.
+
+  - id: verifier_a
+    name: Verifier A (Logical)
+    system_prompt: |
+      You are a logical consistency verifier. Evaluate the given claims from a purely logical perspective.
+
+      For each claim:
+      1. Check for internal contradictions
+      2. Verify logical entailments
+      3. Assess deductive validity
+
+      Return PASS or FAIL for each claim with reasoning.
+
+  - id: verifier_b
+    name: Verifier B (Empirical)
+    system_prompt: |
+      You are an empirical evidence verifier. Evaluate the given claims based on factual accuracy.
+
+      For each claim:
+      1. Check against known facts
+      2. Assess the quality of evidence
+      3. Identify potential factual errors
+
+      Return PASS or FAIL for each claim with reasoning.
+
+  - id: verifier_c
+    name: Verifier C (Contextual)
+    system_prompt: |
+      You are a contextual relevance verifier. Evaluate the given claims in their broader context.
+
+      For each claim:
+      1. Check relevance to the research topic
+      2. Assess contextual appropriateness
+      3. Identify potential miscontextualizations
+
+      Return PASS or FAIL for each claim with reasoning.
+
+steps:
+  - id: pull_black_nodes
+    type: connector_call
+    parameters:
+      connector: chrono_graph
+      operation: get_snapshot
+      method: GET
+      path: /api/graphs/1c128275-b7c6-4f3c-b943-fbe563091c1f/snapshot
+    next: extract_abstracts
+
+  - id: extract_abstracts
+    type: transform
+    parameters:
+      op: json_extract
+      path: nodes
+      field: id,properties.abstract
+      sort_by: createdAt
+      order: desc
+      n: "50"
+    next: generate
+
+  - id: generate
+    type: llm_call
+    role: researcher
+    parameters:
+      prompt_prefix: "Based on the following existing knowledge nodes (id + abstract), identify gaps and generate new nodes and edges. Output ONLY valid JSON:\n\n"
+    next: validate_generate
+
+  - id: validate_generate
+    type: connector_call
+    parameters:
+      connector: format_validator
+      operation: validate
+      method: POST
+      path: /validate
+      stdin_mode: template
+      payload_template: '{"schema":{"type":"object","required":["nodes","edges"],"properties":{"nodes":{"type":"array","minItems":1,"items":{"type":"object","required":["temp_id","type","abstract","body"],"properties":{"temp_id":{"type":"string","minLength":1},"type":{"type":"string","enum":["theorem","lemma","definition","proof","corollary","conjecture","proposition","remark","conclusion","example","notation","axiom","observation","note"]},"abstract":{"type":"string","minLength":1},"body":{"type":"string","minLength":1}}}},"edges":{"type":"array","items":{"type":"object","required":["type","source","target"],"properties":{"type":{"type":"string","enum":["proves","references"]},"source":{"type":"string","minLength":1},"target":{"type":"string","minLength":1}}}}}},"data":${input}}'
+      assert_response_path: valid
+      pass_through_input: "true"
+    next: store_generated_json
+
+  - id: store_generated_json
+    type: assign
+    parameters:
+      target: generated_nodes_json
+      value: "$input"
+    next: decompose
+
+  - id: decompose
+    type: llm_call
+    role: decomposer
+    parameters:
+      prompt_prefix: "Decompose the following claims into verifiable sub-claims:\n\n"
+    next: verify_all
+
+  - id: verify_all
+    type: parallel
+    parameters:
+      workers: verifier_a,verifier_b,verifier_c
+    next: consensus
+
+  - id: consensus
+    type: llm_call
+    role: decomposer
+    parameters:
+      prompt_prefix: |
+        Given the verification results from all three angles, determine the consensus (2/3 quorum).
+        A claim passes if at least 2 of 3 verifiers passed it.
+
+        You will receive the merged verification results as the current input.
+        The original nodes+edges JSON that was submitted for verification is:
+
+        ${variables.generated_nodes_json}
+
+        For all nodes that PASSED verification, keep them EXACTLY as-is but add "sisyphus_status": "verified" as a top-level field on each node.
+        Remove any nodes that FAILED. Also remove any edges that reference removed nodes.
+        Do NOT modify abstract, body, type, temp_id, or any other existing fields.
+
+        Output strict JSON in this exact format:
+        {
+          "nodes": [
+            { "temp_id": "new_0", "type": "theorem", "abstract": "...", "body": "...", "sisyphus_status": "verified" }
+          ],
+          "edges": [
+            { "type": "proves", "source": "new_0", "target": "new_1" }
+          ]
+        }
+
+        Verification results:
+    next: validate_maker
+
+  - id: validate_maker
+    type: connector_call
+    parameters:
+      connector: format_validator
+      operation: validate
+      method: POST
+      path: /validate
+      stdin_mode: template
+      payload_template: '{"schema":{"type":"object","required":["nodes","edges"],"properties":{"nodes":{"type":"array","minItems":1,"items":{"type":"object","required":["temp_id","type","abstract","body","sisyphus_status"],"properties":{"temp_id":{"type":"string","minLength":1},"type":{"type":"string","enum":["theorem","lemma","definition","proof","corollary","conjecture","proposition","remark","conclusion","example","notation","axiom","observation","note"]},"abstract":{"type":"string","minLength":1},"body":{"type":"string","minLength":1},"sisyphus_status":{"type":"string","const":"verified"}}}},"edges":{"type":"array","items":{"type":"object","required":["type","source","target"],"properties":{"type":{"type":"string","enum":["proves","references"]},"source":{"type":"string","minLength":1},"target":{"type":"string","minLength":1}}}}}},"data":${input}}'
+      assert_response_path: valid
+      pass_through_input: "true"
+    next: write_black_nodes
+
+  - id: write_black_nodes
+    type: connector_call
+    parameters:
+      connector: chrono_graph
+      operation: create_nodes
+      method: POST
+      path: /api/graphs/1c128275-b7c6-4f3c-b943-fbe563091c1f/nodes

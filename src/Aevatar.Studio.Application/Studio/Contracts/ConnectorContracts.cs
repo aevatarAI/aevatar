@@ -43,7 +43,8 @@ public sealed record HttpConnectorDefinitionDto(
     IReadOnlyList<string> AllowedMethods,
     IReadOnlyList<string> AllowedPaths,
     IReadOnlyList<string> AllowedInputKeys,
-    IReadOnlyDictionary<string, string> DefaultHeaders);
+    IReadOnlyDictionary<string, string> DefaultHeaders,
+    ConnectorAuthDefinitionDto Auth);
 
 public sealed record CliConnectorDefinitionDto(
     string Command,
@@ -56,8 +57,18 @@ public sealed record CliConnectorDefinitionDto(
 public sealed record McpConnectorDefinitionDto(
     string ServerName,
     string Command,
+    string Url,
     IReadOnlyList<string> Arguments,
     IReadOnlyDictionary<string, string> Environment,
+    IReadOnlyDictionary<string, string> AdditionalHeaders,
+    ConnectorAuthDefinitionDto Auth,
     string DefaultTool,
     IReadOnlyList<string> AllowedTools,
     IReadOnlyList<string> AllowedInputKeys);
+
+public sealed record ConnectorAuthDefinitionDto(
+    string Type,
+    string TokenUrl,
+    string ClientId,
+    string ClientSecret,
+    string Scope);

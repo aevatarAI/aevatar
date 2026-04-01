@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aevatar.Foundation.Abstractions.Connectors;
 
 namespace Aevatar.Bootstrap.Connectors;
@@ -15,9 +16,10 @@ public sealed class HttpConnector : IConnector
     private readonly HttpClient? _client;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly string _httpClientName;
+    private readonly IConnectorRequestAuthorizationProvider? _authorizationProvider;
     private readonly Uri _baseUri;
     private readonly HashSet<string> _allowedMethods;
-    private readonly HashSet<string> _allowedPaths;
+    private readonly string[] _allowedPathPatterns;
     private readonly HashSet<string> _allowedInputKeys;
     private readonly Dictionary<string, string> _defaultHeaders;
     private readonly int _defaultTimeoutMs;
@@ -32,6 +34,7 @@ public sealed class HttpConnector : IConnector
         int timeoutMs = 30_000,
         IHttpClientFactory? httpClientFactory = null,
         string? httpClientName = null,
+        IConnectorRequestAuthorizationProvider? authorizationProvider = null,
         HttpClient? client = null)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name is required", nameof(name));
@@ -42,9 +45,10 @@ public sealed class HttpConnector : IConnector
         _allowedMethods = new HashSet<string>(
             (allowedMethods ?? ["POST"]).Select(x => x.ToUpperInvariant()),
             StringComparer.OrdinalIgnoreCase);
-        _allowedPaths = new HashSet<string>(
-            (allowedPaths ?? ["/"]).Select(NormalizePath),
-            StringComparer.OrdinalIgnoreCase);
+        _allowedPathPatterns = (allowedPaths ?? ["/"])
+            .Select(NormalizePathPattern)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         _allowedInputKeys = new HashSet<string>(allowedInputKeys ?? [], StringComparer.OrdinalIgnoreCase);
         _defaultHeaders = defaultHeaders?.ToDictionary(k => k.Key, v => v.Value, StringComparer.OrdinalIgnoreCase)
                           ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -52,6 +56,7 @@ public sealed class HttpConnector : IConnector
         _client = client;
         _httpClientFactory = httpClientFactory;
         _httpClientName = string.IsNullOrWhiteSpace(httpClientName) ? Name : httpClientName.Trim();
+        _authorizationProvider = authorizationProvider;
     }
 
     /// <inheritdoc />
@@ -76,25 +81,12 @@ public sealed class HttpConnector : IConnector
             };
         }
 
-        var rawPath = request.Operation;
-        if (string.IsNullOrWhiteSpace(rawPath) &&
-            request.Parameters.TryGetValue("path", out var p) &&
-            !string.IsNullOrWhiteSpace(p))
-        {
-            rawPath = p;
-        }
+        var rawPath = request.Parameters.TryGetValue("path", out var p) &&
+                      !string.IsNullOrWhiteSpace(p)
+            ? p
+            : request.Operation;
 
         var normalizedPath = NormalizePath(rawPath);
-        if (!_allowedPaths.Contains("/") && !_allowedPaths.Contains(normalizedPath))
-        {
-            return new ConnectorResponse
-            {
-                Success = false,
-                Error = $"http path '{normalizedPath}' is not allowed",
-                Metadata = new Dictionary<string, string> { ["connector.http.path"] = normalizedPath },
-            };
-        }
-
         var targetUri = BuildTargetUri(_baseUri, normalizedPath);
         if (!string.Equals(targetUri.Scheme, _baseUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(targetUri.Host, _baseUri.Host, StringComparison.OrdinalIgnoreCase) ||
@@ -104,6 +96,21 @@ public sealed class HttpConnector : IConnector
             {
                 Success = false,
                 Error = "target url escapes configured base_url",
+            };
+        }
+
+        var absoluteTargetPath = NormalizePath(targetUri.AbsolutePath);
+        if (!IsPathAllowed(normalizedPath, absoluteTargetPath))
+        {
+            return new ConnectorResponse
+            {
+                Success = false,
+                Error = $"http path '{normalizedPath}' is not allowed",
+                Metadata = new Dictionary<string, string>
+                {
+                    ["connector.http.path"] = normalizedPath,
+                    ["connector.http.absolute_path"] = absoluteTargetPath,
+                },
             };
         }
 
@@ -134,6 +141,11 @@ public sealed class HttpConnector : IConnector
             using var msg = new HttpRequestMessage(new HttpMethod(method), targetUri);
             foreach (var (key, value) in _defaultHeaders)
                 msg.Headers.TryAddWithoutValidation(key, value);
+
+            if (_authorizationProvider != null)
+                await _authorizationProvider.ApplyAsync(msg, timeoutCts.Token);
+
+            ApplyRequestMetadataAuthorization(msg, request.Metadata);
 
             if (request.Parameters.TryGetValue("content_type", out var contentType) &&
                 !string.IsNullOrWhiteSpace(contentType))
@@ -207,6 +219,17 @@ public sealed class HttpConnector : IConnector
         return p;
     }
 
+    private static string NormalizePathPattern(string? pathPattern)
+    {
+        if (string.IsNullOrWhiteSpace(pathPattern))
+            return "/";
+
+        var pattern = pathPattern.Trim();
+        if (!pattern.StartsWith('/'))
+            pattern = "/" + pattern;
+        return pattern;
+    }
+
     private static Uri BuildTargetUri(Uri baseUri, string normalizedPath)
     {
         if (string.IsNullOrWhiteSpace(baseUri.AbsolutePath) ||
@@ -274,6 +297,42 @@ public sealed class HttpConnector : IConnector
         return SharedHttpClient;
     }
 
+    private bool IsPathAllowed(string requestPath, string absoluteTargetPath)
+    {
+        foreach (var pattern in _allowedPathPatterns)
+        {
+            if (string.Equals(pattern, "/", StringComparison.Ordinal))
+                return true;
+
+            if (PathMatchesPattern(pattern, requestPath) || PathMatchesPattern(pattern, absoluteTargetPath))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool PathMatchesPattern(string pattern, string candidate)
+    {
+        if (string.Equals(pattern, candidate, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (pattern.EndsWith("/*", StringComparison.Ordinal))
+        {
+            var prefix = pattern[..^2];
+            if (string.Equals(candidate, prefix, StringComparison.OrdinalIgnoreCase) ||
+                candidate.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (!pattern.Contains('*', StringComparison.Ordinal))
+            return false;
+
+        var regexPattern = "^" + Regex.Escape(pattern).Replace("\\*", ".*") + "$";
+        return Regex.IsMatch(candidate, regexPattern, RegexOptions.IgnoreCase);
+    }
+
     private static bool TryValidatePayloadKeys(string payload, HashSet<string> allowedKeys, out string error)
     {
         error = "";
@@ -304,5 +363,24 @@ public sealed class HttpConnector : IConnector
             error = "payload schema violation: invalid JSON";
             return false;
         }
+    }
+
+    private static void ApplyRequestMetadataAuthorization(
+        HttpRequestMessage request,
+        IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (request.Headers.Authorization != null || metadata == null || metadata.Count == 0)
+            return;
+
+        if (!metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization) ||
+            string.IsNullOrWhiteSpace(authorization))
+        {
+            return;
+        }
+
+        if (!AuthenticationHeaderValue.TryParse(authorization.Trim(), out var parsed))
+            return;
+
+        request.Headers.Authorization = parsed;
     }
 }

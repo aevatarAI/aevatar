@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
@@ -257,6 +258,20 @@ public sealed class WorkflowRunGAgent
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, request.Metadata, State.ScopeId),
         });
+
+        if (request.Metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization))
+            ConnectorAuthorizationRuntimeItemsAccess.SetAuthorization(this, authorization);
+        else
+            ConnectorAuthorizationRuntimeItemsAccess.RemoveAuthorization(this);
+
+        if (request.Metadata.Count > 0)
+        {
+            WorkflowRequestMetadataItemsAccess.SetRequestMetadata(this, request.Metadata);
+        }
+        else
+        {
+            WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(this);
+        }
 
         await PublishAsync(new StartWorkflowEvent
         {
