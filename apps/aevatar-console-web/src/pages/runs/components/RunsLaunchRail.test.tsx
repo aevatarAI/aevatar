@@ -26,10 +26,12 @@ describe("RunsLaunchRail", () => {
       <RunsLaunchRail
         catalogSearch=""
         activeEndpointId="chat"
+        activeEndpointKind="chat"
         composerFormRef={composerFormRef}
         initialFormValues={{
           prompt: "",
           endpointId: "chat",
+          endpointKind: "chat",
           scopeId: "scope-1",
           serviceOverrideId: "service-1",
           transport: "sse",
@@ -48,6 +50,7 @@ describe("RunsLaunchRail", () => {
         onCatalogSearchChange={jest.fn()}
         onClearRecentRuns={jest.fn()}
         onEndpointChange={jest.fn()}
+        onEndpointKindChange={jest.fn()}
         onSelectRouteName={jest.fn()}
         onSubmitRun={async () => {}}
         onTransportChange={jest.fn()}

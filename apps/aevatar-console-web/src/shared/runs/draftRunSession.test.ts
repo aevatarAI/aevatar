@@ -37,6 +37,7 @@ describe("draftRunSession", () => {
       expect.objectContaining({
         kind: "endpoint_invocation",
         endpointId: "aevatar.tools.cli.hosting.AppScriptCommand",
+        endpointKind: "command",
         prompt: "run this",
         payloadTypeUrl:
           "type.googleapis.com/aevatar.tools.cli.hosting.AppScriptCommand",
@@ -76,6 +77,7 @@ describe("draftRunSession", () => {
       expect.objectContaining({
         kind: "endpoint_invocation",
         endpointId: "run",
+        endpointKind: "command",
         serviceOverrideId: "svc-1",
       })
     );
@@ -84,6 +86,7 @@ describe("draftRunSession", () => {
   it("stores and restores observed run session payloads", () => {
     const key = saveObservedRunSessionPayload({
       scopeId: "scope-a",
+      routeName: "OrdersGAgent",
       serviceOverrideId: "default",
       endpointId: "chat",
       prompt: "hello service",
@@ -104,8 +107,10 @@ describe("draftRunSession", () => {
       expect.objectContaining({
         kind: "observed_run_session",
         scopeId: "scope-a",
+        routeName: "OrdersGAgent",
         serviceOverrideId: "default",
         endpointId: "chat",
+        endpointKind: "chat",
         actorId: "actor://scope-a/default",
         commandId: "cmd-1",
         runId: "run-1",

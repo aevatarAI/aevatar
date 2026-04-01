@@ -5,6 +5,11 @@ import React from "react";
 import { history } from "@/shared/navigation/history";
 import { buildRuntimeExplorerHref } from "@/shared/navigation/runtimeRoutes";
 import { formatDateTime } from "@/shared/datetime/dateTime";
+import {
+  type RunEndpointKind,
+  normalizeRunEndpointKind,
+  resolveRunEndpointId,
+} from "@/shared/runs/endpointKinds";
 import { cardStackStyle, embeddedPanelStyle, moduleCardProps, scrollPanelStyle } from "@/shared/ui/proComponents";
 import type { RunTransport } from "../runEventPresentation";
 import type { RecentRunTableRow, RunFormValues, RunPreset, SelectedRouteRecord } from "../runWorkbenchConfig";
@@ -26,6 +31,7 @@ type RunsLaunchRailProps = {
   composerFormRef: React.RefObject<ProFormInstance<RunFormValues> | undefined>;
   draftMode?: boolean;
   activeEndpointId: string;
+  activeEndpointKind: RunEndpointKind;
   initialFormValues: RunFormValues;
   recentRunRows: RecentRunTableRow[];
   selectedTransport: RunTransport;
@@ -41,6 +47,7 @@ type RunsLaunchRailProps = {
   onCatalogSearchChange: (value: string) => void;
   onClearRecentRuns: () => void;
   onEndpointChange: (value: string) => void;
+  onEndpointKindChange: (value: RunEndpointKind) => void;
   onSelectRouteName: (value: string) => void;
   onSubmitRun: (values: RunFormValues) => Promise<void>;
   onTransportChange: (value: RunTransport) => void;
@@ -139,10 +146,15 @@ const railDescriptionStyle: React.CSSProperties = {
 
 function renderRouteMiniCard(
   activeEndpointId: string,
+  activeEndpointKind: RunEndpointKind,
   selectedRouteDetailsPrimitives: string[],
   selectedRouteRecord?: SelectedRouteRecord,
 ): React.ReactNode {
-  if (activeEndpointId && activeEndpointId !== "chat" && !selectedRouteRecord) {
+  if (
+    activeEndpointKind !== "chat" &&
+    activeEndpointId &&
+    !selectedRouteRecord
+  ) {
     return (
       <div style={embeddedPanelStyle}>
         <Space wrap size={[6, 6]}>
@@ -176,8 +188,8 @@ function renderRouteMiniCard(
   return (
     <div style={embeddedPanelStyle}>
       <Space wrap size={[6, 6]}>
-        <Tag color={activeEndpointId === "chat" ? "processing" : "geekblue"}>
-          {activeEndpointId === "chat" ? "Service SSE" : "Command invoke"}
+        <Tag color={activeEndpointKind === "chat" ? "processing" : "geekblue"}>
+          {activeEndpointKind === "chat" ? "Service SSE" : "Command invoke"}
         </Tag>
         <Tag>{selectedRouteRecord.groupLabel}</Tag>
         <Tag>{selectedRouteRecord.sourceLabel}</Tag>
@@ -230,7 +242,11 @@ function renderRecentRunCards(
             <div style={railListHeaderStyle}>
               <div style={railListContentStyle}>
                 <Typography.Text strong style={railTitleStyle}>
-                  {formatRunRouteLabel(record.routeName, record.endpointId)}
+                  {formatRunRouteLabel(
+                    record.routeName,
+                    record.endpointId,
+                    record.endpointKind,
+                  )}
                 </Typography.Text>
                 <div style={railMetaWrapStyle}>
                   <Tag
@@ -246,7 +262,9 @@ function renderRecentRunCards(
                   >
                     {record.statusValue}
                   </Tag>
-                  <Tag>{record.endpointId || "chat"}</Tag>
+                  <Tag>
+                    {resolveRunEndpointId(record.endpointKind, record.endpointId)}
+                  </Tag>
                   <Tag>{formatDateTime(record.recordedAt)}</Tag>
                   <Tag>{record.runId || "No runId"}</Tag>
                 </div>
@@ -347,6 +365,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   composerFormRef,
   draftMode = false,
   activeEndpointId,
+  activeEndpointKind,
   initialFormValues,
   recentRunRows,
   selectedRouteDetailsPrimitives,
@@ -361,12 +380,13 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
   onCatalogSearchChange,
   onClearRecentRuns,
   onEndpointChange,
+  onEndpointKindChange,
   onSelectRouteName,
   onSubmitRun,
   onTransportChange,
   onUsePreset,
 }) => {
-  const isChatEndpoint = activeEndpointId === "chat";
+  const isChatEndpoint = activeEndpointKind === "chat";
 
   return (
     <ProCard
@@ -423,6 +443,7 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                 <div style={compactStackStyle}>
                   {renderRouteMiniCard(
                     activeEndpointId,
+                    activeEndpointKind,
                     selectedRouteDetailsPrimitives,
                     selectedRouteRecord,
                   )}
@@ -431,10 +452,34 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     formRef={composerFormRef}
                     layout="vertical"
                     initialValues={initialFormValues}
-                    onValuesChange={(_, values) => {
-                      onSelectRouteName(values.routeName ?? "");
-                      onEndpointChange(values.endpointId || "chat");
-                      if (values.transport) {
+                    onValuesChange={(changedValues, values) => {
+                      if ("routeName" in changedValues) {
+                        onSelectRouteName(
+                          typeof values.routeName === "string"
+                            ? values.routeName
+                            : "",
+                        );
+                      }
+                      if (
+                        "endpointId" in changedValues ||
+                        "endpointKind" in changedValues
+                      ) {
+                        const nextEndpointKind = normalizeRunEndpointKind(
+                          values.endpointKind,
+                          values.endpointId,
+                        );
+                        onEndpointKindChange(nextEndpointKind);
+                        onEndpointChange(
+                          resolveRunEndpointId(
+                            nextEndpointKind,
+                            values.endpointId,
+                          ),
+                        );
+                      }
+                      if (
+                        "transport" in changedValues &&
+                        values.transport
+                      ) {
                         onTransportChange(values.transport);
                       }
                     }}
@@ -499,6 +544,23 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                         },
                       ]}
                     />
+                    {!draftMode ? (
+                      <ProFormSelect<RunEndpointKind>
+                        name="endpointKind"
+                        label="Endpoint kind"
+                        options={[
+                          { label: "Chat stream", value: "chat" },
+                          { label: "Command invoke", value: "command" },
+                        ]}
+                        extra="Chat endpoints keep the service streaming path even when the endpoint id is custom."
+                        rules={[
+                          {
+                            required: true,
+                            message: "Endpoint kind is required.",
+                          },
+                        ]}
+                      />
+                    ) : null}
                     {isChatEndpoint ? (
                       <ProFormSelect
                         name="routeName"
@@ -559,12 +621,16 @@ const RunsLaunchRail: React.FC<RunsLaunchRailProps> = ({
                     <ProFormText
                       name="endpointId"
                       label="Endpoint"
-                      placeholder="chat"
+                      placeholder={
+                        isChatEndpoint
+                          ? "chat (or a custom chat endpoint id)"
+                          : "endpoint-id"
+                      }
                       disabled={draftMode}
                       rules={[
                         {
-                          required: !draftMode,
-                          message: "Endpoint ID is required.",
+                          required: !draftMode && !isChatEndpoint,
+                          message: "Endpoint ID is required for command invokes.",
                         },
                       ]}
                     />

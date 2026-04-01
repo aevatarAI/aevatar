@@ -1,4 +1,8 @@
 import type { AGUIEvent } from "@aevatar-react-sdk/types";
+import {
+  type RunEndpointKind,
+  normalizeRunEndpointKind,
+} from "./endpointKinds";
 
 export type ScopeDraftRunPayload = {
   kind: "scope_draft";
@@ -10,6 +14,7 @@ export type ScopeDraftRunPayload = {
 export type EndpointInvocationDraftPayload = {
   kind: "endpoint_invocation";
   endpointId: string;
+  endpointKind: RunEndpointKind;
   prompt: string;
   payloadTypeUrl: string;
   payloadBase64?: string;
@@ -20,8 +25,10 @@ export type EndpointInvocationDraftPayload = {
 export type ObservedRunSessionPayload = {
   kind: "observed_run_session";
   scopeId: string;
+  routeName?: string;
   serviceOverrideId?: string;
   endpointId: string;
+  endpointKind: RunEndpointKind;
   prompt: string;
   payloadTypeUrl?: string;
   payloadBase64?: string;
@@ -78,6 +85,7 @@ export function saveScopeDraftRunPayload(payload: {
 
 export function saveEndpointInvocationDraftPayload(payload: {
   endpointId: string;
+  endpointKind?: RunEndpointKind;
   prompt: string;
   payloadTypeUrl: string;
   payloadBase64?: string;
@@ -90,6 +98,10 @@ export function saveEndpointInvocationDraftPayload(payload: {
   const endpointId = payload.endpointId.trim();
   const payloadTypeUrl = payload.payloadTypeUrl.trim();
   const payloadBase64 = payload.payloadBase64?.trim();
+  const endpointKind = normalizeRunEndpointKind(
+    payload.endpointKind,
+    endpointId
+  );
   if (!endpointId || !payloadTypeUrl) {
     return "";
   }
@@ -98,6 +110,7 @@ export function saveEndpointInvocationDraftPayload(payload: {
   const normalizedPayload: EndpointInvocationDraftPayload = {
     kind: "endpoint_invocation",
     endpointId,
+    endpointKind,
     prompt: payload.prompt.trim(),
     payloadTypeUrl,
     payloadBase64: payloadBase64 || undefined,
@@ -113,7 +126,9 @@ export function saveEndpointInvocationDraftPayload(payload: {
 
 export function saveObservedRunSessionPayload(payload: {
   scopeId: string;
+  routeName?: string;
   endpointId: string;
+  endpointKind?: RunEndpointKind;
   prompt: string;
   events: AGUIEvent[];
   serviceOverrideId?: string;
@@ -129,6 +144,10 @@ export function saveObservedRunSessionPayload(payload: {
 
   const scopeId = payload.scopeId.trim();
   const endpointId = payload.endpointId.trim();
+  const endpointKind = normalizeRunEndpointKind(
+    payload.endpointKind,
+    endpointId
+  );
   if (!scopeId || !endpointId || payload.events.length === 0) {
     return "";
   }
@@ -137,7 +156,9 @@ export function saveObservedRunSessionPayload(payload: {
   const normalizedPayload: ObservedRunSessionPayload = {
     kind: "observed_run_session",
     scopeId,
+    routeName: payload.routeName?.trim() || undefined,
     endpointId,
+    endpointKind,
     prompt: payload.prompt.trim(),
     events: payload.events.map((event) => ({ ...event })),
     serviceOverrideId: payload.serviceOverrideId?.trim() || undefined,
@@ -207,7 +228,12 @@ export function loadDraftRunPayload(
       return {
         kind: "observed_run_session",
         scopeId,
+        routeName: observedPayload.routeName?.trim() || undefined,
         endpointId,
+        endpointKind: normalizeRunEndpointKind(
+          observedPayload.endpointKind,
+          endpointId
+        ),
         prompt: observedPayload.prompt?.trim() || "",
         serviceOverrideId: observedPayload.serviceOverrideId?.trim() || undefined,
         payloadTypeUrl: observedPayload.payloadTypeUrl?.trim() || undefined,
@@ -239,6 +265,10 @@ export function loadDraftRunPayload(
       return {
         kind: "endpoint_invocation",
         endpointId,
+        endpointKind: normalizeRunEndpointKind(
+          servicePayload.endpointKind,
+          endpointId
+        ),
         prompt: servicePayload.prompt?.trim() || "",
         payloadTypeUrl,
         payloadBase64: payloadBase64 || undefined,
@@ -307,6 +337,7 @@ export const saveDraftRunPayload = (payload: {
 
 export const saveServiceInvocationDraftPayload = (payload: {
   endpointId: string;
+  endpointKind?: RunEndpointKind;
   prompt: string;
   payloadTypeUrl: string;
   payloadBase64?: string;
@@ -314,6 +345,7 @@ export const saveServiceInvocationDraftPayload = (payload: {
 }): string =>
   saveEndpointInvocationDraftPayload({
     endpointId: payload.endpointId,
+    endpointKind: payload.endpointKind,
     prompt: payload.prompt,
     payloadTypeUrl: payload.payloadTypeUrl,
     payloadBase64: payload.payloadBase64,

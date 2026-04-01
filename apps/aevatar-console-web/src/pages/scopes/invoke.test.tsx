@@ -41,18 +41,219 @@ jest.mock('@/shared/api/runtimeRunsApi', () => ({
   },
 }));
 
+jest.mock('@/shared/api/scopeRuntimeApi', () => ({
+  scopeRuntimeApi: {
+    getServiceBindings: jest.fn(),
+    createServiceBinding: jest.fn(),
+    updateServiceBinding: jest.fn(),
+    retireServiceBinding: jest.fn(),
+    getServiceRevisions: jest.fn(),
+    getServiceRevision: jest.fn(),
+    retireServiceRevision: jest.fn(),
+    listServiceRuns: jest.fn(),
+    getServiceRunAudit: jest.fn(),
+  },
+}));
+
 jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
   parseBackendSSEStream: jest.fn(),
 }));
 
 import { servicesApi } from '@/shared/api/servicesApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 
 describe('ScopeInvokePage', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/scopes/invoke?scopeId=scope-a');
     jest.clearAllMocks();
+    (scopeRuntimeApi.getServiceBindings as jest.Mock).mockResolvedValue({
+      serviceKey: 'scope-a:default:default:default',
+      updatedAt: '2026-03-31T08:20:00Z',
+      bindings: [
+        {
+          bindingId: 'binding-knowledge',
+          displayName: 'Knowledge base',
+          bindingKind: 'secret',
+          policyIds: ['policy-alpha'],
+          retired: false,
+          serviceRef: null,
+          connectorRef: null,
+          secretRef: {
+            secretName: 'knowledge-api-key',
+          },
+        },
+      ],
+    });
+    (scopeRuntimeApi.getServiceRevisions as jest.Mock).mockResolvedValue({
+      scopeId: 'scope-a',
+      serviceId: 'default',
+      serviceKey: 'scope-a:default:default:default',
+      displayName: 'Workspace Demo',
+      defaultServingRevisionId: 'rev-2',
+      activeServingRevisionId: 'rev-2',
+      deploymentId: 'deploy-2',
+      deploymentStatus: 'Active',
+      primaryActorId: 'actor://scope-a/default',
+      catalogStateVersion: 2,
+      catalogLastEventId: 'evt-2',
+      updatedAt: '2026-03-31T08:00:00Z',
+      revisions: [
+        {
+          revisionId: 'rev-2',
+          implementationKind: 'workflow',
+          status: 'ready',
+          artifactHash: 'artifact-2',
+          failureReason: '',
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: 'active',
+          deploymentId: 'deploy-2',
+          primaryActorId: 'actor://scope-a/default',
+          createdAt: '2026-03-31T07:00:00Z',
+          preparedAt: '2026-03-31T07:10:00Z',
+          publishedAt: '2026-03-31T07:20:00Z',
+          retiredAt: null,
+          workflowName: 'support_flow',
+          workflowDefinitionActorId: 'definition://support',
+          inlineWorkflowCount: 0,
+          scriptId: '',
+          scriptRevision: '',
+          scriptDefinitionActorId: '',
+          scriptSourceHash: '',
+          staticActorTypeName: '',
+          staticPreferredActorId: '',
+        },
+      ],
+    });
+    (scopeRuntimeApi.getServiceRevision as jest.Mock).mockResolvedValue({
+      revisionId: 'rev-2',
+      implementationKind: 'workflow',
+      status: 'ready',
+      artifactHash: 'artifact-2',
+      failureReason: '',
+      isDefaultServing: true,
+      isActiveServing: true,
+      isServingTarget: true,
+      allocationWeight: 100,
+      servingState: 'active',
+      deploymentId: 'deploy-2',
+      primaryActorId: 'actor://scope-a/default',
+      createdAt: '2026-03-31T07:00:00Z',
+      preparedAt: '2026-03-31T07:10:00Z',
+      publishedAt: '2026-03-31T07:20:00Z',
+      retiredAt: null,
+      workflowName: 'support_flow',
+      workflowDefinitionActorId: 'definition://support',
+      inlineWorkflowCount: 0,
+      scriptId: '',
+      scriptRevision: '',
+      scriptDefinitionActorId: '',
+      scriptSourceHash: '',
+      staticActorTypeName: '',
+      staticPreferredActorId: '',
+    });
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValue({
+      scopeId: 'scope-a',
+      serviceId: 'default',
+      serviceKey: 'scope-a:default:default:default',
+      displayName: 'Workspace Demo',
+      runs: [
+        {
+          scopeId: 'scope-a',
+          serviceId: 'default',
+          runId: 'run-42',
+          actorId: 'actor://scope-a/default',
+          definitionActorId: 'definition://support',
+          revisionId: 'rev-2',
+          deploymentId: 'deploy-2',
+          workflowName: 'support_flow',
+          completionStatus: 'completed',
+          stateVersion: 9,
+          lastEventId: 'evt-9',
+          lastUpdatedAt: '2026-03-31T08:30:00Z',
+          boundAt: '2026-03-31T08:25:00Z',
+          bindingUpdatedAt: '2026-03-31T08:26:00Z',
+          lastSuccess: true,
+          totalSteps: 4,
+          completedSteps: 4,
+          roleReplyCount: 2,
+          lastOutput: 'Resolved successfully',
+          lastError: '',
+        },
+      ],
+    });
+    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockResolvedValue({
+      summary: {
+        scopeId: 'scope-a',
+        serviceId: 'default',
+        runId: 'run-42',
+        actorId: 'actor://scope-a/default',
+        definitionActorId: 'definition://support',
+        revisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        workflowName: 'support_flow',
+        completionStatus: 'completed',
+        stateVersion: 9,
+        lastEventId: 'evt-9',
+        lastUpdatedAt: '2026-03-31T08:30:00Z',
+        boundAt: '2026-03-31T08:25:00Z',
+        bindingUpdatedAt: '2026-03-31T08:26:00Z',
+        lastSuccess: true,
+        totalSteps: 4,
+        completedSteps: 4,
+        roleReplyCount: 2,
+        lastOutput: 'Resolved successfully',
+        lastError: '',
+      },
+      audit: {
+        reportVersion: '1.0',
+        projectionScope: 'actor_shared',
+        topologySource: 'runtime_snapshot',
+        completionStatus: 'completed',
+        workflowName: 'support_flow',
+        rootActorId: 'actor://scope-a/default',
+        commandId: 'cmd-42',
+        stateVersion: 9,
+        lastEventId: 'evt-9',
+        createdAt: '2026-03-31T08:25:00Z',
+        updatedAt: '2026-03-31T08:30:00Z',
+        startedAt: '2026-03-31T08:25:05Z',
+        endedAt: '2026-03-31T08:30:00Z',
+        durationMs: 295000,
+        success: true,
+        input: 'hello service',
+        finalOutput: 'Resolved successfully',
+        finalError: '',
+        topology: [],
+        steps: [],
+        roleReplies: [],
+        timeline: [
+          {
+            timestamp: '2026-03-31T08:25:05Z',
+            stage: 'step_requested',
+            message: 'Asked support agent',
+            agentId: 'agent-1',
+            stepId: 'answer',
+            stepType: 'llm_call',
+            eventType: 'requested',
+            data: {},
+          },
+        ],
+        summary: {
+          totalSteps: 4,
+          requestedSteps: 4,
+          completedSteps: 4,
+          roleReplyCount: 2,
+          stepTypeCounts: {
+            llm_call: 4,
+          },
+        },
+      },
+    });
   });
 
   it('invokes a non-chat endpoint for the selected scope service', async () => {
@@ -295,5 +496,60 @@ describe('ScopeInvokePage', () => {
     expect(screen.getByRole('button', { name: 'Invoke endpoint' })).toBeDisabled();
     expect(new URLSearchParams(window.location.search).get('serviceId')).toBeNull();
     expect(new URLSearchParams(window.location.search).get('endpointId')).toBeNull();
+  });
+
+  it('opens the service runtime workbench with bindings, revisions, and runs', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+      {
+        serviceKey: 'scope-a:default:default:default',
+        tenantId: 'scope-a',
+        appId: 'default',
+        namespace: 'default',
+        serviceId: 'default',
+        displayName: 'Workspace Demo',
+        defaultServingRevisionId: 'rev-2',
+        activeServingRevisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        primaryActorId: 'actor://scope-a/default',
+        deploymentStatus: 'Active',
+        endpoints: [
+          {
+            endpointId: 'chat',
+            displayName: 'chat',
+            kind: 'chat',
+            requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+            responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+            description: 'Chat with the published scope service.',
+          },
+        ],
+        policyIds: [],
+        updatedAt: '2026-03-26T08:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    expect(await screen.findByText('Invoke Lab')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse services' }));
+
+    expect(await screen.findByText('Published Services')).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: /Bindings \(1\)/i })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: /Revisions \(1\)/i })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: /Runs \(1\)/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Bindings \(1\)/i }));
+    expect(await screen.findByText('Knowledge base')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Runs \(1\)/i }));
+    expect(await screen.findByText('run-42')).toBeTruthy();
+    const auditButton = screen
+      .getAllByRole('button')
+      .find((button) => /Load audit|Inspecting/i.test(button.textContent || ''));
+    expect(auditButton).toBeTruthy();
+    fireEvent.click(auditButton as HTMLElement);
+
+    expect(await screen.findByText('Run Audit')).toBeTruthy();
+    expect(await screen.findByText('Resolved successfully')).toBeTruthy();
+    expect(await screen.findByText('Timeline Highlights')).toBeTruthy();
   });
 });

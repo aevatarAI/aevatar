@@ -23,23 +23,29 @@ import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { history } from "@/shared/navigation/history";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
+import {
+  buildRuntimeGAgentsHref,
+  buildRuntimeRunsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
-import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
-import { formatDateTime } from "@/shared/datetime/dateTime";
 import type {
   ServiceCatalogSnapshot,
   ServiceEndpointSnapshot,
 } from "@/shared/models/services";
 import {
+  describeStudioScopeBindingRevisionContext,
+  describeStudioScopeBindingRevisionTarget,
+  getStudioScopeBindingCurrentRevision,
+} from "@/shared/studio/models";
+import {
   AevatarContextDrawer,
-  AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarPanel,
   AevatarStatusTag,
   AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
+import ScopeServiceRuntimeWorkbench from "./components/ScopeServiceRuntimeWorkbench";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
@@ -278,6 +284,20 @@ const ScopeInvokePage: React.FC = () => {
     selectedService?.endpoints.find(
       (endpoint) => endpoint.endpointId === selectedEndpointId,
     ) ?? null;
+  const currentBindingRevision = getStudioScopeBindingCurrentRevision(
+    bindingQuery.data,
+  );
+  const currentBindingTarget = describeStudioScopeBindingRevisionTarget(
+    currentBindingRevision,
+  );
+  const currentBindingContext = describeStudioScopeBindingRevisionContext(
+    currentBindingRevision,
+  );
+  const currentBindingActor =
+    currentBindingRevision?.primaryActorId ||
+    currentBindingRevision?.staticPreferredActorId ||
+    bindingQuery.data?.primaryActorId ||
+    "";
 
   useEffect(() => {
     if (!selectedEndpoint || isChatEndpoint(selectedEndpoint)) {
@@ -558,11 +578,18 @@ const ScopeInvokePage: React.FC = () => {
       }
     : services.length === 0
       ? {
-          action: () => history.push(buildStudioWorkflowWorkspaceRoute()),
-          actionLabel: "Open workflow workspace",
+          action: () =>
+            history.push(
+              buildRuntimeGAgentsHref({
+                scopeId,
+                actorId: currentBindingRevision?.staticPreferredActorId || undefined,
+                actorTypeName: currentBindingRevision?.staticActorTypeName || undefined,
+              }),
+            ),
+          actionLabel: "Open GAgents",
           description:
-            "No published scope services were discovered. Bind a workflow or script before using the invoke lab.",
-          title: "Publish a project service",
+            "No published scope services were discovered. Manage the current binding before using the invoke lab.",
+          title: "Publish or switch the default binding",
         }
       : invokeResult.status === "success"
         ? {
@@ -749,6 +776,56 @@ const ScopeInvokePage: React.FC = () => {
                   Abort
                 </Button>
               </Space>
+            </AevatarPanel>
+
+            <AevatarPanel
+              description="Keep the default binding visible while you choose a service and endpoint."
+              title="Current Binding"
+            >
+              {!bindingQuery.data?.available || !currentBindingRevision ? (
+                <Alert
+                  title="No published default binding is active for this project yet."
+                  showIcon
+                  type="info"
+                />
+              ) : (
+                <Space direction="vertical" size={12} style={{ width: "100%" }}>
+                  <MetricCard
+                    label="Target"
+                    value={currentBindingTarget}
+                  />
+                  <MetricCard
+                    label="Revision"
+                    value={currentBindingRevision.revisionId}
+                  />
+                  <MetricCard
+                    label="Actor"
+                    value={currentBindingActor || "n/a"}
+                  />
+                  {currentBindingContext ? (
+                    <Typography.Text type="secondary">
+                      {currentBindingContext}
+                    </Typography.Text>
+                  ) : null}
+                  <Button
+                    onClick={() =>
+                      history.push(
+                        buildRuntimeGAgentsHref({
+                          scopeId,
+                          actorId:
+                            currentBindingRevision.staticPreferredActorId ||
+                            undefined,
+                          actorTypeName:
+                            currentBindingRevision.staticActorTypeName ||
+                            undefined,
+                        }),
+                      )
+                    }
+                  >
+                    Manage in GAgents
+                  </Button>
+                </Space>
+              )}
             </AevatarPanel>
           </div>
         }
@@ -941,141 +1018,21 @@ const ScopeInvokePage: React.FC = () => {
             </AevatarPanel>
           </>
         ) : (
-          <>
-            {selectedService ? (
-              <>
-                <AevatarPanel title="Service Snapshot">
-                  <div
-                    style={{
-                      display: "grid",
-                      gap: 12,
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                    }}
-                  >
-                    <MetricCard label="Service key" value={selectedService.serviceKey} />
-                    <MetricCard label="Deployment" value={selectedService.deploymentStatus || "draft"} />
-                    <MetricCard
-                      label="Revision"
-                      value={
-                        selectedService.activeServingRevisionId ||
-                        selectedService.defaultServingRevisionId ||
-                        "n/a"
-                      }
-                    />
-                    <MetricCard label="Actor" value={selectedService.primaryActorId || "n/a"} />
-                  </div>
-                </AevatarPanel>
-
-                <AevatarPanel title="Endpoint Surface">
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    {selectedService.endpoints.map((endpoint) => (
-                      <div
-                        key={endpoint.endpointId}
-                        style={{
-                          border: "1px solid var(--ant-color-border-secondary)",
-                          borderRadius: 12,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          padding: 12,
-                        }}
-                      >
-                        <Space wrap size={[8, 8]}>
-                          <Typography.Text strong>
-                            {endpoint.displayName || endpoint.endpointId}
-                          </Typography.Text>
-                          <AevatarStatusTag
-                            domain="observation"
-                            status={isChatEndpoint(endpoint) ? "streaming" : "snapshot_available"}
-                            label={endpoint.kind || "endpoint"}
-                          />
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {endpoint.description || "No endpoint description."}
-                        </Typography.Text>
-                        <Space wrap>
-                          <Button
-                            onClick={() => {
-                              setPreserveEmptySelection(false);
-                              setSelectedServiceId(selectedService.serviceId);
-                              setSelectedEndpointId(endpoint.endpointId);
-                            }}
-                            type={
-                              selectedEndpointId === endpoint.endpointId
-                                ? "primary"
-                                : "default"
-                            }
-                          >
-                            {selectedEndpointId === endpoint.endpointId
-                              ? "Selected"
-                              : "Use endpoint"}
-                          </Button>
-                        </Space>
-                      </div>
-                    ))}
-                  </div>
-                </AevatarPanel>
-              </>
-            ) : (
-              <AevatarInspectorEmpty description="Choose a published service to inspect its invoke surface." />
-            )}
-            <AevatarPanel
-              description="Browse every published service without taking over the main stage."
-              title="Published Services"
-            >
-              {services.length > 0 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  {services.map((service) => (
-                    <div
-                      key={service.serviceKey}
-                      style={{
-                        border: "1px solid var(--ant-color-border-secondary)",
-                        borderRadius: 12,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                        padding: 12,
-                      }}
-                    >
-                      <Space wrap size={[8, 8]}>
-                        <Typography.Text strong>
-                          {service.displayName || service.serviceId}
-                        </Typography.Text>
-                        <AevatarStatusTag
-                          domain="governance"
-                          status={service.deploymentStatus || "draft"}
-                        />
-                      </Space>
-                      <Typography.Text type="secondary">
-                        {service.endpoints.length} endpoints · Updated{" "}
-                        {formatDateTime(service.updatedAt)}
-                      </Typography.Text>
-                      <Space wrap>
-                        <Button
-                          onClick={() => {
-                            setPreserveEmptySelection(false);
-                            setSelectedServiceId(service.serviceId);
-                          }}
-                          type={
-                            service.serviceId === selectedServiceId
-                              ? "primary"
-                              : "default"
-                          }
-                        >
-                          {service.serviceId === selectedServiceId ? "Selected" : "Use"}
-                        </Button>
-                      </Space>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <Empty
-                  description="No published services were discovered for this project."
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                />
-              )}
-            </AevatarPanel>
-          </>
+          <ScopeServiceRuntimeWorkbench
+            onSelectService={(serviceId) => {
+              setPreserveEmptySelection(false);
+              setSelectedServiceId(serviceId);
+            }}
+            onUseEndpoint={(serviceId, endpointId) => {
+              setPreserveEmptySelection(false);
+              setSelectedServiceId(serviceId);
+              setSelectedEndpointId(endpointId);
+            }}
+            scopeId={scopeId}
+            selectedEndpointId={selectedEndpointId}
+            selectedServiceId={selectedServiceId}
+            services={services}
+          />
         )}
       </AevatarContextDrawer>
     </AevatarPageShell>

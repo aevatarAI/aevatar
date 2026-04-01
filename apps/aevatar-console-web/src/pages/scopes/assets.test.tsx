@@ -67,6 +67,9 @@ jest.mock('@/shared/studio/api', () => ({
       scopeId: 'scope-a',
       serviceId: 'default',
       displayName: 'Workspace Demo',
+      serviceKey: 'scope-a:default',
+      primaryActorId: 'actor://scope-a/default',
+      revisions: [],
     })),
   },
 }));
@@ -82,6 +85,7 @@ describe('ProjectAssetsPage', () => {
     expect(await screen.findByText('Project asset summary')).toBeTruthy();
     expect(await screen.findByText('Workspace Demo')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Manage GAgents' })).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]);
 
