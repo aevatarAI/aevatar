@@ -59,8 +59,11 @@ internal sealed class NyxIdChatSseWriter
     public ValueTask WriteRunFinishedAsync(CancellationToken ct) =>
         WriteFrameAsync(new { type = "RUN_FINISHED" }, ct);
 
-    public ValueTask WriteToolCallAsync(string toolName, string callId, CancellationToken ct) =>
-        WriteFrameAsync(new { type = "TOOL_CALL", toolCall = new { toolName, callId } }, ct);
+    public ValueTask WriteToolCallStartAsync(string toolName, string callId, CancellationToken ct) =>
+        WriteFrameAsync(new { type = "TOOL_CALL_START", toolCallStart = new { toolName, toolCallId = callId } }, ct);
+
+    public ValueTask WriteToolCallEndAsync(string callId, string result, CancellationToken ct) =>
+        WriteFrameAsync(new { type = "TOOL_CALL_END", toolCallEnd = new { toolCallId = callId, result } }, ct);
 
     public ValueTask WriteRunErrorAsync(string message, CancellationToken ct) =>
         WriteFrameAsync(new { type = "RUN_ERROR", runError = new { message } }, ct);

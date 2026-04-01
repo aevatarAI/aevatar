@@ -14,10 +14,8 @@ public sealed class NyxIdExternalKeysTool : IAgentTool
     public string Name => "nyxid_external_keys";
 
     public string Description =>
-        "Manage external API keys and credentials stored in NyxID. " +
-        "Actions: 'list' all external credentials, " +
-        "'rotate' to update a credential with a new value, " +
-        "'delete' to remove a credential.";
+        "Manage external API keys/credentials stored in NyxID. " +
+        "Actions: list, rotate (new value), delete.";
 
     public string ParametersSchema => """
         {
@@ -26,18 +24,17 @@ public sealed class NyxIdExternalKeysTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["list", "rotate", "delete"],
-              "description": "Action to perform"
+              "description": "Action to perform (default: list)"
             },
             "id": {
               "type": "string",
-              "description": "External key ID (required for 'rotate' and 'delete')"
+              "description": "External key ID (for rotate/delete)"
             },
             "credential": {
               "type": "string",
-              "description": "New credential value (required for 'rotate')"
+              "description": "New credential value (for rotate)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -45,36 +42,29 @@ public sealed class NyxIdExternalKeysTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? id = null;
-        string? credential = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("id", out var i))
-                id = i.GetString();
-            if (doc.RootElement.TryGetProperty("credential", out var c))
-                credential = c.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "list");
+        var id = args.Str("id");
 
         return action switch
         {
-            "rotate" when !string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(credential) =>
-                await _client.UpdateExternalKeyAsync(token, id,
-                    JsonSerializer.Serialize(new { credential }), ct),
+            "rotate" when !string.IsNullOrWhiteSpace(id) => await RotateAsync(token, id, args, ct),
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteExternalKeyAsync(token, id, ct),
 
-            "rotate" when string.IsNullOrWhiteSpace(id) => "Error: 'id' is required for rotate action.",
-            "rotate" => "Error: 'credential' is required for rotate action.",
-            "delete" => "Error: 'id' is required for delete action.",
+            "rotate" or "delete" => $"{{\"error\":\"'id' is required for {action}\"}}",
             _ => await _client.ListExternalKeysAsync(token, ct),
         };
+    }
+
+    private async Task<string> RotateAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        var cred = args.Str("credential");
+        if (string.IsNullOrWhiteSpace(cred))
+            return """{"error":"'credential' is required for rotate"}""";
+        return await _client.UpdateExternalKeyAsync(token, id,
+            JsonSerializer.Serialize(new { credential = cred }), ct);
     }
 }

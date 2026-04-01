@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -208,6 +209,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private async Task<SessionReplayRecord> ExecuteStreamingChatAsync(ChatRequestEvent request, CancellationToken streamCt)
     {
         // ─── AG-UI: TEXT_MESSAGE_CONTENT — streaming chunks ───
+        var initialHistoryCount = History.Count;
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
@@ -241,6 +243,10 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 toolCalls.TrackDelta(chunk.DeltaToolCall);
         }
 
+        var appendedHistoryMessages = History.Messages
+            .Skip(Math.Min(initialHistoryCount, History.Count))
+            .ToArray();
+
         foreach (var toolCall in toolCalls.BuildToolCalls())
         {
             await PublishAsync(new ToolCallEvent
@@ -248,6 +254,24 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 CallId = toolCall.Id,
                 ToolName = toolCall.Name,
                 ArgumentsJson = toolCall.ArgumentsJson,
+            }, TopologyAudience.Parent);
+        }
+
+        foreach (var toolResult in appendedHistoryMessages)
+        {
+            if (!string.Equals(toolResult.Role, "tool", StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(toolResult.ToolCallId))
+            {
+                continue;
+            }
+
+            var (success, error) = ClassifyToolResult(toolResult.Content);
+            await PublishAsync(new ToolResultEvent
+            {
+                CallId = toolResult.ToolCallId,
+                ResultJson = toolResult.Content ?? string.Empty,
+                Success = success,
+                Error = error ?? string.Empty,
             }, TopologyAudience.Parent);
         }
 
@@ -466,6 +490,36 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 ToolName = toolCall.Name,
                 ArgumentsJson = toolCall.ArgumentsJson,
             };
+        }
+    }
+
+    private static (bool Success, string? Error) ClassifyToolResult(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return (true, null);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(resultJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty("error", out var errorElement))
+            {
+                return (true, null);
+            }
+
+            var error = errorElement.ValueKind switch
+            {
+                JsonValueKind.String => errorElement.GetString(),
+                JsonValueKind.Null or JsonValueKind.Undefined => null,
+                _ => errorElement.ToString(),
+            };
+            return string.IsNullOrWhiteSpace(error)
+                ? (true, null)
+                : (false, error.Trim());
+        }
+        catch (JsonException)
+        {
+            return (true, null);
         }
     }
 

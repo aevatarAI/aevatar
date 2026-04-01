@@ -980,7 +980,7 @@ public static class ScopeServiceEndpoints
             RunStarted = new RunStartedEvent { ThreadId = actor.Id, RunId = runId },
         }, ct);
 
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var ctr = ct.Register(() => tcs.TrySetCanceled());
 
         await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
@@ -998,7 +998,7 @@ public static class ScopeServiceEndpoints
                         or AGUIEvent.EventOneofCase.RunError
                         or AGUIEvent.EventOneofCase.TextMessageEnd)
                     {
-                        tcs.TrySetResult();
+                        tcs.TrySetResult(aguiEvent.EventCase);
                     }
                 }
                 catch (Exception ex)
@@ -1070,10 +1070,14 @@ public static class ScopeServiceEndpoints
             }
             else
             {
-                await writer.WriteAsync(new AGUIEvent
+                var terminalEventCase = tcs.Task.Result;
+                if (ShouldEmitSyntheticRunFinished(terminalEventCase))
                 {
-                    RunFinished = new RunFinishedEvent { ThreadId = actor.Id, RunId = runId },
-                }, CancellationToken.None);
+                    await writer.WriteAsync(new AGUIEvent
+                    {
+                        RunFinished = new RunFinishedEvent { ThreadId = actor.Id, RunId = runId },
+                    }, CancellationToken.None);
+                }
             }
         }
         else
@@ -1084,6 +1088,9 @@ public static class ScopeServiceEndpoints
             }, CancellationToken.None);
         }
     }
+
+    internal static bool ShouldEmitSyntheticRunFinished(AGUIEvent.EventOneofCase terminalEventCase) =>
+        terminalEventCase == AGUIEvent.EventOneofCase.TextMessageEnd;
 
     private static async Task<IResult> HandleInvokeAsync(
         HttpContext http,

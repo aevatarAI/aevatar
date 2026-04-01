@@ -15,8 +15,7 @@ public sealed class NyxIdProfileTool : IAgentTool
 
     public string Description =>
         "Manage the user's NyxID profile. " +
-        "Actions: 'update' profile (display name), 'delete' account, " +
-        "'consents' to list OAuth app consents, 'revoke_consent' to revoke an app's consent.";
+        "Actions: update (name), delete, consents (list), revoke_consent.";
 
     public string ParametersSchema => """
         {
@@ -25,18 +24,17 @@ public sealed class NyxIdProfileTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["update", "delete", "consents", "revoke_consent"],
-              "description": "Action to perform"
+              "description": "Action to perform (default: consents)"
             },
             "name": {
               "type": "string",
-              "description": "New display name (for 'update')"
+              "description": "New display name (for update)"
             },
             "client_id": {
               "type": "string",
-              "description": "OAuth client ID to revoke consent for (for 'revoke_consent')"
+              "description": "OAuth client ID (for revoke_consent)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -44,35 +42,34 @@ public sealed class NyxIdProfileTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "consents";
-        string? name = null;
-        string? clientId = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "consents";
-            if (doc.RootElement.TryGetProperty("name", out var n))
-                name = n.GetString();
-            if (doc.RootElement.TryGetProperty("client_id", out var c))
-                clientId = c.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "consents");
 
         return action switch
         {
-            "update" when !string.IsNullOrWhiteSpace(name) =>
-                await _client.UpdateProfileAsync(token,
-                    JsonSerializer.Serialize(new { display_name = name }), ct),
-            "update" => "Error: 'name' is required for update action.",
+            "update" => await UpdateAsync(token, args, ct),
             "delete" => await _client.DeleteAccountAsync(token, ct),
-            "revoke_consent" when !string.IsNullOrWhiteSpace(clientId) =>
-                await _client.RevokeConsentAsync(token, clientId, ct),
-            "revoke_consent" => "Error: 'client_id' is required for revoke_consent action.",
+            "revoke_consent" => await RevokeConsentAsync(token, args, ct),
             _ => await _client.ListConsentsAsync(token, ct),
         };
+    }
+
+    private async Task<string> UpdateAsync(string token, ToolArgs args, CancellationToken ct)
+    {
+        var name = args.Str("name") ?? args.Str("display_name");
+        if (string.IsNullOrWhiteSpace(name))
+            return """{"error":"'name' is required for update"}""";
+        return await _client.UpdateProfileAsync(token,
+            JsonSerializer.Serialize(new { display_name = name }), ct);
+    }
+
+    private async Task<string> RevokeConsentAsync(string token, ToolArgs args, CancellationToken ct)
+    {
+        var clientId = args.Str("client_id");
+        if (string.IsNullOrWhiteSpace(clientId))
+            return """{"error":"'client_id' is required for revoke_consent"}""";
+        return await _client.RevokeConsentAsync(token, clientId, ct);
     }
 }

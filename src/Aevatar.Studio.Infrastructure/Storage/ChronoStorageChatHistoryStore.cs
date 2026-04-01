@@ -10,7 +10,9 @@ namespace Aevatar.Studio.Infrastructure.Storage;
 internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
 {
     private const string ChatHistoriesDir = "chat-histories";
-    private const string IndexFileName = "index.json";
+    private const string LegacyIndexKey = $"{ChatHistoriesDir}/index.json";
+    private const string NyxIdChatActorPrefix = "nyxid-chat-";
+    private const string LegacyConversationPrefix = "conv-";
 
     private static readonly ChatHistoryIndex EmptyIndex = new([]);
 
@@ -38,30 +40,30 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
     {
         try
         {
-            var context = TryResolveIndex(scopeId);
+            var context = TryResolveChatHistoryScope(scopeId);
             if (context is null)
                 return EmptyIndex;
 
-            var payload = await _blobClient.TryDownloadAsync(context, ct);
-            if (payload is null)
+            var objects = await _blobClient.ListObjectsAsync(context, ChatHistoriesDir, ct);
+            if (objects.Objects.Count == 0)
                 return EmptyIndex;
 
-            return DeserializeIndex(payload);
+            var conversations = await Task.WhenAll(objects.Objects
+                .Where(static o => IsConversationFile(o.Key))
+                .Select(o => TryBuildConversationMetaAsync(scopeId, o, ct)));
+
+            return new ChatHistoryIndex(conversations
+                .Where(static c => c is not null)
+                .Select(static c => c!)
+                .OrderByDescending(static c => c.UpdatedAt)
+                .ThenBy(static c => c.Id, StringComparer.Ordinal)
+                .ToList());
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed to read chat history index for scope {ScopeId}", scopeId);
             return EmptyIndex;
         }
-    }
-
-    public async Task SaveIndexAsync(string scopeId, ChatHistoryIndex index, CancellationToken ct = default)
-    {
-        var context = TryResolveIndex(scopeId)
-            ?? throw new InvalidOperationException("Chat history storage is not available.");
-
-        var json = JsonSerializer.SerializeToUtf8Bytes(index, JsonOptions);
-        await _blobClient.UploadAsync(context, json, "application/json", ct);
     }
 
     public async Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
@@ -94,47 +96,30 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
 
         var jsonl = SerializeJsonl(messages);
         await _blobClient.UploadAsync(context, jsonl, "application/x-ndjson", ct);
+        await DeleteLegacyIndexIfExistsAsync(scopeId, ct);
     }
 
     public async Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
     {
-        // Delete the JSONL file
         var messagesContext = TryResolveMessages(scopeId, conversationId);
         if (messagesContext is not null)
         {
             await _blobClient.DeleteIfExistsAsync(messagesContext, ct);
         }
-
-        // Remove from index
-        var indexContext = TryResolveIndex(scopeId);
-        if (indexContext is null)
-            return;
-
-        var payload = await _blobClient.TryDownloadAsync(indexContext, ct);
-        if (payload is null)
-            return;
-
-        var index = DeserializeIndex(payload);
-        var updated = index.Conversations
-            .Where(c => !string.Equals(c.Id, conversationId, StringComparison.Ordinal))
-            .ToList();
-
-        var newIndex = new ChatHistoryIndex(updated);
-        var json = JsonSerializer.SerializeToUtf8Bytes(newIndex, JsonOptions);
-        await _blobClient.UploadAsync(indexContext, json, "application/json", ct);
+        await DeleteLegacyIndexIfExistsAsync(scopeId, ct);
     }
 
-    private ChronoStorageCatalogBlobClient.RemoteScopeContext? TryResolveIndex(string scopeId)
+    private ChronoStorageCatalogBlobClient.RemoteScopeContext? TryResolveChatHistoryScope(string scopeId)
     {
         try
         {
             return _blobClient.TryResolveContext(
                 _options.UserConfigPrefix,
-                $"{ChatHistoriesDir}/{IndexFileName}");
+                $"{ChatHistoriesDir}/.probe");
         }
         catch (InvalidOperationException ex)
         {
-            _logger.LogWarning(ex, "Chrono-storage context could not be resolved for chat history index");
+            _logger.LogWarning(ex, "Chrono-storage context could not be resolved for chat history scope");
             return null;
         }
     }
@@ -154,27 +139,57 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
         }
     }
 
-    private static ChatHistoryIndex DeserializeIndex(byte[] payload)
+    private async Task<ConversationMeta?> TryBuildConversationMetaAsync(
+        string scopeId,
+        ChronoStorageCatalogBlobClient.StorageObject storageObject,
+        CancellationToken ct)
     {
-        var doc = JsonDocument.Parse(payload);
-        var conversations = new List<ConversationMeta>();
+        var conversationId = TryExtractConversationId(storageObject.Key);
+        if (string.IsNullOrWhiteSpace(conversationId))
+            return null;
 
-        if (doc.RootElement.TryGetProperty("conversations", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        var context = TryResolveMessages(scopeId, conversationId);
+        if (context is null)
+            return null;
+
+        var payload = await _blobClient.TryDownloadAsync(context, ct);
+        if (payload is null)
+            return null;
+
+        var messages = DeserializeJsonl(payload);
+        if (messages.Count == 0)
         {
-            foreach (var el in arr.EnumerateArray())
-            {
-                conversations.Add(new ConversationMeta(
-                    Id: el.GetProperty("id").GetString() ?? string.Empty,
-                    Title: el.TryGetProperty("title", out var t) ? t.GetString() ?? string.Empty : string.Empty,
-                    ServiceId: el.TryGetProperty("serviceId", out var si) ? si.GetString() ?? string.Empty : string.Empty,
-                    ServiceKind: el.TryGetProperty("serviceKind", out var sk) ? sk.GetString() ?? string.Empty : string.Empty,
-                    CreatedAt: el.TryGetProperty("createdAt", out var ca) ? ca.GetDateTimeOffset() : default,
-                    UpdatedAt: el.TryGetProperty("updatedAt", out var ua) ? ua.GetDateTimeOffset() : default,
-                    MessageCount: el.TryGetProperty("messageCount", out var mc) ? mc.GetInt32() : 0));
-            }
+            var fallbackTimestamp = TryParseStorageTimestamp(storageObject.LastModified) ?? DateTimeOffset.UtcNow;
+            var (fallbackServiceId, fallbackServiceKind) = InferConversationService(scopeId, conversationId);
+            return new ConversationMeta(
+                Id: conversationId,
+                Title: conversationId,
+                ServiceId: fallbackServiceId,
+                ServiceKind: fallbackServiceKind,
+                CreatedAt: fallbackTimestamp,
+                UpdatedAt: fallbackTimestamp,
+                MessageCount: 0);
         }
 
-        return new ChatHistoryIndex(conversations);
+        var title = BuildConversationTitle(messages, conversationId);
+        var createdAt = messages
+            .Select(static message => FromUnixTimestampMilliseconds(message.Timestamp))
+            .DefaultIfEmpty(TryParseStorageTimestamp(storageObject.LastModified) ?? DateTimeOffset.UtcNow)
+            .Min();
+        var updatedAt = messages
+            .Select(static message => FromUnixTimestampMilliseconds(message.Timestamp))
+            .DefaultIfEmpty(createdAt)
+            .Max();
+        var (serviceId, serviceKind) = InferConversationService(scopeId, conversationId);
+
+        return new ConversationMeta(
+            Id: conversationId,
+            Title: title,
+            ServiceId: serviceId,
+            ServiceKind: serviceKind,
+            CreatedAt: createdAt,
+            UpdatedAt: updatedAt,
+            MessageCount: messages.Count);
     }
 
     private static IReadOnlyList<StoredChatMessage> DeserializeJsonl(byte[] payload)
@@ -202,4 +217,89 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
 
         return Encoding.UTF8.GetBytes(sb.ToString());
     }
+
+    private async Task DeleteLegacyIndexIfExistsAsync(string scopeId, CancellationToken ct)
+    {
+        var context = TryResolveLegacyIndex(scopeId);
+        if (context is null)
+            return;
+
+        try
+        {
+            await _blobClient.DeleteIfExistsAsync(context, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to delete legacy chat history index for scope {ScopeId}", scopeId);
+        }
+    }
+
+    private ChronoStorageCatalogBlobClient.RemoteScopeContext? TryResolveLegacyIndex(string scopeId)
+    {
+        try
+        {
+            return _blobClient.TryResolveContext(_options.UserConfigPrefix, LegacyIndexKey);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Chrono-storage context could not be resolved for legacy chat history index");
+            return null;
+        }
+    }
+
+    private static bool IsConversationFile(string key) =>
+        key.StartsWith($"{ChatHistoriesDir}/", StringComparison.Ordinal) &&
+        key.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase);
+
+    private static string? TryExtractConversationId(string key)
+    {
+        if (!IsConversationFile(key))
+            return null;
+
+        var fileName = key[(ChatHistoriesDir.Length + 1)..];
+        return fileName.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^".jsonl".Length]
+            : null;
+    }
+
+    private static string BuildConversationTitle(IReadOnlyList<StoredChatMessage> messages, string fallback)
+    {
+        var source = messages
+            .FirstOrDefault(static message => string.Equals(message.Role, "user", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(message.Content))
+            ?.Content
+            ?? messages.FirstOrDefault(static message => !string.IsNullOrWhiteSpace(message.Content))?.Content
+            ?? fallback;
+        var trimmed = source.Trim();
+        return trimmed.Length <= 60 ? trimmed : trimmed[..60];
+    }
+
+    private static (string ServiceId, string ServiceKind) InferConversationService(string scopeId, string conversationId)
+    {
+        if (conversationId.StartsWith("NyxIdChat:", StringComparison.OrdinalIgnoreCase) ||
+            conversationId.StartsWith(NyxIdChatActorPrefix, StringComparison.OrdinalIgnoreCase) ||
+            conversationId.StartsWith(LegacyConversationPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return ("nyxid-chat", "nyxid-chat");
+        }
+
+        var separatorIndex = conversationId.IndexOf(':');
+        if (separatorIndex > 0)
+        {
+            var serviceId = conversationId[..separatorIndex];
+            var isNyxIdChat = string.Equals(serviceId, "nyxid-chat", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(conversationId, $"NyxIdChat:{scopeId}", StringComparison.OrdinalIgnoreCase);
+            return (serviceId, isNyxIdChat ? "nyxid-chat" : "service");
+        }
+
+        return ("nyxid-chat", "nyxid-chat");
+    }
+
+    private static DateTimeOffset FromUnixTimestampMilliseconds(long timestamp) =>
+        timestamp > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(timestamp)
+            : DateTimeOffset.UnixEpoch;
+
+    private static DateTimeOffset? TryParseStorageTimestamp(string? value) =>
+        DateTimeOffset.TryParse(value, out var timestamp) ? timestamp : null;
 }

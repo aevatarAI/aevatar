@@ -15,19 +15,13 @@ public sealed class NyxIdSessionsTool : IAgentTool
     public string Description =>
         "List the user's active NyxID sessions, showing device info, IP address, and expiration.";
 
-    public string ParametersSchema => """
-        {
-          "type": "object",
-          "properties": {},
-          "required": []
-        }
-        """;
+    public string ParametersSchema => """{"type":"object","properties":{}}""";
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
         return await _client.ListSessionsAsync(token, ct);
     }

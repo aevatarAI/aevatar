@@ -3,6 +3,7 @@ import { Loader2, ExternalLink, Pencil, Save, X, Trash2 } from 'lucide-react';
 import type { ManifestEntry } from './types';
 import RolesCatalogEditor from './editors/RolesCatalogEditor';
 import ConnectorsCatalogEditor from './editors/ConnectorsCatalogEditor';
+import ExplorerContentView from './ExplorerContentView';
 
 type Props = {
   selectedKey: string | null;
@@ -163,9 +164,7 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
             spellCheck={false}
           />
         ) : (
-          <pre className="w-full min-h-[400px] p-4 text-[13px] font-mono leading-relaxed text-gray-700 whitespace-pre-wrap overflow-x-auto max-h-[70vh] overflow-y-auto">
-            {content ?? 'Could not load file.'}
-          </pre>
+          <ExplorerContentView fileType={fileType} content={content} />
         )}
       </div>
     </div>

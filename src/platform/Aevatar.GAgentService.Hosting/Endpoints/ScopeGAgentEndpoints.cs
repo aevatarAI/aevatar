@@ -17,6 +17,7 @@ using AiTextContent = Aevatar.AI.Abstractions.TextMessageContentEvent;
 using AiTextReasoning = Aevatar.AI.Abstractions.TextMessageReasoningEvent;
 using AiTextEnd = Aevatar.AI.Abstractions.TextMessageEndEvent;
 using AiToolCall = Aevatar.AI.Abstractions.ToolCallEvent;
+using AiToolResult = Aevatar.AI.Abstractions.ToolResultEvent;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -596,6 +597,19 @@ public static class ScopeGAgentEndpoints
                 {
                     ToolCallId = ai.CallId,
                     ToolName = ai.ToolName,
+                },
+            };
+        }
+
+        if (payload.Is(AiToolResult.Descriptor))
+        {
+            var ai = payload.Unpack<AiToolResult>();
+            return new AGUIEvent
+            {
+                ToolCallEnd = new ToolCallEndEvent
+                {
+                    ToolCallId = ai.CallId,
+                    Result = ai.ResultJson,
                 },
             };
         }

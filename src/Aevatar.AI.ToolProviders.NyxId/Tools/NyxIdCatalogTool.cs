@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
@@ -15,23 +14,17 @@ public sealed class NyxIdCatalogTool : IAgentTool
 
     public string Description =>
         "Browse available service templates in the NyxID catalog. " +
-        "Use 'list' to see all available services, or 'show' with a slug to get details about a specific service.";
+        "Provide 'slug' to get details for a specific service, or omit to list all.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "properties": {
-            "action": {
-              "type": "string",
-              "enum": ["list", "show"],
-              "description": "Action to perform: 'list' all catalog entries or 'show' details for a specific slug"
-            },
             "slug": {
               "type": "string",
-              "description": "Service slug (required when action is 'show')"
+              "description": "Service slug to show details for (e.g. 'llm-openai'). Omit to list all."
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -39,26 +32,14 @@ public sealed class NyxIdCatalogTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? slug = null;
+        var args = ToolArgs.Parse(argumentsJson);
+        var slug = args.Str("slug");
 
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("slug", out var s))
-                slug = s.GetString();
-        }
-        catch { /* use defaults */ }
+        if (!string.IsNullOrWhiteSpace(slug))
+            return await _client.GetCatalogEntryAsync(token, slug, ct);
 
-        return action switch
-        {
-            "show" when !string.IsNullOrWhiteSpace(slug) =>
-                await _client.GetCatalogEntryAsync(token, slug, ct),
-            _ => await _client.ListCatalogAsync(token, ct),
-        };
+        return await _client.ListCatalogAsync(token, ct);
     }
 }

@@ -84,7 +84,7 @@ public static class NyxIdChatEndpoints
             await writer.WriteRunStartedAsync(actorId, ct);
 
             // Subscribe to actor events and map to SSE frames
-            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             using var ctr = ct.Register(() => tcs.TrySetCanceled());
 
             await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
@@ -93,13 +93,9 @@ public static class NyxIdChatEndpoints
                 {
                     try
                     {
-                        await MapAndWriteEventAsync(envelope, messageId, writer);
-
-                        // Detect completion
-                        if (envelope.Payload is not null && envelope.Payload.Is(TextMessageEndEvent.Descriptor))
-                        {
-                            tcs.TrySetResult();
-                        }
+                        var terminalFrame = await MapAndWriteEventAsync(envelope, messageId, writer);
+                        if (!string.IsNullOrWhiteSpace(terminalFrame))
+                            tcs.TrySetResult(terminalFrame);
                     }
                     catch (Exception ex)
                     {
@@ -136,7 +132,15 @@ public static class NyxIdChatEndpoints
 
             if (completedTask == tcs.Task)
             {
-                await writer.WriteRunFinishedAsync(CancellationToken.None);
+                if (tcs.Task.IsFaulted)
+                {
+                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
+                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
+                }
+                else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
+                {
+                    await writer.WriteRunFinishedAsync(CancellationToken.None);
+                }
             }
             else
             {
@@ -163,14 +167,14 @@ public static class NyxIdChatEndpoints
     /// <summary>
     /// Maps AI event envelope payloads to NyxIdChat SSE frames.
     /// </summary>
-    private static async ValueTask MapAndWriteEventAsync(
+    private static async ValueTask<string?> MapAndWriteEventAsync(
         EventEnvelope envelope,
         string messageId,
         NyxIdChatSseWriter writer)
     {
         var payload = envelope.Payload;
         if (payload is null)
-            return;
+            return null;
 
         if (payload.Is(TextMessageStartEvent.Descriptor))
         {
@@ -185,7 +189,12 @@ public static class NyxIdChatEndpoints
         else if (payload.Is(ToolCallEvent.Descriptor))
         {
             var evt = payload.Unpack<ToolCallEvent>();
-            await writer.WriteToolCallAsync(evt.ToolName, evt.CallId, CancellationToken.None);
+            await writer.WriteToolCallStartAsync(evt.ToolName, evt.CallId, CancellationToken.None);
+        }
+        else if (payload.Is(ToolResultEvent.Descriptor))
+        {
+            var evt = payload.Unpack<ToolResultEvent>();
+            await writer.WriteToolCallEndAsync(evt.CallId, evt.ResultJson, CancellationToken.None);
         }
         else if (payload.Is(TextMessageEndEvent.Descriptor))
         {
@@ -200,18 +209,21 @@ public static class NyxIdChatEndpoints
                 {
                     await writer.WriteRunErrorAsync(
                         evt.Content[llmErrorPrefix.Length..].Trim(), CancellationToken.None);
-                    return;
+                    return "RUN_ERROR";
                 }
 
                 if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
                 {
                     await writer.WriteRunErrorAsync(evt.Content.Trim(), CancellationToken.None);
-                    return;
+                    return "RUN_ERROR";
                 }
             }
 
             await writer.WriteTextEndAsync(messageId, CancellationToken.None);
+            return "TEXT_MESSAGE_END";
         }
+
+        return null;
     }
 
     private static async Task<IResult> HandleDeleteConversationAsync(

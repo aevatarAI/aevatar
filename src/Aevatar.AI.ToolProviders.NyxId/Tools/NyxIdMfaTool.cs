@@ -15,9 +15,7 @@ public sealed class NyxIdMfaTool : IAgentTool
 
     public string Description =>
         "Manage multi-factor authentication (MFA/TOTP). " +
-        "Actions: 'status' to check if MFA is enabled, " +
-        "'setup' to initiate MFA setup (returns QR code URL and secret), " +
-        "'verify' to confirm MFA setup with a TOTP code.";
+        "Actions: status, setup, verify.";
 
     public string ParametersSchema => """
         {
@@ -26,14 +24,13 @@ public sealed class NyxIdMfaTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["status", "setup", "verify"],
-              "description": "Action to perform"
+              "description": "Action to perform (default: status)"
             },
             "code": {
               "type": "string",
-              "description": "TOTP code from authenticator app (required for 'verify')"
+              "description": "TOTP code from authenticator app (for verify)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -41,29 +38,24 @@ public sealed class NyxIdMfaTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "status";
-        string? code = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "status";
-            if (doc.RootElement.TryGetProperty("code", out var c))
-                code = c.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "status");
 
         return action switch
         {
             "setup" => await _client.SetupMfaAsync(token, ct),
-            "verify" when !string.IsNullOrWhiteSpace(code) =>
-                await _client.VerifyMfaSetupAsync(token,
-                    JsonSerializer.Serialize(new { code }), ct),
-            "verify" => "Error: 'code' is required for verify action.",
-            _ => await _client.GetCurrentUserAsync(token, ct), // mfa_enabled is in user profile
+            "verify" => await VerifyAsync(token, args, ct),
+            _ => await _client.GetCurrentUserAsync(token, ct),
         };
+    }
+
+    private async Task<string> VerifyAsync(string token, ToolArgs args, CancellationToken ct)
+    {
+        var code = args.Str("code");
+        if (string.IsNullOrWhiteSpace(code))
+            return """{"error":"'code' is required for verify"}""";
+        return await _client.VerifyMfaSetupAsync(token, JsonSerializer.Serialize(new { code }), ct);
     }
 }

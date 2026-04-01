@@ -94,6 +94,7 @@
 - 单线程事实源：Actor/模块运行态只能在事件处理主线程修改；禁止在模块内使用 `lock/Monitor/ConcurrentDictionary` 作为并发补丁来维护事实状态。
 - 回调只发信号：`Task.Run`、`Timer`、线程池回调不得直接读写运行态，也不得直接推进业务分支；只能发布“内部触发事件”（如 timeout/retry fired）。
 - 业务推进内聚：工作流推进（成功/失败/分支/重试）必须在 Actor 事件处理流程内完成，保证顺序性与可重放性。
+- AI 对话主链必须流式化：仓库内新增或修改 AI 对话执行路径时，禁止使用 `ChatAsync` 作为正式主链；必须使用 `ChatStreamAsync` 作为唯一权威执行入口，使文本、reasoning、tool call、tool result、完成态都沿同一条流式链路对外发布。`ChatAsync` 仅可用于明确的非交互式离线场景，且不得用于 CLI / AGUI / Scope Service / NyxID Chat / Workflow Chat 等任何面向用户的实时会话入口。
 - self continuation 必须事件化：Actor 需要“下一拍继续”时，必须通过标准 self-message 进入自身 inbox，再由 Actor 事件处理流程消费；禁止新增绕过消息抽象的临时 helper，或依赖特定 runtime 的 self-dispatch 偶然行为来推进业务。
 - 延迟与超时事件化：所有 `delay/timeout/retry backoff` 统一采用“异步等待 -> 发布内部事件 -> Actor 内消费并对账”的模式，禁止回调线程直接改状态。
 - 跨 actor 等待必须 continuation 化：Actor 向其他 actor 请求事实或动作时，必须采用“发送请求事件 -> 结束当前 turn -> 由 reply event 或 timeout event 唤醒自身继续处理”的模型；禁止在当前 turn 内同步等待 reply，也禁止用本地快照读取、event store 侧读或伪 RPC 绕过这一约束。

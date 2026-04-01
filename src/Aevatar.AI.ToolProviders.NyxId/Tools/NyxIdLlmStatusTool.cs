@@ -13,22 +13,15 @@ public sealed class NyxIdLlmStatusTool : IAgentTool
     public string Name => "nyxid_llm_status";
 
     public string Description =>
-        "Check available LLM providers and models through the NyxID LLM gateway. " +
-        "Shows which providers are configured and what models are available.";
+        "Check available LLM providers and models through the NyxID LLM gateway.";
 
-    public string ParametersSchema => """
-        {
-          "type": "object",
-          "properties": {},
-          "required": []
-        }
-        """;
+    public string ParametersSchema => """{"type":"object","properties":{}}""";
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
         return await _client.GetLlmStatusAsync(token, ct);
     }

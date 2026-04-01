@@ -2177,7 +2177,20 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </button>
               <button
                 type="button"
-                onClick={() => setBindModalOpen(true)}
+                onClick={() => {
+                  if (selectedDraft?.scopeDetail?.script) {
+                    setBindModalOpen(true);
+                  } else {
+                    // Not promoted yet — open promote modal with auto-incremented candidate revision
+                    const base = selectedDraft?.baseRevision || selectedDraft?.revision || '';
+                    const match = base.match(/^(.*?)(\d+)$/);
+                    const candidateRevision = match
+                      ? `${match[1]}${Number(match[2]) + 1}`
+                      : `${base}_new`;
+                    updateDraft(selectedDraft!.key, draft => ({ ...draft, revision: candidateRevision }));
+                    setPromotionModalOpen(true);
+                  }
+                }}
                 data-tooltip="Bind as Service"
                 aria-label="Bind as Service"
                 className="panel-icon-button header-toolbar-action"

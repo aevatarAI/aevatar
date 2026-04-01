@@ -15,10 +15,7 @@ public sealed class NyxIdNotificationsTool : IAgentTool
 
     public string Description =>
         "Manage notification settings and Telegram integration. " +
-        "Actions: 'settings' to view current settings, " +
-        "'update' to change notification preferences (email, push, telegram for approvals), " +
-        "'telegram_link' to generate a Telegram account link code, " +
-        "'telegram_disconnect' to disconnect Telegram.";
+        "Actions: settings, update, telegram_link, telegram_disconnect.";
 
     public string ParametersSchema => """
         {
@@ -27,22 +24,21 @@ public sealed class NyxIdNotificationsTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["settings", "update", "telegram_link", "telegram_disconnect"],
-              "description": "Action to perform"
+              "description": "Action to perform (default: settings)"
             },
             "approval_email": {
               "type": "boolean",
-              "description": "Enable/disable approval email notifications (for 'update')"
+              "description": "Enable/disable approval email (for update)"
             },
             "approval_push": {
               "type": "boolean",
-              "description": "Enable/disable approval push notifications (for 'update')"
+              "description": "Enable/disable approval push (for update)"
             },
             "approval_telegram": {
               "type": "boolean",
-              "description": "Enable/disable approval Telegram notifications (for 'update')"
+              "description": "Enable/disable approval telegram (for update)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -50,44 +46,29 @@ public sealed class NyxIdNotificationsTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "settings";
-        bool? approvalEmail = null;
-        bool? approvalPush = null;
-        bool? approvalTelegram = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "settings";
-            if (doc.RootElement.TryGetProperty("approval_email", out var ae))
-                approvalEmail = ae.GetBoolean();
-            if (doc.RootElement.TryGetProperty("approval_push", out var ap))
-                approvalPush = ap.GetBoolean();
-            if (doc.RootElement.TryGetProperty("approval_telegram", out var at))
-                approvalTelegram = at.GetBoolean();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "settings");
 
         return action switch
         {
-            "update" => await UpdateSettingsAsync(token, approvalEmail, approvalPush, approvalTelegram, ct),
+            "update" => await UpdateAsync(token, args, ct),
             "telegram_link" => await _client.TelegramLinkAsync(token, ct),
             "telegram_disconnect" => await _client.TelegramDisconnectAsync(token, ct),
             _ => await _client.GetNotificationSettingsAsync(token, ct),
         };
     }
 
-    private async Task<string> UpdateSettingsAsync(
-        string token, bool? approvalEmail, bool? approvalPush, bool? approvalTelegram,
-        CancellationToken ct)
+    private async Task<string> UpdateAsync(string token, ToolArgs args, CancellationToken ct)
     {
-        var payload = new Dictionary<string, object?>();
-        if (approvalEmail.HasValue) payload["approval_email"] = approvalEmail.Value;
-        if (approvalPush.HasValue) payload["push_enabled"] = approvalPush.Value;
-        if (approvalTelegram.HasValue) payload["telegram_enabled"] = approvalTelegram.Value;
-        return await _client.UpdateNotificationSettingsAsync(token, JsonSerializer.Serialize(payload), ct);
+        var p = new Dictionary<string, object?>();
+        var ae = args.Bool("approval_email");
+        if (ae.HasValue) p["approval_email"] = ae.Value;
+        var ap = args.Bool("approval_push");
+        if (ap.HasValue) p["push_enabled"] = ap.Value;
+        var at = args.Bool("approval_telegram");
+        if (at.HasValue) p["telegram_enabled"] = at.Value;
+        return await _client.UpdateNotificationSettingsAsync(token, JsonSerializer.Serialize(p), ct);
     }
 }

@@ -15,7 +15,7 @@ public sealed class NyxIdEndpointsTool : IAgentTool
 
     public string Description =>
         "Manage user endpoints (service base URLs). " +
-        "Actions: 'list' all endpoints, 'update' an endpoint's URL, 'delete' an endpoint.";
+        "Actions: list, update, delete.";
 
     public string ParametersSchema => """
         {
@@ -24,18 +24,17 @@ public sealed class NyxIdEndpointsTool : IAgentTool
             "action": {
               "type": "string",
               "enum": ["list", "update", "delete"],
-              "description": "Action to perform"
+              "description": "Action to perform (default: list)"
             },
             "id": {
               "type": "string",
-              "description": "Endpoint ID (required for 'update' and 'delete')"
+              "description": "Endpoint ID (for update/delete)"
             },
             "url": {
               "type": "string",
-              "description": "New URL (required for 'update')"
+              "description": "New URL (for update)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -43,36 +42,28 @@ public sealed class NyxIdEndpointsTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? id = null;
-        string? url = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("id", out var i))
-                id = i.GetString();
-            if (doc.RootElement.TryGetProperty("url", out var u))
-                url = u.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "list");
+        var id = args.Str("id");
 
         return action switch
         {
-            "update" when !string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(url) =>
-                await _client.UpdateEndpointAsync(token, id,
-                    JsonSerializer.Serialize(new { url }), ct),
+            "update" when !string.IsNullOrWhiteSpace(id) => await UpdateAsync(token, id, args, ct),
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteEndpointAsync(token, id, ct),
 
-            "update" when string.IsNullOrWhiteSpace(id) => "Error: 'id' is required for update action.",
-            "update" => "Error: 'url' is required for update action.",
-            "delete" => "Error: 'id' is required for delete action.",
+            "update" or "delete" => $"{{\"error\":\"'id' is required for {action}\"}}",
             _ => await _client.ListEndpointsAsync(token, ct),
         };
+    }
+
+    private async Task<string> UpdateAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        var url = args.Str("url");
+        if (string.IsNullOrWhiteSpace(url))
+            return """{"error":"'url' is required for update"}""";
+        return await _client.UpdateEndpointAsync(token, id, JsonSerializer.Serialize(new { url }), ct);
     }
 }

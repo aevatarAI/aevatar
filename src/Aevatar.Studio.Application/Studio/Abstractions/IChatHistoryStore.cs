@@ -3,7 +3,6 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 public interface IChatHistoryStore
 {
     Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default);
-    Task SaveIndexAsync(string scopeId, ChatHistoryIndex index, CancellationToken ct = default);
     Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(string scopeId, string conversationId, CancellationToken ct = default);
     Task SaveMessagesAsync(string scopeId, string conversationId, IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default);
     Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default);
