@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text.Json;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -20,17 +21,20 @@ public sealed class ToolCallLoop
     private readonly AgentHookPipeline? _hooks;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
+    private readonly TokenBudgetTracker? _budgetTracker;
 
     public ToolCallLoop(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
         IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        TokenBudgetTracker? budgetTracker = null)
     {
         _tools = tools;
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
         _llmMiddlewares = llmMiddlewares ?? [];
+        _budgetTracker = budgetTracker;
     }
 
     /// <summary>
@@ -171,6 +175,7 @@ public sealed class ToolCallLoop
 
         var response = llmCallContext.Response
             ?? new LLMResponse { Content = null, ToolCalls = null };
+        _budgetTracker?.RecordUsage(response.Usage);
         llmCtx.LLMResponse = response;
 
         // ─── Hook: LLM Request End ───

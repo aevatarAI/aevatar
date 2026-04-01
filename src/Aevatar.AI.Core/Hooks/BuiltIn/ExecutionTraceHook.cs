@@ -43,4 +43,12 @@ public sealed class ExecutionTraceHook : IAIGAgentExecutionHook
 
     public Task OnToolExecuteEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
     { _logger.LogInformation("[Trace] Tool End: {Tool}", ctx.ToolName); return Task.CompletedTask; }
+
+    // ─── 上下文压缩 hook ───
+
+    public Task OnCompactStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+    { _logger.LogInformation("[Trace] Compact Start: Reason={Reason}", ctx.Items.TryGetValue("compression_reason", out var r) ? r : "unknown"); return Task.CompletedTask; }
+
+    public Task OnCompactEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct)
+    { _logger.LogInformation("[Trace] Compact End: ToolResults={Compacted}, Truncated={Truncated}, Summarized={Summarized}", ctx.Items.TryGetValue("compacted_tool_results", out var c) ? c : 0, ctx.Items.TryGetValue("truncated_messages", out var t) ? t : 0, ctx.Items.TryGetValue("summarized", out var s) ? s : false); return Task.CompletedTask; }
 }

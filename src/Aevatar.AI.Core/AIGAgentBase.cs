@@ -42,6 +42,14 @@ public sealed class AIAgentConfig
     /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
     public int StreamBufferCapacity { get; set; } = 256;
 
+    /// <summary>Prompt token 预算上限。0 = 禁用上下文压缩（默认）。</summary>
+    public int MaxPromptTokenBudget { get; set; } = 0;
+
+    /// <summary>触发压缩的阈值比例（0.5~0.99）。当 LastPromptTokens > Budget * Threshold 时触发。</summary>
+    public double CompressionThreshold { get; set; } = 0.85;
+
+    /// <summary>是否启用 LLM 摘要压缩（Level 3）。默认关闭。</summary>
+    public bool EnableSummarization { get; set; }
 }
 
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>
@@ -128,6 +136,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
         public bool HasStreamBufferCapacity { get; init; }
         public int? StreamBufferCapacity { get; init; }
+
+        public bool HasMaxPromptTokenBudget { get; init; }
+        public int? MaxPromptTokenBudget { get; init; }
+
+        public bool HasCompressionThreshold { get; init; }
+        public double? CompressionThreshold { get; init; }
+
+        public bool HasEnableSummarization { get; init; }
+        public bool? EnableSummarization { get; init; }
     }
 
     /// <summary>Extracts config overrides from protobuf state.</summary>
@@ -165,6 +182,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
         if (overrides.HasStreamBufferCapacity && (overrides.StreamBufferCapacity ?? 0) > 0)
             merged.StreamBufferCapacity = overrides.StreamBufferCapacity!.Value;
+
+        if (overrides.HasMaxPromptTokenBudget)
+            merged.MaxPromptTokenBudget = Math.Max(0, overrides.MaxPromptTokenBudget ?? 0);
+
+        if (overrides.HasCompressionThreshold && overrides.CompressionThreshold.HasValue)
+            merged.CompressionThreshold = overrides.CompressionThreshold.Value;
+
+        if (overrides.HasEnableSummarization && overrides.EnableSummarization.HasValue)
+            merged.EnableSummarization = overrides.EnableSummarization.Value;
 
         NormalizeEffectiveConfig(merged);
         return merged;
@@ -237,7 +263,11 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         }
 
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, _toolMiddlewares, _llmMiddlewares);
+        var toolLoop = new ToolCallLoop(Tools, _hooks, _toolMiddlewares, _llmMiddlewares, History.Budget);
+        var compressionConfig = new Chat.ContextCompressionConfig(
+            MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,
+            CompressionThreshold: EffectiveConfig.CompressionThreshold,
+            EnableSummarization: EffectiveConfig.EnableSummarization);
         _chat = new ChatRuntime(
             providerFactory: GetLLMProvider,
             history: History,
@@ -248,7 +278,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity);
+            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity,
+            compressionConfig: compressionConfig);
     }
 
     private ILLMProvider GetLLMProvider()
@@ -344,6 +375,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         MaxToolRounds = source.MaxToolRounds,
         MaxHistoryMessages = source.MaxHistoryMessages,
         StreamBufferCapacity = source.StreamBufferCapacity,
+        MaxPromptTokenBudget = source.MaxPromptTokenBudget,
+        CompressionThreshold = source.CompressionThreshold,
+        EnableSummarization = source.EnableSummarization,
     };
 
     private static void NormalizeEffectiveConfig(AIAgentConfig config)
@@ -357,6 +391,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             config.MaxHistoryMessages = 100;
         if (config.StreamBufferCapacity <= 0)
             config.StreamBufferCapacity = 256;
+        if (config.MaxPromptTokenBudget < 0)
+            config.MaxPromptTokenBudget = 0;
+        config.CompressionThreshold = Math.Clamp(config.CompressionThreshold, 0.5, 0.99);
     }
 
     private sealed class NullLLMProviderFactory : ILLMProviderFactory

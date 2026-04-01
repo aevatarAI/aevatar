@@ -105,6 +105,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             MaxHistoryMessages = overrides.HasMaxHistoryMessages ? overrides.MaxHistoryMessages : null,
             HasStreamBufferCapacity = overrides.HasStreamBufferCapacity,
             StreamBufferCapacity = overrides.HasStreamBufferCapacity ? overrides.StreamBufferCapacity : null,
+            HasMaxPromptTokenBudget = overrides.HasMaxPromptTokenBudget,
+            MaxPromptTokenBudget = overrides.HasMaxPromptTokenBudget ? overrides.MaxPromptTokenBudget : null,
+            HasCompressionThreshold = overrides.HasCompressionThreshold,
+            CompressionThreshold = overrides.HasCompressionThreshold ? overrides.CompressionThreshold : null,
+            HasEnableSummarization = overrides.HasEnableSummarization,
+            EnableSummarization = overrides.HasEnableSummarization ? overrides.EnableSummarization : null,
         };
     }
 
@@ -418,6 +424,18 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             overrides.StreamBufferCapacity = evt.StreamBufferCapacity;
         else
             overrides.ClearStreamBufferCapacity();
+        if (evt.MaxPromptTokenBudget > 0)
+            overrides.MaxPromptTokenBudget = evt.MaxPromptTokenBudget;
+        else
+            overrides.ClearMaxPromptTokenBudget();
+        if (evt.CompressionThreshold > 0)
+            overrides.CompressionThreshold = evt.CompressionThreshold;
+        else
+            overrides.ClearCompressionThreshold();
+        if (evt.EnableSummarization)
+            overrides.EnableSummarization = true;
+        else
+            overrides.ClearEnableSummarization();
         return next;
     }
 

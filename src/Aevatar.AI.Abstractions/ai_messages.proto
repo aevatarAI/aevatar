@@ -40,6 +40,9 @@ message InitializeRoleAgentEvent {
   int32 stream_buffer_capacity = 9;
   string event_modules = 10;
   string event_routes = 11;
+  int32 max_prompt_token_budget = 12;
+  double compression_threshold = 13;
+  bool enable_summarization = 14;
 }
 
 message AIAgentConfigOverrides {
@@ -51,6 +54,9 @@ message AIAgentConfigOverrides {
   optional int32 max_tool_rounds = 6;
   optional int32 max_history_messages = 7;
   optional int32 stream_buffer_capacity = 8;
+  optional int32 max_prompt_token_budget = 9;
+  optional double compression_threshold = 10;
+  optional bool enable_summarization = 11;
 }
 
 message RoleChatSessionState {

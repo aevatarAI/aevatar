@@ -55,6 +55,16 @@ public sealed class AgentHookPipeline
     public Task RunSessionEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
         RunAll(h => h.OnSessionEndAsync(ctx, ct), "OnSessionEnd");
 
+    // ─── 上下文压缩生命周期 ───
+
+    /// <summary>上下文压缩开始前执行所有 hook。</summary>
+    public Task RunCompactStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnCompactStartAsync(ctx, ct), "OnCompactStart");
+
+    /// <summary>上下文压缩完成后执行所有 hook。</summary>
+    public Task RunCompactEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnCompactEndAsync(ctx, ct), "OnCompactEnd");
+
     // ─── 内部 ───
 
     private async Task RunAll(Func<IAIGAgentExecutionHook, Task> action, string phase)

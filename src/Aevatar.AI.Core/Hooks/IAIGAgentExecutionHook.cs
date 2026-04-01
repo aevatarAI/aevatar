@@ -39,4 +39,12 @@ public interface IAIGAgentExecutionHook : IGAgentExecutionHook
 
     /// <summary>会话结束。</summary>
     Task OnSessionEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) => Task.CompletedTask;
+
+    // ─── 上下文压缩生命周期 ───
+
+    /// <summary>上下文压缩开始前。Items 中含 compression_reason、last_prompt_tokens、budget_limit。</summary>
+    Task OnCompactStartAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>上下文压缩完成后。Items 中含 compacted_tool_results、truncated_messages、summarized。</summary>
+    Task OnCompactEndAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) => Task.CompletedTask;
 }

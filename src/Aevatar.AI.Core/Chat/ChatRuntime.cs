@@ -12,6 +12,15 @@ using System.Threading.Channels;
 
 namespace Aevatar.AI.Core.Chat;
 
+/// <summary>上下文压缩配置。</summary>
+/// <param name="MaxPromptTokenBudget">Prompt token 预算上限。0 = 禁用。</param>
+/// <param name="CompressionThreshold">触发压缩的阈值比例（0.5~0.99）。</param>
+/// <param name="EnableSummarization">是否启用 LLM 摘要压缩（Level 3）。</param>
+public sealed record ContextCompressionConfig(
+    int MaxPromptTokenBudget = 0,
+    double CompressionThreshold = 0.85,
+    bool EnableSummarization = false);
+
 /// <summary>Chat 执行运行时。调 LLM，管理历史，集成 Middleware。</summary>
 public sealed class ChatRuntime
 {
@@ -26,6 +35,7 @@ public sealed class ChatRuntime
     private readonly string? _agentId;
     private readonly string? _agentName;
     private readonly int _streamBufferCapacity;
+    private readonly ContextCompressionConfig _compressionConfig;
 
     public ChatRuntime(
         Func<ILLMProvider> providerFactory,
@@ -37,7 +47,8 @@ public sealed class ChatRuntime
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         string? agentId = null,
         string? agentName = null,
-        int streamBufferCapacity = 256)
+        int streamBufferCapacity = 256,
+        ContextCompressionConfig? compressionConfig = null)
     {
         _providerFactory = providerFactory;
         _history = history;
@@ -51,6 +62,7 @@ public sealed class ChatRuntime
         _streamBufferCapacity = streamBufferCapacity > 0
             ? streamBufferCapacity
             : throw new ArgumentOutOfRangeException(nameof(streamBufferCapacity), "Stream buffer capacity must be greater than zero.");
+        _compressionConfig = compressionConfig ?? new ContextCompressionConfig();
     }
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
@@ -78,6 +90,7 @@ public sealed class ChatRuntime
             if (runContext.Terminate) return;
 
             _history.Add(ChatMessage.User(runContext.UserMessage));
+            await RunCompressionIfNeededAsync(ct);
             var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
             var provider = _providerFactory();
             runContext.Items["gen_ai.provider.name"] = provider.Name;
@@ -166,6 +179,7 @@ public sealed class ChatRuntime
                 {
                     if (runContext.Terminate) return;
 
+                    await RunCompressionIfNeededAsync(runToken);
                     var userMsg = ChatMessage.User(runContext.UserMessage);
                     pendingHistoryMessages.Add(userMsg);
                     var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
@@ -384,6 +398,7 @@ public sealed class ChatRuntime
             Usage = streamedUsage,
             ToolCalls = streamedToolCalls,
         };
+        _history.Budget.RecordUsage(response.Usage);
         llmHookContext.LLMResponse = response;
         if (_hooks != null) await _hooks.RunLLMRequestEndAsync(llmHookContext, ct);
 
@@ -541,6 +556,42 @@ public sealed class ChatRuntime
         });
 
         return chunks;
+    }
+
+    private async Task RunCompressionIfNeededAsync(CancellationToken ct)
+    {
+        if (_compressionConfig.MaxPromptTokenBudget <= 0
+            || !_history.Budget.IsOverBudget(_compressionConfig.MaxPromptTokenBudget, _compressionConfig.CompressionThreshold))
+        {
+            return;
+        }
+
+        var hookCtx = new AIGAgentExecutionHookContext();
+        hookCtx.Items["compression_reason"] = "token_budget_exceeded";
+        hookCtx.Items["last_prompt_tokens"] = _history.Budget.LastPromptTokens;
+        hookCtx.Items["budget_limit"] = _compressionConfig.MaxPromptTokenBudget;
+        if (_hooks != null) await _hooks.RunCompactStartAsync(hookCtx, ct);
+
+        // Level 1: Tool result compaction
+        var compacted = ContextCompressor.CompactToolResults(_history.WritableMessages);
+
+        // Level 2: Importance-aware truncation (target 70% of max)
+        var targetCount = (int)(_history.MaxMessages * 0.7);
+        var truncated = ContextCompressor.TruncateByImportance(_history.WritableMessages, targetCount);
+
+        // Level 3: Summarization (opt-in)
+        var summarized = false;
+        if (_compressionConfig.EnableSummarization && _history.Count > 12)
+        {
+            var provider = _providerFactory();
+            summarized = await ContextCompressor.SummarizeOldestBlockAsync(
+                _history.WritableMessages, provider, null, blockSize: 8, ct);
+        }
+
+        hookCtx.Items["compacted_tool_results"] = compacted;
+        hookCtx.Items["truncated_messages"] = truncated;
+        hookCtx.Items["summarized"] = summarized;
+        if (_hooks != null) await _hooks.RunCompactEndAsync(hookCtx, ct);
     }
 
     private sealed record StreamingRoundResult(
