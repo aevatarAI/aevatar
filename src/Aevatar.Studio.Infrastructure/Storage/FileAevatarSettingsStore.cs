@@ -162,33 +162,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(AevatarPaths.ConfigJson, optional: true, reloadOnChange: false)
             .Build();
-        var configuredEndpoint = configuration["Aevatar:NyxId:GatewayEndpoint"]
-            ?? configuration["Cli:App:NyxId:GatewayEndpoint"];
-        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
-            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
-
-        var authority = configuration["Cli:App:NyxId:Authority"]
-            ?? configuration["Aevatar:NyxId:Authority"];
-
-        return NormalizeNyxIdGatewayEndpoint(authority);
-    }
-
-    private static string? NormalizeNyxIdGatewayEndpoint(string? authority)
-    {
-        var trimmed = authority?.Trim().TrimEnd('/');
-        if (string.IsNullOrWhiteSpace(trimmed) ||
-            !Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
-        {
-            return null;
-        }
-
-        var absolute = uri.ToString().TrimEnd('/');
-        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
-        {
-            return absolute;
-        }
-
-        return $"{absolute}/api/v1/llm/gateway/v1";
+        return NyxIdLlmEndpointResolver.ResolveEndpoint(configuration);
     }
 
     private Dictionary<string, string> LoadSecrets()

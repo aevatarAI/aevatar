@@ -32,7 +32,7 @@ public sealed class AevatarAIFeatureOptions
     public string? OrnnBaseUrl { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
-    public string? NyxIdGatewayEndpoint { get; set; }
+    public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
     public string DefaultProvider { get; set; } = "openai";
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
@@ -476,38 +476,15 @@ public static class ServiceCollectionExtensions
 
     private static string? ResolveNyxIdGatewayEndpoint(IConfiguration configuration, AevatarAIFeatureOptions options)
     {
-        var configuredEndpoint = options.NyxIdGatewayEndpoint;
-        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
-            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+        if (options.NyxIdLlmEndpoint != null)
+        {
+            var authority = configuration["Cli:App:NyxId:Authority"]
+                ?? configuration["Aevatar:NyxId:Authority"]
+                ?? configuration["Aevatar:Authentication:Authority"];
+            return NyxIdLlmEndpointResolver.ResolveEndpoint(authority, options.NyxIdLlmEndpoint);
+        }
 
-        configuredEndpoint = configuration["Aevatar:NyxId:GatewayEndpoint"]
-            ?? configuration["Cli:App:NyxId:GatewayEndpoint"];
-        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
-            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
-
-        var authority = configuration["Cli:App:NyxId:Authority"]
-            ?? configuration["Aevatar:NyxId:Authority"]
-            ?? configuration["Aevatar:Authentication:Authority"];
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        return NormalizeNyxIdGatewayEndpoint(authority);
-    }
-
-    private static string? NormalizeNyxIdGatewayEndpoint(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        var trimmed = value.Trim().TrimEnd('/');
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
-            return trimmed;
-
-        var absolute = uri.ToString().TrimEnd('/');
-        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
-            return absolute;
-
-        return $"{absolute}/api/v1/llm/gateway/v1";
+        return NyxIdLlmEndpointResolver.ResolveEndpoint(configuration);
     }
 
     private sealed record FallbackRegistration(
