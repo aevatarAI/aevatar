@@ -199,10 +199,30 @@ type ProviderDraft = {
   apiKeyConfigured: boolean;
 };
 
+type RuntimeMode = 'remote' | 'local';
+type UserLlmRoute = 'auto' | 'gateway' | string;
+
+type UserConfigProviderStatus = {
+  provider_slug: string;
+  provider_name: string;
+  status: string;
+  source?: string;
+};
+
+type UserConfigState = {
+  defaultModel: string;
+  preferredLlmRoute: UserLlmRoute;
+  loading: boolean;
+  providers: UserConfigProviderStatus[];
+  supportedModels: string[];
+  modelsByProvider: Record<string, string[]>;
+  modelsLoading: boolean;
+};
+
 type StudioSettingsState = {
-  runtimeBaseUrl: string;
+  remoteRuntimeUrl: string;
   localRuntimeUrl: string;
-  runtimeMode: 'remote' | 'local';
+  runtimeMode: RuntimeMode;
   ornnBaseUrl: string;
   appearanceTheme: string;
   colorMode: 'light' | 'dark';
@@ -242,9 +262,59 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 
 const DEFAULT_REMOTE_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
 const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:5080';
-const DEFAULT_RUNTIME_BASE_URL = DEFAULT_REMOTE_RUNTIME_URL;
+const DEFAULT_RUNTIME_BASE_URL = DEFAULT_LOCAL_RUNTIME_URL;
+const USER_LLM_ROUTE_AUTO = 'auto';
+const USER_LLM_ROUTE_GATEWAY = 'gateway';
+const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
+const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
 const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
+
+function normalizeRuntimeMode(value: unknown): RuntimeMode {
+  return String(value || '').trim().toLowerCase() === 'remote' ? 'remote' : 'local';
+}
+
+function normalizeRuntimeUrl(value: unknown, fallback: string) {
+  const normalized = String(value || '').trim();
+  return (normalized || fallback).replace(/\/+$/, '');
+}
+
+function normalizeUserLlmRoute(value: unknown): UserLlmRoute {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized || USER_LLM_ROUTE_AUTO;
+}
+
+function resolveUserRuntimeConfig(userConfigData?: any) {
+  const legacyRuntimeUrl = String(userConfigData?.runtimeBaseUrl || '').trim().replace(/\/+$/, '');
+  const hasExplicitRuntimeConfig = Boolean(
+    userConfigData?.runtimeMode || userConfigData?.localRuntimeBaseUrl || userConfigData?.remoteRuntimeBaseUrl,
+  );
+  if (!hasExplicitRuntimeConfig && legacyRuntimeUrl) {
+    const isLocalRuntime = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(legacyRuntimeUrl);
+    return {
+      runtimeMode: isLocalRuntime ? 'local' as const : 'remote' as const,
+      localRuntimeUrl: isLocalRuntime ? legacyRuntimeUrl : DEFAULT_LOCAL_RUNTIME_URL,
+      remoteRuntimeUrl: isLocalRuntime ? DEFAULT_REMOTE_RUNTIME_URL : legacyRuntimeUrl,
+      activeRuntimeUrl: legacyRuntimeUrl,
+    };
+  }
+
+  const runtimeMode = normalizeRuntimeMode(userConfigData?.runtimeMode);
+  const localRuntimeUrl = normalizeRuntimeUrl(userConfigData?.localRuntimeBaseUrl, DEFAULT_LOCAL_RUNTIME_URL);
+  const remoteRuntimeUrl = normalizeRuntimeUrl(userConfigData?.remoteRuntimeBaseUrl, DEFAULT_REMOTE_RUNTIME_URL);
+  return {
+    runtimeMode,
+    localRuntimeUrl,
+    remoteRuntimeUrl,
+    activeRuntimeUrl: runtimeMode === 'remote' ? remoteRuntimeUrl : localRuntimeUrl,
+  };
+}
+
+function getActiveRuntimeUrl(runtime: Pick<StudioSettingsState, 'runtimeMode' | 'localRuntimeUrl' | 'remoteRuntimeUrl'>) {
+  return runtime.runtimeMode === 'remote'
+    ? normalizeRuntimeUrl(runtime.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL)
+    : normalizeRuntimeUrl(runtime.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL);
+}
 
 function createEmptyAppContext(): AppContextState {
   return {
@@ -612,9 +682,9 @@ const DEFAULT_ORNN_BASE_URL = 'https://ornn.chrono-ai.fun';
 
 function createEmptyStudioSettings(): StudioSettingsState {
   return {
-    runtimeBaseUrl: DEFAULT_REMOTE_RUNTIME_URL,
+    remoteRuntimeUrl: DEFAULT_REMOTE_RUNTIME_URL,
     localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
-    runtimeMode: 'remote',
+    runtimeMode: 'local',
     ornnBaseUrl: DEFAULT_ORNN_BASE_URL,
     appearanceTheme: 'blue',
     colorMode: 'light',
@@ -765,13 +835,15 @@ function App() {
   const [explorerInitialFolder, setExplorerInitialFolder] = useState<string | null>(null);
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
-  const [userConfigState, setUserConfigState] = useState<{
-    defaultModel: string;
-    loading: boolean;
-    providers: { provider_slug: string; provider_name: string; status: string }[];
-    supportedModels: string[];
-    modelsLoading: boolean;
-  }>({ defaultModel: '', loading: false, providers: [], supportedModels: [], modelsLoading: false });
+  const [userConfigState, setUserConfigState] = useState<UserConfigState>({
+    defaultModel: '',
+    preferredLlmRoute: USER_LLM_ROUTE_AUTO,
+    loading: false,
+    providers: [],
+    supportedModels: [],
+    modelsByProvider: {},
+    modelsLoading: false,
+  });
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [logsCollapsed, setLogsCollapsed] = useState(false);
@@ -1405,8 +1477,8 @@ function App() {
       const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
       const userConfigData = userConfigResult.status === 'fulfilled' ? userConfigResult.value : null;
 
-      // Runtime URL from chrono-storage config.json (authoritative source) — update local proxy target
-      const nextRuntime = userConfigData?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
+      const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
+      const nextRuntime = runtimeConfig.activeRuntimeUrl;
       fetch('/api/_proxy/runtime-url', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1431,8 +1503,17 @@ function App() {
       });
       setWorkflowList(Array.isArray(workflows) ? workflows : []);
 
-      hydrateSettings(settings, userConfigData);
-      setUserConfigState(prev => ({ ...prev, defaultModel: userConfigData?.defaultModel || '', loading: false }));
+      hydrateSettings(settings, {
+        ...runtimeConfig,
+        defaultModel: userConfigData?.defaultModel || '',
+        preferredLlmRoute: userConfigData?.preferredLlmRoute || USER_LLM_ROUTE_AUTO,
+      });
+      setUserConfigState(prev => ({
+        ...prev,
+        defaultModel: userConfigData?.defaultModel || '',
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+        loading: false,
+      }));
 
       hydrateConnectorCatalog(connectorCatalog);
       hydrateConnectorDraft(connectorDraftResponse);
@@ -1499,12 +1580,12 @@ function App() {
       }
     }
 
-    const savedRuntimeUrl = userConfigData?.runtimeBaseUrl || DEFAULT_REMOTE_RUNTIME_URL;
+    const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
 
     setSettingsState({
-      runtimeBaseUrl: savedRuntimeUrl,
-      localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
-      runtimeMode: 'remote',
+      remoteRuntimeUrl: runtimeConfig.remoteRuntimeUrl,
+      localRuntimeUrl: runtimeConfig.localRuntimeUrl,
+      runtimeMode: runtimeConfig.runtimeMode,
       ornnBaseUrl: payload?.ornnBaseUrl || DEFAULT_ORNN_BASE_URL,
       appearanceTheme: payload?.appearanceTheme || 'blue',
       colorMode: payload?.colorMode === 'dark' ? 'dark' : 'light',
@@ -1513,6 +1594,11 @@ function App() {
       providerTypes,
       providers,
     });
+    setUserConfigState(prev => ({
+      ...prev,
+      defaultModel: String(userConfigData?.defaultModel || '').trim(),
+      preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+    }));
     setSelectedProviderKey(providers[0]?.key || null);
     setRuntimeTestState({
       status: 'idle',
@@ -2535,13 +2621,19 @@ function App() {
   async function handleSaveSettings() {
     try {
       const nyxIdProvider = settingsState.providers.find(p => usesFixedProviderName(p.providerType));
-      const activeRuntimeUrl = settingsState.runtimeBaseUrl || DEFAULT_REMOTE_RUNTIME_URL;
+      const runtimeConfig = {
+        runtimeMode: settingsState.runtimeMode,
+        localRuntimeBaseUrl: normalizeRuntimeUrl(settingsState.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
+        remoteRuntimeBaseUrl: normalizeRuntimeUrl(settingsState.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
+      };
+      const activeRuntimeUrl = getActiveRuntimeUrl(settingsState);
 
-      // Save runtimeBaseUrl + defaultModel to chrono-storage (userConfig)
+      // Save runtime selection and defaultModel to chrono-storage (userConfig)
       const nyxIdModel = nyxIdProvider?.model.trim() || '';
       const userConfigSaveAll = api.userConfig.save({
         defaultModel: nyxIdModel,
-        runtimeBaseUrl: activeRuntimeUrl,
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute),
+        ...runtimeConfig,
       }).catch(() => {});
 
       const response = await api.settings.save({
@@ -2566,7 +2658,11 @@ function App() {
         body: JSON.stringify({ runtimeBaseUrl: activeRuntimeUrl }),
       }).catch(() => {});
 
-      hydrateSettings(response, { defaultModel: nyxIdModel, runtimeBaseUrl: activeRuntimeUrl });
+      hydrateSettings(response, {
+        defaultModel: nyxIdModel,
+        preferredLlmRoute: userConfigState.preferredLlmRoute,
+        ...runtimeConfig,
+      });
       setWorkspaceSettings(prev => ({
         ...prev,
         runtimeBaseUrl: activeRuntimeUrl,
@@ -2596,7 +2692,7 @@ function App() {
   }
 
   async function handleTestRuntime(targetUrl?: string) {
-    const urlToTest = targetUrl ?? settingsState.runtimeBaseUrl;
+    const urlToTest = targetUrl ?? getActiveRuntimeUrl(settingsState);
     try {
       setRuntimeTestState({
         status: 'testing',
@@ -3332,16 +3428,57 @@ function App() {
 
                     <div className="settings-section-card space-y-5">
                       <div>
-                        <label className="field-label">Runtime URL</label>
+                        <label className="field-label">Runtime Target</label>
+                        <div className="mt-2 inline-flex rounded-[14px] bg-[#F2F1EE] p-1">
+                          <button
+                            onClick={() => {
+                              setSettingsState(prev => ({ ...prev, runtimeMode: 'local' }));
+                              setRuntimeTestState({ status: 'idle', message: '' });
+                            }}
+                            className={`px-3 py-1.5 rounded-[10px] text-[12px] font-semibold transition-colors ${
+                              settingsState.runtimeMode === 'local'
+                                ? 'bg-white text-gray-800 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                          >
+                            Local
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSettingsState(prev => ({ ...prev, runtimeMode: 'remote' }));
+                              setRuntimeTestState({ status: 'idle', message: '' });
+                            }}
+                            className={`px-3 py-1.5 rounded-[10px] text-[12px] font-semibold transition-colors ${
+                              settingsState.runtimeMode === 'remote'
+                                ? 'bg-white text-gray-800 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                          >
+                            Remote
+                          </button>
+                        </div>
+                        <div className="text-[12px] text-gray-400 mt-2">
+                          {settingsState.runtimeMode === 'local'
+                            ? 'Default local runtime is http://127.0.0.1:5080.'
+                            : 'Use a remote runtime when you need a shared or hosted backend.'}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="field-label">
+                          {settingsState.runtimeMode === 'local' ? 'Local Runtime URL' : 'Remote Runtime URL'}
+                        </label>
                         <input
                           className="panel-input mt-1"
-                          value={settingsState.runtimeBaseUrl}
+                          value={settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.remoteRuntimeUrl}
                           onChange={event => {
                             const value = event.target.value;
-                            setSettingsState(prev => ({ ...prev, runtimeBaseUrl: value }));
+                            setSettingsState(prev => prev.runtimeMode === 'local'
+                              ? { ...prev, localRuntimeUrl: value }
+                              : { ...prev, remoteRuntimeUrl: value });
                             setRuntimeTestState({ status: 'idle', message: '' });
                           }}
-                          placeholder={DEFAULT_REMOTE_RUNTIME_URL}
+                          placeholder={settingsState.runtimeMode === 'local' ? DEFAULT_LOCAL_RUNTIME_URL : DEFAULT_REMOTE_RUNTIME_URL}
                         />
                       </div>
 
@@ -3370,7 +3507,7 @@ function App() {
                             <SettingsStatusPill status={runtimeTestState.status} />
                           </div>
                           <div className="text-[12px] text-gray-500 mt-2 break-all">
-                            {settingsState.runtimeBaseUrl}
+                            {getActiveRuntimeUrl(settingsState)}
                           </div>
                           <div className="text-[13px] text-gray-600 mt-3">
                             {runtimeTestState.message}
@@ -3383,6 +3520,11 @@ function App() {
                   <CloudConfigSection
                     userConfigState={userConfigState}
                     setUserConfigState={setUserConfigState}
+                    runtimeConfig={{
+                      runtimeMode: settingsState.runtimeMode,
+                      localRuntimeUrl: settingsState.localRuntimeUrl,
+                      remoteRuntimeUrl: settingsState.remoteRuntimeUrl,
+                    }}
                     flash={flash}
                   />
                 ) : settingsSection === 'skills' ? (
@@ -4772,20 +4914,13 @@ function App() {
   );
 }
 
-type UserConfigState = {
-  defaultModel: string;
-  loading: boolean;
-  providers: { provider_slug: string; provider_name: string; status: string }[];
-  supportedModels: string[];
-  modelsLoading: boolean;
-};
-
 function CloudConfigSection(props: {
   userConfigState: UserConfigState;
   setUserConfigState: React.Dispatch<React.SetStateAction<UserConfigState>>;
+  runtimeConfig: Pick<StudioSettingsState, 'runtimeMode' | 'localRuntimeUrl' | 'remoteRuntimeUrl'>;
   flash: (msg: string, type: 'success' | 'error') => void;
 }) {
-  const { userConfigState, setUserConfigState, flash } = props;
+  const { userConfigState, setUserConfigState, runtimeConfig, flash } = props;
   const [filterText, setFilterText] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -4802,11 +4937,12 @@ function CloudConfigSection(props: {
             ...prev,
             providers: result?.providers ?? [],
             supportedModels: result?.supported_models ?? [],
+            modelsByProvider: result?.models_by_provider ?? {},
             modelsLoading: false,
           }));
         }
       } catch {
-        if (!cancelled) setUserConfigState(prev => ({ ...prev, providers: [], supportedModels: [], modelsLoading: false }));
+        if (!cancelled) setUserConfigState(prev => ({ ...prev, providers: [], supportedModels: [], modelsByProvider: {}, modelsLoading: false }));
       }
     })();
     return () => { cancelled = true; };
@@ -4825,34 +4961,80 @@ function CloudConfigSection(props: {
     [userConfigState.providers],
   );
 
-  const groupedModels = useMemo(() => {
-    const prefixToProvider: Record<string, string> = {};
-    for (const p of readyProviders) {
-      const slug = p.provider_slug;
-      const name = p.provider_name;
-      if (slug === 'openai') { for (const pfx of ['gpt-', 'o1-', 'o1', 'o3-', 'o3', 'o4-', 'chatgpt-']) prefixToProvider[pfx] = name; }
-      else if (slug === 'anthropic') { prefixToProvider['claude-'] = name; }
-      else if (slug === 'google-ai') { prefixToProvider['gemini-'] = name; }
-      else if (slug === 'mistral') { for (const pfx of ['mistral-', 'codestral-', 'magistral-']) prefixToProvider[pfx] = name; }
-      else if (slug === 'cohere') { for (const pfx of ['command-']) prefixToProvider[pfx] = name; }
-      else if (slug === 'deepseek') { prefixToProvider['deepseek-'] = name; }
-      else { prefixToProvider[slug + '-'] = name; }
-    }
-    const q = filterText.trim().toLowerCase();
-    const groups = new Map<string, string[]>();
-    for (const model of userConfigState.supportedModels) {
-      if (q && !model.toLowerCase().includes(q)) continue;
-      let provider = 'Other';
-      for (const [pfx, name] of Object.entries(prefixToProvider)) {
-        if (model.startsWith(pfx) || model === pfx.replace(/-$/, '')) { provider = name; break; }
-      }
-      if (!groups.has(provider)) groups.set(provider, []);
-      groups.get(provider)!.push(model);
-    }
-    return groups;
-  }, [userConfigState.supportedModels, readyProviders, filterText]);
+  const gatewayProviders = useMemo(
+    () => readyProviders.filter(p => (p.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) === USER_CONFIG_PROVIDER_SOURCE_GATEWAY),
+    [readyProviders],
+  );
 
-  const hasData = userConfigState.supportedModels.length > 0;
+  const serviceProviders = useMemo(
+    () => userConfigState.providers.filter(p => p.source === USER_CONFIG_PROVIDER_SOURCE_SERVICE),
+    [userConfigState.providers],
+  );
+
+  const readyChronoLlmProvider = useMemo(
+    () => serviceProviders.find(p => p.provider_slug === 'chrono-llm' && p.status === 'ready') || null,
+    [serviceProviders],
+  );
+
+  const preferredRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
+  const effectiveRoute = preferredRoute === USER_LLM_ROUTE_AUTO
+    ? (readyChronoLlmProvider ? readyChronoLlmProvider.provider_slug : USER_LLM_ROUTE_GATEWAY)
+    : preferredRoute;
+
+  const routeOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string; note?: string }> = [
+      {
+        value: USER_LLM_ROUTE_AUTO,
+        label: 'Auto',
+        note: readyChronoLlmProvider ? `Currently ${readyChronoLlmProvider.provider_name || 'chrono-llm'}` : 'Currently NyxID Gateway',
+      },
+      {
+        value: USER_LLM_ROUTE_GATEWAY,
+        label: 'NyxID Gateway',
+      },
+    ];
+
+    const seen = new Set(options.map(option => option.value));
+    for (const provider of serviceProviders) {
+      const slug = provider.provider_slug;
+      if (!slug || seen.has(slug)) continue;
+      seen.add(slug);
+      options.push({
+        value: slug,
+        label: provider.provider_name || slug,
+        note: provider.status === 'ready' ? 'Ready' : 'Unavailable',
+      });
+    }
+
+    if (!seen.has(preferredRoute) && preferredRoute !== USER_LLM_ROUTE_AUTO && preferredRoute !== USER_LLM_ROUTE_GATEWAY) {
+      options.push({
+        value: preferredRoute,
+        label: preferredRoute,
+        note: 'Unavailable',
+      });
+    }
+
+    return options;
+  }, [preferredRoute, readyChronoLlmProvider, serviceProviders]);
+
+  const groupedModels = useMemo(() => {
+    const query = filterText.trim().toLowerCase();
+    const providerOrder = effectiveRoute === USER_LLM_ROUTE_GATEWAY
+      ? gatewayProviders
+      : userConfigState.providers.filter(provider => provider.provider_slug === effectiveRoute);
+
+    return providerOrder
+      .map(provider => ({
+        label: provider.provider_name || provider.provider_slug,
+        models: (userConfigState.modelsByProvider[provider.provider_slug] || [])
+          .filter(model => !query || model.toLowerCase().includes(query)),
+      }))
+      .filter(group => group.models.length > 0);
+  }, [effectiveRoute, filterText, gatewayProviders, userConfigState.modelsByProvider, userConfigState.providers]);
+
+  const hasData = groupedModels.length > 0;
+  const effectiveRouteLabel = routeOptions.find(option => option.value === effectiveRoute)?.label
+    || (effectiveRoute === USER_LLM_ROUTE_GATEWAY ? 'NyxID Gateway' : effectiveRoute);
 
   return (
     <div className="max-w-[920px] space-y-8">
@@ -4866,7 +5048,13 @@ function CloudConfigSection(props: {
           onClick={async () => {
             try {
               setUserConfigState(prev => ({ ...prev, loading: true }));
-              await api.userConfig.save({ defaultModel: userConfigState.defaultModel.trim() });
+              await api.userConfig.save({
+                defaultModel: userConfigState.defaultModel.trim(),
+                preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute),
+                runtimeMode: runtimeConfig.runtimeMode,
+                localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
+                remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
+              });
               flash('LLM config saved', 'success');
             } catch (error: any) {
               flash(error?.message || 'Failed to save LLM config', 'error');
@@ -4879,6 +5067,34 @@ function CloudConfigSection(props: {
         >
           {userConfigState.loading ? 'Saving...' : 'Save config'}
         </button>
+      </div>
+
+      <div className="settings-section-card space-y-4">
+        <div className="section-heading">Preferred route</div>
+        <div>
+          <label className="field-label">LLM route</label>
+          <select
+            className="panel-input mt-1"
+            value={preferredRoute}
+            onChange={event => {
+              const nextRoute = normalizeUserLlmRoute(event.target.value);
+              setUserConfigState(prev => ({ ...prev, preferredLlmRoute: nextRoute }));
+            }}
+          >
+            {routeOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.note ? `${option.label} - ${option.note}` : option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="text-[11px] text-gray-400 leading-relaxed">
+          {preferredRoute === USER_LLM_ROUTE_AUTO
+            ? `Auto prefers chrono-llm when it is available and otherwise falls back to NyxID Gateway. It is currently using ${effectiveRouteLabel}.`
+            : preferredRoute === USER_LLM_ROUTE_GATEWAY
+            ? 'All Aevatar chat requests will go through NyxID Gateway.'
+            : `${effectiveRouteLabel} will be used for Aevatar chat requests. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
+        </div>
       </div>
 
       {/* Providers status */}
@@ -4941,13 +5157,13 @@ function CloudConfigSection(props: {
                 <div className="absolute z-50 mt-1 w-full max-h-[280px] overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
                   {userConfigState.modelsLoading ? (
                     <div className="px-3 py-2 text-[12px] text-gray-400">Loading...</div>
-                  ) : groupedModels.size === 0 ? (
+                  ) : groupedModels.length === 0 ? (
                     <div className="px-3 py-2 text-[12px] text-gray-400">No matching models</div>
                   ) : (
-                    Array.from(groupedModels.entries()).map(([provider, models]) => (
-                      <div key={provider}>
-                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{provider}</div>
-                        {models.map(model => (
+                    groupedModels.map(group => (
+                      <div key={group.label}>
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{group.label}</div>
+                        {group.models.map(model => (
                           <button
                             key={model}
                             type="button"
@@ -4977,7 +5193,7 @@ function CloudConfigSection(props: {
           )}
         </div>
         <div className="text-[11px] text-gray-400 leading-relaxed">
-          The default model used by NyxID Gateway. Select from supported models, or type a model name manually.
+          The default model applied to {effectiveRouteLabel}. Select from supported models, or type a model name manually.
         </div>
       </div>
     </div>

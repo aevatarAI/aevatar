@@ -40,6 +40,7 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
 
   const entry = manifest.find(f => f.key === selectedKey);
   const fileType = entry?.type ?? 'file';
+  const isReadOnly = fileType === 'workflow' || fileType === 'script';
 
   // Rich editors for roles and connectors
   if (fileType === 'roles') return <RolesCatalogEditor flash={flash} />;
@@ -107,14 +108,14 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
               <ExternalLink size={12} /> Open in Studio
             </button>
           )}
-          {!editing ? (
+          {!isReadOnly && !editing ? (
             <button
               onClick={startEditing}
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333]"
             >
               <Pencil size={12} /> Edit
             </button>
-          ) : (
+          ) : !isReadOnly && editing ? (
             <>
               <button
                 onClick={handleSave}
@@ -129,7 +130,7 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
               >
                 <X size={12} /> Cancel
               </button>
-              {onDelete && (
+              {onDelete ? (
                 confirmDelete ? (
                   <button
                     onClick={handleDelete}
@@ -146,9 +147,9 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
                     <Trash2 size={12} /> Delete
                   </button>
                 )
-              )}
+              ) : null}
             </>
-          )}
+          ) : null}
         </div>
       </div>
 

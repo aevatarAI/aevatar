@@ -116,6 +116,7 @@ public static class NyxIdChatEndpoints
                 ScopeId = scopeId,
             };
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
+            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
 
             var envelope = new EventEnvelope
             {
@@ -222,6 +223,29 @@ public static class NyxIdChatEndpoints
     {
         var removed = await actorStore.DeleteActorAsync(scopeId, actorId, ct);
         return removed ? Results.Ok() : Results.NotFound();
+    }
+
+    private static async Task InjectUserConfigMetadataAsync(
+        HttpContext http,
+        IDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        var preferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
+        if (preferencesStore == null)
+            return;
+
+        try
+        {
+            var preferences = await preferencesStore.GetAsync(ct);
+            if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
+                metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+            if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
+                metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
+        }
+        catch
+        {
+            // Best-effort
+        }
     }
 
     private static string? ExtractBearerToken(HttpContext http)

@@ -76,8 +76,6 @@ public sealed class ChronoStorageCatalogBlobClient
         RemoteScopeContext context,
         CancellationToken cancellationToken)
     {
-        // Use direct download endpoint (proxied through Nyx) instead of presigned S3 URLs,
-        // since presigned URLs point directly to S3 which may not be accessible from the client.
         using var request = CreateChronoStorageRequest(
             HttpMethod.Get,
             CreateChronoStorageUri(
@@ -86,13 +84,54 @@ public sealed class ChronoStorageCatalogBlobClient
                 $"key={Uri.EscapeDataString(context.ObjectKey)}"),
             context);
         using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        if (response.IsSuccessStatusCode)
+        {
+            return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        }
+
+        if (response.StatusCode != HttpStatusCode.NotFound)
+        {
+            response.EnsureSuccessStatusCode();
+        }
+
+        return await TryDownloadViaPresignedUrlAsync(context, cancellationToken);
+    }
+
+    private async Task<byte[]?> TryDownloadViaPresignedUrlAsync(
+        RemoteScopeContext context,
+        CancellationToken cancellationToken)
+    {
+        using var presignedRequest = CreateChronoStorageRequest(
+            HttpMethod.Get,
+            CreateChronoStorageUri(
+                context,
+                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
+                $"key={Uri.EscapeDataString(context.ObjectKey)}"),
+            context);
+        using var presignedResponse = await GetCatalogApiClient(context).SendAsync(presignedRequest, cancellationToken);
+        if (presignedResponse.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
 
-        response.EnsureSuccessStatusCode();
-        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        presignedResponse.EnsureSuccessStatusCode();
+
+        var payload = await presignedResponse.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
+        var presignedUrl = payload?.Data?.Url?.Trim() ?? payload?.Data?.PresignedUrl?.Trim();
+        if (string.IsNullOrWhiteSpace(presignedUrl))
+        {
+            throw new InvalidOperationException("Chrono-storage presigned-url response did not include a download URL.");
+        }
+
+        using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, presignedUrl);
+        using var downloadResponse = await _httpClientFactory.CreateClient().SendAsync(downloadRequest, cancellationToken);
+        if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        downloadResponse.EnsureSuccessStatusCode();
+        return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
     }
 
     public async Task UploadAsync(
@@ -121,9 +160,12 @@ public sealed class ChronoStorageCatalogBlobClient
         string? prefix = null,
         CancellationToken cancellationToken = default)
     {
+        var baseScope = string.IsNullOrWhiteSpace(context.Prefix)
+            ? context.ScopeDirectory
+            : $"{context.Prefix}/{context.ScopeDirectory}";
         var listPrefix = string.IsNullOrWhiteSpace(prefix)
-            ? context.ScopeDirectory + "/"
-            : $"{context.ScopeDirectory}/{prefix.TrimStart('/')}";
+            ? baseScope + "/"
+            : $"{baseScope}/{prefix.TrimStart('/')}";
 
         var query = $"prefix={Uri.EscapeDataString(listPrefix)}";
         using var request = CreateChronoStorageRequest(
@@ -137,18 +179,22 @@ public sealed class ChronoStorageCatalogBlobClient
         response.EnsureSuccessStatusCode();
         var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<ListObjectsPayload>>(cancellationToken);
         var objects = envelope?.Data?.Objects ?? [];
-        // Strip the scopeDirectory prefix so keys are relative (e.g. "workflows/foo.yaml")
+        // Strip the scopeDirectory prefix (including any bucket-level prefix) so keys are relative
+        // (e.g. "workflows/foo.yaml")
         var stripped = objects
-            .Select(o => o with { Key = StripScopePrefix(o.Key, context.ScopeDirectory) })
+            .Select(o => o with { Key = StripScopePrefix(o.Key, context.ScopeDirectory, context.Prefix) })
             .Where(o => !string.IsNullOrWhiteSpace(o.Key))
             .ToList();
         return new ListObjectsResult(stripped);
     }
 
-    private static string StripScopePrefix(string key, string scopeDir)
+    private static string StripScopePrefix(string key, string scopeDir, string? bucketPrefix = null)
     {
-        var prefix = scopeDir.TrimEnd('/') + "/";
-        return key.StartsWith(prefix, StringComparison.Ordinal) ? key[prefix.Length..] : string.Empty;
+        var fullDir = string.IsNullOrWhiteSpace(bucketPrefix)
+            ? scopeDir.TrimEnd('/')
+            : $"{bucketPrefix.TrimEnd('/')}/{scopeDir.TrimEnd('/')}";
+        var p = fullDir + "/";
+        return key.StartsWith(p, StringComparison.Ordinal) ? key[p.Length..] : string.Empty;
     }
 
     public async Task DeleteIfExistsAsync(
@@ -360,5 +406,14 @@ public sealed class ChronoStorageCatalogBlobClient
     {
         [JsonPropertyName("objects")]
         public List<StorageObject> Objects { get; set; } = new();
+    }
+
+    private sealed class PresignedUrlPayload
+    {
+        [JsonPropertyName("url")]
+        public string? Url { get; set; }
+
+        [JsonPropertyName("presignedUrl")]
+        public string? PresignedUrl { get; set; }
     }
 }

@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Hosting.Endpoints;
 
@@ -18,9 +19,9 @@ public static class ExplorerEndpoints
         var group = app.MapGroup("/api/explorer").WithTags("Explorer");
         group.MapGet("/manifest", HandleGetManifestAsync);
         group.MapGet("/grep", HandleGrepAsync);
-        group.MapGet("/files/{*key}", HandleGetFileAsync);
-        group.MapPut("/files/{*key}", HandlePutFileAsync);
-        group.MapDelete("/files/{*key}", HandleDeleteFileAsync);
+        group.MapGet("/files/{**key}", HandleGetFileAsync);
+        group.MapPut("/files/{**key}", HandlePutFileAsync);
+        group.MapDelete("/files/{**key}", HandleDeleteFileAsync);
         return app;
     }
 
@@ -43,7 +44,6 @@ public static class ExplorerEndpoints
             if (blobClient == null)
                 return Results.Ok(new ChronoStorageCatalogBlobClient.StorageManifest());
 
-            // Need any context to carry the scope/bucket/auth — use a dummy key
             var context = blobClient.TryResolveContext(string.Empty, "_");
             if (context == null)
                 return Results.Ok(new ChronoStorageCatalogBlobClient.StorageManifest());
@@ -96,10 +96,12 @@ public static class ExplorerEndpoints
         string key,
         [FromServices] IAppScopeResolver scopeResolver,
         [FromServices] ChronoStorageCatalogBlobClient? blobClient,
+        [FromServices] IOptions<ConnectorCatalogStorageOptions> storageOptions,
         CancellationToken ct)
     {
         try
         {
+            key = NormalizeFileKey(key);
             var scope = scopeResolver.Resolve(http);
             if (scope == null)
                 return Results.BadRequest(new { error = "Not authenticated" });
@@ -107,12 +109,8 @@ public static class ExplorerEndpoints
             if (blobClient == null)
                 return Results.NotFound(new { error = $"File not found: {key}" });
 
-            var context = blobClient.TryResolveContext(string.Empty, key);
-            if (context == null)
-                return Results.NotFound(new { error = $"File not found: {key}" });
-
-            var data = await blobClient.TryDownloadAsync(context, ct);
-            if (data == null)
+            var resolved = await TryDownloadFromKnownPrefixesAsync(blobClient, key, storageOptions.Value, ct);
+            if (resolved is null)
                 return Results.NotFound(new { error = $"File not found: {key}" });
 
             var contentType = key switch
@@ -122,7 +120,7 @@ public static class ExplorerEndpoints
                 _ when key.EndsWith(".cs") => "text/plain",
                 _ => "application/octet-stream",
             };
-            return Results.Text(Encoding.UTF8.GetString(data), contentType);
+            return Results.Text(Encoding.UTF8.GetString(resolved.Value.Payload), contentType);
         }
         catch (InvalidOperationException ex)
         {
@@ -135,18 +133,23 @@ public static class ExplorerEndpoints
         string key,
         [FromServices] IAppScopeResolver scopeResolver,
         [FromServices] ChronoStorageCatalogBlobClient? blobClient,
+        [FromServices] IOptions<ConnectorCatalogStorageOptions> storageOptions,
         CancellationToken ct)
     {
         try
         {
+            key = NormalizeFileKey(key);
             var scope = scopeResolver.Resolve(http);
             if (scope == null)
                 return Results.BadRequest(new { error = "Not authenticated" });
 
+            if (InferType(key) is "workflow" or "script")
+                return Results.BadRequest(new { error = "Workflow and script files are managed by Studio. Use the Studio API to edit them." });
+
             if (blobClient == null)
                 return Results.StatusCode(503);
 
-            var context = blobClient.TryResolveContext(string.Empty, key);
+            var context = await TryResolveWritableContextAsync(blobClient, key, storageOptions.Value, ct);
             if (context == null)
                 return Results.StatusCode(503);
 
@@ -173,22 +176,30 @@ public static class ExplorerEndpoints
         string key,
         [FromServices] IAppScopeResolver scopeResolver,
         [FromServices] ChronoStorageCatalogBlobClient? blobClient,
+        [FromServices] IOptions<ConnectorCatalogStorageOptions> storageOptions,
         CancellationToken ct)
     {
         try
         {
+            key = NormalizeFileKey(key);
             var scope = scopeResolver.Resolve(http);
             if (scope == null)
                 return Results.BadRequest(new { error = "Not authenticated" });
 
+            if (InferType(key) is "workflow" or "script")
+                return Results.BadRequest(new { error = "Workflow and script files are managed by Studio. Use the Studio API to delete them." });
+
             if (blobClient == null)
                 return Results.StatusCode(503);
 
-            var context = blobClient.TryResolveContext(string.Empty, key);
-            if (context == null)
-                return Results.StatusCode(503);
+            foreach (var prefix in GetCandidatePrefixesForKey(key, storageOptions.Value))
+            {
+                var context = blobClient.TryResolveContext(prefix, key);
+                if (context == null) continue;
 
-            await blobClient.DeleteIfExistsAsync(context, ct);
+                await blobClient.DeleteIfExistsAsync(context, ct);
+            }
+
             return Results.NoContent();
         }
         catch (InvalidOperationException ex)
@@ -331,5 +342,75 @@ public static class ExplorerEndpoints
         var fileName = key.Split('/').Last();
         var dotIdx = fileName.LastIndexOf('.');
         return dotIdx > 0 ? fileName[..dotIdx] : fileName;
+    }
+
+    private static string NormalizeFileKey(string key) =>
+        Uri.UnescapeDataString(key ?? string.Empty).Trim('/');
+
+    /// <summary>
+    /// Returns the bucket-level prefix that a given key is stored under, matching the prefix
+    /// used by the corresponding storage store.
+    /// </summary>
+    private static string GetPrefixForKey(string key, ConnectorCatalogStorageOptions opts)
+    {
+        if (key.StartsWith("chat-histories/", StringComparison.Ordinal))
+            return opts.UserConfigPrefix;
+
+        return InferType(key) switch
+        {
+            "connectors" => opts.Prefix,
+            "roles" => opts.RolesPrefix,
+            "config" => opts.UserConfigPrefix,
+            _ when string.Equals(key, "actors.json", StringComparison.Ordinal) => opts.UserConfigPrefix,
+            _ => string.Empty,
+        };
+    }
+
+    private static IEnumerable<string> GetCandidatePrefixesForKey(string key, ConnectorCatalogStorageOptions opts)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var preferred = GetPrefixForKey(key, opts);
+        if (seen.Add(preferred))
+            yield return preferred;
+
+        foreach (var candidate in new[] { string.Empty, opts.Prefix, opts.RolesPrefix, opts.UserConfigPrefix })
+        {
+            if (seen.Add(candidate ?? string.Empty))
+                yield return candidate ?? string.Empty;
+        }
+    }
+
+    private static async Task<(
+        ChronoStorageCatalogBlobClient.RemoteScopeContext Context,
+        byte[] Payload)?> TryDownloadFromKnownPrefixesAsync(
+        ChronoStorageCatalogBlobClient blobClient,
+        string key,
+        ConnectorCatalogStorageOptions opts,
+        CancellationToken ct)
+    {
+        foreach (var prefix in GetCandidatePrefixesForKey(key, opts))
+        {
+            var context = blobClient.TryResolveContext(prefix, key);
+            if (context == null) continue;
+
+            var payload = await blobClient.TryDownloadAsync(context, ct);
+            if (payload != null)
+                return (context, payload);
+        }
+
+        return null;
+    }
+
+    private static async Task<ChronoStorageCatalogBlobClient.RemoteScopeContext?> TryResolveWritableContextAsync(
+        ChronoStorageCatalogBlobClient blobClient,
+        string key,
+        ConnectorCatalogStorageOptions opts,
+        CancellationToken ct)
+    {
+        var existing = await TryDownloadFromKnownPrefixesAsync(blobClient, key, opts, ct);
+        if (existing is not null)
+            return existing.Value.Context;
+
+        return blobClient.TryResolveContext(GetPrefixForKey(key, opts), key);
     }
 }

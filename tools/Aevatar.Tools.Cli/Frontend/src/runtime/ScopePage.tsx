@@ -6,7 +6,7 @@ import {
   isRawObserved,
   type RuntimeEvent,
 } from './sseUtils';
-import { sanitizeAssistantMessageContent } from './chatContent';
+import { parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
@@ -19,59 +19,160 @@ function genId() {
   return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
 }
 
-/** Minimal markdown-ish rendering: code blocks, inline code, bold, newlines */
-function renderContent(text: string) {
+/** Lightweight markdown rendering for chat content */
+type RenderTone = 'assistant' | 'user';
+
+function renderContent(text: string, tone: RenderTone = 'assistant') {
   if (!text) return null;
-  const parts = text.split(/(```[\s\S]*?```)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('```') && part.endsWith('```')) {
-      const inner = part.slice(3, -3);
-      const newlineIdx = inner.indexOf('\n');
-      const lang = newlineIdx > 0 ? inner.slice(0, newlineIdx).trim() : '';
-      const code = newlineIdx > 0 ? inner.slice(newlineIdx + 1) : inner;
+  return parseMarkdownBlocks(text).map((block, i) => renderBlock(block, tone, i));
+}
+
+function renderInline(text: string, tone: RenderTone) {
+  return tokenizeInlineContent(text).map((token, i) => {
+    if (token.kind === 'code') {
+      const codeClass = tone === 'user'
+        ? 'px-1 py-0.5 rounded bg-white/15 text-[12px] font-mono text-white'
+        : 'px-1 py-0.5 rounded bg-gray-100 text-[12px] font-mono text-pink-600';
       return (
-        <div key={i} className="my-2 rounded-lg overflow-hidden border border-gray-200">
-          {lang && (
-            <div className="px-3 py-1 bg-gray-100 text-[11px] font-mono text-gray-500 border-b border-gray-200">
-              {lang}
+        <code key={i} className={codeClass}>
+          {token.text}
+        </code>
+      );
+    }
+
+    if (token.kind === 'link') {
+      const linkClass = tone === 'user'
+        ? 'underline underline-offset-2 decoration-white/60 hover:decoration-white text-white break-all'
+        : 'underline underline-offset-2 decoration-blue-300 hover:decoration-blue-500 text-blue-600 hover:text-blue-700 break-all';
+      const content = token.bold ? <strong>{token.text}</strong> : token.text;
+      return (
+        <a
+          key={i}
+          href={token.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={linkClass}
+        >
+          {content}
+        </a>
+      );
+    }
+
+    if (token.bold) {
+      return <strong key={i}>{token.text}</strong>;
+    }
+
+    return <span key={i}>{token.text}</span>;
+  });
+}
+
+function renderBlock(
+  block: ReturnType<typeof parseMarkdownBlocks>[number],
+  tone: RenderTone,
+  key: number,
+) {
+  switch (block.kind) {
+    case 'code': {
+      const containerClass = tone === 'user'
+        ? 'my-2 rounded-lg overflow-hidden border border-white/20'
+        : 'my-2 rounded-lg overflow-hidden border border-gray-200';
+      const headerClass = tone === 'user'
+        ? 'px-3 py-1 bg-white/10 text-[11px] font-mono text-white/75 border-b border-white/15'
+        : 'px-3 py-1 bg-gray-100 text-[11px] font-mono text-gray-500 border-b border-gray-200';
+      const preClass = tone === 'user'
+        ? 'px-3 py-2 bg-white/5 text-[13px] font-mono leading-5 overflow-x-auto whitespace-pre text-white'
+        : 'px-3 py-2 bg-gray-50 text-[13px] font-mono leading-5 overflow-x-auto whitespace-pre';
+      return (
+        <div key={key} className={containerClass}>
+          {block.lang && (
+            <div className={headerClass}>
+              {block.lang}
             </div>
           )}
-          <pre className="px-3 py-2 bg-gray-50 text-[13px] font-mono leading-5 overflow-x-auto whitespace-pre">
-            {code}
+          <pre className={preClass}>
+            {block.code}
           </pre>
         </div>
       );
     }
-    return (
-      <span key={i}>
-        {part.split('\n').map((line, li, arr) => (
-          <span key={li}>
-            {renderInline(line)}
-            {li < arr.length - 1 && <br />}
-          </span>
-        ))}
-      </span>
-    );
-  });
-}
 
-function renderInline(text: string) {
-  const parts = text.split(/(`[^`]+`)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('`') && part.endsWith('`')) {
+    case 'heading': {
+      const sizes = ['text-[22px]', 'text-[19px]', 'text-[17px]', 'text-[15px]', 'text-[14px]', 'text-[13px]'];
+      const headingClass = tone === 'user'
+        ? `${sizes[Math.min(block.level - 1, sizes.length - 1)]} font-semibold text-white mt-3 mb-1`
+        : `${sizes[Math.min(block.level - 1, sizes.length - 1)]} font-semibold text-gray-900 mt-3 mb-1`;
       return (
-        <code key={i} className="px-1 py-0.5 rounded bg-gray-100 text-[12px] font-mono text-pink-600">
-          {part.slice(1, -1)}
-        </code>
+        <div key={key} className={headingClass}>
+          {renderInline(block.text, tone)}
+        </div>
       );
     }
-    return part.split(/(\*\*[^*]+\*\*)/g).map((seg, j) => {
-      if (seg.startsWith('**') && seg.endsWith('**')) {
-        return <strong key={`${i}-${j}`}>{seg.slice(2, -2)}</strong>;
-      }
-      return <span key={`${i}-${j}`}>{seg}</span>;
-    });
-  });
+
+    case 'blockquote': {
+      const quoteClass = tone === 'user'
+        ? 'my-2 border-l-2 border-white/35 pl-3 text-white/90'
+        : 'my-2 border-l-2 border-gray-300 pl-3 text-gray-600';
+      return (
+        <blockquote key={key} className={quoteClass}>
+          {renderLines(block.lines, tone)}
+        </blockquote>
+      );
+    }
+
+    case 'unordered-list': {
+      const listClass = tone === 'user'
+        ? 'my-2 list-disc pl-5 space-y-1 text-white'
+        : 'my-2 list-disc pl-5 space-y-1 text-gray-800';
+      return (
+        <ul key={key} className={listClass}>
+          {block.items.map((item, idx) => (
+            <li key={idx} className="break-words">
+              {renderInline(item, tone)}
+            </li>
+          ))}
+        </ul>
+      );
+    }
+
+    case 'ordered-list': {
+      const listClass = tone === 'user'
+        ? 'my-2 list-decimal pl-5 space-y-1 text-white'
+        : 'my-2 list-decimal pl-5 space-y-1 text-gray-800';
+      return (
+        <ol key={key} className={listClass}>
+          {block.items.map((item, idx) => (
+            <li key={idx} className="break-words">
+              {renderInline(item, tone)}
+            </li>
+          ))}
+        </ol>
+      );
+    }
+
+    case 'thematic-break': {
+      const hrClass = tone === 'user'
+        ? 'my-3 border-white/20'
+        : 'my-3 border-gray-200';
+      return <hr key={key} className={hrClass} />;
+    }
+
+    case 'paragraph':
+    default:
+      return (
+        <p key={key} className="my-1">
+          {renderLines(block.lines, tone)}
+        </p>
+      );
+  }
+}
+
+function renderLines(lines: string[], tone: RenderTone) {
+  return lines.map((line, lineIndex) => (
+    <span key={lineIndex}>
+      {renderInline(line, tone)}
+      {lineIndex < lines.length - 1 && <br />}
+    </span>
+  ));
 }
 
 // ── Step Indicator ─────────────────────────────────────────────────────────────
@@ -173,7 +274,7 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#2563eb] text-white px-4 py-3 text-[14px] leading-relaxed">
-          <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+          <div className="break-words">{renderContent(msg.content, 'user')}</div>
         </div>
       </div>
     );
@@ -225,7 +326,7 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
         {/* Text content */}
         <div className="text-[14px] leading-relaxed text-gray-800">
           <div className="break-words">
-            {renderContent(displayContent)}
+            {renderContent(displayContent, 'assistant')}
             {msg.status === 'streaming' && displayContent && (
               <span className="inline-block w-[2px] h-[18px] bg-gray-400 animate-blink ml-0.5 align-text-bottom" />
             )}

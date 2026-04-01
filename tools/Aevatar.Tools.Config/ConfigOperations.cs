@@ -349,13 +349,33 @@ internal sealed class ConfigOperations
     private static string? TryResolveNyxIdGatewayEndpointFromConfigJson()
     {
         var all = LoadJsonFileAsFlat(AevatarPaths.ConfigJson);
-        if (!all.TryGetValue("Cli:App:NyxId:Authority", out var authority) ||
-            string.IsNullOrWhiteSpace(authority))
+        if (all.TryGetValue("Aevatar:NyxId:GatewayEndpoint", out var configuredEndpoint) &&
+            !string.IsNullOrWhiteSpace(configuredEndpoint))
+        {
+            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+        }
+
+        if (all.TryGetValue("Cli:App:NyxId:GatewayEndpoint", out configuredEndpoint) &&
+            !string.IsNullOrWhiteSpace(configuredEndpoint))
+        {
+            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+        }
+
+        if (!all.TryGetValue("Cli:App:NyxId:Authority", out var authority) &&
+            !all.TryGetValue("Aevatar:NyxId:Authority", out authority))
         {
             return null;
         }
 
-        var trimmed = authority.Trim().TrimEnd('/');
+        return NormalizeNyxIdGatewayEndpoint(authority);
+    }
+
+    private static string? NormalizeNyxIdGatewayEndpoint(string? value)
+    {
+        var trimmed = value?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
             return null;
 

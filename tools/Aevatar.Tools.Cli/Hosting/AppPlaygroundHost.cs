@@ -5,7 +5,7 @@ namespace Aevatar.Tools.Cli.Hosting;
 
 internal static class AppPlaygroundHost
 {
-    private static volatile string _currentApiBaseUrl = "https://aevatar-console-backend-api.aevatar.ai";
+    private static volatile string _currentApiBaseUrl = "http://127.0.0.1:5080";
 
     public static async Task RunAsync(
         int port,

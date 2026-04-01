@@ -15,7 +15,10 @@ namespace Aevatar.GAgents.NyxidChat;
 /// NyxID chat GAgent. Extends RoleGAgent with a chat system prompt.
 /// On first activation (empty state), self-initializes with the system prompt
 /// so callers never need to dispatch InitializeRoleAgentEvent manually.
-/// Uses the default LLM provider (same as other scope services).
+/// Always pins the NyxID-backed provider so requests are routed using the
+/// authenticated NyxID account instead of drifting with the app default.
+/// The NyxID provider itself decides whether to use a user-configured
+/// chrono-llm service or fall back to the NyxID LLM gateway.
 ///
 /// Overrides HandleChatRequest to use non-streaming ChatAsync which runs
 /// the full ToolCallLoop (LLM -> tool_call -> execute -> result -> LLM -> ...),
@@ -36,32 +39,60 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        // Self-initialize on first activation so the system prompt is persisted
-        // into actor state without requiring an external init command.
-        // ProviderName is intentionally left unset so the GAgent uses the default
-        // LLM provider, consistent with other scope services (e.g. workflow-bound).
         if (string.IsNullOrWhiteSpace(State.RoleName))
         {
-            await PersistDomainEventAsync(new InitializeRoleAgentEvent
-            {
-                RoleName = NyxIdChatServiceDefaults.DisplayName,
-                SystemPrompt = NyxIdChatSystemPrompt.Value,
-                MaxToolRounds = 5,
-            });
+            await PersistDomainEventAsync(BuildInitializeRoleAgentEvent(NyxIdChatServiceDefaults.DisplayName));
         }
-        else if (string.Equals(State.ConfigOverrides?.ProviderName, "nyxid", StringComparison.OrdinalIgnoreCase))
+        else if (RequiresNyxIdProviderMigration())
         {
-            // Migration: clear the hardcoded "nyxid" provider so the GAgent uses
-            // the default LLM provider, consistent with other scope services.
-            await PersistDomainEventAsync(new InitializeRoleAgentEvent
-            {
-                RoleName = State.RoleName,
-                SystemPrompt = NyxIdChatSystemPrompt.Value,
-                MaxToolRounds = 5,
-            });
+            await PersistDomainEventAsync(BuildInitializeRoleAgentEvent(State.RoleName));
         }
 
         await base.OnActivateAsync(ct);
+    }
+
+    private bool RequiresNyxIdProviderMigration()
+    {
+        var overrides = State.ConfigOverrides;
+        return overrides == null ||
+               !overrides.HasProviderName ||
+               string.IsNullOrWhiteSpace(overrides.ProviderName);
+    }
+
+    private InitializeRoleAgentEvent BuildInitializeRoleAgentEvent(string roleName)
+    {
+        var initializeEvent = new InitializeRoleAgentEvent
+        {
+            RoleName = string.IsNullOrWhiteSpace(roleName)
+                ? NyxIdChatServiceDefaults.DisplayName
+                : roleName.Trim(),
+            ProviderName = NyxIdChatServiceDefaults.ProviderName,
+            SystemPrompt = NyxIdChatSystemPrompt.Value,
+            MaxToolRounds = State.ConfigOverrides?.HasMaxToolRounds == true &&
+                            State.ConfigOverrides.MaxToolRounds > 0
+                ? State.ConfigOverrides.MaxToolRounds
+                : 5,
+            EventModules = State.EventModules ?? string.Empty,
+            EventRoutes = State.EventRoutes ?? string.Empty,
+        };
+
+        var overrides = State.ConfigOverrides;
+        if (overrides?.HasModel == true)
+            initializeEvent.Model = overrides.Model;
+
+        if (overrides?.HasTemperature == true)
+            initializeEvent.Temperature = overrides.Temperature;
+
+        if (overrides?.HasMaxTokens == true && overrides.MaxTokens > 0)
+            initializeEvent.MaxTokens = overrides.MaxTokens;
+
+        if (overrides?.HasMaxHistoryMessages == true && overrides.MaxHistoryMessages > 0)
+            initializeEvent.MaxHistoryMessages = overrides.MaxHistoryMessages;
+
+        if (overrides?.HasStreamBufferCapacity == true && overrides.StreamBufferCapacity > 0)
+            initializeEvent.StreamBufferCapacity = overrides.StreamBufferCapacity;
+
+        return initializeEvent;
     }
 
     /// <summary>

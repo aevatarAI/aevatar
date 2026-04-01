@@ -28,6 +28,8 @@ One-command reinstall:
 bash tools/Aevatar.Tools.Cli/reinstall-tool.sh
 ```
 
+The reinstall script rebuilds the frontend, packs and reinstalls the global tool, then starts `aevatar app` in the background on port `6688` by default. Set `AEVATAR_REINSTALL_RESTART_APP=0` when you want reinstall without auto-start.
+
 ## Commands
 
 ```bash

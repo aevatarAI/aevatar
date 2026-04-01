@@ -1,4 +1,5 @@
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
 using Aevatar.Studio.Infrastructure.Serialization;
@@ -28,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConnectorCatalogStore, ChronoStorageConnectorCatalogStore>();
         services.AddSingleton<IRoleCatalogStore, ChronoStorageRoleCatalogStore>();
         services.AddSingleton<IUserConfigStore, ChronoStorageUserConfigStore>();
+        services.AddSingleton<INyxIdUserLlmPreferencesStore, ChronoStorageNyxIdUserLlmPreferencesStore>();
         services.AddSingleton<IGAgentActorStore, ChronoStorageGAgentActorStore>();
         services.AddSingleton<IChatHistoryStore, ChronoStorageChatHistoryStore>();
         services.AddSingleton<IWorkflowStoragePort, ChronoStorageWorkflowStoragePort>();

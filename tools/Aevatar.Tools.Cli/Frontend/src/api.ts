@@ -293,9 +293,10 @@ export const userConfig = {
   get:    ()          => request<any>('/user-config'),
   save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
   models: ()          => request<{
-    providers?: { provider_slug: string; provider_name: string; status: string; proxy_url: string }[];
+    providers?: { provider_slug: string; provider_name: string; status: string; proxy_url: string; source?: string }[];
     gateway_url?: string;
     supported_models?: string[];
+    models_by_provider?: Record<string, string[]>;
   }>('/user-config/models'),
 };
 
@@ -680,20 +681,22 @@ export const ornn = {
 };
 
 /* ─── Explorer (manifest-based chrono-storage) ─── */
+const encodeExplorerKey = (key: string) => key.split('/').map(segment => encodeURIComponent(segment)).join('/');
+
 export const explorer = {
   getManifest: () => request<{ version: number; files: Array<{ key: string; type: string; name?: string; updatedAt?: string }> }>('/explorer/manifest'),
-  getFile: (key: string) => fetch(`/api/explorer/files/${encodeURIComponent(key)}`, {
+  getFile: (key: string) => fetch(`/api/explorer/files/${encodeExplorerKey(key)}`, {
     headers: { ...getAuthHeaders() },
   }).then(res => {
     if (!res.ok) throw { status: res.status, message: 'File not found' };
     return res.text();
   }),
-  putFile: (key: string, content: string) => fetch(`/api/explorer/files/${encodeURIComponent(key)}`, {
+  putFile: (key: string, content: string) => fetch(`/api/explorer/files/${encodeExplorerKey(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/plain', ...getAuthHeaders() },
     body: content,
   }).then(res => { if (!res.ok) throw { status: res.status, message: 'Save failed' }; }),
-  deleteFile: (key: string) => fetch(`/api/explorer/files/${encodeURIComponent(key)}`, {
+  deleteFile: (key: string) => fetch(`/api/explorer/files/${encodeExplorerKey(key)}`, {
     method: 'DELETE',
     headers: { ...getAuthHeaders() },
   }).then(res => { if (!res.ok) throw { status: res.status, message: 'Delete failed' }; }),

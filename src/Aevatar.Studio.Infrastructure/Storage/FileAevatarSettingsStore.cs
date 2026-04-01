@@ -159,9 +159,16 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
 
     private static string? TryResolveNyxIdGatewayEndpointFromConfigJson()
     {
-        var authority = new ConfigurationBuilder()
+        var configuration = new ConfigurationBuilder()
             .AddJsonFile(AevatarPaths.ConfigJson, optional: true, reloadOnChange: false)
-            .Build()["Cli:App:NyxId:Authority"];
+            .Build();
+        var configuredEndpoint = configuration["Aevatar:NyxId:GatewayEndpoint"]
+            ?? configuration["Cli:App:NyxId:GatewayEndpoint"];
+        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
+            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+
+        var authority = configuration["Cli:App:NyxId:Authority"]
+            ?? configuration["Aevatar:NyxId:Authority"];
 
         return NormalizeNyxIdGatewayEndpoint(authority);
     }

@@ -280,14 +280,7 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         AevatarAIFeatureOptions options)
     {
-        var authority = configuration["Aevatar:NyxId:Authority"]
-            ?? configuration["Cli:App:NyxId:Authority"]
-            ?? configuration["Aevatar:Authentication:Authority"];
-
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        var gatewayEndpoint = NormalizeNyxIdGatewayEndpoint(authority);
+        var gatewayEndpoint = ResolveNyxIdGatewayEndpoint(configuration, options);
         if (string.IsNullOrWhiteSpace(gatewayEndpoint))
             return null;
 
@@ -484,6 +477,11 @@ public static class ServiceCollectionExtensions
     private static string? ResolveNyxIdGatewayEndpoint(IConfiguration configuration, AevatarAIFeatureOptions options)
     {
         var configuredEndpoint = options.NyxIdGatewayEndpoint;
+        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
+            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+
+        configuredEndpoint = configuration["Aevatar:NyxId:GatewayEndpoint"]
+            ?? configuration["Cli:App:NyxId:GatewayEndpoint"];
         if (!string.IsNullOrWhiteSpace(configuredEndpoint))
             return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
 

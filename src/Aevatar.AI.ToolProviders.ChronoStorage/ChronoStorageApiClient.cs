@@ -39,20 +39,23 @@ public sealed class ChronoStorageApiClient
 
     /// <summary>GET /api/explorer/files/{key} — read file content.</summary>
     public Task<string> GetFileAsync(string token, string key, CancellationToken ct) =>
-        GetAsync(token, $"/api/explorer/files/{Uri.EscapeDataString(key)}", ct);
+        GetAsync(token, $"/api/explorer/files/{EncodeKeyPath(key)}", ct);
 
     /// <summary>PUT /api/explorer/files/{key} — write/create file.</summary>
     public Task<string> PutFileAsync(string token, string key, string content, CancellationToken ct) =>
-        PutAsync(token, $"/api/explorer/files/{Uri.EscapeDataString(key)}", content, ct);
+        PutAsync(token, $"/api/explorer/files/{EncodeKeyPath(key)}", content, ct);
 
     /// <summary>DELETE /api/explorer/files/{key} — delete file.</summary>
     public Task<string> DeleteFileAsync(string token, string key, CancellationToken ct) =>
-        DeleteAsync(token, $"/api/explorer/files/{Uri.EscapeDataString(key)}", ct);
+        DeleteAsync(token, $"/api/explorer/files/{EncodeKeyPath(key)}", ct);
 
     // ─── HTTP helpers ───
 
     private string GetBaseUrl() =>
         _options.ApiBaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("ChronoStorage API base URL is not configured.");
+
+    private static string EncodeKeyPath(string key) =>
+        string.Join("/", (key ?? string.Empty).Split('/', StringSplitOptions.None).Select(Uri.EscapeDataString));
 
     private async Task<string> GetAsync(string token, string path, CancellationToken ct)
     {

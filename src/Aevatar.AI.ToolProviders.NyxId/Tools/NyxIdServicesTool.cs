@@ -185,7 +185,7 @@ public sealed class NyxIdServicesTool : IAgentTool
     {
         var payload = new Dictionary<string, object?>();
         if (direct)
-            payload["node_id"] = null;
+            payload["node_id"] = string.Empty;
         else if (!string.IsNullOrWhiteSpace(nodeId))
             payload["node_id"] = nodeId;
         else

@@ -15,6 +15,7 @@ using System.Text;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Hosting;
 using Aevatar.Scripting.Core.Ports;
 using Google.Protobuf.WellKnownTypes;
@@ -1021,20 +1022,25 @@ internal static class StudioEndpoints
             ? new Dictionary<string, string>(clientMetadata)
             : new Dictionary<string, string>();
 
-        // Forward caller's Bearer token so NyxID-backed providers can authenticate.
+        // Forward caller's Bearer token so NyxID-backed providers and connectors can authenticate.
         var bearerToken = ExtractBearerToken(http);
         if (!string.IsNullOrWhiteSpace(bearerToken))
+        {
             metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+            metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+        }
 
         // Forward the user's preferred model from their config.
-        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
-        if (userConfigStore != null)
+        var llmPreferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
+        if (llmPreferencesStore != null)
         {
             try
             {
-                var userConfig = await userConfigStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                    metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                var preferences = await llmPreferencesStore.GetAsync(ct);
+                if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
+                    metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
+                if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
+                    metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = preferences.PreferredRoute.Trim();
             }
             catch
             {
