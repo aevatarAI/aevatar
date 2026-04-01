@@ -1,0 +1,362 @@
+{
+	"openapi": "3.0.0",
+	"components": {
+		"examples": {},
+		"headers": {},
+		"parameters": {},
+		"requestBodies": {},
+		"responses": {},
+		"schemas": {
+			"IngestResponse": {
+				"properties": {
+					"uploadId": {
+						"type": "string"
+					},
+					"nodeIds": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"edgeIds": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					}
+				},
+				"required": [
+					"uploadId",
+					"nodeIds",
+					"edgeIds"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ErrorResponse": {
+				"properties": {
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"error"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"GraphNode": {
+				"properties": {},
+				"type": "object",
+				"additionalProperties": {}
+			},
+			"GraphEdge": {
+				"properties": {},
+				"type": "object",
+				"additionalProperties": {}
+			},
+			"IngestRequest": {
+				"properties": {
+					"nodes": {
+						"items": {
+							"$ref": "#/components/schemas/GraphNode"
+						},
+						"type": "array"
+					},
+					"edges": {
+						"items": {
+							"$ref": "#/components/schemas/GraphEdge"
+						},
+						"type": "array"
+					}
+				},
+				"required": [
+					"nodes"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"UploadHistoryDTO": {
+				"properties": {
+					"id": {
+						"type": "string"
+					},
+					"user": {
+						"type": "string"
+					},
+					"uploadTime": {
+						"type": "string"
+					},
+					"nodeCount": {
+						"type": "number",
+						"format": "double"
+					},
+					"edgeCount": {
+						"type": "number",
+						"format": "double"
+					},
+					"nodeIds": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"edgeIds": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"status": {
+						"type": "string"
+					},
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"id",
+					"user",
+					"uploadTime",
+					"nodeCount",
+					"edgeCount",
+					"nodeIds",
+					"edgeIds",
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"HistoryListResponse": {
+				"properties": {
+					"records": {
+						"items": {
+							"$ref": "#/components/schemas/UploadHistoryDTO"
+						},
+						"type": "array"
+					},
+					"total": {
+						"type": "number",
+						"format": "double"
+					},
+					"page": {
+						"type": "number",
+						"format": "double"
+					},
+					"pageSize": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"required": [
+					"records",
+					"total",
+					"page",
+					"pageSize"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"HealthResponse": {
+				"properties": {
+					"service": {
+						"type": "string"
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"ok"
+						],
+						"nullable": false
+					}
+				},
+				"required": [
+					"service",
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {}
+	},
+	"info": {
+		"title": "Sisyphus Ingestor",
+		"version": "1.0.0",
+		"description": "Knowledge ingestion service. Accepts arbitrary knowledge content (nodes and edges), writes them to chrono-graph as raw (red) entries, and tracks upload history in MongoDB.",
+		"contact": {}
+	},
+	"paths": {
+		"/ingest": {
+			"post": {
+				"operationId": "Ingest",
+				"responses": {
+					"200": {
+						"description": "Ingested successfully",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/IngestResponse"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Bad request",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"500": {
+						"description": "Ingestion failed",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Ingest knowledge content — nodes and edges are written to chrono-graph as raw (red) entries.\nEach node gets `sisyphus_status = \"raw\"` and a timestamp automatically.",
+				"summary": "Ingest knowledge content",
+				"tags": [
+					"Ingestion"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/IngestRequest"
+							}
+						}
+					}
+				}
+			}
+		},
+		"/history": {
+			"get": {
+				"operationId": "ListHistory",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HistoryListResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get paginated upload history.",
+				"summary": "List upload history",
+				"tags": [
+					"History"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "page",
+						"required": false,
+						"schema": {
+							"default": 1,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "pageSize",
+						"required": false,
+						"schema": {
+							"default": 20,
+							"format": "double",
+							"type": "number"
+						}
+					}
+				]
+			}
+		},
+		"/history/{uploadId}": {
+			"get": {
+				"operationId": "GetUpload",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/UploadHistoryDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Upload not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get detailed trace for a single upload.",
+				"summary": "Get upload detail",
+				"tags": [
+					"History"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "uploadId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/health": {
+			"get": {
+				"operationId": "GetHealth",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HealthResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Check service health.",
+				"summary": "Health check",
+				"tags": [
+					"Health"
+				],
+				"security": [],
+				"parameters": []
+			}
+		}
+	},
+	"servers": [
+		{
+			"url": "/"
+		}
+	]
+}

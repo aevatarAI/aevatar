@@ -1,0 +1,208 @@
+{
+	"openapi": "3.0.0",
+	"components": {
+		"examples": {},
+		"headers": {},
+		"parameters": {},
+		"requestBodies": {},
+		"responses": {},
+		"schemas": {
+			"HealthResponse": {
+				"properties": {
+					"status": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ErrorResponse": {
+				"properties": {
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"error"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"Record_string.unknown_": {
+				"properties": {},
+				"additionalProperties": {},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"GraphNode": {
+				"description": "A single node from the knowledge graph representing a mathematical statement or construct.\nEach node contains TeX content in its properties that will be sanitized, repaired if broken,\nand rendered into the appropriate amsthm environment in the final LaTeX document.",
+				"properties": {
+					"id": {
+						"type": "string",
+						"description": "Unique node identifier (UUID)"
+					},
+					"type": {
+						"type": "string",
+						"description": "Node type from whitelist: theorem, lemma, definition, proof, corollary, conjecture,\nproposition, remark, conclusion, example, notation, axiom, observation, note"
+					},
+					"properties": {
+						"$ref": "#/components/schemas/Record_string.unknown_",
+						"description": "Node properties including 'body' (TeX content) and 'abstract' (summary).\nThe 'body' field contains the raw LaTeX source for this node. Broken or malformed\nTeX is automatically sanitized and repaired to guarantee successful compilation."
+					}
+				},
+				"required": [
+					"id",
+					"type",
+					"properties"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"GraphEdge": {
+				"description": "A directed edge between two knowledge graph nodes, representing a dependency relationship.\nEdges are used for topological sorting (to determine document order) and for generating\ncross-references in the final LaTeX document.",
+				"properties": {
+					"source": {
+						"type": "string",
+						"description": "Source node ID — the node that references or proves the target"
+					},
+					"target": {
+						"type": "string",
+						"description": "Target node ID — the node being referenced or proved"
+					},
+					"edge_type": {
+						"type": "string",
+						"description": "Edge relationship type: 'proves' or 'references'.\n'proves' indicates the source is a proof of the target.\n'references' indicates the source cites or depends on the target."
+					}
+				},
+				"required": [
+					"source",
+					"target",
+					"edge_type"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"CompileRequest": {
+				"description": "Request body for the paper compilation endpoint.\nContains the knowledge graph nodes and edges to compile into a LaTeX research paper.\nThe compilation pipeline: sanitize TeX → topologically sort by edges → generate LaTeX → compile to PDF with tectonic.",
+				"properties": {
+					"nodes": {
+						"items": {
+							"$ref": "#/components/schemas/GraphNode"
+						},
+						"type": "array",
+						"description": "Array of black (verified) knowledge graph nodes to compile into a paper.\nMust be non-empty and contain at most 10,000 nodes."
+					},
+					"edges": {
+						"items": {
+							"$ref": "#/components/schemas/GraphEdge"
+						},
+						"type": "array",
+						"description": "Array of edges defining dependencies between nodes.\nUsed for topological ordering (so referenced nodes appear before referencing nodes)\nand for generating cross-reference links in the compiled document."
+					}
+				},
+				"required": [
+					"nodes",
+					"edges"
+				],
+				"type": "object",
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {}
+	},
+	"info": {
+		"title": "Sisyphus Paper Compiler",
+		"version": "1.0.0",
+		"description": "Compiles knowledge graph nodes into LaTeX research papers. Receives black (verified) nodes with TeX content, sanitizes and repairs broken LaTeX, topologically sorts by edge dependencies, assembles a complete LaTeX document with amsthm environments and cross-references, and compiles to PDF using tectonic.",
+		"contact": {}
+	},
+	"paths": {
+		"/health": {
+			"get": {
+				"operationId": "GetHealth",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HealthResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Check service health.",
+				"summary": "Health check",
+				"tags": [
+					"Health"
+				],
+				"security": [],
+				"parameters": []
+			}
+		},
+		"/compile": {
+			"post": {
+				"operationId": "Compile",
+				"responses": {
+					"200": {
+						"description": "PDF compiled successfully",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "string",
+									"format": "byte"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Invalid request — nodes array is empty or exceeds maximum",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"500": {
+						"description": "Compilation failure — tectonic could not produce a PDF",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Compile knowledge graph nodes into a PDF research paper.\n\nAccepts an array of black (verified) nodes with TeX content and edges defining\ntheir dependency relationships. Returns the compiled PDF as a binary stream.\n\nBroken or malformed TeX is auto-repaired: brace balancing, dangerous command\nstripping, and fallback to plain text ensure compilation always succeeds.\n\nThe response is a raw PDF binary with Content-Type `application/pdf`.",
+				"summary": "Compile nodes to PDF",
+				"tags": [
+					"Compilation"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CompileRequest"
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	"servers": [
+		{
+			"url": "/"
+		}
+	]
+}

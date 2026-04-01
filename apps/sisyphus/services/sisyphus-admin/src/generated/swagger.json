@@ -1,0 +1,522 @@
+{
+	"openapi": "3.0.0",
+	"components": {
+		"examples": {},
+		"headers": {},
+		"parameters": {},
+		"requestBodies": {},
+		"responses": {},
+		"schemas": {
+			"Pick_Settings.Exclude_keyofSettings._id__": {
+				"properties": {
+					"id": {
+						"type": "string",
+						"enum": [
+							"global"
+						],
+						"nullable": false
+					},
+					"graphId": {
+						"type": "string"
+					},
+					"verifyCronIntervalHours": {
+						"type": "number",
+						"format": "double"
+					},
+					"eventRetentionDays": {
+						"type": "number",
+						"format": "double"
+					},
+					"defaultResearchMode": {
+						"type": "string",
+						"enum": [
+							"graph_based",
+							"exploration"
+						]
+					},
+					"graphViewNodeLimit": {
+						"type": "number",
+						"format": "double"
+					},
+					"updatedAt": {
+						"type": "string"
+					},
+					"updatedBy": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"id",
+					"graphId",
+					"verifyCronIntervalHours",
+					"eventRetentionDays",
+					"defaultResearchMode",
+					"graphViewNodeLimit",
+					"updatedAt"
+				],
+				"type": "object",
+				"description": "From T, pick a set of properties whose keys are in the union K"
+			},
+			"Omit_Settings._id_": {
+				"$ref": "#/components/schemas/Pick_Settings.Exclude_keyofSettings._id__",
+				"description": "Construct a type with the properties of T except for those in type K."
+			},
+			"SettingsDTO": {
+				"$ref": "#/components/schemas/Omit_Settings._id_"
+			},
+			"ErrorResponse": {
+				"properties": {
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"error"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"UpdateSettingsRequest": {
+				"properties": {
+					"graphId": {
+						"type": "string"
+					},
+					"verifyCronIntervalHours": {
+						"type": "number",
+						"format": "double"
+					},
+					"eventRetentionDays": {
+						"type": "number",
+						"format": "double"
+					},
+					"defaultResearchMode": {
+						"type": "string",
+						"enum": [
+							"graph_based",
+							"exploration"
+						]
+					},
+					"graphViewNodeLimit": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"type": "object",
+				"additionalProperties": false
+			},
+			"AuditAction": {
+				"type": "string",
+				"enum": [
+					"create",
+					"update",
+					"delete",
+					"compile",
+					"deploy",
+					"trigger",
+					"stop",
+					"login",
+					"logout"
+				]
+			},
+			"AuditResource": {
+				"type": "string",
+				"enum": [
+					"workflow",
+					"connector",
+					"schema",
+					"settings",
+					"session",
+					"user"
+				]
+			},
+			"Record_string.unknown_": {
+				"properties": {},
+				"additionalProperties": {},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"Pick_AuditEvent.Exclude_keyofAuditEvent._id-or-createdAt__": {
+				"properties": {
+					"id": {
+						"type": "string"
+					},
+					"timestamp": {
+						"type": "string"
+					},
+					"userId": {
+						"type": "string"
+					},
+					"userName": {
+						"type": "string"
+					},
+					"action": {
+						"$ref": "#/components/schemas/AuditAction"
+					},
+					"resource": {
+						"$ref": "#/components/schemas/AuditResource"
+					},
+					"resourceId": {
+						"type": "string"
+					},
+					"resourceName": {
+						"type": "string"
+					},
+					"service": {
+						"type": "string"
+					},
+					"details": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"id",
+					"timestamp",
+					"userId",
+					"action",
+					"resource",
+					"service"
+				],
+				"type": "object",
+				"description": "From T, pick a set of properties whose keys are in the union K"
+			},
+			"Omit_AuditEvent._id-or-createdAt_": {
+				"$ref": "#/components/schemas/Pick_AuditEvent.Exclude_keyofAuditEvent._id-or-createdAt__",
+				"description": "Construct a type with the properties of T except for those in type K."
+			},
+			"AuditEventDTO": {
+				"allOf": [
+					{
+						"$ref": "#/components/schemas/Omit_AuditEvent._id-or-createdAt_"
+					},
+					{
+						"properties": {
+							"createdAt": {
+								"type": "string"
+							}
+						},
+						"required": [
+							"createdAt"
+						],
+						"type": "object"
+					}
+				]
+			},
+			"CreateAuditEventRequest": {
+				"properties": {
+					"userId": {
+						"type": "string"
+					},
+					"userName": {
+						"type": "string"
+					},
+					"action": {
+						"$ref": "#/components/schemas/AuditAction"
+					},
+					"resource": {
+						"$ref": "#/components/schemas/AuditResource"
+					},
+					"resourceId": {
+						"type": "string"
+					},
+					"resourceName": {
+						"type": "string"
+					},
+					"service": {
+						"type": "string"
+					},
+					"details": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"userId",
+					"action",
+					"resource",
+					"service"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"AuditListResponse": {
+				"properties": {
+					"events": {
+						"items": {
+							"$ref": "#/components/schemas/AuditEventDTO"
+						},
+						"type": "array"
+					},
+					"total": {
+						"type": "number",
+						"format": "double"
+					},
+					"page": {
+						"type": "number",
+						"format": "double"
+					},
+					"pageSize": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"required": [
+					"events",
+					"total",
+					"page",
+					"pageSize"
+				],
+				"type": "object",
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {}
+	},
+	"info": {
+		"title": "Sisyphus Admin",
+		"version": "1.0.0",
+		"description": "Global settings and audit trail service. Manages project-level configuration (graph ID, cron intervals), records audit events from all Sisyphus services, and tracks user login history.",
+		"contact": {}
+	},
+	"paths": {
+		"/settings": {
+			"get": {
+				"operationId": "GetSettings",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SettingsDTO"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get global settings. Returns defaults if never configured.\nOther Sisyphus services call this to retrieve graphId, cron intervals, etc.",
+				"summary": "Get settings",
+				"tags": [
+					"Settings"
+				],
+				"security": [],
+				"parameters": []
+			},
+			"put": {
+				"operationId": "UpdateSettings",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SettingsDTO"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Bad request",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Update global settings. Merges provided fields with existing values.",
+				"summary": "Update settings",
+				"tags": [
+					"Settings"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/UpdateSettingsRequest"
+							}
+						}
+					}
+				}
+			}
+		},
+		"/health": {
+			"get": {
+				"operationId": "Health",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"properties": {
+										"status": {
+											"type": "string"
+										},
+										"service": {
+											"type": "string"
+										}
+									},
+									"required": [
+										"status",
+										"service"
+									],
+									"type": "object"
+								}
+							}
+						}
+					}
+				},
+				"summary": "Health check",
+				"tags": [
+					"Health"
+				],
+				"security": [],
+				"parameters": []
+			}
+		},
+		"/audit": {
+			"post": {
+				"operationId": "RecordEvent",
+				"responses": {
+					"201": {
+						"description": "Event recorded",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuditEventDTO"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Bad request",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Record an audit event. Called by other Sisyphus services after operations.",
+				"summary": "Record audit event",
+				"tags": [
+					"Audit"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CreateAuditEventRequest"
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "ListEvents",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/AuditListResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "List audit events with filtering and pagination.",
+				"summary": "List audit events",
+				"tags": [
+					"Audit"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "page",
+						"required": false,
+						"schema": {
+							"default": 1,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "pageSize",
+						"required": false,
+						"schema": {
+							"default": 50,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "userId",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "query",
+						"name": "action",
+						"required": false,
+						"schema": {
+							"$ref": "#/components/schemas/AuditAction"
+						}
+					},
+					{
+						"in": "query",
+						"name": "resource",
+						"required": false,
+						"schema": {
+							"$ref": "#/components/schemas/AuditResource"
+						}
+					},
+					{
+						"in": "query",
+						"name": "service",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "query",
+						"name": "since",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "query",
+						"name": "until",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		}
+	},
+	"servers": [
+		{
+			"url": "/"
+		}
+	]
+}

@@ -1,0 +1,16 @@
+{
+  "entryFile": "src/app.ts",
+  "noImplicitAdditionalProperties": "throw-on-extras",
+  "controllerPathGlobs": ["src/controllers/**/*.ts"],
+  "spec": {
+    "outputDirectory": "src/generated",
+    "specVersion": 3,
+    "name": "Sisyphus Workflow",
+    "description": "Workflow and connector definition management service. Provides CRUD for workflow definitions, connector definitions, compile-to-YAML with chrono-ornn skill injection, and deploy to Aevatar mainnet.",
+    "version": "1.0.0"
+  },
+  "routes": {
+    "routesDir": "src/generated",
+    "esm": true
+  }
+}

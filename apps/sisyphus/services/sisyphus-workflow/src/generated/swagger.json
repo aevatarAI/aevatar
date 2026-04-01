@@ -1,0 +1,1427 @@
+{
+	"openapi": "3.0.0",
+	"components": {
+		"examples": {},
+		"headers": {},
+		"parameters": {},
+		"requestBodies": {},
+		"responses": {},
+		"schemas": {
+			"RoleDefinition": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"skillId": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"name"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"Record_string.unknown_": {
+				"properties": {},
+				"additionalProperties": {},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"StepDefinition": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"type": {
+						"type": "string"
+					},
+					"order": {
+						"type": "number",
+						"format": "double"
+					},
+					"roleRef": {
+						"type": "string"
+					},
+					"connectorRef": {
+						"type": "string"
+					},
+					"parameters": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"name",
+					"type",
+					"order"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"DeploymentStatus": {
+				"type": "string",
+				"enum": [
+					"draft",
+					"compiled",
+					"deployed",
+					"out_of_sync"
+				]
+			},
+			"DeploymentState": {
+				"properties": {
+					"status": {
+						"$ref": "#/components/schemas/DeploymentStatus"
+					},
+					"contentHash": {
+						"type": "string"
+					},
+					"lastCompiledAt": {
+						"type": "string"
+					},
+					"lastDeployedAt": {
+						"type": "string"
+					},
+					"lastDeployedArtifactId": {
+						"type": "string"
+					},
+					"mainnetRevisionId": {
+						"type": "string"
+					},
+					"deployError": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"WorkflowDefinitionDTO": {
+				"properties": {
+					"id": {
+						"type": "string"
+					},
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"yaml": {
+						"type": "string"
+					},
+					"roles": {
+						"items": {
+							"$ref": "#/components/schemas/RoleDefinition"
+						},
+						"type": "array"
+					},
+					"steps": {
+						"items": {
+							"$ref": "#/components/schemas/StepDefinition"
+						},
+						"type": "array"
+					},
+					"parameters": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					},
+					"deploymentState": {
+						"$ref": "#/components/schemas/DeploymentState"
+					},
+					"createdAt": {
+						"type": "string"
+					},
+					"updatedAt": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"id",
+					"name",
+					"description",
+					"roles",
+					"steps",
+					"createdAt",
+					"updatedAt"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ErrorResponse": {
+				"properties": {
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"error"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"CreateWorkflowRequest": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"yaml": {
+						"type": "string"
+					},
+					"roles": {
+						"items": {
+							"$ref": "#/components/schemas/RoleDefinition"
+						},
+						"type": "array"
+					},
+					"steps": {
+						"items": {
+							"$ref": "#/components/schemas/StepDefinition"
+						},
+						"type": "array"
+					},
+					"parameters": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"name",
+					"description",
+					"roles",
+					"steps"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"WorkflowListResponse": {
+				"properties": {
+					"workflows": {
+						"items": {
+							"$ref": "#/components/schemas/WorkflowDefinitionDTO"
+						},
+						"type": "array"
+					},
+					"total": {
+						"type": "number",
+						"format": "double"
+					},
+					"page": {
+						"type": "number",
+						"format": "double"
+					},
+					"pageSize": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"required": [
+					"workflows",
+					"total",
+					"page",
+					"pageSize"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"UpdateWorkflowRequest": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"yaml": {
+						"type": "string"
+					},
+					"roles": {
+						"items": {
+							"$ref": "#/components/schemas/RoleDefinition"
+						},
+						"type": "array"
+					},
+					"steps": {
+						"items": {
+							"$ref": "#/components/schemas/StepDefinition"
+						},
+						"type": "array"
+					},
+					"parameters": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"type": "object",
+				"additionalProperties": false
+			},
+			"HealthResponse": {
+				"properties": {
+					"service": {
+						"type": "string"
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"ok"
+						],
+						"nullable": false
+					}
+				},
+				"required": [
+					"service",
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"AuthConfig": {
+				"properties": {
+					"type": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"type"
+				],
+				"type": "object",
+				"additionalProperties": {}
+			},
+			"HttpEndpoint": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"method": {
+						"type": "string"
+					},
+					"path": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"name",
+					"method",
+					"path"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ConnectorDefinitionDTO": {
+				"properties": {
+					"id": {
+						"type": "string"
+					},
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"type": {
+						"type": "string",
+						"enum": [
+							"http",
+							"mcp"
+						]
+					},
+					"baseUrl": {
+						"type": "string"
+					},
+					"authConfig": {
+						"$ref": "#/components/schemas/AuthConfig"
+					},
+					"endpoints": {
+						"items": {
+							"$ref": "#/components/schemas/HttpEndpoint"
+						},
+						"type": "array"
+					},
+					"mcpConfig": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					},
+					"createdAt": {
+						"type": "string"
+					},
+					"updatedAt": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"id",
+					"name",
+					"description",
+					"type",
+					"createdAt",
+					"updatedAt"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"CreateConnectorRequest": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"type": {
+						"type": "string",
+						"enum": [
+							"http",
+							"mcp"
+						]
+					},
+					"baseUrl": {
+						"type": "string"
+					},
+					"authConfig": {
+						"$ref": "#/components/schemas/AuthConfig"
+					},
+					"endpoints": {
+						"items": {
+							"$ref": "#/components/schemas/HttpEndpoint"
+						},
+						"type": "array"
+					},
+					"mcpConfig": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"name",
+					"description",
+					"type"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ConnectorListResponse": {
+				"properties": {
+					"connectors": {
+						"items": {
+							"$ref": "#/components/schemas/ConnectorDefinitionDTO"
+						},
+						"type": "array"
+					},
+					"total": {
+						"type": "number",
+						"format": "double"
+					},
+					"page": {
+						"type": "number",
+						"format": "double"
+					},
+					"pageSize": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"required": [
+					"connectors",
+					"total",
+					"page",
+					"pageSize"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"UpdateConnectorRequest": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"type": {
+						"type": "string",
+						"enum": [
+							"http",
+							"mcp"
+						]
+					},
+					"baseUrl": {
+						"type": "string"
+					},
+					"authConfig": {
+						"$ref": "#/components/schemas/AuthConfig"
+					},
+					"endpoints": {
+						"items": {
+							"$ref": "#/components/schemas/HttpEndpoint"
+						},
+						"type": "array"
+					},
+					"mcpConfig": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"type": "object",
+				"additionalProperties": false
+			},
+			"Record_string.string_": {
+				"properties": {},
+				"additionalProperties": {
+					"type": "string"
+				},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"MainnetConnectorDto": {
+				"properties": {
+					"Name": {
+						"type": "string"
+					},
+					"Type": {
+						"type": "string"
+					},
+					"Enabled": {
+						"type": "boolean"
+					},
+					"TimeoutMs": {
+						"type": "number",
+						"format": "double"
+					},
+					"Retry": {
+						"type": "number",
+						"format": "double"
+					},
+					"Http": {
+						"properties": {
+							"DefaultHeaders": {
+								"$ref": "#/components/schemas/Record_string.string_"
+							},
+							"AllowedInputKeys": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"AllowedPaths": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"AllowedMethods": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"BaseUrl": {
+								"type": "string"
+							}
+						},
+						"required": [
+							"DefaultHeaders",
+							"AllowedInputKeys",
+							"AllowedPaths",
+							"AllowedMethods",
+							"BaseUrl"
+						],
+						"type": "object"
+					},
+					"Cli": {
+						"properties": {
+							"Environment": {
+								"$ref": "#/components/schemas/Record_string.string_"
+							},
+							"WorkingDirectory": {
+								"type": "string"
+							},
+							"AllowedInputKeys": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"AllowedOperations": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"FixedArguments": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"Command": {
+								"type": "string"
+							}
+						},
+						"required": [
+							"Environment",
+							"WorkingDirectory",
+							"AllowedInputKeys",
+							"AllowedOperations",
+							"FixedArguments",
+							"Command"
+						],
+						"type": "object"
+					},
+					"Mcp": {
+						"properties": {
+							"AllowedInputKeys": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"AllowedTools": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"DefaultTool": {
+								"type": "string"
+							},
+							"Environment": {
+								"$ref": "#/components/schemas/Record_string.string_"
+							},
+							"Arguments": {
+								"items": {
+									"type": "string"
+								},
+								"type": "array"
+							},
+							"Command": {
+								"type": "string"
+							},
+							"ServerName": {
+								"type": "string"
+							}
+						},
+						"required": [
+							"AllowedInputKeys",
+							"AllowedTools",
+							"DefaultTool",
+							"Environment",
+							"Arguments",
+							"Command",
+							"ServerName"
+						],
+						"type": "object"
+					}
+				},
+				"required": [
+					"Name",
+					"Type",
+					"Enabled",
+					"TimeoutMs",
+					"Retry",
+					"Http",
+					"Cli",
+					"Mcp"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"CompiledOutput": {
+				"properties": {
+					"workflowYaml": {
+						"type": "string"
+					},
+					"connectorJson": {
+						"items": {
+							"$ref": "#/components/schemas/Record_string.unknown_"
+						},
+						"type": "array"
+					}
+				},
+				"required": [
+					"workflowYaml",
+					"connectorJson"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"DeployResult": {
+				"properties": {
+					"success": {
+						"type": "boolean"
+					},
+					"workflowId": {
+						"type": "string"
+					},
+					"revisionId": {
+						"type": "string"
+					},
+					"result": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"success",
+					"workflowId"
+				],
+				"type": "object",
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {}
+	},
+	"info": {
+		"title": "Sisyphus Workflow",
+		"version": "1.0.0",
+		"description": "Workflow and connector definition management service. Provides CRUD for workflow definitions, connector definitions, compile-to-YAML with chrono-ornn skill injection, and deploy to Aevatar mainnet.",
+		"contact": {}
+	},
+	"paths": {
+		"/workflows": {
+			"post": {
+				"operationId": "CreateWorkflow",
+				"responses": {
+					"201": {
+						"description": "Workflow created",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/WorkflowDefinitionDTO"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Bad request",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Create a new workflow definition.",
+				"summary": "Create workflow",
+				"tags": [
+					"Workflows"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CreateWorkflowRequest"
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "ListWorkflows",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/WorkflowListResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "List all workflow definitions with pagination.",
+				"summary": "List workflows",
+				"tags": [
+					"Workflows"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "page",
+						"required": false,
+						"schema": {
+							"default": 1,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "pageSize",
+						"required": false,
+						"schema": {
+							"default": 20,
+							"format": "double",
+							"type": "number"
+						}
+					}
+				]
+			}
+		},
+		"/workflows/{workflowId}": {
+			"get": {
+				"operationId": "GetWorkflow",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/WorkflowDefinitionDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Workflow not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get a single workflow by ID, including roles and steps.",
+				"summary": "Get workflow",
+				"tags": [
+					"Workflows"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			},
+			"put": {
+				"operationId": "UpdateWorkflow",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/WorkflowDefinitionDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Workflow not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Update a workflow definition (roles, steps, parameters).",
+				"summary": "Update workflow",
+				"tags": [
+					"Workflows"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/UpdateWorkflowRequest"
+							}
+						}
+					}
+				}
+			},
+			"delete": {
+				"operationId": "DeleteWorkflow",
+				"responses": {
+					"204": {
+						"description": "Workflow deleted"
+					},
+					"404": {
+						"description": "Workflow not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Delete a workflow and its associated roles/steps.",
+				"summary": "Delete workflow",
+				"tags": [
+					"Workflows"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/workflows/{workflowId}/deployment-status": {
+			"get": {
+				"operationId": "GetDeploymentStatus",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"properties": {
+										"lastArtifact": {
+											"$ref": "#/components/schemas/Record_string.unknown_"
+										},
+										"deploymentState": {
+											"$ref": "#/components/schemas/DeploymentState"
+										}
+									},
+									"required": [
+										"deploymentState"
+									],
+									"type": "object"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Workflow not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get deployment status and last compiled artifact for a workflow.",
+				"summary": "Get deployment status",
+				"tags": [
+					"Workflows"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/health": {
+			"get": {
+				"operationId": "GetHealth",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HealthResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Check service health.",
+				"summary": "Health check",
+				"tags": [
+					"Health"
+				],
+				"security": [],
+				"parameters": []
+			}
+		},
+		"/connectors": {
+			"post": {
+				"operationId": "CreateConnector",
+				"responses": {
+					"201": {
+						"description": "Connector created",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ConnectorDefinitionDTO"
+								}
+							}
+						}
+					}
+				},
+				"description": "Create a new connector definition.",
+				"summary": "Create connector",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CreateConnectorRequest"
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "ListConnectors",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ConnectorListResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "List all connector definitions with pagination.",
+				"summary": "List connectors",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "page",
+						"required": false,
+						"schema": {
+							"default": 1,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "pageSize",
+						"required": false,
+						"schema": {
+							"default": 20,
+							"format": "double",
+							"type": "number"
+						}
+					}
+				]
+			}
+		},
+		"/connectors/{connectorId}": {
+			"get": {
+				"operationId": "GetConnector",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ConnectorDefinitionDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Connector not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get a single connector by ID.",
+				"summary": "Get connector",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "connectorId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			},
+			"put": {
+				"operationId": "UpdateConnector",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ConnectorDefinitionDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Connector not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Update a connector definition.",
+				"summary": "Update connector",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "connectorId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/UpdateConnectorRequest"
+							}
+						}
+					}
+				}
+			},
+			"delete": {
+				"operationId": "DeleteConnector",
+				"responses": {
+					"204": {
+						"description": "Connector deleted"
+					},
+					"404": {
+						"description": "Connector not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Delete a connector definition.",
+				"summary": "Delete connector",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "connectorId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/connectors/{connectorId}/compile": {
+			"get": {
+				"operationId": "CompileConnector",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/MainnetConnectorDto"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Connector not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Compile a single connector to mainnet ConnectorDefinitionDto format.",
+				"summary": "Compile connector",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "connectorId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/connectors/sync": {
+			"post": {
+				"operationId": "SyncConnectors",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"properties": {
+										"count": {
+											"type": "number",
+											"format": "double"
+										},
+										"success": {
+											"type": "boolean"
+										}
+									},
+									"required": [
+										"count",
+										"success"
+									],
+									"type": "object"
+								}
+							}
+						}
+					},
+					"502": {
+						"description": "Sync failed",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Sync ALL connectors to Aevatar mainnet. Loads all connectors from DB,\nmaps to mainnet format, and PUTs the full catalog.",
+				"summary": "Sync connectors to Aevatar",
+				"tags": [
+					"Connectors"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "header",
+						"name": "Authorization",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/compile/{workflowId}": {
+			"post": {
+				"operationId": "Compile",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/CompiledOutput"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Workflow not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"502": {
+						"description": "chrono-ornn unreachable",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Compile a workflow into YAML + connector JSON.\nResolves skill prompts from chrono-ornn, persists artifact, updates deployment status.",
+				"summary": "Compile workflow",
+				"tags": [
+					"Compile"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": false,
+					"content": {
+						"application/json": {
+							"schema": {
+								"properties": {
+									"userToken": {
+										"type": "string"
+									}
+								},
+								"type": "object"
+							}
+						}
+					}
+				}
+			}
+		},
+		"/deploy/{workflowId}": {
+			"post": {
+				"operationId": "Deploy",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/DeployResult"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Workflow not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"502": {
+						"description": "Deploy failed",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Compile and deploy a workflow to Aevatar mainnet.\nPipeline: compile -> upload connectors -> upload roles -> upload workflow (Scope API).",
+				"summary": "Deploy workflow to mainnet",
+				"tags": [
+					"Deploy"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "header",
+						"name": "Authorization",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": false,
+					"content": {
+						"application/json": {
+							"schema": {
+								"properties": {
+									"userToken": {
+										"type": "string"
+									}
+								},
+								"type": "object"
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	"servers": [
+		{
+			"url": "/"
+		}
+	]
+}

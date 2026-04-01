@@ -1,0 +1,16 @@
+{
+  "entryFile": "src/app.ts",
+  "noImplicitAdditionalProperties": "throw-on-extras",
+  "controllerPathGlobs": ["src/controllers/**/*.ts"],
+  "spec": {
+    "outputDirectory": "src/generated",
+    "specVersion": 3,
+    "name": "Sisyphus Runner",
+    "description": "Workflow lifecycle management service. Starts/stops workflow sessions across research, translate, purify, and verify types. Streams AG-UI events via WebSocket, manages verify cron jobs, and provides crash recovery.",
+    "version": "2.0.0"
+  },
+  "routes": {
+    "routesDir": "src/generated",
+    "esm": true
+  }
+}

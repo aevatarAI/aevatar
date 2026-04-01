@@ -1,0 +1,16 @@
+{
+  "entryFile": "src/app.ts",
+  "noImplicitAdditionalProperties": "throw-on-extras",
+  "controllerPathGlobs": ["src/controllers/**/*.ts"],
+  "spec": {
+    "outputDirectory": "src/generated",
+    "specVersion": 3,
+    "name": "Sisyphus Admin",
+    "description": "Global settings and audit trail service. Manages project-level configuration (graph ID, cron intervals), records audit events from all Sisyphus services, and tracks user login history.",
+    "version": "1.0.0"
+  },
+  "routes": {
+    "routesDir": "src/generated",
+    "esm": true
+  }
+}

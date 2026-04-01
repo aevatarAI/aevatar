@@ -1,0 +1,606 @@
+{
+	"openapi": "3.0.0",
+	"components": {
+		"examples": {},
+		"headers": {},
+		"parameters": {},
+		"requestBodies": {},
+		"responses": {},
+		"schemas": {
+			"StartResponse": {
+				"properties": {
+					"sessionId": {
+						"type": "string"
+					},
+					"runId": {
+						"type": "string"
+					},
+					"workflowType": {
+						"type": "string"
+					},
+					"status": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"sessionId",
+					"runId",
+					"workflowType",
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ErrorResponse": {
+				"properties": {
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"error"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"WorkflowType": {
+				"type": "string"
+			},
+			"StartRequest": {
+				"properties": {
+					"mode": {
+						"type": "string"
+					},
+					"direction": {
+						"type": "string"
+					},
+					"runMode": {
+						"type": "string",
+						"enum": [
+							"draft",
+							"deployed"
+						],
+						"description": "\"deployed\" (default) requires workflow to be deployed; \"draft\" compiles on-the-fly"
+					},
+					"userToken": {
+						"type": "string",
+						"description": "User's NyxID access token for aevatar mainnet auth"
+					}
+				},
+				"type": "object",
+				"additionalProperties": false
+			},
+			"StopResponse": {
+				"properties": {
+					"sessionId": {
+						"type": "string"
+					},
+					"workflowType": {
+						"type": "string"
+					},
+					"status": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"sessionId",
+					"workflowType",
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"SessionStatus": {
+				"type": "string",
+				"enum": [
+					"running",
+					"stopped",
+					"completed",
+					"failed"
+				]
+			},
+			"SessionDTO": {
+				"properties": {
+					"id": {
+						"type": "string"
+					},
+					"runId": {
+						"type": "string"
+					},
+					"workflowType": {
+						"$ref": "#/components/schemas/WorkflowType"
+					},
+					"status": {
+						"$ref": "#/components/schemas/SessionStatus"
+					},
+					"triggeredBy": {
+						"type": "string"
+					},
+					"startedAt": {
+						"type": "string"
+					},
+					"stoppedAt": {
+						"type": "string"
+					},
+					"duration": {
+						"type": "number",
+						"format": "double"
+					},
+					"error": {
+						"type": "string"
+					},
+					"mode": {
+						"type": "string"
+					},
+					"direction": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"id",
+					"runId",
+					"workflowType",
+					"status",
+					"triggeredBy",
+					"startedAt"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"StatusResponse": {
+				"properties": {
+					"running": {
+						"type": "boolean"
+					},
+					"session": {
+						"allOf": [
+							{
+								"$ref": "#/components/schemas/SessionDTO"
+							}
+						],
+						"nullable": true
+					}
+				},
+				"required": [
+					"running",
+					"session"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"Record_string.StatusResponse_": {
+				"properties": {},
+				"additionalProperties": {
+					"$ref": "#/components/schemas/StatusResponse"
+				},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"HistoryListResponse": {
+				"properties": {
+					"records": {
+						"items": {
+							"$ref": "#/components/schemas/SessionDTO"
+						},
+						"type": "array"
+					},
+					"total": {
+						"type": "number",
+						"format": "double"
+					},
+					"page": {
+						"type": "number",
+						"format": "double"
+					},
+					"pageSize": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"required": [
+					"records",
+					"total",
+					"page",
+					"pageSize"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"Record_string.unknown_": {
+				"properties": {},
+				"additionalProperties": {},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"AgUiEvent": {
+				"properties": {
+					"sessionId": {
+						"type": "string"
+					},
+					"timestamp": {
+						"type": "string"
+					},
+					"eventType": {
+						"type": "string"
+					},
+					"payload": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					},
+					"createdAt": {
+						"type": "string",
+						"format": "date-time"
+					}
+				},
+				"required": [
+					"sessionId",
+					"timestamp",
+					"eventType",
+					"payload",
+					"createdAt"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"SessionDetailResponse": {
+				"properties": {
+					"session": {
+						"$ref": "#/components/schemas/SessionDTO"
+					},
+					"events": {
+						"items": {
+							"$ref": "#/components/schemas/AgUiEvent"
+						},
+						"type": "array"
+					}
+				},
+				"required": [
+					"session",
+					"events"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"HealthResponse": {
+				"properties": {
+					"service": {
+						"type": "string"
+					},
+					"status": {
+						"type": "string",
+						"enum": [
+							"ok"
+						],
+						"nullable": false
+					}
+				},
+				"required": [
+					"service",
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {}
+	},
+	"info": {
+		"title": "Sisyphus Runner",
+		"version": "2.0.0",
+		"description": "Workflow lifecycle management service. Starts/stops workflow sessions across research, translate, purify, and verify types. Streams AG-UI events via WebSocket, manages verify cron jobs, and provides crash recovery.",
+		"contact": {}
+	},
+	"paths": {
+		"/workflows/{workflowType}/start": {
+			"post": {
+				"operationId": "Start",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/StartResponse"
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Workflow already running",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"500": {
+						"description": "Failed to start",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Start a workflow session (research, translate, purify, verify).\nFor research type, accepts optional mode (graph_based/exploration) and direction.",
+				"summary": "Start workflow",
+				"tags": [
+					"Workflow Runs"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowType",
+						"required": true,
+						"schema": {
+							"$ref": "#/components/schemas/WorkflowType"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/StartRequest"
+							}
+						}
+					}
+				}
+			}
+		},
+		"/workflows/{workflowType}/stop": {
+			"post": {
+				"operationId": "Stop",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/StopResponse"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "No running session",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Stop a running workflow session.",
+				"summary": "Stop workflow",
+				"tags": [
+					"Workflow Runs"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowType",
+						"required": true,
+						"schema": {
+							"$ref": "#/components/schemas/WorkflowType"
+						}
+					}
+				]
+			}
+		},
+		"/workflows/{workflowType}/status": {
+			"get": {
+				"operationId": "Status",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/StatusResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get current status of a specific workflow type.",
+				"summary": "Get workflow status",
+				"tags": [
+					"Workflow Runs"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "workflowType",
+						"required": true,
+						"schema": {
+							"$ref": "#/components/schemas/WorkflowType"
+						}
+					}
+				]
+			}
+		},
+		"/workflows/status": {
+			"get": {
+				"operationId": "AllStatus",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/Record_string.StatusResponse_"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get status of all workflow types.",
+				"summary": "Get all workflow statuses",
+				"tags": [
+					"Workflow Runs"
+				],
+				"security": [],
+				"parameters": []
+			}
+		},
+		"/history": {
+			"get": {
+				"operationId": "ListHistory",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HistoryListResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get paginated list of all workflow trigger records.\nSupports filtering by workflow_type, status, and date range.",
+				"summary": "List trigger history",
+				"tags": [
+					"History"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "page",
+						"required": false,
+						"schema": {
+							"default": 1,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "pageSize",
+						"required": false,
+						"schema": {
+							"default": 20,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "workflowType",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "query",
+						"name": "status",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "query",
+						"name": "startDate",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					},
+					{
+						"in": "query",
+						"name": "endDate",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/history/{sessionId}": {
+			"get": {
+				"operationId": "GetSessionDetail",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SessionDetailResponse"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Session not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get the full AG-UI event log for a session.",
+				"summary": "Get session detail with events",
+				"tags": [
+					"History"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "sessionId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/health": {
+			"get": {
+				"operationId": "GetHealth",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HealthResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Check service health.",
+				"summary": "Health check",
+				"tags": [
+					"Health"
+				],
+				"security": [],
+				"parameters": []
+			}
+		}
+	},
+	"servers": [
+		{
+			"url": "/"
+		}
+	]
+}

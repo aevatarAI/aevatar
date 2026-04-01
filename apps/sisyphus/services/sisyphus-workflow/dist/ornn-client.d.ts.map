@@ -1,0 +1,1 @@
+{"version":3,"file":"ornn-client.d.ts","sourceRoot":"","sources":["../src/ornn-client.ts"],"names":[],"mappings":"AAMA,MAAM,WAAW,YAAY;IAC3B,EAAE,EAAE,MAAM,CAAC;IACX,IAAI,EAAE,MAAM,CAAC;IACb,OAAO,EAAE,MAAM,CAAC;CACjB;AAED;;;;;GAKG;AACH,wBAAsB,iBAAiB,CAAC,OAAO,EAAE,MAAM,GAAG,OAAO,CAAC,YAAY,CAAC,CA4B9E;AAED,qBAAa,oBAAqB,SAAQ,KAAK;gBACjC,OAAO,EAAE,MAAM;CAI5B"}

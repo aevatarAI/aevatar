@@ -1,0 +1,16 @@
+{
+  "entryFile": "src/app.ts",
+  "noImplicitAdditionalProperties": "throw-on-extras",
+  "controllerPathGlobs": ["src/controllers/**/*.ts"],
+  "spec": {
+    "outputDirectory": "src/generated",
+    "specVersion": 3,
+    "name": "Sisyphus Ingestor",
+    "description": "Knowledge ingestion service. Accepts arbitrary knowledge content (nodes and edges), writes them to chrono-graph as raw (red) entries, and tracks upload history in MongoDB.",
+    "version": "1.0.0"
+  },
+  "routes": {
+    "routesDir": "src/generated",
+    "esm": true
+  }
+}

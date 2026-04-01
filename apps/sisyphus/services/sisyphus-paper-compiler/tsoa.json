@@ -1,0 +1,16 @@
+{
+  "entryFile": "src/app.ts",
+  "noImplicitAdditionalProperties": "throw-on-extras",
+  "controllerPathGlobs": ["src/controllers/**/*.ts"],
+  "spec": {
+    "outputDirectory": "src/generated",
+    "specVersion": 3,
+    "name": "Sisyphus Paper Compiler",
+    "description": "Compiles knowledge graph nodes into LaTeX research papers. Receives black (verified) nodes with TeX content, sanitizes and repairs broken LaTeX, topologically sorts by edge dependencies, assembles a complete LaTeX document with amsthm environments and cross-references, and compiles to PDF using tectonic.",
+    "version": "1.0.0"
+  },
+  "routes": {
+    "routesDir": "src/generated",
+    "esm": true
+  }
+}

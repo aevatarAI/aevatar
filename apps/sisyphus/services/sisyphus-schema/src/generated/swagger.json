@@ -1,0 +1,644 @@
+{
+	"openapi": "3.0.0",
+	"components": {
+		"examples": {},
+		"headers": {},
+		"parameters": {},
+		"requestBodies": {},
+		"responses": {},
+		"schemas": {
+			"ValidationResult": {
+				"properties": {
+					"valid": {
+						"type": "boolean"
+					},
+					"errors": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					}
+				},
+				"required": [
+					"valid"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ValidateErrorResponse": {
+				"description": "Error response returned when the request body is malformed\n(e.g., missing `schema` or `data` fields).",
+				"properties": {
+					"valid": {
+						"type": "boolean",
+						"enum": [
+							false
+						],
+						"nullable": false,
+						"description": "Always `false` for error responses."
+					},
+					"errors": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array",
+						"description": "Human-readable error messages describing what went wrong."
+					}
+				},
+				"required": [
+					"valid",
+					"errors"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ValidateRequest": {
+				"description": "The request body for JSON Schema validation.",
+				"properties": {
+					"schema": {
+						"description": "A JSON Schema (draft-07) object that defines the expected structure of the data.\nThis can be any valid JSON Schema, including complex schemas with nested objects,\narrays, conditionals, and format validations.",
+						"example": {
+							"type": "object",
+							"required": [
+								"name"
+							],
+							"properties": {
+								"name": {
+									"type": "string"
+								}
+							}
+						}
+					},
+					"data": {
+						"description": "The JSON data to validate against the provided schema.\nCan be any valid JSON value — object, array, string, number, boolean, or null.",
+						"example": {
+							"name": "test"
+						}
+					}
+				},
+				"type": "object",
+				"additionalProperties": false
+			},
+			"Record_string.unknown_": {
+				"properties": {},
+				"additionalProperties": {},
+				"type": "object",
+				"description": "Construct a type with a set of properties K of type T"
+			},
+			"SchemaDefinitionDTO": {
+				"properties": {
+					"id": {
+						"type": "string"
+					},
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"entityType": {
+						"type": "string",
+						"enum": [
+							"node",
+							"edge"
+						]
+					},
+					"applicableTypes": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"jsonSchema": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					},
+					"createdAt": {
+						"type": "string"
+					},
+					"updatedAt": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"id",
+					"name",
+					"description",
+					"entityType",
+					"applicableTypes",
+					"jsonSchema",
+					"createdAt",
+					"updatedAt"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ErrorResponse": {
+				"properties": {
+					"error": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"error"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"CreateSchemaRequest": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"entityType": {
+						"type": "string",
+						"enum": [
+							"node",
+							"edge"
+						]
+					},
+					"applicableTypes": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"jsonSchema": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"required": [
+					"name",
+					"description",
+					"entityType",
+					"applicableTypes",
+					"jsonSchema"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"SchemaListResponse": {
+				"properties": {
+					"schemas": {
+						"items": {
+							"$ref": "#/components/schemas/SchemaDefinitionDTO"
+						},
+						"type": "array"
+					},
+					"total": {
+						"type": "number",
+						"format": "double"
+					},
+					"page": {
+						"type": "number",
+						"format": "double"
+					},
+					"pageSize": {
+						"type": "number",
+						"format": "double"
+					}
+				},
+				"required": [
+					"schemas",
+					"total",
+					"page",
+					"pageSize"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"UpdateSchemaRequest": {
+				"properties": {
+					"name": {
+						"type": "string"
+					},
+					"description": {
+						"type": "string"
+					},
+					"entityType": {
+						"type": "string",
+						"enum": [
+							"node",
+							"edge"
+						]
+					},
+					"applicableTypes": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"jsonSchema": {
+						"$ref": "#/components/schemas/Record_string.unknown_"
+					}
+				},
+				"type": "object",
+				"additionalProperties": false
+			},
+			"ValidateByNameRequest": {
+				"properties": {
+					"data": {}
+				},
+				"required": [
+					"data"
+				],
+				"type": "object",
+				"additionalProperties": false
+			},
+			"HealthResponse": {
+				"description": "Response from the health check endpoint.",
+				"properties": {
+					"status": {
+						"type": "string",
+						"enum": [
+							"ok"
+						],
+						"nullable": false,
+						"description": "Service status — always `\"ok\"` when the service is running."
+					}
+				},
+				"required": [
+					"status"
+				],
+				"type": "object",
+				"additionalProperties": false
+			}
+		},
+		"securitySchemes": {}
+	},
+	"info": {
+		"title": "Sisyphus Schemas",
+		"version": "1.0.0",
+		"description": "Schema definition and validation service. Manages JSON Schema definitions in MongoDB with CRUD operations, validates data against inline or stored schemas using Ajv (draft-07). Used by Sisyphus workflow connector_call steps.",
+		"contact": {}
+	},
+	"paths": {
+		"/validate": {
+			"post": {
+				"operationId": "Validate",
+				"responses": {
+					"200": {
+						"description": "Validation completed",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ValidationResult"
+								},
+								"examples": {
+									"Example 1": {
+										"value": {
+											"valid": true
+										}
+									},
+									"Example 2": {
+										"value": {
+											"valid": false,
+											"errors": [
+												"/name must be string"
+											]
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Bad Request — missing schema or data",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ValidateErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Validate JSON data against a JSON Schema.\n\nAccepts a JSON Schema and a data payload, then validates the data against the\nschema using Ajv (draft-07 with formats). Returns whether the data is valid\nand, if not, a list of human-readable error messages describing each violation.\n\nCompiled schemas are cached (LRU, up to 500 entries) for performance — repeated\nvalidations against the same schema skip recompilation.",
+				"summary": "Validate data against a JSON Schema",
+				"tags": [
+					"Validation"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ValidateRequest"
+							}
+						}
+					}
+				}
+			}
+		},
+		"/schemas": {
+			"post": {
+				"operationId": "CreateSchema",
+				"responses": {
+					"201": {
+						"description": "Schema created",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SchemaDefinitionDTO"
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Bad request",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Schema with this name already exists",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Create a new schema definition.",
+				"summary": "Create schema",
+				"tags": [
+					"Schemas"
+				],
+				"security": [],
+				"parameters": [],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/CreateSchemaRequest"
+							}
+						}
+					}
+				}
+			},
+			"get": {
+				"operationId": "ListSchemas",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SchemaListResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "List all schema definitions with pagination.",
+				"summary": "List schemas",
+				"tags": [
+					"Schemas"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "query",
+						"name": "page",
+						"required": false,
+						"schema": {
+							"default": 1,
+							"format": "double",
+							"type": "number"
+						}
+					},
+					{
+						"in": "query",
+						"name": "pageSize",
+						"required": false,
+						"schema": {
+							"default": 20,
+							"format": "double",
+							"type": "number"
+						}
+					}
+				]
+			}
+		},
+		"/schemas/{schemaId}": {
+			"get": {
+				"operationId": "GetSchema",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SchemaDefinitionDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Schema not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Get a single schema by ID.",
+				"summary": "Get schema",
+				"tags": [
+					"Schemas"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "schemaId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			},
+			"put": {
+				"operationId": "UpdateSchema",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/SchemaDefinitionDTO"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Schema not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Update an existing schema. Invalidates the LRU cache for the old schema.",
+				"summary": "Update schema",
+				"tags": [
+					"Schemas"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "schemaId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/UpdateSchemaRequest"
+							}
+						}
+					}
+				}
+			},
+			"delete": {
+				"operationId": "DeleteSchema",
+				"responses": {
+					"204": {
+						"description": "Schema deleted"
+					},
+					"404": {
+						"description": "Schema not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Delete a schema. Invalidates the LRU cache for the deleted schema.",
+				"summary": "Delete schema",
+				"tags": [
+					"Schemas"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "schemaId",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				]
+			}
+		},
+		"/validate/{schemaName}": {
+			"post": {
+				"operationId": "ValidateByName",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ValidationResult"
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Schema not found",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ErrorResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Validate data against a stored schema by name.",
+				"summary": "Validate against named schema",
+				"tags": [
+					"Validation"
+				],
+				"security": [],
+				"parameters": [
+					{
+						"in": "path",
+						"name": "schemaName",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"$ref": "#/components/schemas/ValidateByNameRequest"
+							}
+						}
+					}
+				}
+			}
+		},
+		"/health": {
+			"get": {
+				"operationId": "GetHealth",
+				"responses": {
+					"200": {
+						"description": "Ok",
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HealthResponse"
+								}
+							}
+						}
+					}
+				},
+				"description": "Check service health.\n\nReturns `{ status: \"ok\" }` if the service is running and ready to accept requests.",
+				"summary": "Health check",
+				"tags": [
+					"Health"
+				],
+				"security": [],
+				"parameters": []
+			}
+		}
+	},
+	"servers": [
+		{
+			"url": "/"
+		}
+	]
+}

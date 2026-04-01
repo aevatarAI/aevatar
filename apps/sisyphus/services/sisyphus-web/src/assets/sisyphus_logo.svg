@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 50" width="360" height="50">
+  <defs>
+    <style>
+      .main-text {
+        font-family: 'Courier New', 'Lucida Console', monospace;
+        font-size: 38px;
+        font-weight: 900;
+        letter-spacing: 10px;
+        fill: #00f5ff;
+        text-anchor: middle;
+        filter: url(#glowCyan);
+        animation: flicker 3s steps(1) infinite;
+      }
+
+      @keyframes flicker {
+        0%,91%,100%   { opacity: 1;    filter: url(#glowCyan); }
+        91.5%          { opacity: 0.45; filter: url(#glowCyanDim); }
+        92%            { opacity: 1;    filter: url(#glowCyan); }
+        93%,93.4%      { opacity: 0.55; filter: url(#glowCyanDim); }
+        93.8%          { opacity: 1;    filter: url(#glowCyan); }
+        95.5%,95.9%    { opacity: 0.72; filter: url(#glowCyanMid); }
+        96.3%          { opacity: 1;    filter: url(#glowCyan); }
+        97.5%          { opacity: 0.3;  filter: url(#glowCyanDim); }
+        97.9%          { opacity: 1;    filter: url(#glowCyan); }
+      }
+    </style>
+
+    <filter id="glowCyan" x="-30%" y="-80%" width="160%" height="260%">
+      <feGaussianBlur stdDeviation="2" result="b1"/>
+      <feGaussianBlur stdDeviation="5" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowCyanMid" x="-30%" y="-80%" width="160%" height="260%">
+      <feGaussianBlur stdDeviation="1.5" result="b1"/>
+      <feMerge>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="glowCyanDim" x="-30%" y="-80%" width="160%" height="260%">
+      <feGaussianBlur stdDeviation="1" result="b1"/>
+      <feMerge>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <text class="main-text" x="180" y="37">SISYPHUS</text>
+</svg>
