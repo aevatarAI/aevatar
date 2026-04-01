@@ -1,6 +1,6 @@
 import { X } from 'lucide-react'
 import type { GraphNode, TraverseResult } from '../types/graph'
-import { STATUS_COLORS, getNodeColor } from '../types/graph'
+import { getNodeColor } from '../types/graph'
 
 interface NodeDetailsPanelProps {
   node: GraphNode | null
@@ -69,8 +69,8 @@ export default function NodeDetailsPanel({ node, traverseResult, onClose }: Node
             <span
               className="badge text-[10px]"
               style={{
-                color: STATUS_COLORS[status] ?? 'var(--text-muted)',
-                borderColor: STATUS_COLORS[status] ?? 'var(--border-default)',
+                color: 'var(--text-muted)',
+                borderColor: 'var(--border-default)',
               }}
             >
               {status}
@@ -91,7 +91,7 @@ export default function NodeDetailsPanel({ node, traverseResult, onClose }: Node
           </h3>
           <div className="grid grid-cols-2 gap-2">
             <MetaCard label="Type" value={node.type} color={getNodeColor(node)} />
-            <MetaCard label="Status" value={status ?? 'unknown'} color={STATUS_COLORS[status ?? ''] ?? 'var(--text-muted)'} />
+            <MetaCard label="Status" value={status ?? 'unknown'} color={'var(--text-muted)'} />
             {sourceType && <MetaCard label="Source" value={sourceType} />}
             {language && <MetaCard label="Language" value={language} />}
           </div>

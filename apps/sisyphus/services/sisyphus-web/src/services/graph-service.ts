@@ -50,7 +50,7 @@ function authHeaders(accessToken: string): HeadersInit {
 }
 
 export async function fetchGraphSnapshot(graphId: string, accessToken: string): Promise<GraphSnapshot> {
-  const url = proxyUrl(`/api/graphs/${encodeURIComponent(graphId)}/snapshot`)
+  const url = proxyUrl(`/api/graphs/${encodeURIComponent(graphId)}/snapshot-light`)
   const res = await fetch(url, { headers: authHeaders(accessToken) })
   if (!res.ok) throw new Error(`Failed to fetch graph snapshot: ${res.status}`)
   const data = await res.json()
