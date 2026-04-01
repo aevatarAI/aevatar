@@ -112,10 +112,119 @@ public sealed class NyxIdApiClient
     public Task<string> ListApprovalServiceConfigsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/approvals/service-configs", ct);
 
+    // ─── Profile ───
+
+    public Task<string> UpdateProfileAsync(string token, string body, CancellationToken ct) =>
+        PutAsync(token, "/api/v1/users/me", body, ct);
+
+    public Task<string> DeleteAccountAsync(string token, CancellationToken ct) =>
+        DeleteAsync(token, "/api/v1/users/me", ct);
+
+    public Task<string> ListConsentsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/users/me/consents", ct);
+
+    public Task<string> RevokeConsentAsync(string token, string clientId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/users/me/consents/{Uri.EscapeDataString(clientId)}", ct);
+
+    // ─── MFA ───
+
+    public Task<string> SetupMfaAsync(string token, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/mfa/setup", "{}", ct);
+
+    public Task<string> VerifyMfaSetupAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/mfa/verify-setup", body, ct);
+
+    // ─── Sessions ───
+
+    public Task<string> ListSessionsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/sessions", ct);
+
+    // ─── Services (additions) ───
+
+    public Task<string> UpdateServiceAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/keys/{Uri.EscapeDataString(id)}", body, ct);
+
+    // ─── User Services (for route command) ───
+
+    public Task<string> UpdateUserServiceAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/user-services/{Uri.EscapeDataString(id)}", body, ct);
+
+    // ─── Proxy (additions) ───
+
+    public Task<string> DiscoverProxyServicesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/proxy/services", ct);
+
+    // ─── API Keys (additions) ───
+
+    public Task<string> GetApiKeyAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> RotateApiKeyAsync(string token, string id, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}/rotate", "{}", ct);
+
+    public Task<string> DeleteApiKeyAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> UpdateApiKeyAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(id)}", body, ct);
+
+    // ─── Approvals (additions) ───
+
+    public Task<string> GetApprovalAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> ListApprovalGrantsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/approvals/grants", ct);
+
+    public Task<string> RevokeApprovalGrantAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/approvals/grants/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> SetApprovalConfigAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/approvals/service-configs/{Uri.EscapeDataString(id)}", body, ct);
+
+    // ─── Endpoints ───
+
+    public Task<string> ListEndpointsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/endpoints", ct);
+
+    public Task<string> UpdateEndpointAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/endpoints/{Uri.EscapeDataString(id)}", body, ct);
+
+    public Task<string> DeleteEndpointAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/endpoints/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── External Keys ───
+
+    public Task<string> ListExternalKeysAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/api-keys/external", ct);
+
+    public Task<string> UpdateExternalKeyAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/api-keys/external/{Uri.EscapeDataString(id)}", body, ct);
+
+    public Task<string> DeleteExternalKeyAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/api-keys/external/{Uri.EscapeDataString(id)}", ct);
+
     // ─── Notifications ───
 
     public Task<string> GetNotificationSettingsAsync(string token, CancellationToken ct) =>
         GetAsync(token, "/api/v1/notifications/settings", ct);
+
+    public Task<string> UpdateNotificationSettingsAsync(string token, string body, CancellationToken ct) =>
+        PutAsync(token, "/api/v1/notifications/settings", body, ct);
+
+    public Task<string> TelegramLinkAsync(string token, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/notifications/telegram/link", "{}", ct);
+
+    public Task<string> TelegramDisconnectAsync(string token, CancellationToken ct) =>
+        DeleteAsync(token, "/api/v1/notifications/telegram", ct);
+
+    // ─── Nodes (additions) ───
+
+    public Task<string> GenerateNodeRegistrationTokenAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/nodes/register-token", body, ct);
+
+    public Task<string> RotateNodeTokenAsync(string token, string id, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/nodes/{Uri.EscapeDataString(id)}/rotate-token", "{}", ct);
 
     // ─── LLM ───
 

@@ -15,7 +15,9 @@ public sealed class NyxIdNodesTool : IAgentTool
 
     public string Description =>
         "Manage on-premise node agents. Nodes hold credentials locally and proxy requests through NyxID. " +
-        "Use 'list' to see all nodes, 'show' for details, or 'delete' to remove a node.";
+        "Actions: 'list' all nodes, 'show' details, 'delete' a node, " +
+        "'register_token' to generate a registration token for a new node, " +
+        "'rotate_token' to rotate a node's auth token.";
 
     public string ParametersSchema => """
         {
@@ -23,12 +25,16 @@ public sealed class NyxIdNodesTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "delete"],
-              "description": "Action: 'list' all nodes, 'show' node details, or 'delete' a node"
+              "enum": ["list", "show", "delete", "register_token", "rotate_token"],
+              "description": "Action to perform"
             },
             "id": {
               "type": "string",
-              "description": "Node ID or name (required for 'show' and 'delete')"
+              "description": "Node ID (required for 'show', 'delete', 'rotate_token')"
+            },
+            "name": {
+              "type": "string",
+              "description": "Node name (required for 'register_token')"
             }
           },
           "required": ["action"]
@@ -43,6 +49,7 @@ public sealed class NyxIdNodesTool : IAgentTool
 
         string action = "list";
         string? id = null;
+        string? name = null;
 
         try
         {
@@ -51,6 +58,8 @@ public sealed class NyxIdNodesTool : IAgentTool
                 action = a.GetString() ?? "list";
             if (doc.RootElement.TryGetProperty("id", out var i))
                 id = i.GetString();
+            if (doc.RootElement.TryGetProperty("name", out var n))
+                name = n.GetString();
         }
         catch { /* use defaults */ }
 
@@ -60,7 +69,15 @@ public sealed class NyxIdNodesTool : IAgentTool
                 await _client.GetNodeAsync(token, id, ct),
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteNodeAsync(token, id, ct),
-            "show" or "delete" => $"Error: 'id' is required for {action} action.",
+            "rotate_token" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.RotateNodeTokenAsync(token, id, ct),
+            "register_token" when !string.IsNullOrWhiteSpace(name) =>
+                await _client.GenerateNodeRegistrationTokenAsync(token,
+                    JsonSerializer.Serialize(new { name }), ct),
+
+            "show" or "delete" or "rotate_token" =>
+                $"Error: 'id' is required for {action} action.",
+            "register_token" => "Error: 'name' is required for register_token action.",
             _ => await _client.ListNodesAsync(token, ct),
         };
     }

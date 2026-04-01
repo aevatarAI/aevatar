@@ -36,12 +36,19 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
         IReadOnlyList<IAgentTool> tools =
         [
             new NyxIdAccountTool(_client),
+            new NyxIdStatusTool(_client),
+            new NyxIdProfileTool(_client),
+            new NyxIdMfaTool(_client),
+            new NyxIdSessionsTool(_client),
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
             new NyxIdProxyTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
+            new NyxIdEndpointsTool(_client),
+            new NyxIdExternalKeysTool(_client),
+            new NyxIdNotificationsTool(_client),
             new NyxIdLlmStatusTool(_client),
             new NyxIdProvidersTool(_client),
         ];

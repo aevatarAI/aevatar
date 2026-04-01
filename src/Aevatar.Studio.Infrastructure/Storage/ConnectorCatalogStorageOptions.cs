@@ -1,6 +1,6 @@
 namespace Aevatar.Studio.Infrastructure.Storage;
 
-internal sealed class ConnectorCatalogStorageOptions
+public sealed class ConnectorCatalogStorageOptions
 {
     public const string SectionName = "Cli:App:Connectors:ChronoStorage";
 

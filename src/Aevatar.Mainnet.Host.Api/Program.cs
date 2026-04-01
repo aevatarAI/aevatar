@@ -3,6 +3,7 @@ using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
+using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.ChatbotClassifier;
@@ -43,6 +44,12 @@ builder.Services.AddNyxIdTools(o =>
     o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
                 ?? builder.Configuration["Cli:App:NyxId:Authority"]
                 ?? builder.Configuration["Aevatar:Authentication:Authority"];
+});
+builder.Services.AddChronoStorageTools(o =>
+{
+    // Self-referencing: the explorer endpoints are served by this same host.
+    var urls = builder.Configuration[WebHostDefaults.ServerUrlsKey] ?? "http://127.0.0.1:5080";
+    o.ApiBaseUrl = urls.Split(';').FirstOrDefault()?.Trim();
 });
 
 var app = builder.Build();

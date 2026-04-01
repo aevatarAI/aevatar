@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Microsoft.AspNetCore.Http;
@@ -8,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Infrastructure.Storage;
 
-internal sealed class ChronoStorageCatalogBlobClient
+public sealed class ChronoStorageCatalogBlobClient
 {
     public const string NyxProxyHttpClientName = "NyxProxyAuthorized";
 
@@ -75,12 +76,14 @@ internal sealed class ChronoStorageCatalogBlobClient
         RemoteScopeContext context,
         CancellationToken cancellationToken)
     {
+        // Use direct download endpoint (proxied through Nyx) instead of presigned S3 URLs,
+        // since presigned URLs point directly to S3 which may not be accessible from the client.
         using var request = CreateChronoStorageRequest(
             HttpMethod.Get,
             CreateChronoStorageUri(
                 context,
-                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
-                $"key={Uri.EscapeDataString(context.ObjectKey)}&expiresIn={context.PresignedUrlExpiresInSeconds}"),
+                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/objects/download",
+                $"key={Uri.EscapeDataString(context.ObjectKey)}"),
             context);
         using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -89,27 +92,7 @@ internal sealed class ChronoStorageCatalogBlobClient
         }
 
         response.EnsureSuccessStatusCode();
-        var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
-        var downloadUrl = string.IsNullOrWhiteSpace(envelope?.Data?.PresignedUrl)
-            ? envelope?.Data?.Url?.Trim()
-            : envelope.Data.PresignedUrl.Trim();
-        if (string.IsNullOrWhiteSpace(downloadUrl))
-        {
-            throw new InvalidOperationException("Chrono-storage presigned URL response did not include a usable download URL.");
-        }
-
-        var downloadUri = ResolveDownloadUri(context, downloadUrl);
-        using var downloadRequest = IsSameAuthority(downloadUri, context.BaseUri)
-            ? CreateChronoStorageRequest(HttpMethod.Get, downloadUri, context)
-            : new HttpRequestMessage(HttpMethod.Get, downloadUri);
-        using var downloadResponse = await GetDownloadClient(context, downloadUri).SendAsync(downloadRequest, cancellationToken);
-        if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
-        {
-            return null;
-        }
-
-        downloadResponse.EnsureSuccessStatusCode();
-        return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken);
     }
 
     public async Task UploadAsync(
@@ -131,6 +114,41 @@ internal sealed class ChronoStorageCatalogBlobClient
             content);
         using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<ListObjectsResult> ListObjectsAsync(
+        RemoteScopeContext context,
+        string? prefix = null,
+        CancellationToken cancellationToken = default)
+    {
+        var listPrefix = string.IsNullOrWhiteSpace(prefix)
+            ? context.ScopeDirectory + "/"
+            : $"{context.ScopeDirectory}/{prefix.TrimStart('/')}";
+
+        var query = $"prefix={Uri.EscapeDataString(listPrefix)}";
+        using var request = CreateChronoStorageRequest(
+            HttpMethod.Get,
+            CreateChronoStorageUri(
+                context,
+                $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/objects",
+                query),
+            context);
+        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<ListObjectsPayload>>(cancellationToken);
+        var objects = envelope?.Data?.Objects ?? [];
+        // Strip the scopeDirectory prefix so keys are relative (e.g. "workflows/foo.yaml")
+        var stripped = objects
+            .Select(o => o with { Key = StripScopePrefix(o.Key, context.ScopeDirectory) })
+            .Where(o => !string.IsNullOrWhiteSpace(o.Key))
+            .ToList();
+        return new ListObjectsResult(stripped);
+    }
+
+    private static string StripScopePrefix(string key, string scopeDir)
+    {
+        var prefix = scopeDir.TrimEnd('/') + "/";
+        return key.StartsWith(prefix, StringComparison.Ordinal) ? key[prefix.Length..] : string.Empty;
     }
 
     public async Task DeleteIfExistsAsync(
@@ -249,33 +267,6 @@ internal sealed class ChronoStorageCatalogBlobClient
             ? _httpClientFactory.CreateClient(NyxProxyHttpClientName)
             : _httpClientFactory.CreateClient();
 
-    private HttpClient GetDownloadClient(RemoteScopeContext context, Uri downloadUri) =>
-        IsSameAuthority(downloadUri, context.BaseUri)
-            ? GetCatalogApiClient(context)
-            : _httpClientFactory.CreateClient();
-
-    private static Uri ResolveDownloadUri(RemoteScopeContext context, string downloadUrl)
-    {
-        var trimmed = downloadUrl.Trim();
-        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var absoluteUri))
-        {
-            return absoluteUri;
-        }
-
-        if (Uri.TryCreate(context.BaseUri, trimmed, out var relativeUri))
-        {
-            return relativeUri;
-        }
-
-        throw new InvalidOperationException(
-            $"Chrono-storage presigned URL response returned an invalid download URL '{downloadUrl}'.");
-    }
-
-    private static bool IsSameAuthority(Uri left, Uri right) =>
-        string.Equals(left.Scheme, right.Scheme, StringComparison.OrdinalIgnoreCase) &&
-        string.Equals(left.Host, right.Host, StringComparison.OrdinalIgnoreCase) &&
-        left.Port == right.Port;
-
     private static Uri CreateChronoStorageUri(RemoteScopeContext context, string relativePath, string? query = null)
     {
         var builder = new UriBuilder(new Uri(context.BaseUri, CombineRelativePath(context.ApiRoutePrefix, relativePath)))
@@ -317,7 +308,32 @@ internal sealed class ChronoStorageCatalogBlobClient
         return normalized;
     }
 
-    internal sealed record RemoteScopeContext(
+    // --- List objects result ---
+
+    public sealed record StorageObject(
+        [property: JsonPropertyName("key")] string Key,
+        [property: JsonPropertyName("lastModified")] string? LastModified,
+        [property: JsonPropertyName("size")] long? Size);
+
+    public sealed record ListObjectsResult(IReadOnlyList<StorageObject> Objects);
+
+    // --- Manifest DTOs (used by ExplorerEndpoints) ---
+
+    public sealed class ManifestEntry
+    {
+        [JsonPropertyName("key")] public string Key { get; set; } = "";
+        [JsonPropertyName("type")] public string Type { get; set; } = "";
+        [JsonPropertyName("name")] public string? Name { get; set; }
+        [JsonPropertyName("updatedAt")] public string? UpdatedAt { get; set; }
+    }
+
+    public sealed class StorageManifest
+    {
+        [JsonPropertyName("version")] public int Version { get; set; } = 1;
+        [JsonPropertyName("files")] public List<ManifestEntry> Files { get; set; } = new();
+    }
+
+    public sealed record RemoteScopeContext(
         AppScopeContext Scope,
         Uri BaseUri,
         string ApiRoutePrefix,
@@ -340,12 +356,9 @@ internal sealed class ChronoStorageCatalogBlobClient
         public T? Data { get; set; }
     }
 
-    private sealed class PresignedUrlPayload
+    private sealed class ListObjectsPayload
     {
-        [JsonPropertyName("url")]
-        public string Url { get; set; } = string.Empty;
-
-        [JsonPropertyName("presignedUrl")]
-        public string PresignedUrl { get; set; } = string.Empty;
+        [JsonPropertyName("objects")]
+        public List<StorageObject> Objects { get; set; } = new();
     }
 }

@@ -1,119 +1,172 @@
-import { Loader2, ExternalLink } from 'lucide-react';
-import type { ConfigStore } from './useConfigStore';
-import ConfigEditor from './editors/ConfigEditor';
-import RolesEditor from './editors/RolesEditor';
-import ConnectorsEditor from './editors/ConnectorsEditor';
-import ChatHistoryViewer from './editors/ChatHistoryViewer';
+import { useState } from 'react';
+import { Loader2, ExternalLink, Pencil, Save, X, Trash2 } from 'lucide-react';
+import type { ManifestEntry } from './types';
+import RolesCatalogEditor from './editors/RolesCatalogEditor';
+import ConnectorsCatalogEditor from './editors/ConnectorsCatalogEditor';
 
 type Props = {
-  store: ConfigStore;
+  selectedKey: string | null;
+  content: string | null;
+  loading: boolean;
+  manifest: ManifestEntry[];
+  onOpenInStudio?: (type: string, key: string) => void;
+  onSave?: (key: string, content: string) => Promise<void>;
+  onDelete?: (key: string) => Promise<void>;
   flash: (msg: string, type: 'success' | 'error') => void;
-  onOpenWorkflowInStudio?: (workflowId: string) => void;
-  onOpenScriptInStudio?: (scriptId: string) => void;
 };
 
-function WorkflowViewer({ store, onOpenWorkflowInStudio }: { store: ConfigStore; onOpenWorkflowInStudio?: (workflowId: string) => void }) {
-  const workflowId = store.selectedFile.replace('workflow:', '');
-  const wf = store.workflows.find(w => w.workflowId === workflowId);
+export default function EditorPanel({ selectedKey, content, loading, manifest, onOpenInStudio, onSave, onDelete, flash }: Props) {
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  if (store.workflowLoading) {
+  if (!selectedKey) {
     return (
-      <div className="py-8 flex flex-col items-center justify-center gap-2 text-[13px] text-gray-400">
-        <Loader2 size={24} className="animate-spin text-gray-400" />
-        <span>Loading workflow...</span>
+      <div className="py-16 flex items-center justify-center text-[14px] text-gray-400">
+        Select a file to view
       </div>
     );
   }
 
+  if (loading) {
+    return (
+      <div className="py-12 flex flex-col items-center justify-center gap-2 text-[13px] text-gray-400">
+        <Loader2 size={24} className="animate-spin text-gray-400" />
+        <span>Loading file...</span>
+      </div>
+    );
+  }
+
+  const entry = manifest.find(f => f.key === selectedKey);
+  const fileType = entry?.type ?? 'file';
+
+  // Rich editors for roles and connectors
+  if (fileType === 'roles') return <RolesCatalogEditor flash={flash} />;
+  if (fileType === 'connectors') return <ConnectorsCatalogEditor flash={flash} />;
+
+  const fileName = selectedKey.split('/').pop() || selectedKey;
+
+  function startEditing() {
+    setEditContent(content ?? '');
+    setEditing(true);
+  }
+
+  function cancelEditing() {
+    setEditing(false);
+    setEditContent('');
+    setConfirmDelete(false);
+  }
+
+  async function handleSave() {
+    if (!onSave) return;
+    setSaving(true);
+    try {
+      await onSave(selectedKey!, editContent);
+      setEditing(false);
+      flash('Saved', 'success');
+    } catch (e: any) {
+      flash(e?.message || 'Save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!onDelete) return;
+    setSaving(true);
+    try {
+      await onDelete(selectedKey!);
+      setEditing(false);
+      setConfirmDelete(false);
+      flash('Deleted', 'success');
+    } catch (e: any) {
+      flash(e?.message || 'Delete failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="max-w-[780px] space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-[15px] font-semibold text-gray-800">{wf?.name || workflowId}</div>
-          {wf?.description && <div className="text-[12px] text-gray-500 mt-1">{wf.description}</div>}
-          {wf && <div className="text-[11px] text-gray-400 mt-1">{wf.stepCount} steps · {wf.directoryLabel}</div>}
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">{fileType}</div>
+          <div className="text-[16px] font-bold text-gray-800 mt-0.5">{fileName}</div>
+          {entry?.updatedAt && (
+            <div className="text-[11px] text-gray-400 mt-1">{new Date(entry.updatedAt).toLocaleString()}</div>
+          )}
         </div>
-        {onOpenWorkflowInStudio && (
-          <button
-            onClick={() => onOpenWorkflowInStudio(workflowId)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] transition-colors"
-          >
-            <ExternalLink size={12} />
-            Open in Studio
-          </button>
+        <div className="flex items-center gap-2">
+          {(fileType === 'workflow' || fileType === 'script') && onOpenInStudio && (
+            <button
+              onClick={() => onOpenInStudio(fileType, selectedKey)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#EEEAE4] bg-white px-3 py-1.5 text-[12px] font-semibold text-gray-700 hover:bg-[#FAF8F4]"
+            >
+              <ExternalLink size={12} /> Open in Studio
+            </button>
+          )}
+          {!editing ? (
+            <button
+              onClick={startEditing}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333]"
+            >
+              <Pencil size={12} /> Edit
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save
+              </button>
+              <button
+                onClick={cancelEditing}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#EEEAE4] bg-white px-3 py-1.5 text-[12px] font-semibold text-gray-700 hover:bg-[#FAF8F4]"
+              >
+                <X size={12} /> Cancel
+              </button>
+              {onDelete && (
+                confirmDelete ? (
+                  <button
+                    onClick={handleDelete}
+                    disabled={saving}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    Confirm Delete
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDelete(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-red-600 hover:bg-red-50"
+                  >
+                    <Trash2 size={12} /> Delete
+                  </button>
+                )
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="rounded-2xl border border-[#EEEAE4] bg-white p-1">
+        {editing ? (
+          <textarea
+            value={editContent}
+            onChange={e => setEditContent(e.target.value)}
+            className="w-full min-h-[400px] max-h-[70vh] p-4 text-[13px] font-mono leading-relaxed text-gray-700 resize-y outline-none"
+            spellCheck={false}
+          />
+        ) : (
+          <pre className="w-full min-h-[400px] p-4 text-[13px] font-mono leading-relaxed text-gray-700 whitespace-pre-wrap overflow-x-auto max-h-[70vh] overflow-y-auto">
+            {content ?? 'Could not load file.'}
+          </pre>
         )}
       </div>
-      {store.selectedWorkflowYaml != null ? (
-        <pre className="rounded-[14px] border border-[#E6E3DE] bg-[#FAFAF9] p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto max-h-[70vh] overflow-y-auto">
-          {store.selectedWorkflowYaml}
-        </pre>
-      ) : (
-        <div className="text-[13px] text-gray-400">Could not load workflow YAML.</div>
-      )}
     </div>
   );
-}
-
-function ScriptViewer({ store, onOpenScriptInStudio }: { store: ConfigStore; onOpenScriptInStudio?: (scriptId: string) => void }) {
-  const scriptId = store.selectedFile.replace('script:', '');
-  const script = store.scripts.find(s => s.scriptId === scriptId);
-
-  if (!script) {
-    return <div className="text-[13px] text-gray-400">Script not found.</div>;
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-[15px] font-semibold text-gray-800">{script.scriptId}.cs</div>
-          <div className="text-[11px] text-gray-400 mt-1">
-            Revision: {script.activeRevision} · Updated: {script.updatedAt ? new Date(script.updatedAt).toLocaleString() : 'unknown'}
-          </div>
-        </div>
-        {onOpenScriptInStudio && (
-          <button
-            onClick={() => onOpenScriptInStudio(scriptId)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] transition-colors"
-          >
-            <ExternalLink size={12} />
-            Open in Script Studio
-          </button>
-        )}
-      </div>
-      {script.sourceText ? (
-        <pre className="rounded-[14px] border border-[#E6E3DE] bg-[#FAFAF9] p-4 text-[12px] text-gray-700 font-mono whitespace-pre-wrap overflow-x-auto max-h-[70vh] overflow-y-auto">
-          {script.sourceText}
-        </pre>
-      ) : (
-        <div className="text-[13px] text-gray-400">Source code not available. The script may need to be promoted first.</div>
-      )}
-    </div>
-  );
-}
-
-export default function EditorPanel({ store, flash, onOpenWorkflowInStudio, onOpenScriptInStudio }: Props) {
-  if (store.selectedFile.startsWith('script:')) {
-    return <ScriptViewer store={store} onOpenScriptInStudio={onOpenScriptInStudio} />;
-  }
-
-  if (store.selectedFile.startsWith('workflow:')) {
-    return <WorkflowViewer store={store} onOpenWorkflowInStudio={onOpenWorkflowInStudio} />;
-  }
-
-  if (store.selectedFile.startsWith('chat-history:')) {
-    const convId = store.selectedFile.replace('chat-history:', '');
-    return <ChatHistoryViewer store={store} conversationId={convId} flash={flash} />;
-  }
-
-  switch (store.selectedFile) {
-    case 'config.json':
-      return <ConfigEditor store={store} flash={flash} />;
-    case 'roles.json':
-      return <RolesEditor store={store} flash={flash} />;
-    case 'connectors.json':
-      return <ConnectorsEditor store={store} flash={flash} />;
-    default:
-      return null;
-  }
 }

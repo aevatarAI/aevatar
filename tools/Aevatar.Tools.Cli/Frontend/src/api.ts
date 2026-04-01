@@ -679,6 +679,26 @@ export const ornn = {
   },
 };
 
+/* ─── Explorer (manifest-based chrono-storage) ─── */
+export const explorer = {
+  getManifest: () => request<{ version: number; files: Array<{ key: string; type: string; name?: string; updatedAt?: string }> }>('/explorer/manifest'),
+  getFile: (key: string) => fetch(`/api/explorer/files/${encodeURIComponent(key)}`, {
+    headers: { ...getAuthHeaders() },
+  }).then(res => {
+    if (!res.ok) throw { status: res.status, message: 'File not found' };
+    return res.text();
+  }),
+  putFile: (key: string, content: string) => fetch(`/api/explorer/files/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain', ...getAuthHeaders() },
+    body: content,
+  }).then(res => { if (!res.ok) throw { status: res.status, message: 'Save failed' }; }),
+  deleteFile: (key: string) => fetch(`/api/explorer/files/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders() },
+  }).then(res => { if (!res.ok) throw { status: res.status, message: 'Delete failed' }; }),
+};
+
 export const app = {
   getContext: () => request<any>('/app/context'),
   validateDraftScript: (data: any, signal?: AbortSignal) => request<any>('/app/scripts/validate', { method: 'POST', body: JSON.stringify(data), signal }),

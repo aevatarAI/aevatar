@@ -23,20 +23,25 @@ public sealed class NyxIdProxyTool : IAgentTool
     public string Description =>
         "Make HTTP requests to downstream services through NyxID's credential-injecting proxy. " +
         "NyxID automatically injects the user's stored credentials. " +
-        "Use nyxid_services first to discover available service slugs. " +
-        "Paths are relative to the service's base URL.";
+        "Use 'discover' to list all proxyable services with their proxy URLs, " +
+        "or provide 'slug' and 'path' to send a proxied request.";
 
     public string ParametersSchema => """
         {
           "type": "object",
           "properties": {
+            "action": {
+              "type": "string",
+              "enum": ["request", "discover"],
+              "description": "Action: 'request' (default) to send a proxied request, or 'discover' to list proxyable services"
+            },
             "slug": {
               "type": "string",
-              "description": "Service slug (e.g. 'llm-openai', 'api-github')"
+              "description": "Service slug (e.g. 'llm-openai', 'api-github'). Required for 'request'."
             },
             "path": {
               "type": "string",
-              "description": "API path relative to the service's base URL (e.g. '/chat/completions', '/user/repos')"
+              "description": "API path relative to the service's base URL (e.g. '/chat/completions'). Required for 'request'."
             },
             "method": {
               "type": "string",
@@ -53,7 +58,7 @@ public sealed class NyxIdProxyTool : IAgentTool
               "description": "Additional HTTP headers"
             }
           },
-          "required": ["slug", "path"]
+          "required": []
         }
         """;
 
@@ -65,6 +70,7 @@ public sealed class NyxIdProxyTool : IAgentTool
 
         _logger.LogInformation("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
 
+        string action = "request";
         string? slug = null;
         string? path = null;
         string method = "GET";
@@ -74,6 +80,8 @@ public sealed class NyxIdProxyTool : IAgentTool
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
+            if (doc.RootElement.TryGetProperty("action", out var a))
+                action = a.GetString() ?? "request";
             if (doc.RootElement.TryGetProperty("slug", out var s))
                 slug = s.GetString();
             if (doc.RootElement.TryGetProperty("path", out var p))
@@ -95,12 +103,15 @@ public sealed class NyxIdProxyTool : IAgentTool
             return $"Error: Failed to parse arguments. Raw input: {argumentsJson}";
         }
 
+        if (action == "discover")
+            return await _client.DiscoverProxyServicesAsync(token, ct);
+
         _logger.LogInformation("[nyxid_proxy] Parsed: slug={Slug}, path={Path}, method={Method}", slug, path, method);
 
         if (string.IsNullOrWhiteSpace(slug))
-            return $"Error: 'slug' is required. Received arguments: {argumentsJson}";
+            return $"Error: 'slug' is required for request action. Received arguments: {argumentsJson}";
         if (string.IsNullOrWhiteSpace(path))
-            return $"Error: 'path' is required. Received arguments: {argumentsJson}";
+            return $"Error: 'path' is required for request action. Received arguments: {argumentsJson}";
 
         return await _client.ProxyRequestAsync(token, slug, path, method, body, headers, ct);
     }

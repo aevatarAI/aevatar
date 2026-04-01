@@ -29,6 +29,7 @@ public sealed class AppScopedWorkflowService
     private readonly IServiceLifecycleQueryPort? _serviceLifecycleQueryPort;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IWorkflowYamlDocumentService _yamlDocumentService;
+    private readonly IWorkflowStoragePort? _workflowStoragePort;
 
     public AppScopedWorkflowService(
         IHttpClientFactory httpClientFactory,
@@ -37,7 +38,8 @@ public sealed class AppScopedWorkflowService
         IScopeWorkflowCommandPort? workflowCommandPort = null,
         IWorkflowActorBindingReader? workflowActorBindingReader = null,
         IServiceRevisionArtifactStore? artifactStore = null,
-        IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null)
+        IServiceLifecycleQueryPort? serviceLifecycleQueryPort = null,
+        IWorkflowStoragePort? workflowStoragePort = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _yamlDocumentService = yamlDocumentService ?? throw new ArgumentNullException(nameof(yamlDocumentService));
@@ -46,6 +48,7 @@ public sealed class AppScopedWorkflowService
         _workflowActorBindingReader = workflowActorBindingReader;
         _artifactStore = artifactStore;
         _serviceLifecycleQueryPort = serviceLifecycleQueryPort;
+        _workflowStoragePort = workflowStoragePort;
     }
 
     public async Task<IReadOnlyList<WorkflowSummary>> ListAsync(
@@ -102,7 +105,9 @@ public sealed class AppScopedWorkflowService
 
                 // If revision ID is empty (deployment snapshot not ready yet),
                 // scan for the latest revision via the service lifecycle query.
-                if (string.IsNullOrWhiteSpace(yaml) && _workflowQueryPort != null)
+                if (string.IsNullOrWhiteSpace(yaml) &&
+                    _workflowQueryPort != null &&
+                    _serviceLifecycleQueryPort != null)
                 {
                     var identity = new ServiceIdentity
                     {
@@ -111,7 +116,7 @@ public sealed class AppScopedWorkflowService
                         Namespace = "default",
                         ServiceId = normalizedWorkflowId,
                     };
-                    var svc = await _serviceLifecycleQueryPort?.GetServiceAsync(identity, ct);
+                    var svc = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
                     var revId = svc?.ActiveServingRevisionId;
                     if (string.IsNullOrWhiteSpace(revId))
                         revId = svc?.DefaultServingRevisionId;
@@ -196,6 +201,18 @@ public sealed class AppScopedWorkflowService
         }
 
         PersistLayout(normalizedScopeId, workflowId, request.Layout);
+
+        try
+        {
+            if (_workflowStoragePort != null)
+            {
+                await _workflowStoragePort.UploadWorkflowYamlAsync(workflowId, workflowName, normalizedYaml, ct);
+            }
+        }
+        catch
+        {
+            // Don't fail the save if chrono-storage upload fails
+        }
 
         return ToWorkflowFileResponse(
             normalizedScopeId,

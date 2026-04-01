@@ -3,7 +3,7 @@ namespace Aevatar.Studio.Infrastructure.Storage;
 /// <summary>
 /// Minimal NyxID auth options needed by ChronoStorage client to resolve NyxProxy base URL.
 /// </summary>
-internal sealed class NyxIdAppAuthOptions
+public sealed class NyxIdAppAuthOptions
 {
     public const string SectionName = "Cli:App:NyxId";
 

@@ -6,6 +6,7 @@ import {
   isRawObserved,
   type RuntimeEvent,
 } from './sseUtils';
+import { sanitizeAssistantMessageContent } from './chatContent';
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
@@ -166,6 +167,7 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
   const [stepsOpen, setStepsOpen] = useState(false);
   const hasSteps = msg.steps && msg.steps.length > 0;
   const hasTools = msg.toolCalls && msg.toolCalls.length > 0;
+  const displayContent = isUser ? msg.content : sanitizeAssistantMessageContent(msg.content);
 
   if (isUser) {
     return (
@@ -223,12 +225,12 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
         {/* Text content */}
         <div className="text-[14px] leading-relaxed text-gray-800">
           <div className="break-words">
-            {renderContent(msg.content)}
-            {msg.status === 'streaming' && msg.content && (
+            {renderContent(displayContent)}
+            {msg.status === 'streaming' && displayContent && (
               <span className="inline-block w-[2px] h-[18px] bg-gray-400 animate-blink ml-0.5 align-text-bottom" />
             )}
           </div>
-          {!msg.content && msg.status === 'streaming' && (
+          {!displayContent && msg.status === 'streaming' && (
             <div className="flex items-center gap-1.5 py-2">
               <span className="block w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
               <span className="block w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />

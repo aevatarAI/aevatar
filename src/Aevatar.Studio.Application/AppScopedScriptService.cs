@@ -16,6 +16,7 @@ using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
+using Aevatar.Studio.Application.Studio.Abstractions;
 namespace Aevatar.Studio.Application;
 
 public sealed class AppScopedScriptService
@@ -35,6 +36,7 @@ public sealed class AppScopedScriptService
     private readonly IScriptEvolutionDecisionReadPort? _scriptEvolutionDecisionReadPort;
     private readonly IScriptingActorAddressResolver? _scriptingActorAddressResolver;
     private readonly IScriptReadModelQueryApplicationService? _readModelQueryService;
+    private readonly IScriptStoragePort? _scriptStoragePort;
     private readonly IHttpClientFactory _httpClientFactory;
 
     public AppScopedScriptService(
@@ -46,7 +48,8 @@ public sealed class AppScopedScriptService
         IScriptCatalogQueryPort? scriptCatalogQueryPort = null,
         IScriptEvolutionDecisionReadPort? scriptEvolutionDecisionReadPort = null,
         IScriptingActorAddressResolver? scriptingActorAddressResolver = null,
-        IScriptReadModelQueryApplicationService? readModelQueryService = null)
+        IScriptReadModelQueryApplicationService? readModelQueryService = null,
+        IScriptStoragePort? scriptStoragePort = null)
     {
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
@@ -57,6 +60,7 @@ public sealed class AppScopedScriptService
         _scriptEvolutionDecisionReadPort = scriptEvolutionDecisionReadPort;
         _scriptingActorAddressResolver = scriptingActorAddressResolver;
         _readModelQueryService = readModelQueryService;
+        _scriptStoragePort = scriptStoragePort;
     }
 
     public async Task<IReadOnlyList<ScopeScriptSummary>> ListAsync(
@@ -253,7 +257,16 @@ public sealed class AppScopedScriptService
                 ct) ?? throw new InvalidOperationException("Script save returned an empty response.");
         }
 
-        return BuildSavedDetail(normalizedScopeId, sourceText, upsertResult);
+        var detail = BuildSavedDetail(normalizedScopeId, sourceText, upsertResult);
+
+        try
+        {
+            if (_scriptStoragePort != null)
+                await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, ct);
+        }
+        catch { /* don't fail the save if chrono-storage upload fails */ }
+
+        return detail;
     }
 
     public async Task<ScriptPromotionDecision> ProposeEvolutionAsync(

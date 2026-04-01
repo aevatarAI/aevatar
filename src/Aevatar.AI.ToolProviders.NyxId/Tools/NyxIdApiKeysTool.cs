@@ -15,7 +15,9 @@ public sealed class NyxIdApiKeysTool : IAgentTool
 
     public string Description =>
         "Manage NyxID API keys for programmatic access. " +
-        "Use 'list' to see existing keys, or 'create' to generate a new key with specified scopes.";
+        "Actions: 'list' all keys, 'show' key details, 'create' a new key, " +
+        "'rotate' to regenerate a key, 'delete' to revoke a key, " +
+        "'update' to change key name/scopes/permissions.";
 
     public string ParametersSchema => """
         {
@@ -23,16 +25,36 @@ public sealed class NyxIdApiKeysTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "create"],
-              "description": "Action: 'list' existing keys or 'create' a new key"
+              "enum": ["list", "show", "create", "rotate", "delete", "update"],
+              "description": "Action to perform"
+            },
+            "id": {
+              "type": "string",
+              "description": "API key ID (required for 'show', 'rotate', 'delete', 'update')"
             },
             "name": {
               "type": "string",
-              "description": "Name for the new key (required for 'create')"
+              "description": "Key name (required for 'create', optional for 'update')"
             },
             "scopes": {
               "type": "string",
-              "description": "Space-separated scopes for the new key (e.g. 'proxy read')"
+              "description": "Space-separated scopes (e.g. 'proxy read write')"
+            },
+            "allowed_services": {
+              "type": "string",
+              "description": "Comma-separated service IDs to allow (for 'create' or 'update')"
+            },
+            "allowed_nodes": {
+              "type": "string",
+              "description": "Comma-separated node IDs to allow (for 'create' or 'update')"
+            },
+            "allow_all_services": {
+              "type": "boolean",
+              "description": "Allow access to all services (for 'create' or 'update')"
+            },
+            "allow_all_nodes": {
+              "type": "boolean",
+              "description": "Allow access to all nodes (for 'create' or 'update')"
             }
           },
           "required": ["action"]
@@ -46,30 +68,90 @@ public sealed class NyxIdApiKeysTool : IAgentTool
             return "Error: No NyxID access token available. User must be authenticated.";
 
         string action = "list";
+        string? id = null;
         string? name = null;
         string? scopes = null;
+        string? allowedServices = null;
+        string? allowedNodes = null;
+        bool? allowAllServices = null;
+        bool? allowAllNodes = null;
 
         try
         {
             using var doc = JsonDocument.Parse(argumentsJson);
             if (doc.RootElement.TryGetProperty("action", out var a))
                 action = a.GetString() ?? "list";
+            if (doc.RootElement.TryGetProperty("id", out var i))
+                id = i.GetString();
             if (doc.RootElement.TryGetProperty("name", out var n))
                 name = n.GetString();
             if (doc.RootElement.TryGetProperty("scopes", out var s))
                 scopes = s.GetString();
+            if (doc.RootElement.TryGetProperty("allowed_services", out var asv))
+                allowedServices = asv.GetString();
+            if (doc.RootElement.TryGetProperty("allowed_nodes", out var anv))
+                allowedNodes = anv.GetString();
+            if (doc.RootElement.TryGetProperty("allow_all_services", out var aas))
+                allowAllServices = aas.GetBoolean();
+            if (doc.RootElement.TryGetProperty("allow_all_nodes", out var aan))
+                allowAllNodes = aan.GetBoolean();
         }
         catch { /* use defaults */ }
 
-        if (action == "create")
+        return action switch
         {
-            if (string.IsNullOrWhiteSpace(name))
-                return "Error: 'name' is required for create action.";
+            "show" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetApiKeyAsync(token, id, ct),
+            "rotate" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.RotateApiKeyAsync(token, id, ct),
+            "delete" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.DeleteApiKeyAsync(token, id, ct),
+            "update" when !string.IsNullOrWhiteSpace(id) =>
+                await UpdateApiKeyAsync(token, id, name, scopes, allowedServices, allowedNodes, allowAllServices, allowAllNodes, ct),
+            "create" when !string.IsNullOrWhiteSpace(name) =>
+                await CreateApiKeyAsync(token, name, scopes, allowedServices, allowedNodes, allowAllServices, allowAllNodes, ct),
 
-            var body = JsonSerializer.Serialize(new { name, scopes = scopes ?? "proxy read" });
-            return await _client.CreateApiKeyAsync(token, body, ct);
-        }
+            "show" or "rotate" or "delete" or "update" =>
+                "Error: 'id' is required for this action.",
+            "create" => "Error: 'name' is required for create action.",
+            _ => await _client.ListApiKeysAsync(token, ct),
+        };
+    }
 
-        return await _client.ListApiKeysAsync(token, ct);
+    private async Task<string> CreateApiKeyAsync(
+        string token, string name, string? scopes,
+        string? allowedServices, string? allowedNodes,
+        bool? allowAllServices, bool? allowAllNodes,
+        CancellationToken ct)
+    {
+        var payload = BuildKeyPayload(name, scopes, allowedServices, allowedNodes, allowAllServices, allowAllNodes);
+        return await _client.CreateApiKeyAsync(token, JsonSerializer.Serialize(payload), ct);
+    }
+
+    private async Task<string> UpdateApiKeyAsync(
+        string token, string id, string? name, string? scopes,
+        string? allowedServices, string? allowedNodes,
+        bool? allowAllServices, bool? allowAllNodes,
+        CancellationToken ct)
+    {
+        var payload = BuildKeyPayload(name, scopes, allowedServices, allowedNodes, allowAllServices, allowAllNodes);
+        return await _client.UpdateApiKeyAsync(token, id, JsonSerializer.Serialize(payload), ct);
+    }
+
+    private static Dictionary<string, object?> BuildKeyPayload(
+        string? name, string? scopes,
+        string? allowedServices, string? allowedNodes,
+        bool? allowAllServices, bool? allowAllNodes)
+    {
+        var payload = new Dictionary<string, object?>();
+        if (name != null) payload["name"] = name;
+        if (scopes != null) payload["scopes"] = scopes;
+        if (allowedServices != null)
+            payload["allowed_service_ids"] = allowedServices.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (allowedNodes != null)
+            payload["allowed_node_ids"] = allowedNodes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (allowAllServices.HasValue) payload["allow_all_services"] = allowAllServices.Value;
+        if (allowAllNodes.HasValue) payload["allow_all_nodes"] = allowAllNodes.Value;
+        return payload;
     }
 }

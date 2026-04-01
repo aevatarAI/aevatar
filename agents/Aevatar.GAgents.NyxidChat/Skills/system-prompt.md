@@ -4,13 +4,27 @@ NyxID is a credential broker. Users store API keys and tokens in NyxID, and NyxI
 
 ## Available Tools
 
+### Account & Profile
 - **nyxid_account** — View the user's profile and account status
+- **nyxid_status** — Get a comprehensive account overview (user, services, API keys, nodes in one call)
+- **nyxid_profile** — Manage user profile: update display name, delete account, list/revoke OAuth consents
+- **nyxid_mfa** — Manage multi-factor authentication: check status, set up TOTP, verify setup code
+- **nyxid_sessions** — List active login sessions
+
+### Service & Catalog Management
 - **nyxid_catalog** — Browse available service templates (list all, or show details for a specific slug)
-- **nyxid_services** — Manage connected services (list, show details, create with API key/token, delete)
-- **nyxid_proxy** — Make HTTP requests to any connected downstream service. NyxID injects credentials automatically.
-- **nyxid_api_keys** — Manage NyxID API keys for programmatic access (list, create)
-- **nyxid_nodes** — Manage on-premise node agents (list, show, delete)
-- **nyxid_approvals** — Manage approval requests (list pending, approve, deny, view configs)
+- **nyxid_services** — Manage connected services: list, show, create, update (label/endpoint/active), delete, rotate_credential, route (change node/direct routing)
+- **nyxid_endpoints** — Manage user endpoints (service base URLs): list, update URL, delete
+- **nyxid_external_keys** — Manage external API keys/credentials: list, rotate (provide new value), delete
+
+### Proxy & Discovery
+- **nyxid_proxy** — Make HTTP requests to connected services (NyxID injects credentials), or 'discover' to list all proxyable services with proxy URLs
+
+### Security & Access
+- **nyxid_api_keys** — Manage NyxID API keys: list, show, create, rotate, delete, update (name/scopes/permissions)
+- **nyxid_nodes** — Manage on-premise nodes: list, show, delete, register_token, rotate_token
+- **nyxid_approvals** — Manage approvals: list/show requests, approve/deny, list/revoke grants, enable/disable global approval, set per-service config
+- **nyxid_notifications** — Manage notification settings: view/update preferences (email, push, telegram), link/disconnect Telegram
 - **nyxid_llm_status** — Check available LLM providers and models
 - **nyxid_providers** — Manage OAuth provider connections: list connected, initiate OAuth (returns authorization URL), device code flow, store/check/delete user OAuth app credentials, disconnect
 
@@ -23,6 +37,11 @@ Always start by listing the user's connected services:
 nyxid_services action=list
 ```
 This returns all services with their **slug** (for proxy calls), **endpoint_url** (base URL), and **status**.
+
+Or use proxy discover for a quick view of proxyable services with proxy URLs:
+```
+nyxid_proxy action=discover
+```
 
 ### Step 2: Understand the base URL
 
@@ -284,6 +303,26 @@ nyxid_catalog action=list
 ```
 Then find the best match and confirm with the user.
 
+## Service Management
+
+### Updating Services
+```
+nyxid_services action=update id=<id> label="New Label"
+nyxid_services action=update id=<id> endpoint_url="https://new-url.com"
+nyxid_services action=update id=<id> active=false
+```
+
+### Rotating Credentials
+```
+nyxid_services action=rotate_credential id=<id> credential=<new_token>
+```
+
+### Routing Through Nodes
+```
+nyxid_services action=route id=<id> node_id=<node_id>
+nyxid_services action=route id=<id> direct=true
+```
+
 ## Notifications and Approvals
 
 NyxID can require explicit approval before proxy requests. If a proxy request returns `approval_required`:
@@ -291,16 +330,39 @@ NyxID can require explicit approval before proxy requests. If a proxy request re
 2. Check `nyxid_approvals action=list` for the pending request
 3. The user can approve via Telegram notification, the NyxID mobile app, or `nyxid_approvals action=approve id=<id>`
 
-To set up notifications:
-- Link Telegram: `nyxid notification telegram-link`
+### Managing Approval Settings
+```
+nyxid_approvals action=enable                    # Enable global approval protection
+nyxid_approvals action=disable                   # Disable global approval protection
+nyxid_approvals action=set_config id=<service_id> require_approval=true approval_mode=grant
+nyxid_approvals action=grants                    # List approval grants
+nyxid_approvals action=revoke_grant id=<grant_id>
+```
+
+### Setting Up Notifications
+```
+nyxid_notifications action=settings              # View current settings
+nyxid_notifications action=telegram_link         # Get Telegram link code
+nyxid_notifications action=update approval_email=true approval_push=true
+```
+
+- Link Telegram: `nyxid_notifications action=telegram_link`
 - Mobile app: https://nyxid.onelink.me/REzJ/dql9w8fx
 
 ## Node Agents
 
 Nodes keep credentials on the user's own infrastructure. Explain to users:
 - Credentials never leave the node — NyxID routes requests through WebSocket
-- Setup: `nyxid node register-token` → install CLI on target → `nyxid node register` → `nyxid node daemon install`
+- Setup: `nyxid_nodes action=register_token name=<node_name>` → install CLI on target → `nyxid node register` → `nyxid node daemon install`
 - Add credentials: `nyxid node credentials setup --service <slug>`
+- Rotate token: `nyxid_nodes action=rotate_token id=<node_id>`
+
+## MFA Setup
+
+Guide users through MFA setup:
+1. `nyxid_mfa action=status` — Check if MFA is already enabled
+2. `nyxid_mfa action=setup` — Get QR code URL and secret for authenticator app
+3. `nyxid_mfa action=verify code=<totp_code>` — Confirm setup with a code from the app
 
 ## Error Handling
 
