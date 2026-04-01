@@ -1,6 +1,6 @@
 import pino from "pino";
 import type { GraphNode, GraphEdge } from "./types.js";
-import { sanitizeBody, isBodyBroken, stripToPlainText } from "./sanitizer.js";
+import { sanitizeBody, isBodyBroken, stripToPlainText, balanceBraces } from "./sanitizer.js";
 
 const logger = pino({ name: "paper-compiler:generator" });
 
@@ -245,7 +245,7 @@ export function generateLatex(sortedNodes: GraphNode[], edges: GraphEdge[]): str
     if (node.type === "proof") {
       lines.push("\\begin{proof}");
       lines.push(`\\label{${label}}`);
-      if (abstractText.trim()) lines.push(`\\textit{${abstractText}}`);
+      if (abstractText.trim()) lines.push(`\\textit{${balanceBraces(abstractText)}}`);
       lines.push("");
       emitBodyContained(lines, body);
       emitCrossRefs(lines, node.id, referencedBy);
@@ -254,7 +254,7 @@ export function generateLatex(sortedNodes: GraphNode[], edges: GraphEdge[]): str
       const envName = THEOREM_ENV_NAMES[node.type];
       lines.push(`\\begin{${envName}}`);
       lines.push(`\\label{${label}}`);
-      if (abstractText.trim()) lines.push(`\\textit{${abstractText}}`);
+      if (abstractText.trim()) lines.push(`\\textit{${balanceBraces(abstractText)}}`);
       lines.push("");
       emitBodyContained(lines, body);
       emitCrossRefs(lines, node.id, referencedBy);
@@ -262,7 +262,7 @@ export function generateLatex(sortedNodes: GraphNode[], edges: GraphEdge[]): str
     } else {
       lines.push(`\\paragraph{${escapeLatex(node.type)}}`);
       lines.push(`\\label{${label}}`);
-      if (abstractText.trim()) lines.push(`\\textit{${abstractText}}`);
+      if (abstractText.trim()) lines.push(`\\textit{${balanceBraces(abstractText)}}`);
       lines.push("");
       emitBodyContained(lines, body);
       emitCrossRefs(lines, node.id, referencedBy);

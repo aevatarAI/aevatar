@@ -17,7 +17,7 @@ ENV NODE_ENV=production
 
 # Install tectonic via GitHub release binary (more reliable than drop-sh for cross-platform)
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates libfontconfig1 libssl3 && \
+    apt-get install -y --no-install-recommends curl ca-certificates libfontconfig1 libssl3 libgraphite2-3 libharfbuzz0b libicu72 && \
     ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then TECTONIC_ARCH="x86_64"; else TECTONIC_ARCH="aarch64"; fi && \
     curl -fsSL "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-${TECTONIC_ARCH}-unknown-linux-gnu.tar.gz" \

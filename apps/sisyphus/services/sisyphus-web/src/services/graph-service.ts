@@ -22,13 +22,26 @@ interface RawEdge {
 }
 
 function mapNode(raw: RawNode): GraphNode {
-  const name = raw.properties?.name
-  return {
-    id: raw.id,
-    label: typeof name === 'string' && name ? name : raw.id,
-    type: raw.type,
-    properties: raw.properties,
+  // chrono-graph returns user properties as flat top-level fields (JsonExtensionData)
+  const SYSTEM_KEYS = new Set(['id', 'graphId', 'type', 'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'properties'])
+  const properties: Record<string, unknown> = raw.properties ? { ...raw.properties } : {}
+  for (const [k, v] of Object.entries(raw)) {
+    if (!SYSTEM_KEYS.has(k) && v !== undefined && v !== null) {
+      properties[k] = v
+    }
   }
+
+  const name = properties.name
+  const abstract = properties.abstract
+  let label: string
+  if (typeof name === 'string' && name) {
+    label = name
+  } else if (typeof abstract === 'string' && abstract) {
+    label = abstract.length > 60 ? abstract.slice(0, 57) + '...' : abstract
+  } else {
+    label = `${raw.type ?? 'node'} · ${raw.id.slice(0, 8)}`
+  }
+  return { id: raw.id, label, type: raw.type, properties }
 }
 
 function mapEdge(raw: RawEdge): GraphEdge {
@@ -60,6 +73,14 @@ export async function fetchGraphSnapshot(graphId: string, accessToken: string): 
   }
 }
 
+export async function fetchNodeDetail(graphId: string, nodeId: string, accessToken: string): Promise<GraphNode> {
+  const url = proxyUrl(`/api/graphs/${encodeURIComponent(graphId)}/nodes/${encodeURIComponent(nodeId)}`)
+  const res = await fetch(url, { headers: authHeaders(accessToken) })
+  if (!res.ok) throw new Error(`Failed to fetch node: ${res.status}`)
+  const data = await res.json()
+  return mapNode(data)
+}
+
 export async function fetchNodeTraversal(
   graphId: string,
   nodeId: string,
@@ -73,9 +94,27 @@ export async function fetchNodeTraversal(
   if (!res.ok) throw new Error(`Failed to fetch node traversal: ${res.status}`)
   const data = await res.json()
   const node = data.node ? mapNode(data.node) : mapNode(data)
-  return {
-    node,
-    neighbors: (data.neighbors ?? data.connectedNodes ?? []).map(mapNode),
-    edges: (data.edges ?? data.relationships ?? []).map(mapEdge),
-  }
+  // chrono-graph traverse returns parents/children/parentEdges/childEdges
+  const neighbors = [
+    ...(data.parents ?? []),
+    ...(data.children ?? []),
+    ...(data.neighbors ?? []),
+    ...(data.connectedNodes ?? []),
+    ...(data.upstream ?? []),
+    ...(data.downstream ?? []),
+  ].map(mapNode)
+  // Deduplicate by id
+  const seen = new Set<string>()
+  const uniqueNeighbors = neighbors.filter((n) => {
+    if (seen.has(n.id)) return false
+    seen.add(n.id)
+    return true
+  })
+  const edges = [
+    ...(data.parentEdges ?? []),
+    ...(data.childEdges ?? []),
+    ...(data.edges ?? []),
+    ...(data.relationships ?? []),
+  ].map(mapEdge)
+  return { node, neighbors: uniqueNeighbors, edges }
 }

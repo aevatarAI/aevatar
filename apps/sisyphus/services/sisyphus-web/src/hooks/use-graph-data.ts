@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { fetchGraphSnapshot, fetchNodeTraversal } from '../services/graph-service'
+import { fetchGraphSnapshot, fetchNodeDetail, fetchNodeTraversal } from '../services/graph-service'
 import { useAuth } from '../auth/useAuth'
 import { useSettings } from '../settings/SettingsContext'
 import type { GraphSnapshot, GraphNode, TraverseResult } from '../types/graph'
@@ -107,15 +107,29 @@ export function useGraphData() {
 
   const selectNode = useCallback(async (nodeId: string) => {
     const token = getAccessToken()
-    const node = fullSnapshot?.nodes.find((n) => n.id === nodeId) ?? null
-    setSelectedNode(node)
+    // Show lightweight data immediately
+    const lightNode = fullSnapshot?.nodes.find((n) => n.id === nodeId) ?? null
+    setSelectedNode(lightNode)
     setTraverseResult(null)
     if (!token || !graphId) return
+
+    // Fetch full node detail (body, all properties)
+    try {
+      const fullNode = await fetchNodeDetail(graphId, nodeId, token)
+      setSelectedNode(fullNode)
+    } catch (err) {
+      console.error('[sisyphus] fetchNodeDetail failed:', err)
+    }
+
+    // Fetch connections (traverse)
     try {
       const result = await fetchNodeTraversal(graphId, nodeId, 2, token)
       setTraverseResult(result)
-    } catch { /* traverse is supplementary */ }
-  }, [fullSnapshot, getAccessToken])
+    } catch (err) {
+      console.error('[sisyphus] fetchNodeTraversal failed:', err)
+      setTraverseResult({ node: lightNode!, neighbors: [], edges: [] })
+    }
+  }, [fullSnapshot, getAccessToken, graphId])
 
   const clearSelection = useCallback(() => {
     setSelectedNode(null)

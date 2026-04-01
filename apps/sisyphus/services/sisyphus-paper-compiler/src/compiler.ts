@@ -6,7 +6,7 @@ import pino from "pino";
 
 const logger = pino({ name: "paper-compiler:compiler" });
 
-const COMPILE_TIMEOUT_MS = 60_000;
+const COMPILE_TIMEOUT_MS = 300_000; // 5 min for large documents
 const MAX_CONCURRENT = 3;
 
 // Simple counting semaphore for tectonic concurrency
@@ -64,7 +64,7 @@ export async function compilePdf(latex: string): Promise<Buffer> {
             }
 
             // Non-fatal: tectonic exited with error code but may have produced a PDF
-            logger.warn({ exitCode: proc.exitCode, stderr: stderr?.slice(0, 500) }, "Tectonic exited with error");
+            logger.warn({ exitCode: proc.exitCode, stderr: stderr?.slice(-2000) }, "Tectonic exited with error");
           }
           resolve();
         }

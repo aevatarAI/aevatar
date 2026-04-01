@@ -61,7 +61,7 @@ export class CompileController extends Controller {
       return Buffer.from(JSON.stringify({ error: "Request must include a non-empty 'nodes' array" }));
     }
 
-    const MAX_NODES = 10_000;
+    const MAX_NODES = 50_000;
     if (body.nodes.length > MAX_NODES) {
       this.setStatus(400);
       return Buffer.from(JSON.stringify({ error: `Node count ${body.nodes.length} exceeds maximum of ${MAX_NODES}` }));

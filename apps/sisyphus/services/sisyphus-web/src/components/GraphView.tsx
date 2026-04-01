@@ -8,9 +8,10 @@ import NodeDetailsPanel from './NodeDetailsPanel'
 
 interface GraphViewProps {
   onFilteredSnapshotChange?: (snapshot: GraphSnapshot | null) => void
+  onFilterNameChange?: (name: string) => void
 }
 
-export default function GraphView({ onFilteredSnapshotChange }: GraphViewProps) {
+export default function GraphView({ onFilteredSnapshotChange, onFilterNameChange }: GraphViewProps) {
   const {
     snapshot, fullSnapshot, selectedNode, traverseResult, loading, error, refresh, selectNode, clearSelection,
     filters, setFilters, filterOptions,
@@ -23,14 +24,10 @@ export default function GraphView({ onFilteredSnapshotChange }: GraphViewProps) 
   const prevSnapshotRef = useRef(snapshot)
 
   // Show rendering overlay when snapshot changes (filter switch)
+  // Stays visible until ForceGraph3D finishes warmup via onEngineStop
   useEffect(() => {
     if (snapshot !== prevSnapshotRef.current && snapshot && snapshot.nodes.length > 0) {
       setRendering(true)
-      const raf = requestAnimationFrame(() => {
-        requestAnimationFrame(() => setRendering(false))
-      })
-      prevSnapshotRef.current = snapshot
-      return () => cancelAnimationFrame(raf)
     }
     prevSnapshotRef.current = snapshot
   }, [snapshot])
@@ -39,6 +36,12 @@ export default function GraphView({ onFilteredSnapshotChange }: GraphViewProps) 
   useEffect(() => {
     onFilteredSnapshotChange?.(snapshot)
   }, [snapshot, onFilteredSnapshotChange])
+
+  // Notify parent of filter name for compile file naming
+  useEffect(() => {
+    const parts = [filters.layer || 'all', filters.type, filters.edgeType].filter(Boolean)
+    onFilterNameChange?.(parts.join('_') || 'all')
+  }, [filters, onFilterNameChange])
 
   // Track container dimensions
   useEffect(() => {
@@ -147,9 +150,10 @@ export default function GraphView({ onFilteredSnapshotChange }: GraphViewProps) 
         </div>
       )}
 
-      {/* 3D Force Graph */}
-      {snapshot && !isEmpty && !rendering && (
+      {/* 3D Force Graph — key forces remount on filter change so onEngineStop fires */}
+      {snapshot && !isEmpty && (
         <ForceGraph3D
+          key={`${filters.layer}_${filters.type}_${filters.edgeType}_${filters.search}`}
           ref={fgRef}
           width={dimensions.width}
           height={dimensions.height}
@@ -169,6 +173,7 @@ export default function GraphView({ onFilteredSnapshotChange }: GraphViewProps) 
           cooldownTicks={0}
           d3AlphaDecay={0.05}
           d3VelocityDecay={0.4}
+          onEngineStop={() => setRendering(false)}
         />
       )}
 
