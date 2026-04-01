@@ -75,6 +75,34 @@ public sealed class AgentHookPipeline
     public Task RunToolApprovalCompletedAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
         RunAll(h => h.OnToolApprovalCompletedAsync(ctx, ct), "OnToolApprovalCompleted");
 
+    // ─── Post-Sampling ───
+
+    /// <summary>LLM 响应完成后、Tool 执行前的拦截点。</summary>
+    public Task RunPostSamplingAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnPostSamplingAsync(ctx, ct), "OnPostSampling");
+
+    // ─── Tool 执行失败 ───
+
+    /// <summary>Tool 执行异常时执行所有 hook。</summary>
+    public Task RunToolExecuteFailureAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnToolExecuteFailureAsync(ctx, ct), "OnToolExecuteFailure");
+
+    // ─── 通知事件 ───
+
+    /// <summary>通用通知事件分发。</summary>
+    public Task RunNotificationAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnNotificationAsync(ctx, ct), "OnNotification");
+
+    // ─── Turn 完成/失败 ───
+
+    /// <summary>Agent 轮次正常完成。</summary>
+    public Task RunStopAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnStopAsync(ctx, ct), "OnStop");
+
+    /// <summary>Agent 轮次因错误终止。</summary>
+    public Task RunStopFailureAsync(AIGAgentExecutionHookContext ctx, CancellationToken ct) =>
+        RunAll(h => h.OnStopFailureAsync(ctx, ct), "OnStopFailure");
+
     // ─── 内部 ───
 
     private async Task RunAll(Func<IAIGAgentExecutionHook, Task> action, string phase)

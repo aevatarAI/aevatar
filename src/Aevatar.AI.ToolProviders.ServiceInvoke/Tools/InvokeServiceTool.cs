@@ -83,11 +83,16 @@ public sealed class InvokeServiceTool : IAgentTool
 
             var payloadJson = args.RawOrStr("payload");
             var catalog = await _catalogReader.GetAsync(identity, ct);
-            var endpoint = catalog?.Endpoints
+            if (catalog == null)
+                return JsonSerializer.Serialize(new { error = $"Service '{serviceId}' was not found in scope '{_options.TenantId}:{_options.AppId}:{_options.Namespace}'." });
+
+            var endpoint = catalog.Endpoints
                 .FirstOrDefault(e => string.Equals(e.EndpointId, endpointId, StringComparison.OrdinalIgnoreCase));
+            if (endpoint == null)
+                return JsonSerializer.Serialize(new { error = $"Endpoint '{endpointId}' not found on service '{serviceId}'. Available: {string.Join(", ", catalog.Endpoints.Select(e => e.EndpointId))}" });
 
             var payload = await PackPayloadAsync(
-                payloadJson, endpoint?.RequestTypeUrl, catalog, ct);
+                payloadJson, endpoint.RequestTypeUrl, catalog, ct);
 
             var commandId = Guid.NewGuid().ToString("N");
             var request = new ServiceInvocationRequest

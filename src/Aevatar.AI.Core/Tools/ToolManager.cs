@@ -51,4 +51,16 @@ public sealed class ToolManager
         try { return ChatMessage.Tool(call.Id, await tool.ExecuteAsync(call.ArgumentsJson, ct)); }
         catch (Exception ex) { return ChatMessage.Tool(call.Id, $"{{\"error\":\"{ex.Message}\"}}"); }
     }
+
+    /// <summary>
+    /// 执行 tool_call，不吞异常。成功返回 (result, null)，失败返回 (errorJson, exception)。
+    /// 供需要感知异常的调用方（如 hook 系统）使用。
+    /// </summary>
+    public async Task<(string Result, Exception? Error)> ExecuteToolCallRawAsync(ToolCall call, CancellationToken ct = default)
+    {
+        var tool = Get(call.Name);
+        if (tool == null) return ($"{{\"error\":\"Tool '{call.Name}' not found\"}}", new InvalidOperationException($"Tool '{call.Name}' not found"));
+        try { return (await tool.ExecuteAsync(call.ArgumentsJson, ct), null); }
+        catch (Exception ex) { return ($"{{\"error\":\"{ex.Message}\"}}", ex); }
+    }
 }

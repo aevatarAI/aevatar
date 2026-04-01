@@ -7,8 +7,11 @@ using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.Scripting;
 using Aevatar.AI.ToolProviders.ServiceInvoke;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Workflow;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Configuration;
@@ -42,6 +45,11 @@ public sealed class AevatarAIFeatureOptions
     public string? ServiceInvokeTenantId { get; set; }
     public string? ServiceInvokeAppId { get; set; }
     public string? ServiceInvokeNamespace { get; set; }
+    public bool EnableWebTools { get; set; }
+    public string? WebSearchNyxIdSlug { get; set; }
+    public string? WebSearchApiBaseUrl { get; set; }
+    public bool EnableWorkflowTools { get; set; }
+    public bool EnableScriptingTools { get; set; }
 }
 
 public static class ServiceCollectionExtensions
@@ -74,6 +82,15 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableServiceInvokeTools)
             RegisterServiceInvokeTools(services, options);
+
+        if (options.EnableWebTools)
+            RegisterWebTools(services, options);
+
+        if (options.EnableWorkflowTools)
+            RegisterWorkflowTools(services);
+
+        if (options.EnableScriptingTools)
+            RegisterScriptingTools(services);
 
         return services;
     }
@@ -588,5 +605,24 @@ public static class ServiceCollectionExtensions
             return;
 
         services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
+    }
+
+    private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        services.AddWebTools(o =>
+        {
+            o.NyxIdSearchSlug = options.WebSearchNyxIdSlug;
+            o.SearchApiBaseUrl = options.WebSearchApiBaseUrl;
+        });
+    }
+
+    private static void RegisterWorkflowTools(IServiceCollection services)
+    {
+        services.AddWorkflowTools();
+    }
+
+    private static void RegisterScriptingTools(IServiceCollection services)
+    {
+        services.AddScriptingTools();
     }
 }

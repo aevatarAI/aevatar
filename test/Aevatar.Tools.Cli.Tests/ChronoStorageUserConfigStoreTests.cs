@@ -25,7 +25,7 @@ public sealed class ChronoStorageUserConfigStoreTests
         var config = await store.GetAsync();
 
         config.DefaultModel.Should().BeEmpty();
-        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Auto);
+        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         config.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode);
         config.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:6001");
         config.RemoteRuntimeBaseUrl.Should().Be("https://remote-default.example");
@@ -47,7 +47,7 @@ public sealed class ChronoStorageUserConfigStoreTests
         var config = await store.GetAsync();
 
         config.DefaultModel.Should().Be("gpt-4.1");
-        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Auto);
+        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
         config.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         config.LocalRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
         config.RemoteRuntimeBaseUrl.Should().Be("https://runtime.example");

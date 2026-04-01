@@ -6,6 +6,7 @@ using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Core.Tools;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Channels;
@@ -66,7 +67,7 @@ public sealed class ChatRuntime
     }
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
-    public Task<string?> ChatAsync(string userMessage, int maxToolRounds = 10, CancellationToken ct = default) =>
+    public Task<string?> ChatAsync(string userMessage, int maxToolRounds = DefaultMaxToolRounds, CancellationToken ct = default) =>
         ChatAsync(userMessage, maxToolRounds, requestId: null, metadata: null, ct);
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
@@ -85,25 +86,53 @@ public sealed class ChatRuntime
             CancellationToken = ct,
         };
 
-        await MiddlewarePipeline.RunAgentAsync(_agentMiddlewares, runContext, async () =>
+        try
         {
-            if (runContext.Terminate) return;
+            await MiddlewarePipeline.RunAgentAsync(_agentMiddlewares, runContext, async () =>
+            {
+                if (runContext.Terminate) return;
 
-            _history.Add(ChatMessage.User(runContext.UserMessage));
-            await RunCompressionIfNeededAsync(ct);
-            var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
-            var provider = _providerFactory();
-            runContext.Items["gen_ai.provider.name"] = provider.Name;
-            var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
+                _history.Add(ChatMessage.User(runContext.UserMessage));
+                await RunCompressionIfNeededAsync(ct);
+                var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
+                var provider = _providerFactory();
+                runContext.Items["gen_ai.provider.name"] = provider.Name;
+                var messages = _history.BuildMessages(baseRequest.Messages.FirstOrDefault(m => m.Role == "system")?.Content);
 
-            var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
+                var result = await _toolLoop.ExecuteAsync(provider, messages, baseRequest, maxToolRounds, ct);
 
-            _history.Clear();
-            foreach (var m in messages.Where(m => m.Role != "system"))
-                _history.Add(m);
+                _history.Clear();
+                foreach (var m in messages.Where(m => m.Role != "system"))
+                    _history.Add(m);
 
-            runContext.Result = result;
-        });
+                runContext.Result = result;
+            });
+
+            // ─── Hook: Stop（轮次正常完成） ───
+            if (_hooks != null)
+            {
+                var stopCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
+                stopCtx.Items["final_content"] = runContext.Result ?? "";
+                // Count tool-calling rounds by counting assistant messages that have tool calls
+                stopCtx.Items["total_rounds"] = _history.Messages
+                    .Count(m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
+                await _hooks.RunStopAsync(stopCtx, ct);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // ─── Hook: StopFailure（轮次因错误终止） ───
+            if (_hooks != null)
+            {
+                var failCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
+                failCtx.Items["error"] = ex;
+                failCtx.Items["error_message"] = ex.Message;
+                failCtx.Items["error_phase"] = "llm_or_tool_execution";
+                try { await _hooks.RunStopFailureAsync(failCtx, ct); }
+                catch { /* best-effort */ }
+            }
+            throw;
+        }
 
         return runContext.Result;
     }
@@ -192,6 +221,20 @@ public sealed class ChatRuntime
 
                     for (var round = 0; round < effectiveMaxToolRounds; round++)
                     {
+                        // Create a streaming tool executor for mid-stream dispatch.
+                        // Tools start executing as soon as their tool_use block completes
+                        // in the stream, before the full LLM response finishes.
+                        //
+                        // HOWEVER: when PostSampling hooks are configured, we must defer
+                        // tool dispatch until after the hook runs — the hook may block all
+                        // tool calls. In that case we collect tool calls into a list first,
+                        // then dispatch after PostSampling approves.
+                        using var streamingExecutor = new StreamingToolExecutor(
+                            _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                            requestMetadata: baseRequest.Metadata);
+
+                        List<ToolCall>? deferredToolCalls = _hooks != null ? [] : null;
+
                         var roundRequest = new LLMRequest
                         {
                             Messages = [..messages],
@@ -209,10 +252,18 @@ public sealed class ChatRuntime
                             roundRequest,
                             channel.Writer,
                             runToken,
-                            () => wroteOutput = true);
+                            () => wroteOutput = true,
+                            onToolCallCompleted: toolCall =>
+                            {
+                                if (deferredToolCalls != null)
+                                    deferredToolCalls.Add(toolCall);
+                                else
+                                    streamingExecutor.AddTool(toolCall);
+                            });
 
                         if (roundResult.Terminated)
                         {
+                            streamingExecutor.Discard();
                             AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, roundResult.ToolCalls);
                             finalContent = roundResult.Content;
                             break;
@@ -237,6 +288,39 @@ public sealed class ChatRuntime
                             break;
                         }
 
+                        // ─── Hook: Post-Sampling（流式路径：LLM 输出完成后、tool 调度前） ───
+                        // When hooks are configured, tool calls were deferred (not dispatched
+                        // mid-stream). Run PostSampling first; if it blocks, discard everything.
+                        // Otherwise, dispatch the deferred tool calls now.
+                        if (_hooks != null)
+                        {
+                            var postSamplingCtx = new AIGAgentExecutionHookContext
+                            {
+                                LLMResponse = new LLMResponse
+                                {
+                                    Content = roundResult.Content,
+                                    ToolCalls = roundResult.ToolCalls,
+                                },
+                            };
+                            postSamplingCtx.Items["tool_call_count"] = roundResult.ToolCalls?.Count ?? 0;
+                            await _hooks.RunPostSamplingAsync(postSamplingCtx, runToken);
+
+                            if (postSamplingCtx.Items.TryGetValue("block_tool_calls", out var block)
+                                && block is true)
+                            {
+                                AppendAssistantMessage(messages, pendingHistoryMessages, roundResult.Content, toolCalls: null);
+                                finalContent = roundResult.Content;
+                                break;
+                            }
+
+                            // PostSampling approved — dispatch deferred tool calls
+                            if (deferredToolCalls != null)
+                            {
+                                foreach (var tc in deferredToolCalls)
+                                    streamingExecutor.AddTool(tc);
+                            }
+                        }
+
                         var assistantToolCallMessage = new ChatMessage
                         {
                             Role = "assistant",
@@ -245,10 +329,14 @@ public sealed class ChatRuntime
                         messages.Add(assistantToolCallMessage);
                         pendingHistoryMessages.Add(assistantToolCallMessage);
 
-                        var toolMessageStartIndex = messages.Count;
-                        await _toolLoop.ExecuteToolCallsAsync(roundResult.ToolCalls, messages, baseRequest.Metadata, runToken);
-                        for (var index = toolMessageStartIndex; index < messages.Count; index++)
-                            pendingHistoryMessages.Add(messages[index]);
+                        // Collect results from the streaming executor (tools already started mid-stream).
+                        // Metadata is propagated inside the executor via its constructor parameter.
+                        await foreach (var result in streamingExecutor.GetRemainingResultsAsync(runToken))
+                        {
+                            var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                            messages.Add(toolMsg);
+                            pendingHistoryMessages.Add(toolMsg);
+                        }
                     }
 
                     if (finalContent == null)
@@ -285,11 +373,33 @@ public sealed class ChatRuntime
                         runToken);
                 }
 
+                // ─── Hook: Stop（流式轮次正常完成） ───
+                if (_hooks != null)
+                {
+                    var stopCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
+                    stopCtx.Items["final_content"] = runContext.Result ?? "";
+                    stopCtx.Items["total_rounds"] = pendingHistoryMessages
+                        .Count(m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
+                    try { await _hooks.RunStopAsync(stopCtx, runToken); }
+                    catch { /* best-effort */ }
+                }
+
                 channel.Writer.TryComplete();
                 return pendingHistoryMessages;
             }
             catch (Exception ex)
             {
+                // ─── Hook: StopFailure（流式轮次因错误终止） ───
+                if (_hooks != null && ex is not OperationCanceledException)
+                {
+                    var failCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
+                    failCtx.Items["error"] = ex;
+                    failCtx.Items["error_message"] = ex.Message;
+                    failCtx.Items["error_phase"] = "streaming_llm_or_tool_execution";
+                    try { await _hooks.RunStopFailureAsync(failCtx, CancellationToken.None); }
+                    catch { /* best-effort */ }
+                }
+
                 channel.Writer.TryComplete(ex);
                 return pendingHistoryMessages;
             }
@@ -319,12 +429,24 @@ public sealed class ChatRuntime
         }
     }
 
-    private async Task<StreamingRoundResult> StreamLlmRoundAsync(
+    private Task<StreamingRoundResult> StreamLlmRoundAsync(
         ILLMProvider provider,
         LLMRequest request,
         ChannelWriter<LLMStreamChunk> writer,
         CancellationToken ct,
-        Action markOutputWritten)
+        Action markOutputWritten,
+        Action<ToolCall>? onToolCallCompleted = null)
+    {
+        return StreamLlmRoundCoreAsync(provider, request, writer, ct, markOutputWritten, onToolCallCompleted);
+    }
+
+    private async Task<StreamingRoundResult> StreamLlmRoundCoreAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        ChannelWriter<LLMStreamChunk> writer,
+        CancellationToken ct,
+        Action markOutputWritten,
+        Action<ToolCall>? onToolCallCompleted)
     {
         var llmHookContext = new AIGAgentExecutionHookContext { LLMRequest = request };
         if (_hooks != null) await _hooks.RunLLMRequestStartAsync(llmHookContext, ct);
@@ -350,7 +472,9 @@ public sealed class ChatRuntime
             var full = new StringBuilder();
             TokenUsage? usage = null;
             string? finishReason = null;
-            var toolCalls = new StreamingToolCallAccumulator();
+            var toolCalls = onToolCallCompleted != null
+                ? new StreamingToolCallAccumulator(onToolCallCompleted)
+                : new StreamingToolCallAccumulator();
 
             await foreach (var chunk in provider.ChatStreamAsync(llmCallContext.Request, ct))
             {
@@ -592,6 +716,22 @@ public sealed class ChatRuntime
         hookCtx.Items["truncated_messages"] = truncated;
         hookCtx.Items["summarized"] = summarized;
         if (_hooks != null) await _hooks.RunCompactEndAsync(hookCtx, ct);
+
+        // ─── Hook: Notification（token 预算超限，已触发压缩） ───
+        if (_hooks != null)
+        {
+            var notifyCtx = new AIGAgentExecutionHookContext { AgentId = _agentId };
+            notifyCtx.Items["notification_type"] = "budget_compression_triggered";
+            notifyCtx.Items["notification_payload"] = new Dictionary<string, object?>
+            {
+                ["last_prompt_tokens"] = _history.Budget.LastPromptTokens,
+                ["budget_limit"] = _compressionConfig.MaxPromptTokenBudget,
+                ["compacted_tool_results"] = compacted,
+                ["truncated_messages"] = truncated,
+                ["summarized"] = summarized,
+            };
+            await _hooks.RunNotificationAsync(notifyCtx, ct);
+        }
     }
 
     private sealed record StreamingRoundResult(

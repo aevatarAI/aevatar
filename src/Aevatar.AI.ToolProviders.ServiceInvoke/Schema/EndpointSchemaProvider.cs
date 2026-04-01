@@ -14,10 +14,11 @@ namespace Aevatar.AI.ToolProviders.ServiceInvoke.Schema;
 public sealed class EndpointSchemaProvider
 {
     private const string TypeUrlPrefix = "type.googleapis.com/";
+    private const int MaxCacheEntries = 500;
 
     private readonly IServiceRevisionArtifactStore _artifactStore;
-    private readonly ConcurrentDictionary<string, string?> _schemaCache = new();
-    private readonly ConcurrentDictionary<string, MessageDescriptor?> _descriptorCache = new();
+    private readonly ConcurrentDictionary<string, CacheEntry<string?>> _schemaCache = new();
+    private readonly ConcurrentDictionary<string, CacheEntry<MessageDescriptor?>> _descriptorCache = new();
 
     public EndpointSchemaProvider(IServiceRevisionArtifactStore artifactStore)
     {
@@ -38,18 +39,15 @@ public sealed class EndpointSchemaProvider
             return null;
 
         var cacheKey = $"{serviceKey}:{revisionId}:{requestTypeUrl}";
-        if (_schemaCache.TryGetValue(cacheKey, out var cached))
-            return cached;
+        if (_schemaCache.TryGetValue(cacheKey, out var cached) && !cached.IsExpired)
+            return cached.Value;
 
         var descriptor = await ResolveDescriptorAsync(serviceKey, revisionId, requestTypeUrl, ct);
         if (descriptor == null)
-        {
-            _schemaCache[cacheKey] = null;
             return null;
-        }
 
         var schema = ProtoToJsonSchemaConverter.Convert(descriptor);
-        _schemaCache[cacheKey] = schema;
+        SetCache(_schemaCache, cacheKey, schema, ttl: null);
         return schema;
     }
 
@@ -79,7 +77,6 @@ public sealed class EndpointSchemaProvider
 
             var message = parser.Parse(payloadJson, descriptor);
 
-            // Build Any with the correct TypeUrl
             var typeUrl = requestTypeUrl.StartsWith(TypeUrlPrefix, StringComparison.Ordinal)
                 ? requestTypeUrl
                 : TypeUrlPrefix + requestTypeUrl;
@@ -92,7 +89,6 @@ public sealed class EndpointSchemaProvider
         }
         catch
         {
-            // Typed conversion failed — caller falls back to Struct
             return null;
         }
     }
@@ -104,11 +100,21 @@ public sealed class EndpointSchemaProvider
         CancellationToken ct)
     {
         var cacheKey = $"{serviceKey}:{revisionId}:{requestTypeUrl}";
-        if (_descriptorCache.TryGetValue(cacheKey, out var cached))
-            return cached;
+        if (_descriptorCache.TryGetValue(cacheKey, out var cached) && !cached.IsExpired)
+            return cached.Value;
 
         var descriptor = await ResolveDescriptorCoreAsync(serviceKey, revisionId, requestTypeUrl, ct);
-        _descriptorCache[cacheKey] = descriptor;
+
+        if (descriptor != null)
+        {
+            SetCache(_descriptorCache, cacheKey, descriptor, ttl: null);
+        }
+        else
+        {
+            // Negative results use short TTL so transient unavailability self-heals
+            SetCache(_descriptorCache, cacheKey, (MessageDescriptor?)null, ttl: TimeSpan.FromMinutes(2));
+        }
+
         return descriptor;
     }
 
@@ -163,5 +169,36 @@ public sealed class EndpointSchemaProvider
         }
 
         return null;
+    }
+
+    private static void SetCache<T>(ConcurrentDictionary<string, CacheEntry<T>> cache, string key, T value, TimeSpan? ttl)
+    {
+        // Evict oldest entries when cache grows too large
+        if (cache.Count >= MaxCacheEntries)
+        {
+            var expired = cache.Where(kv => kv.Value.IsExpired).Select(kv => kv.Key).Take(50).ToList();
+            foreach (var k in expired)
+                cache.TryRemove(k, out _);
+
+            // If still too large, remove arbitrary entries
+            if (cache.Count >= MaxCacheEntries)
+            {
+                var excess = cache.Keys.Take(50).ToList();
+                foreach (var k in excess)
+                    cache.TryRemove(k, out _);
+            }
+        }
+
+        cache[key] = new CacheEntry<T>(value, ttl);
+    }
+
+    private readonly struct CacheEntry<T>(T value, TimeSpan? ttl)
+    {
+        public T Value { get; } = value;
+        private long ExpiresAtTicks { get; } = ttl.HasValue
+            ? Environment.TickCount64 + (long)ttl.Value.TotalMilliseconds
+            : long.MaxValue;
+
+        public bool IsExpired => Environment.TickCount64 >= ExpiresAtTicks;
     }
 }

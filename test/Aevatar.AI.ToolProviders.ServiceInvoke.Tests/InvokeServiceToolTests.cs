@@ -86,16 +86,41 @@ public class InvokeServiceToolTests
         {
             RequestId = "req1",
             ServiceKey = "k",
-            EndpointId = "ep",
+            EndpointId = "cmd1",
             CommandId = "c",
             CorrelationId = "c",
         });
 
         var tool = new InvokeServiceTool(port, DefaultCatalogReader(), DefaultOptions());
-        var result = await tool.ExecuteAsync("""{"service_id":"svc1","endpoint_id":"ep"}""");
+        var result = await tool.ExecuteAsync("""{"service_id":"svc1","endpoint_id":"cmd1"}""");
 
         using var doc = JsonDocument.Parse(result);
         doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReturnsErrorWhenServiceNotFound()
+    {
+        var port = new StubInvocationPort();
+        var reader = new StubCatalogReader([]);
+
+        var tool = new InvokeServiceTool(port, reader, DefaultOptions());
+        var result = await tool.ExecuteAsync("""{"service_id":"nonexistent","endpoint_id":"cmd1"}""");
+
+        result.Should().Contain("not found");
+        result.Should().Contain("nonexistent");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReturnsErrorWhenEndpointNotFound()
+    {
+        var port = new StubInvocationPort();
+        var tool = new InvokeServiceTool(port, DefaultCatalogReader(), DefaultOptions());
+        var result = await tool.ExecuteAsync("""{"service_id":"svc1","endpoint_id":"bad-ep"}""");
+
+        result.Should().Contain("bad-ep");
+        result.Should().Contain("not found");
+        result.Should().Contain("cmd1"); // shows available endpoints
     }
 
     [Fact]

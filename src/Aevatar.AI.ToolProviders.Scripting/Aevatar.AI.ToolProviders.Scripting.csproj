@@ -3,16 +3,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>Aevatar.AI.ToolProviders.ChronoStorage</AssemblyName>
-    <RootNamespace>Aevatar.AI.ToolProviders.ChronoStorage</RootNamespace>
+    <AssemblyName>Aevatar.AI.ToolProviders.Scripting</AssemblyName>
+    <RootNamespace>Aevatar.AI.ToolProviders.Scripting</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
-    <ProjectReference Include="..\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 </Project>

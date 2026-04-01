@@ -21,15 +21,13 @@ public static class ProtoToJsonSchemaConverter
             return new Dictionary<string, object> { ["type"] = "object" };
 
         var properties = new Dictionary<string, object>();
-        var required = new List<string>();
 
         foreach (var field in descriptor.Fields.InDeclarationOrder())
         {
             if (field.ContainingOneof != null && !field.ContainingOneof.IsSynthetic)
                 continue;
 
-            var jsonName = field.JsonName;
-            properties[jsonName] = BuildFieldSchema(field, depth);
+            properties[field.JsonName] = BuildFieldSchema(field, depth);
         }
 
         // Add oneof groups as optional properties
@@ -37,22 +35,14 @@ public static class ProtoToJsonSchemaConverter
         {
             if (oneof.IsSynthetic) continue;
             foreach (var field in oneof.Fields)
-            {
-                var jsonName = field.JsonName;
-                properties[jsonName] = BuildFieldSchema(field, depth);
-            }
+                properties[field.JsonName] = BuildFieldSchema(field, depth);
         }
 
-        var result = new Dictionary<string, object>
+        return new Dictionary<string, object>
         {
             ["type"] = "object",
             ["properties"] = properties,
         };
-
-        if (required.Count > 0)
-            result["required"] = required;
-
-        return result;
     }
 
     private static Dictionary<string, object> BuildFieldSchema(FieldDescriptor field, int depth)
