@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
+import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
@@ -269,12 +270,34 @@ jest.mock("@/shared/api/runtimeQueryApi", () => ({
   },
 }));
 
+jest.mock("@/shared/api/runtimeGAgentApi", () => ({
+  runtimeGAgentApi: {
+    listTypes: jest.fn(async () => [
+      {
+        typeName: "OrdersGAgent",
+        fullName: "Tests.OrdersGAgent",
+        assemblyName: "Tests",
+      },
+    ]),
+    listActors: jest.fn(async () => [
+      {
+        gAgentType: "Tests.OrdersGAgent",
+        actorIds: ["orders-gagent"],
+      },
+    ]),
+  },
+}));
+
 const mockEnsureActiveAuthSession =
   ensureActiveAuthSession as jest.MockedFunction<
     (_config?: unknown) => Promise<Record<string, unknown> | null>
   >;
 const mockRuntimeQueryApi = runtimeQueryApi as unknown as {
   listPrimitives: jest.Mock;
+};
+const mockRuntimeGAgentApi = runtimeGAgentApi as unknown as {
+  listTypes: jest.Mock;
+  listActors: jest.Mock;
 };
 
 jest.mock("@/shared/studio/api", () => ({
@@ -564,6 +587,15 @@ jest.mock("@/shared/studio/api", () => ({
           preparedAt: "2026-03-26T07:01:00Z",
           publishedAt: "2026-03-26T07:02:00Z",
           retiredAt: null,
+          workflowName: "workspace-demo",
+          workflowDefinitionActorId: "scope-workflow:scope-1:default",
+          inlineWorkflowCount: 1,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
+          staticPreferredActorId: "",
         },
         {
           revisionId: "rev-1",
@@ -582,6 +614,15 @@ jest.mock("@/shared/studio/api", () => ({
           preparedAt: "2026-03-25T07:01:00Z",
           publishedAt: "2026-03-25T07:02:00Z",
           retiredAt: null,
+          workflowName: "workspace-demo-v1",
+          workflowDefinitionActorId: "scope-workflow:scope-1:default:v1",
+          inlineWorkflowCount: 1,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
+          staticPreferredActorId: "",
         },
       ],
     })),
@@ -593,6 +634,15 @@ jest.mock("@/shared/studio/api", () => ({
       serviceId: "default",
       displayName: "workspace-demo",
       revisionId: input.revisionId,
+    })),
+    retireScopeBindingRevision: jest.fn(async (input: {
+      scopeId: string;
+      revisionId: string;
+    }) => ({
+      scopeId: input.scopeId,
+      serviceId: "default",
+      revisionId: input.revisionId,
+      status: "Retiring",
     })),
     stopExecution: jest.fn(async (executionId: string) => ({
       executionId,
@@ -1130,6 +1180,45 @@ jest.mock("./components/StudioWorkbenchSections", () => {
         React.createElement(
           "button",
           {
+            key: "bind-gagent-chat-runs",
+            type: "button",
+            onClick: () =>
+              props.onBindGAgent?.(
+                {
+                  displayName: "orders-gagent",
+                  actorTypeName: "Tests.OrdersGAgent, Tests",
+                  preferredActorId: "orders-gagent",
+                  endpoints: [
+                    {
+                      endpointId: "run",
+                      displayName: "Run",
+                      kind: "command",
+                      requestTypeUrl:
+                        "type.googleapis.com/google.protobuf.StringValue",
+                      responseTypeUrl:
+                        "type.googleapis.com/example.RunResult",
+                      description: "Run the bound gagent.",
+                    },
+                    {
+                      endpointId: "support-chat",
+                      displayName: "Chat",
+                      kind: "chat",
+                      requestTypeUrl: "",
+                      responseTypeUrl: "",
+                      description: "Chat with the bound gagent.",
+                    },
+                  ],
+                  openRunsEndpointId: "support-chat",
+                  prompt: "Chat with the orders gagent",
+                },
+                { openRuns: true }
+              ),
+          },
+          "Bind GAgent Chat + Runs"
+        ),
+        React.createElement(
+          "button",
+          {
             key: "open-runs",
             type: "button",
             onClick: () => props.onRunInConsole?.(),
@@ -1145,6 +1234,17 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 onClick: () => props.onActivateBindingRevision?.("rev-1"),
               },
               "Activate rev-1"
+            )
+          : null,
+        props.scopeBinding?.available
+          ? React.createElement(
+              "button",
+              {
+                key: "retire-rev-1",
+                type: "button",
+                onClick: () => props.onRetireBindingRevision?.("rev-1"),
+              },
+              "Retire rev-1"
             )
           : null,
         runOpen
@@ -1431,6 +1531,19 @@ describe("StudioPage", () => {
         exampleWorkflows: ["demo_template"],
       },
     ]);
+    mockRuntimeGAgentApi.listTypes.mockResolvedValue([
+      {
+        typeName: "OrdersGAgent",
+        fullName: "Tests.OrdersGAgent",
+        assemblyName: "Tests",
+      },
+    ]);
+    mockRuntimeGAgentApi.listActors.mockResolvedValue([
+      {
+        gAgentType: "Tests.OrdersGAgent",
+        actorIds: ["orders-gagent"],
+      },
+    ]);
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       enabled: false,
       authenticated: false,
@@ -1491,11 +1604,13 @@ describe("StudioPage", () => {
       expect(studioApi.getAppContext).toHaveBeenCalled();
     });
 
-    expect(window.location.pathname).toBe("/studio");
-    const searchParams = new URLSearchParams(window.location.search);
-    expect(searchParams.get("tab")).toBe("studio");
-    expect(searchParams.get("workflow")).toBe("workflow-1");
-    expect(searchParams.get("execution")).toBe("execution-1");
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(searchParams.get("workflow")).toBe("workflow-1");
+      expect(searchParams.get("execution")).toBe("execution-1");
+    });
   });
 
   it("redirects to login when Studio auth stays unauthenticated after refresh", async () => {
@@ -1505,7 +1620,7 @@ describe("StudioPage", () => {
       providerDisplayName: "NyxID",
     });
 
-    renderStudioPage("/studio?tab=studio&workflowId=workflow-1");
+    renderStudioPage("/studio?tab=studio&workflow=workflow-1");
 
     await waitFor(() => {
       expect(mockEnsureActiveAuthSession).toHaveBeenCalledTimes(1);
@@ -1513,7 +1628,7 @@ describe("StudioPage", () => {
     });
 
     expect(new URLSearchParams(window.location.search).get("redirect")).toBe(
-      "/studio?tab=studio&workflowId=workflow-1"
+      "/studio?workflow=workflow-1&tab=studio"
     );
   });
 
@@ -1844,6 +1959,22 @@ describe("StudioPage", () => {
     });
   });
 
+  it("loads discovered GAgent types and saved actor ids for the resolved scope", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    await waitFor(() => {
+      expect(mockRuntimeGAgentApi.listTypes).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(mockRuntimeGAgentApi.listActors).toHaveBeenCalledWith("scope-1");
+    });
+  });
+
   it("binds a GAgent service and opens runtime runs with a draft payload", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -1899,6 +2030,64 @@ describe("StudioPage", () => {
     );
   });
 
+  it("binds a chat GAgent endpoint and opens runtime runs without a draft payload", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Bind GAgent Chat + Runs" })
+    );
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        displayName: "orders-gagent",
+        actorTypeName: "Tests.OrdersGAgent, Tests",
+        preferredActorId: "orders-gagent",
+        endpoints: [
+          {
+            endpointId: "run",
+            displayName: "Run",
+            kind: "command",
+            requestTypeUrl:
+              "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/example.RunResult",
+            description: "Run the bound gagent.",
+          },
+          {
+            endpointId: "support-chat",
+            displayName: "Chat",
+            kind: "chat",
+            requestTypeUrl: undefined,
+            responseTypeUrl: undefined,
+            description: "Chat with the bound gagent.",
+          },
+        ],
+      });
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/runs");
+    });
+    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
+      "scope-1"
+    );
+    expect(new URLSearchParams(window.location.search).get("endpointId")).toBe(
+      "support-chat"
+    );
+    expect(new URLSearchParams(window.location.search).get("endpointKind")).toBe(
+      "chat"
+    );
+    expect(new URLSearchParams(window.location.search).get("prompt")).toBe(
+      "Chat with the orders gagent"
+    );
+    expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
+  });
+
   it("activates a historical scope binding revision from Studio", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
@@ -1911,6 +2100,24 @@ describe("StudioPage", () => {
 
     await waitFor(() => {
       expect(studioApi.activateScopeBindingRevision).toHaveBeenCalledWith({
+        scopeId: "scope-1",
+        revisionId: "rev-1",
+      });
+    });
+  });
+
+  it("retires a historical scope binding revision from Studio", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retire rev-1" }));
+
+    await waitFor(() => {
+      expect(studioApi.retireScopeBindingRevision).toHaveBeenCalledWith({
         scopeId: "scope-1",
         revisionId: "rev-1",
       });

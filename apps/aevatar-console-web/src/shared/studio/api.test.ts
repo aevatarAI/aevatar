@@ -406,6 +406,10 @@ describe('studioApi host-session requests', () => {
             preparedAt: '2026-03-26T07:01:00Z',
             publishedAt: '2026-03-26T07:02:00Z',
             retiredAt: null,
+            scriptId: 'script-alpha',
+            scriptRevision: 'script-rev-1',
+            scriptDefinitionActorId: 'definition://script-alpha',
+            scriptSourceHash: 'hash-1',
           },
         ],
       }),
@@ -415,5 +419,51 @@ describe('studioApi host-session requests', () => {
     const status = await studioApi.getScopeBinding('scope-1');
 
     expect(status.revisions[0]?.implementationKind).toBe('script');
+    expect(status.revisions[0]?.scriptId).toBe('script-alpha');
+  });
+
+  it('retires a scope binding revision through the studio binding API', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scopeId: 'scope-1',
+        serviceId: 'default',
+        revisionId: 'rev-2',
+        status: 'Retiring',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(
+      studioApi.retireScopeBindingRevision({
+        scopeId: 'scope-1',
+        revisionId: 'rev-2',
+      }),
+    ).resolves.toEqual({
+      scopeId: 'scope-1',
+      serviceId: 'default',
+      revisionId: 'rev-2',
+      status: 'Retiring',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/scopes/scope-1/binding/revisions/rev-2:retire',
+      expect.objectContaining({
+        method: 'POST',
+      }),
+    );
   });
 });

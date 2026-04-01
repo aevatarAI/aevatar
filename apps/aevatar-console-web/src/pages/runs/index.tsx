@@ -58,6 +58,11 @@ import {
   type RecentRunEntry,
   saveRecentRun,
 } from "@/shared/runs/recentRuns";
+import {
+  type RunEndpointKind,
+  normalizeRunEndpointKind,
+  resolveRunEndpointId as resolveStoredRunEndpointId,
+} from "@/shared/runs/endpointKinds";
 import { isAutoEncodableTextPayloadTypeUrl } from "@/shared/runs/protobufPayload";
 import {
   deleteDraftRunPayload as deleteQueuedDraftRunPayload,
@@ -155,17 +160,23 @@ const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
 };
 
 function resolveRequestedServiceId(
-  request: Pick<RunFormValues, "endpointId" | "routeName" | "serviceOverrideId">,
+  request: Pick<
+    RunFormValues,
+    "endpointId" | "endpointKind" | "routeName" | "serviceOverrideId"
+  >,
   draftMode: boolean
 ): string {
   if (draftMode) {
     return "";
   }
 
-  const normalizedEndpointId = trimOptional(request.endpointId) || "chat";
+  const normalizedEndpointKind = normalizeRunEndpointKind(
+    request.endpointKind,
+    request.endpointId
+  );
   const normalizedServiceOverrideId =
     trimOptional(request.serviceOverrideId) || "";
-  if (normalizedEndpointId !== "chat") {
+  if (normalizedEndpointKind !== "chat") {
     return normalizedServiceOverrideId;
   }
 
@@ -209,9 +220,10 @@ const RunsPage: React.FC = () => {
     () => ({
       ...urlInitialFormValues,
       routeName:
-        endpointInvocationDraftPayload || observedRunDraftPayload
-        ? undefined
-        : urlInitialFormValues.routeName,
+        observedRunDraftPayload?.routeName ??
+        (endpointInvocationDraftPayload
+          ? undefined
+          : urlInitialFormValues.routeName),
       prompt:
         observedRunDraftPayload?.prompt ??
         endpointInvocationDraftPayload?.prompt ??
@@ -222,6 +234,10 @@ const RunsPage: React.FC = () => {
         observedRunDraftPayload?.serviceOverrideId ??
         endpointInvocationDraftPayload?.serviceOverrideId ??
         urlInitialFormValues.serviceOverrideId,
+      endpointKind:
+        observedRunDraftPayload?.endpointKind ??
+        endpointInvocationDraftPayload?.endpointKind ??
+        urlInitialFormValues.endpointKind,
       endpointId:
         observedRunDraftPayload?.endpointId ??
         endpointInvocationDraftPayload?.endpointId ??
@@ -289,9 +305,40 @@ const RunsPage: React.FC = () => {
   const [activeServiceOverrideId, setActiveServiceOverrideId] = useState(
     initialFormValues.serviceOverrideId ?? ""
   );
-  const [activeEndpointId, setActiveEndpointId] = useState(
-    initialFormValues.endpointId ?? "chat"
+  const [activeEndpointKind, setActiveEndpointKind] = useState<RunEndpointKind>(
+    normalizeRunEndpointKind(
+      initialFormValues.endpointKind,
+      initialFormValues.endpointId
+    )
   );
+  const [activeEndpointId, setActiveEndpointId] = useState(
+    resolveStoredRunEndpointId(
+      initialFormValues.endpointKind,
+      initialFormValues.endpointId
+    )
+  );
+  const handleRouteSelection = useCallback((value: string) => {
+    const normalizedValue = value ?? "";
+    setSelectedRouteName((currentValue) =>
+      currentValue === normalizedValue ? currentValue : normalizedValue
+    );
+  }, []);
+  const handleEndpointKindChange = useCallback((value: RunEndpointKind) => {
+    setActiveEndpointKind((currentValue) =>
+      currentValue === value ? currentValue : value
+    );
+  }, []);
+  const handleEndpointChange = useCallback((value: string) => {
+    const normalizedValue = value.trim();
+    setActiveEndpointId((currentValue) =>
+      currentValue === normalizedValue ? currentValue : normalizedValue
+    );
+  }, []);
+  const handleTransportChange = useCallback((value: RunTransport) => {
+    setSelectedTransport((currentValue) =>
+      currentValue === value ? currentValue : value
+    );
+  }, []);
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
   const autoStartedDraftRunRef = useRef(false);
   const hydratedObservedRunRef = useRef(false);
@@ -315,6 +362,7 @@ const RunsPage: React.FC = () => {
     (snapshot: {
       actorId?: string;
       endpointId: string;
+      endpointKind?: RunEndpointKind;
       events: AGUIEvent[];
       payloadBase64?: string;
       payloadTypeUrl?: string;
@@ -329,7 +377,12 @@ const RunsPage: React.FC = () => {
       setActiveTransport(selectedTransport);
       setActiveScopeId(snapshot.scopeId);
       setActiveServiceOverrideId(snapshot.serviceOverrideId ?? "");
-      setActiveEndpointId(snapshot.endpointId);
+      setActiveEndpointKind(
+        normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId)
+      );
+      setActiveEndpointId(
+        resolveStoredRunEndpointId(snapshot.endpointKind, snapshot.endpointId)
+      );
       setSelectedRouteName(snapshot.routeName ?? "");
       setSelectedTraceItemKey("");
       setConsoleView("timeline");
@@ -339,6 +392,10 @@ const RunsPage: React.FC = () => {
         ...initialFormValues,
         actorId: snapshot.actorId,
         endpointId: snapshot.endpointId,
+        endpointKind: normalizeRunEndpointKind(
+          snapshot.endpointKind,
+          snapshot.endpointId
+        ),
         payloadBase64: snapshot.payloadBase64,
         payloadTypeUrl: snapshot.payloadTypeUrl,
         prompt: snapshot.prompt,
@@ -374,7 +431,14 @@ const RunsPage: React.FC = () => {
       request: RunFormValues
     ) => {
       const normalizedScopeId = scopeId.trim();
-      const normalizedEndpointId = request.endpointId?.trim() || "chat";
+      const normalizedEndpointKind = normalizeRunEndpointKind(
+        request.endpointKind,
+        request.endpointId
+      );
+      const normalizedEndpointId = resolveStoredRunEndpointId(
+        normalizedEndpointKind,
+        request.endpointId
+      );
       const resolvedServiceId = resolveRequestedServiceId(
         request,
         Boolean(scopeDraftPayload)
@@ -383,6 +447,9 @@ const RunsPage: React.FC = () => {
       const requestedPayloadBase64 = request.payloadBase64?.trim() ?? "";
       if (!normalizedScopeId) {
         throw new Error("Scope ID is required.");
+      }
+      if (normalizedEndpointKind === "command" && !normalizedEndpointId) {
+        throw new Error("Endpoint ID is required for command invokes.");
       }
       if (
         requestedPayloadTypeUrl &&
@@ -400,6 +467,7 @@ const RunsPage: React.FC = () => {
       setActiveTransport(request.transport);
       setActiveScopeId(normalizedScopeId);
       setActiveServiceOverrideId(resolvedServiceId);
+      setActiveEndpointKind(normalizedEndpointKind);
       setActiveEndpointId(normalizedEndpointId);
       setRunStartedAtMs(Date.now());
       setStreaming(true);
@@ -417,7 +485,7 @@ const RunsPage: React.FC = () => {
               },
               controller.signal
             )
-          : normalizedEndpointId === "chat" &&
+          : normalizedEndpointKind === "chat" &&
               !request.payloadTypeUrl?.trim() &&
               !request.payloadBase64?.trim()
             ? await runtimeRunsApi.streamChat(
@@ -525,13 +593,21 @@ const RunsPage: React.FC = () => {
     );
   }, [activeServiceOverrideId]);
 
-  const resolveRunEndpointId = useCallback(() => {
-    return (
-      activeEndpointId.trim() ||
-      composerFormRef.current?.getFieldValue("endpointId")?.trim?.() ||
-      "chat"
+  const resolveRunEndpointKind = useCallback(() => {
+    return normalizeRunEndpointKind(
+      activeEndpointKind,
+      activeEndpointId ||
+        composerFormRef.current?.getFieldValue("endpointId")?.trim?.()
     );
-  }, [activeEndpointId]);
+  }, [activeEndpointId, activeEndpointKind]);
+
+  const resolveRunEndpointId = useCallback(() => {
+    return resolveStoredRunEndpointId(
+      resolveRunEndpointKind(),
+      activeEndpointId ||
+        composerFormRef.current?.getFieldValue("endpointId")?.trim?.()
+    );
+  }, [activeEndpointId, resolveRunEndpointKind]);
 
   const resizeComposerRail = useCallback((clientX: number) => {
     const containerRect = runsWorkbenchMainRef.current?.getBoundingClientRect();
@@ -613,6 +689,7 @@ const RunsPage: React.FC = () => {
     hydrateObservedSession({
       actorId: observedRunDraftPayload.actorId,
       endpointId: observedRunDraftPayload.endpointId,
+      endpointKind: observedRunDraftPayload.endpointKind,
       events: observedRunDraftPayload.events,
       payloadBase64: observedRunDraftPayload.payloadBase64,
       payloadTypeUrl: observedRunDraftPayload.payloadTypeUrl,
@@ -657,6 +734,7 @@ const RunsPage: React.FC = () => {
       ...initialFormValues,
       actorId: undefined,
       endpointId: "chat",
+      endpointKind: "chat",
       payloadBase64: undefined,
       payloadTypeUrl: undefined,
       prompt,
@@ -712,10 +790,8 @@ const RunsPage: React.FC = () => {
     };
   }, [isComposerResizing, resizeComposerRail]);
 
-  const endpointName =
-    activeEndpointId ||
-    composerFormRef.current?.getFieldValue("endpointId")?.trim?.() ||
-    "chat";
+  const endpointKind = resolveRunEndpointKind();
+  const endpointName = resolveRunEndpointId();
   const routeName = useMemo(() => {
     const sessionWorkflowName = trimOptional(session.context?.workflowName);
     if (sessionWorkflowName) {
@@ -726,12 +802,18 @@ const RunsPage: React.FC = () => {
       return scopeDraftPayload.bundleName;
     }
 
-    if (endpointName !== "chat") {
+    if (endpointKind !== "chat") {
       return endpointName;
     }
 
-    return "";
-  }, [endpointName, scopeDraftPayload, session.context?.workflowName]);
+    return trimOptional(selectedRouteName);
+  }, [
+    endpointKind,
+    endpointName,
+    scopeDraftPayload,
+    selectedRouteName,
+    session.context?.workflowName,
+  ]);
   const actorId = session.context?.actorId;
   const commandId = session.context?.commandId ?? "";
   const payloadTypeUrl =
@@ -818,7 +900,7 @@ const RunsPage: React.FC = () => {
         };
       }
 
-      if (!endpointName || endpointName === "chat") {
+      if (!endpointName || endpointKind === "chat") {
         return undefined;
       }
 
@@ -847,6 +929,7 @@ const RunsPage: React.FC = () => {
       description: selectedRouteDetails.description,
     };
   }, [
+    endpointKind,
     endpointName,
     endpointInvocationDraftPayload,
     payloadTypeUrl,
@@ -895,8 +978,15 @@ const RunsPage: React.FC = () => {
               )
           : undefined,
         onRestore: () => {
-          const isChatEndpoint =
-            !entry.endpointId || entry.endpointId === "chat";
+          const restoredEndpointKind = normalizeRunEndpointKind(
+            entry.endpointKind,
+            entry.endpointId
+          );
+          const restoredEndpointId = resolveStoredRunEndpointId(
+            restoredEndpointKind,
+            entry.endpointId
+          );
+          const isChatEndpoint = restoredEndpointKind === "chat";
           const restoredServiceOverrideId =
             isChatEndpoint &&
             entry.serviceOverrideId === entry.routeName
@@ -909,15 +999,16 @@ const RunsPage: React.FC = () => {
           if (entry.observedEvents.length > 0 && entry.scopeId) {
             hydrateObservedSession({
               actorId: entry.actorId || undefined,
-              endpointId: entry.endpointId || "chat",
+              endpointId: restoredEndpointId,
+              endpointKind: restoredEndpointKind,
               events: entry.observedEvents,
               payloadBase64: entry.payloadBase64 || undefined,
               payloadTypeUrl: entry.payloadTypeUrl || undefined,
-              prompt: entry.prompt,
-              routeName: restoredRouteName,
-              scopeId: entry.scopeId,
-              serviceOverrideId: restoredServiceOverrideId,
-            });
+            prompt: entry.prompt,
+            routeName: restoredRouteName,
+            scopeId: entry.scopeId,
+            serviceOverrideId: restoredServiceOverrideId,
+          });
             return;
           }
 
@@ -926,14 +1017,16 @@ const RunsPage: React.FC = () => {
             routeName: restoredRouteName,
             scopeId: entry.scopeId || undefined,
             serviceOverrideId: restoredServiceOverrideId,
-            endpointId: entry.endpointId || "chat",
+            endpointId: restoredEndpointId,
+            endpointKind: restoredEndpointKind,
             payloadTypeUrl: entry.payloadTypeUrl || undefined,
             payloadBase64: entry.payloadBase64 || undefined,
             actorId: entry.actorId || undefined,
             transport: selectedTransport,
           });
           setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
-          setActiveEndpointId(entry.endpointId || "chat");
+          setActiveEndpointKind(restoredEndpointKind);
+          setActiveEndpointId(restoredEndpointId);
         },
       })),
     [hydrateObservedSession, recentRuns, selectedTransport]
@@ -1154,8 +1247,9 @@ const RunsPage: React.FC = () => {
     () => ({
       status: session.status,
       transport: activeTransport,
-      routeName,
+      routeName: routeName ?? "",
       endpointId: endpointName,
+      endpointKind,
       actorId: actorId ?? "",
       commandId,
       runId: session.runId ?? "",
@@ -1178,6 +1272,7 @@ const RunsPage: React.FC = () => {
       session.messages.length,
       session.runId,
       session.status,
+      endpointKind,
       endpointName,
       routeName,
     ]
@@ -1189,6 +1284,7 @@ const RunsPage: React.FC = () => {
       composerFormRef.current?.getFieldValue("payloadTypeUrl") ?? "";
     const currentPayloadBase64 =
       composerFormRef.current?.getFieldValue("payloadBase64") ?? "";
+    const currentEndpointKind = resolveRunEndpointKind();
     const currentEndpointId = resolveRunEndpointId();
     const currentServiceOverrideId = resolveRunServiceOverrideId();
     const candidateId =
@@ -1205,11 +1301,12 @@ const RunsPage: React.FC = () => {
         id: candidateId,
         scopeId: resolveRunScopeId(),
         serviceOverrideId:
-          currentEndpointId === "chat" &&
+          currentEndpointKind === "chat" &&
           currentServiceOverrideId === routeName
             ? ""
             : currentServiceOverrideId,
         endpointId: currentEndpointId,
+        endpointKind: currentEndpointKind,
         payloadTypeUrl: currentPayloadTypeUrl,
         payloadBase64: currentPayloadBase64,
         routeName,
@@ -1227,6 +1324,7 @@ const RunsPage: React.FC = () => {
     commandId,
     latestMessagePreview,
     payloadTypeUrl,
+    resolveRunEndpointKind,
     resolveRunScopeId,
     resolveRunServiceOverrideId,
     resolveRunEndpointId,
@@ -1271,10 +1369,11 @@ const RunsPage: React.FC = () => {
 
   const submitPathLabel = scopeDraftPayload
     ? "/api/scopes/{scopeId}/workflow/draft-run"
-    : endpointName === "chat"
+    : endpointKind === "chat"
       ? resolveRequestedServiceId(
           {
             endpointId: endpointName,
+            endpointKind,
             routeName: selectedRouteName,
             serviceOverrideId:
               activeServiceOverrideId || initialFormValues.serviceOverrideId,
@@ -1512,6 +1611,7 @@ const RunsPage: React.FC = () => {
           statusTone={runStatusTone}
           transport={activeTransport}
           endpointId={endpointName}
+          endpointKind={endpointKind}
         />
 
         <div ref={runsWorkbenchMainRef} style={runsWorkbenchMainStyle}>
@@ -1527,6 +1627,7 @@ const RunsPage: React.FC = () => {
             <RunsLaunchRail
               actorId={actorId ?? undefined}
               activeEndpointId={endpointName}
+              activeEndpointKind={endpointKind}
               catalogSearch={catalogSearch}
               composerFormRef={composerFormRef}
               draftMode={Boolean(draftRunPayload)}
@@ -1548,12 +1649,13 @@ const RunsPage: React.FC = () => {
               onAbortRun={abortRun}
               onCatalogSearchChange={setCatalogSearch}
               onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
-              onEndpointChange={setActiveEndpointId}
-              onSelectRouteName={setSelectedRouteName}
+              onEndpointChange={handleEndpointChange}
+              onEndpointKindChange={handleEndpointKindChange}
+              onSelectRouteName={handleRouteSelection}
               onSubmitRun={async (values) => {
                 await sendRun(values.scopeId ?? "", values);
               }}
-              onTransportChange={setSelectedTransport}
+              onTransportChange={handleTransportChange}
               onUsePreset={(record) => {
                 composerFormRef.current?.setFieldsValue({
                   prompt: record.prompt,
@@ -1562,7 +1664,9 @@ const RunsPage: React.FC = () => {
                     composerFormRef.current?.getFieldValue("scopeId") ??
                     initialFormValues.scopeId,
                   serviceOverrideId: undefined,
-                  endpointId: "chat",
+                  endpointId:
+                    endpointKind === "chat" ? endpointName || "chat" : "chat",
+                  endpointKind: "chat",
                   payloadTypeUrl: undefined,
                   payloadBase64: undefined,
                   actorId: undefined,
@@ -1571,7 +1675,10 @@ const RunsPage: React.FC = () => {
                 setSelectedRouteName(
                   scopeDraftPayload?.bundleName ?? record.routeName
                 );
-                setActiveEndpointId("chat");
+                setActiveEndpointKind("chat");
+                setActiveEndpointId(
+                  endpointKind === "chat" ? endpointName || "chat" : "chat"
+                );
                 setCatalogSearch("");
               }}
             />

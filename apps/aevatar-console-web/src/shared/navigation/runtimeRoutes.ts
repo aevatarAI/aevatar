@@ -3,6 +3,7 @@ const runtimePaths = {
   primitives: "/runtime/primitives",
   runs: "/runtime/runs",
   explorer: "/runtime/explorer",
+  gagents: "/runtime/gagents",
 } as const;
 
 type QueryValue = string | undefined;
@@ -51,6 +52,7 @@ export function buildRuntimeRunsHref(options?: {
   serviceOverrideId?: string;
   serviceId?: string;
   endpointId?: string;
+  endpointKind?: string;
   payloadTypeUrl?: string;
   payloadBase64?: string;
   actorId?: string;
@@ -62,6 +64,7 @@ export function buildRuntimeRunsHref(options?: {
     scopeId: options?.scopeId,
     serviceOverrideId: options?.serviceOverrideId ?? options?.serviceId,
     endpointId: options?.endpointId,
+    endpointKind: options?.endpointKind,
     payloadTypeUrl: options?.payloadTypeUrl,
     payloadBase64: options?.payloadBase64,
     actorId: options?.actorId,
@@ -81,5 +84,17 @@ export function buildRuntimeExplorerHref(options?: {
     runId: options?.runId,
     scopeId: options?.scopeId,
     serviceId: options?.serviceId ?? options?.serviceOverrideId,
+  });
+}
+
+export function buildRuntimeGAgentsHref(options?: {
+  scopeId?: string;
+  actorTypeName?: string;
+  actorId?: string;
+}): string {
+  return buildHref(runtimePaths.gagents, {
+    scopeId: options?.scopeId,
+    type: options?.actorTypeName,
+    actorId: options?.actorId,
   });
 }

@@ -9,16 +9,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
+import { servicesApi } from "@/shared/api/servicesApi";
+import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
+import {
+  buildRuntimeGAgentsHref,
+  buildRuntimeRunsHref,
+} from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import {
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
-import type { ScopeScriptSummary, ScopeWorkflowSummary } from "@/shared/models/scopes";
+import type {
+  ScopeScriptSummary,
+  ScopeWorkflowSummary,
+} from "@/shared/models/scopes";
+import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
+  describeStudioScopeBindingRevisionContext,
+  describeStudioScopeBindingRevisionTarget,
   formatStudioScopeBindingImplementationKind,
+  getStudioScopeBindingCurrentRevision,
   type StudioScopeBindingRevision,
 } from "@/shared/studio/models";
 import {
@@ -68,6 +80,17 @@ function readSelectedFocus(): ScopeFocus {
 }
 
 const initialDraft = readScopeQueryDraft();
+const scopeServiceAppId = "default";
+const scopeServiceNamespace = "default";
+
+function buildScopedServiceHref(scopeId: string, serviceId: string): string {
+  const params = new URLSearchParams();
+  params.set("tenantId", scopeId.trim());
+  params.set("appId", scopeServiceAppId);
+  params.set("namespace", scopeServiceNamespace);
+  params.set("serviceId", serviceId.trim());
+  return `/services?${params.toString()}`;
+}
 
 const ScopeOverviewPage: React.FC = () => {
   const queryClient = useQueryClient();
@@ -118,6 +141,16 @@ const ScopeOverviewPage: React.FC = () => {
     queryKey: ["scopes", "scripts", scopeId],
     queryFn: () => scopesApi.listScripts(scopeId),
   });
+  const scopeServicesQuery = useQuery({
+    enabled: scopeId.length > 0,
+    queryKey: ["scopes", "services", scopeId],
+    queryFn: () =>
+      servicesApi.listServices({
+        tenantId: scopeId,
+        appId: scopeServiceAppId,
+        namespace: scopeServiceNamespace,
+      }),
+  });
   const workflowDetailQuery = useQuery({
     enabled: scopeId.length > 0 && focus?.kind === "workflow",
     queryKey: ["scopes", "workflow", scopeId, focus?.id],
@@ -140,6 +173,18 @@ const ScopeOverviewPage: React.FC = () => {
       });
     },
   });
+  const retireRevisionMutation = useMutation({
+    mutationFn: (revisionId: string) =>
+      studioApi.retireScopeBindingRevision({
+        revisionId,
+        scopeId,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["scopes", "binding", scopeId],
+      });
+    },
+  });
 
   useEffect(() => {
     history.replace(
@@ -153,15 +198,21 @@ const ScopeOverviewPage: React.FC = () => {
 
   const binding = bindingQuery.data;
   const revisions = binding?.revisions ?? [];
-  const activeRevision =
-    revisions.find((item) => item.isActiveServing) ??
-    revisions.find((item) => item.isDefaultServing) ??
-    revisions[0] ??
-    null;
+  const activeRevision = getStudioScopeBindingCurrentRevision(binding);
   const focusedRevision =
     focus?.kind === "revision"
       ? revisions.find((item) => item.revisionId === focus.id) ?? null
       : activeRevision;
+  const currentBindingTarget = describeStudioScopeBindingRevisionTarget(activeRevision);
+  const currentBindingContext = describeStudioScopeBindingRevisionContext(activeRevision);
+  const currentBindingActor =
+    activeRevision?.primaryActorId ||
+    activeRevision?.staticPreferredActorId ||
+    binding?.primaryActorId ||
+    "";
+  const selectedServiceCard =
+    scopeServicesQuery.data?.find((service) => service.serviceId === binding?.serviceId) ??
+    null;
 
   const workflowMetas = useMemo<ProListMetas<ScopeWorkflowSummary>>(
     () => ({
@@ -328,10 +379,34 @@ const ScopeOverviewPage: React.FC = () => {
                 </Button>
                 <Button
                   onClick={() =>
+                    history.push(
+                      buildRuntimeGAgentsHref({
+                        scopeId,
+                        actorId: activeRevision?.staticPreferredActorId || undefined,
+                        actorTypeName: activeRevision?.staticActorTypeName || undefined,
+                      }),
+                    )
+                  }
+                >
+                  Manage GAgents
+                </Button>
+                <Button
+                  onClick={() =>
                     history.push(buildStudioWorkflowWorkspaceRoute())
                   }
                 >
                   Open workflow workspace
+                </Button>
+                <Button
+                  onClick={() =>
+                    history.push(
+                      selectedServiceCard
+                        ? buildScopedServiceHref(scopeId, selectedServiceCard.serviceId)
+                        : "/services",
+                    )
+                  }
+                >
+                  Open services
                 </Button>
               </Space>
             </AevatarPanel>
@@ -366,15 +441,100 @@ const ScopeOverviewPage: React.FC = () => {
                       value={binding?.available ? binding.displayName || binding.serviceId : "Not bound"}
                     />
                     <MetricCard
+                      label="Binding target"
+                      value={currentBindingTarget}
+                    />
+                    <MetricCard
+                      label="Binding kind"
+                      value={formatStudioScopeBindingImplementationKind(
+                        activeRevision?.implementationKind,
+                      )}
+                    />
+                    <MetricCard
                       label="Workflows"
                       value={workflowsQuery.data?.length ?? 0}
                     />
                     <MetricCard label="Scripts" value={scriptsQuery.data?.length ?? 0} />
                     <MetricCard
+                      label="Services"
+                      value={scopeServicesQuery.data?.length ?? 0}
+                    />
+                    <MetricCard
                       label="Serving"
                       value={binding?.deploymentStatus || "draft"}
                     />
                   </div>
+                </AevatarPanel>
+
+                <AevatarPanel
+                  description="The current project binding should be legible without leaving the overview page."
+                  title="Current Binding"
+                >
+                  {!binding?.available || !activeRevision ? (
+                    <Alert
+                      title="No published default binding is active for this project yet."
+                      showIcon
+                      type="info"
+                    />
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: 12,
+                          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                        }}
+                      >
+                        <MetricCard label="Service" value={binding.displayName || binding.serviceId} />
+                        <MetricCard label="Target" value={currentBindingTarget} />
+                        <MetricCard
+                          label="Revision"
+                          value={activeRevision.revisionId}
+                        />
+                        <MetricCard
+                          label="Actor"
+                          value={currentBindingActor || "n/a"}
+                        />
+                      </div>
+                      {currentBindingContext ? (
+                        <Alert
+                          description={currentBindingContext}
+                          showIcon
+                          title="Binding detail"
+                          type="info"
+                        />
+                      ) : null}
+                      <Space wrap>
+                        <Button
+                          onClick={() =>
+                            history.push(
+                              buildRuntimeGAgentsHref({
+                                scopeId,
+                                actorId:
+                                  activeRevision.staticPreferredActorId || undefined,
+                                actorTypeName:
+                                  activeRevision.staticActorTypeName || undefined,
+                              }),
+                            )
+                          }
+                        >
+                          Open in GAgents
+                        </Button>
+                        <Button
+                          onClick={() =>
+                            history.push(
+                              buildScopeHref("/scopes/invoke", activeDraft, {
+                                serviceId: binding.serviceId,
+                              }),
+                            )
+                          }
+                          type="primary"
+                        >
+                          Test in Invoke Lab
+                        </Button>
+                      </Space>
+                    </>
+                  )}
                 </AevatarPanel>
 
                 <AevatarPanel
@@ -385,14 +545,30 @@ const ScopeOverviewPage: React.FC = () => {
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                       {revisions.map((revision) => (
                         <RevisionCard
+                          activating={
+                            activateRevisionMutation.isPending &&
+                            activateRevisionMutation.variables === revision.revisionId
+                          }
+                          canActivate={
+                            !revision.isActiveServing &&
+                            !revision.isDefaultServing &&
+                            !revision.retiredAt
+                          }
+                          canRetire={
+                            !revision.retiredAt &&
+                            revision.revisionId !== binding?.defaultServingRevisionId
+                          }
                           key={revision.revisionId}
                           onActivate={() => activateRevisionMutation.mutate(revision.revisionId)}
                           onInspect={() =>
                             setFocus({ kind: "revision", id: revision.revisionId })
                           }
+                          onRetire={() => retireRevisionMutation.mutate(revision.revisionId)}
                           revision={revision}
-                          activating={activateRevisionMutation.isPending &&
-                            activateRevisionMutation.variables === revision.revisionId}
+                          retiring={
+                            retireRevisionMutation.isPending &&
+                            retireRevisionMutation.variables === revision.revisionId
+                          }
                         />
                       ))}
                     </div>
@@ -411,6 +587,51 @@ const ScopeOverviewPage: React.FC = () => {
                     gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
                   }}
                 >
+                  <AevatarPanel
+                    description="Published services are the runtime surfaces users can actually invoke from this project."
+                    title="Published Services"
+                  >
+                    {scopeServicesQuery.error ? (
+                      <Alert
+                        showIcon
+                        title={
+                          scopeServicesQuery.error instanceof Error
+                            ? scopeServicesQuery.error.message
+                            : "Failed to load published services."
+                        }
+                        type="error"
+                      />
+                    ) : scopeServicesQuery.isLoading ? (
+                      <AevatarInspectorEmpty description="Loading published services." />
+                    ) : scopeServicesQuery.data && scopeServicesQuery.data.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        {scopeServicesQuery.data.map((service) => (
+                          <ScopeServiceCard
+                            key={service.serviceKey}
+                            onOpenInvoke={() =>
+                              history.push(
+                                buildScopeHref("/scopes/invoke", activeDraft, {
+                                  serviceId: service.serviceId,
+                                }),
+                              )
+                            }
+                            onOpenServices={() =>
+                              history.push(
+                                buildScopedServiceHref(scopeId, service.serviceId),
+                              )
+                            }
+                            service={service}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <Empty
+                        description="No published services were found for this scope."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    )}
+                  </AevatarPanel>
+
                   <AevatarPanel title="Workflow Assets">
                     <ProList<ScopeWorkflowSummary>
                       dataSource={workflowsQuery.data ?? []}
@@ -494,9 +715,30 @@ const ScopeOverviewPage: React.FC = () => {
                   focusedRevision.implementationKind,
                 )}
               />
+              <MetricCard
+                label="Target"
+                value={describeStudioScopeBindingRevisionTarget(focusedRevision)}
+              />
               <MetricCard label="Serving state" value={focusedRevision.servingState || focusedRevision.status} />
-              <MetricCard label="Actor" value={focusedRevision.primaryActorId || "n/a"} />
+              <MetricCard
+                label="Actor"
+                value={
+                  focusedRevision.primaryActorId ||
+                  focusedRevision.staticPreferredActorId ||
+                  "n/a"
+                }
+              />
             </div>
+            {describeStudioScopeBindingRevisionContext(focusedRevision) ? (
+              <Alert
+                description={describeStudioScopeBindingRevisionContext(
+                  focusedRevision,
+                )}
+                showIcon
+                title="Binding detail"
+                type="info"
+              />
+            ) : null}
             <Space wrap>
               <Button
                 disabled={focusedRevision.isActiveServing}
@@ -505,6 +747,32 @@ const ScopeOverviewPage: React.FC = () => {
                 type="primary"
               >
                 Activate revision
+              </Button>
+              <Button
+                danger
+                disabled={
+                  Boolean(focusedRevision.retiredAt) ||
+                  focusedRevision.revisionId === binding?.defaultServingRevisionId
+                }
+                loading={retireRevisionMutation.isPending}
+                onClick={() => retireRevisionMutation.mutate(focusedRevision.revisionId)}
+              >
+                Retire revision
+              </Button>
+              <Button
+                onClick={() =>
+                  history.push(
+                    buildRuntimeGAgentsHref({
+                      scopeId,
+                      actorId:
+                        focusedRevision.staticPreferredActorId || undefined,
+                      actorTypeName:
+                        focusedRevision.staticActorTypeName || undefined,
+                    }),
+                  )
+                }
+              >
+                Open in GAgents
               </Button>
             </Space>
           </AevatarPanel>
@@ -612,12 +880,67 @@ const MetricCard: React.FC<{
   </div>
 );
 
+const ScopeServiceCard: React.FC<{
+  onOpenInvoke: () => void;
+  onOpenServices: () => void;
+  service: ServiceCatalogSnapshot;
+}> = ({ onOpenInvoke, onOpenServices, service }) => (
+  <div
+    style={{
+      border: "1px solid var(--ant-color-border-secondary)",
+      borderRadius: 12,
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+      padding: 12,
+    }}
+  >
+    <Space wrap size={[8, 8]}>
+      <Typography.Text strong>
+        {service.displayName || service.serviceId}
+      </Typography.Text>
+      <AevatarStatusTag
+        domain="governance"
+        status={service.deploymentStatus || "draft"}
+      />
+    </Space>
+    <Typography.Text type="secondary">
+      {service.endpoints.length} endpoints · Revision{" "}
+      {service.activeServingRevisionId ||
+        service.defaultServingRevisionId ||
+        "n/a"}
+    </Typography.Text>
+    <Typography.Text type="secondary">
+      Actor {service.primaryActorId || "n/a"} · Updated {formatDateTime(service.updatedAt)}
+    </Typography.Text>
+    <Space wrap>
+      <Button onClick={onOpenInvoke} type="primary">
+        Open invoke
+      </Button>
+      <Button onClick={onOpenServices}>Open services</Button>
+    </Space>
+  </div>
+);
+
 const RevisionCard: React.FC<{
   activating: boolean;
+  canActivate: boolean;
+  canRetire: boolean;
   onActivate: () => void;
   onInspect: () => void;
+  onRetire: () => void;
   revision: StudioScopeBindingRevision;
-}> = ({ activating, onActivate, onInspect, revision }) => (
+  retiring: boolean;
+}> = ({
+  activating,
+  canActivate,
+  canRetire,
+  onActivate,
+  onInspect,
+  onRetire,
+  revision,
+  retiring,
+}) => (
   <div
     style={{
       border: "1px solid var(--ant-color-border-secondary)",
@@ -647,6 +970,7 @@ const RevisionCard: React.FC<{
         status={revision.servingState || revision.status}
       />
       {revision.isActiveServing ? <AevatarStatusTag domain="run" status="active" label="Active serving" /> : null}
+      {revision.isDefaultServing ? <AevatarStatusTag domain="asset" status="active" label="Default" /> : null}
     </Space>
     <Typography.Text
       style={{
@@ -658,19 +982,55 @@ const RevisionCard: React.FC<{
         wordBreak: "break-word",
       }}
     >
-      {formatStudioScopeBindingImplementationKind(revision.implementationKind)} · {revision.primaryActorId || revision.deploymentId || "No actor assigned"}
+      {formatStudioScopeBindingImplementationKind(revision.implementationKind)} ·{" "}
+      {describeStudioScopeBindingRevisionTarget(revision)}
+    </Typography.Text>
+    {describeStudioScopeBindingRevisionContext(revision) ? (
+      <Typography.Text
+        style={{
+          color: "var(--ant-color-text-secondary)",
+          display: "block",
+          maxWidth: "100%",
+          overflowWrap: "anywhere",
+          whiteSpace: "normal",
+          wordBreak: "break-word",
+        }}
+      >
+        {describeStudioScopeBindingRevisionContext(revision)}
+      </Typography.Text>
+    ) : null}
+    <Typography.Text
+      style={{
+        color: "var(--ant-color-text-secondary)",
+        display: "block",
+        maxWidth: "100%",
+        overflowWrap: "anywhere",
+        whiteSpace: "normal",
+        wordBreak: "break-word",
+      }}
+    >
+      Actor {revision.primaryActorId || revision.staticPreferredActorId || "n/a"} · Deployment{" "}
+      {revision.deploymentId || "draft"}
     </Typography.Text>
     <Space wrap>
       <Button icon={<EyeOutlined />} onClick={onInspect}>
         Inspect
       </Button>
       <Button
-        disabled={revision.isActiveServing}
+        disabled={!canActivate}
         loading={activating}
         onClick={onActivate}
         type="primary"
       >
         Activate
+      </Button>
+      <Button
+        danger
+        disabled={!canRetire}
+        loading={retiring}
+        onClick={onRetire}
+      >
+        Retire
       </Button>
     </Space>
   </div>

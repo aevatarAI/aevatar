@@ -24,12 +24,19 @@ import React, { useEffect, useMemo, useState } from "react";
 import { history } from "@/shared/navigation/history";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
+import { buildRuntimeGAgentsHref } from "@/shared/navigation/runtimeRoutes";
 import type {
   ScopeScriptCatalog,
   ScopeScriptSummary,
   ScopeWorkflowSummary,
 } from "@/shared/models/scopes";
 import { studioApi } from "@/shared/studio/api";
+import {
+  describeStudioScopeBindingRevisionContext,
+  describeStudioScopeBindingRevisionTarget,
+  formatStudioScopeBindingImplementationKind,
+  getStudioScopeBindingCurrentRevision,
+} from "@/shared/studio/models";
 import {
   buildStudioScriptsWorkspaceRoute,
   buildStudioWorkflowEditorRoute,
@@ -376,10 +383,29 @@ const ProjectAssetsPage: React.FC = () => {
     (item) => item.capabilityStatus === "active",
   ).length;
   const draftCapabilityCount = workflowCount + scriptCount - activeCapabilityCount;
-
+  const currentBindingRevision = getStudioScopeBindingCurrentRevision(
+    bindingQuery.data,
+  );
   const currentBindingLabel = bindingQuery.data?.available
-    ? bindingQuery.data.displayName || bindingQuery.data.serviceId
+    ? currentBindingRevision
+      ? describeStudioScopeBindingRevisionTarget(currentBindingRevision)
+      : bindingQuery.data.displayName || bindingQuery.data.serviceId
     : "Not bound";
+  const currentBindingKind = currentBindingRevision
+    ? formatStudioScopeBindingImplementationKind(
+        currentBindingRevision.implementationKind,
+      )
+    : bindingQuery.data?.available
+      ? "Published"
+      : "Unknown";
+  const currentBindingContext = describeStudioScopeBindingRevisionContext(
+    currentBindingRevision,
+  );
+  const currentBindingActor =
+    currentBindingRevision?.primaryActorId ||
+    currentBindingRevision?.staticPreferredActorId ||
+    bindingQuery.data?.primaryActorId ||
+    "";
 
   const selectedWorkflow = useMemo(
     () =>
@@ -663,6 +689,21 @@ const ProjectAssetsPage: React.FC = () => {
         >
           Open Project Overview
         </Button>,
+        <Button
+          key="open-gagents"
+          disabled={!activeDraft.scopeId.trim()}
+          onClick={() =>
+            history.push(
+              buildRuntimeGAgentsHref({
+                scopeId: activeDraft.scopeId.trim(),
+                actorId: currentBindingRevision?.staticPreferredActorId || undefined,
+                actorTypeName: currentBindingRevision?.staticActorTypeName || undefined,
+              }),
+            )
+          }
+        >
+          Manage GAgents
+        </Button>,
       ]}
       onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
       title="Project Assets"
@@ -737,6 +778,7 @@ const ProjectAssetsPage: React.FC = () => {
               >
                 <SummaryMetric label="Project" value={activeDraft.scopeId} />
                 <SummaryMetric label="Default binding" value={currentBindingLabel} />
+                <SummaryMetric label="Binding kind" value={currentBindingKind} />
                 <SummaryMetric
                   label="Live capabilities"
                   tone="success"
@@ -761,6 +803,18 @@ const ProjectAssetsPage: React.FC = () => {
                   <SummaryField
                     label="Focus"
                     value="Stage capability posture first. Open the inspector only when you need source, schema, or catalog detail."
+                  />
+                  <SummaryField
+                    label="Binding detail"
+                    value={
+                      currentBindingContext ||
+                      bindingQuery.data?.serviceKey ||
+                      "No published default binding"
+                    }
+                  />
+                  <SummaryField
+                    label="Serving actor"
+                    value={currentBindingActor || "n/a"}
                   />
                   <SummaryField
                     label="Workflows"

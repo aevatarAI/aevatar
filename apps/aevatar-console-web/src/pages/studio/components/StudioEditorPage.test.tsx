@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { StudioEditorPage } from './StudioWorkbenchSections';
 
@@ -167,6 +167,21 @@ function createBaseProps(overrides = {}) {
     canOpenRunWorkflow: true,
     canRunWorkflow: true,
     runNotice: null,
+    resolvedScopeId: undefined,
+    publishPending: false,
+    canPublishWorkflow: true,
+    publishNotice: null,
+    scopeBinding: null,
+    scopeBindingLoading: false,
+    scopeBindingError: null,
+    gAgentTypes: [],
+    gAgentTypesLoading: false,
+    gAgentTypesError: null,
+    gAgentActorGroups: [],
+    gAgentActorsLoading: false,
+    gAgentActorsError: null,
+    bindingActivationRevisionId: '',
+    bindingRetirementRevisionId: '',
     onSwitchStudioView: jest.fn(),
     onExportDraft: jest.fn(),
     onSelectGraphNode: jest.fn(),
@@ -187,8 +202,12 @@ function createBaseProps(overrides = {}) {
     onWorkflowImportChange: jest.fn(),
     onResetDraft: jest.fn(),
     onSaveDraft: jest.fn(),
+    onPublishWorkflow: jest.fn(),
     onOpenProjectOverview: jest.fn(),
     onOpenProjectInvoke: jest.fn(),
+    onBindGAgent: jest.fn(async () => undefined),
+    onActivateBindingRevision: jest.fn(),
+    onRetireBindingRevision: jest.fn(),
     onInspectPublishedWorkflow: jest.fn(),
     onRunInConsole: jest.fn(),
     onAskAiPromptChange: jest.fn(),
@@ -304,5 +323,61 @@ describe('StudioEditorPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Project Invoke' }));
 
     expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('adds another GAgent endpoint before binding', async () => {
+    const onBindGAgent = jest.fn(async () => undefined);
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          gAgentTypes: [
+            {
+              typeName: 'OrdersGAgent',
+              fullName: 'Tests.OrdersGAgent',
+              assemblyName: 'Tests',
+            },
+          ],
+          gAgentActorGroups: [
+            {
+              gAgentType: 'Tests.OrdersGAgent',
+              actorIds: ['orders-1'],
+            },
+          ],
+          onBindGAgent,
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /GAgent service/i }));
+
+    expect(await screen.findByText('Bind GAgent service')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Add endpoint/i }));
+    fireEvent.change(screen.getByLabelText('GAgent endpoint id 2'), {
+      target: { value: 'chat' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bind' }));
+
+    await waitFor(() => {
+      expect(onBindGAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          endpoints: expect.arrayContaining([
+            expect.objectContaining({
+              endpointId: 'run',
+            }),
+            expect.objectContaining({
+              endpointId: 'chat',
+            }),
+          ]),
+        }),
+        {
+          openRuns: false,
+        },
+      );
+    });
   });
 });

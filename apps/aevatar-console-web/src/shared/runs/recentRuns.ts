@@ -1,4 +1,8 @@
 import type { AGUIEvent } from "@aevatar-react-sdk/types";
+import {
+  type RunEndpointKind,
+  normalizeRunEndpointKind,
+} from "./endpointKinds";
 
 export interface RecentRunEntry {
   id: string;
@@ -7,6 +11,7 @@ export interface RecentRunEntry {
   serviceOverrideId: string;
   serviceId?: string;
   endpointId: string;
+  endpointKind: RunEndpointKind;
   payloadTypeUrl: string;
   payloadBase64: string;
   routeName: string;
@@ -62,6 +67,10 @@ function sanitizeEntry(value: Partial<RecentRunEntry> & {
       'serviceId'
     ),
     endpointId: value.endpointId?.trim() || "",
+    endpointKind: normalizeRunEndpointKind(
+      typeof record.endpointKind === "string" ? record.endpointKind : undefined,
+      value.endpointId
+    ),
     payloadTypeUrl: value.payloadTypeUrl?.trim() || "",
     payloadBase64: value.payloadBase64?.trim() || "",
     routeName: readLegacyCompatibleString(record, 'routeName', 'workflowName'),

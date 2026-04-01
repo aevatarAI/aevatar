@@ -82,6 +82,12 @@ export default [
     menuBadgeKey: "live.topology",
   },
   {
+    path: "/runtime/gagents",
+    name: "GAgents",
+    component: "./gagents",
+    menuGroupKey: "live",
+  },
+  {
     path: "/services",
     name: "Services",
     component: "./services",
@@ -182,6 +188,11 @@ export default [
   {
     path: "/actors",
     redirect: "/runtime/explorer",
+    hideInMenu: true,
+  },
+  {
+    path: "/gagents",
+    redirect: "/runtime/gagents",
     hideInMenu: true,
   },
   {
