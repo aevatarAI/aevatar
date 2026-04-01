@@ -101,7 +101,7 @@ steps:
     parameters:
       op: json_extract
       path: nodes
-      field: id,properties.abstract
+      field: id,abstract
       sort_by: createdAt
       order: desc
       n: "50"
