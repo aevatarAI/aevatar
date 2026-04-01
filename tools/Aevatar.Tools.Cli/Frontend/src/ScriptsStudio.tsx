@@ -1243,7 +1243,15 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       setBindModalOpen(false);
       onFlash(`Bound script "${scriptId}" as service "${sid}"`, 'success');
     } catch (e: any) {
-      onFlash(e?.message || 'Bind failed', 'error');
+      // Bind failed — close bind modal and redirect to promote dialog
+      setBindModalOpen(false);
+      const base = selectedDraft.baseRevision || selectedDraft.revision || '';
+      const match = base.match(/^(.*?)(\d+)$/);
+      const candidateRevision = match
+        ? `${match[1]}${Number(match[2]) + 1}`
+        : `${base}_new`;
+      updateDraft(selectedDraft.key, draft => ({ ...draft, revision: candidateRevision }));
+      setPromotionModalOpen(true);
     } finally {
       setBindPending(false);
     }
@@ -2177,20 +2185,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (selectedDraft?.scopeDetail?.script) {
-                    setBindModalOpen(true);
-                  } else {
-                    // Not promoted yet — open promote modal with auto-incremented candidate revision
-                    const base = selectedDraft?.baseRevision || selectedDraft?.revision || '';
-                    const match = base.match(/^(.*?)(\d+)$/);
-                    const candidateRevision = match
-                      ? `${match[1]}${Number(match[2]) + 1}`
-                      : `${base}_new`;
-                    updateDraft(selectedDraft!.key, draft => ({ ...draft, revision: candidateRevision }));
-                    setPromotionModalOpen(true);
-                  }
-                }}
+                onClick={() => setBindModalOpen(true)}
                 data-tooltip="Bind as Service"
                 aria-label="Bind as Service"
                 className="panel-icon-button header-toolbar-action"

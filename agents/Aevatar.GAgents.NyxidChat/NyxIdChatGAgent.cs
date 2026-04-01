@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Attributes;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -19,15 +20,19 @@ namespace Aevatar.GAgents.NyxidChat;
 /// </summary>
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
+    private readonly SkillRegistry? _skillRegistry;
+
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        SkillRegistry? skillRegistry = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
     {
+        _skillRegistry = skillRegistry;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -42,6 +47,21 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         }
 
         await base.OnActivateAsync(ct);
+    }
+
+    /// <summary>
+    /// 装饰系统 prompt：追加 SkillRegistry 中的可用技能列表。
+    /// </summary>
+    protected override string DecorateSystemPrompt(string basePrompt)
+    {
+        if (_skillRegistry == null || _skillRegistry.Count == 0)
+            return basePrompt;
+
+        var skillSection = _skillRegistry.BuildSystemPromptSection();
+        if (string.IsNullOrEmpty(skillSection))
+            return basePrompt;
+
+        return basePrompt + "\n" + skillSection;
     }
 
     private bool RequiresNyxIdProviderMigration()

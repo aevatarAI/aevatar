@@ -53,10 +53,20 @@ public sealed class ToolCallLoop
         }
     }
 
+    /// <summary>Max recovery attempts when the LLM response is truncated by output token limit.</summary>
+    internal const int MaxLengthRecoveries = 3;
+
+    internal const string LengthRecoveryNudge =
+        "[System: Your previous response was cut off due to length limits. " +
+        "Continue exactly where you left off. If you were in the middle of a tool call, " +
+        "please make the tool call again.]";
+
     private async Task<string?> ExecuteCoreAsync(
         ILLMProvider provider, List<ChatMessage> messages,
         LLMRequest baseRequest, int maxRounds, CancellationToken ct)
     {
+        var lengthRecoveryCount = 0;
+
         for (var round = 0; round < maxRounds; round++)
         {
             var callId = ComposeRoundCallId(baseRequest.RequestId, round);
@@ -75,6 +85,19 @@ public sealed class ToolCallLoop
 
             if (terminated || !response.HasToolCalls)
             {
+                // Recovery: if the response was truncated by max_tokens, inject a continuation
+                // nudge and retry instead of exiting — mirrors Claude Code's recovery logic.
+                if (!terminated
+                    && IsLengthTruncated(response.FinishReason)
+                    && lengthRecoveryCount < MaxLengthRecoveries)
+                {
+                    if (response.Content != null)
+                        messages.Add(ChatMessage.Assistant(response.Content));
+                    messages.Add(ChatMessage.User(LengthRecoveryNudge));
+                    lengthRecoveryCount++;
+                    continue;
+                }
+
                 if (response.Content != null)
                     messages.Add(ChatMessage.Assistant(response.Content));
                 return response.Content;
@@ -367,6 +390,13 @@ public sealed class ToolCallLoop
             if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
         }
     }
+
+    /// <summary>
+    /// Detects whether the LLM response was truncated by the output token limit.
+    /// Different providers use different finish_reason strings for this condition.
+    /// </summary>
+    public static bool IsLengthTruncated(string? finishReason) =>
+        finishReason is "length" or "max_tokens";
 
     private sealed class NullAgentTool(string name) : IAgentTool
     {

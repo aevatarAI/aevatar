@@ -34,7 +34,7 @@ public sealed class AIAgentConfig
     public int? MaxTokens { get; set; }
 
     /// <summary>单轮 Chat 最大 Tool Calling 轮数。</summary>
-    public int MaxToolRounds { get; set; } = 10;
+    public int MaxToolRounds { get; set; } = 40;
 
     /// <summary>历史消息上限。</summary>
     public int MaxHistoryMessages { get; set; } = 100;
@@ -271,9 +271,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return _llmProviderFactory.GetDefault();
     }
 
+    /// <summary>
+    /// 装饰系统 prompt。子类可覆写以追加动态内容（如技能列表）。
+    /// 默认实现直接返回原始 prompt。
+    /// </summary>
+    protected virtual string DecorateSystemPrompt(string basePrompt) => basePrompt;
+
     private LLMRequest BuildRequest() => new()
     {
-        Messages = History.BuildMessages(EffectiveConfig.SystemPrompt),
+        Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt)),
         RequestId = null,
         Metadata = null,
         Tools = Tools.HasTools ? Tools.GetAll() : null,
@@ -346,7 +352,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         config.Model = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model.Trim();
         config.SystemPrompt ??= string.Empty;
         if (config.MaxToolRounds <= 0)
-            config.MaxToolRounds = 10;
+            config.MaxToolRounds = 40;
         if (config.MaxHistoryMessages <= 0)
             config.MaxHistoryMessages = 100;
         if (config.StreamBufferCapacity <= 0)

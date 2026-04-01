@@ -386,6 +386,80 @@ public class ToolCallLoopTests
         hook.LlmEndCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WhenFinishReasonLength_ShouldInjectNudgeAndContinue()
+    {
+        // First response: truncated (finish_reason = "length", no tool calls)
+        // Second response: normal completion after continuation nudge
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = "partial answer...", FinishReason = "length" },
+            new LLMResponse { Content = "...continued and done" },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("do something complex") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 5, CancellationToken.None);
+
+        result.Should().Be("...continued and done");
+        provider.Requests.Should().HaveCount(2, "should have retried after length truncation");
+        messages.Should().Contain(m => m.Role == "assistant" && m.Content == "partial answer...");
+        messages.Should().Contain(m => m.Role == "user" && m.Content!.Contains("cut off due to length"));
+        messages.Should().Contain(m => m.Role == "assistant" && m.Content == "...continued and done");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenFinishReasonLength_ShouldRespectMaxRecoveries()
+    {
+        // All responses are truncated — should stop after MaxLengthRecoveries (3) attempts
+        var responses = Enumerable.Range(0, 5)
+            .Select(i => new LLMResponse { Content = $"truncated-{i}", FinishReason = "length" })
+            .ToList();
+        // Add a final-call-without-tools response for when maxRounds is exhausted
+        responses.Add(new LLMResponse { Content = "forced-final" });
+
+        var provider = new QueueLLMProvider(responses);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("never ending") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 10, CancellationToken.None);
+
+        // 1 initial + 3 recoveries = 4 calls, then on the 4th truncation it exits
+        provider.Requests.Should().HaveCount(4);
+        result.Should().Be("truncated-3", "should return the last truncated response after exhausting recoveries");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenFinishReasonMaxTokens_ShouldAlsoRecover()
+    {
+        // Some providers use "max_tokens" instead of "length"
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse { Content = "cut off", FinishReason = "max_tokens" },
+            new LLMResponse { Content = "completed" },
+        ]);
+        var loop = new ToolCallLoop(new ToolManager());
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 5, CancellationToken.None);
+
+        result.Should().Be("completed");
+        provider.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void IsLengthTruncated_ShouldDetectKnownReasons()
+    {
+        ToolCallLoop.IsLengthTruncated("length").Should().BeTrue();
+        ToolCallLoop.IsLengthTruncated("max_tokens").Should().BeTrue();
+        ToolCallLoop.IsLengthTruncated("stop").Should().BeFalse();
+        ToolCallLoop.IsLengthTruncated(null).Should().BeFalse();
+        ToolCallLoop.IsLengthTruncated("").Should().BeFalse();
+    }
+
     private sealed class QueueLLMProvider : ILLMProvider
     {
         private readonly Queue<LLMResponse> _responses;

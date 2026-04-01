@@ -910,6 +910,18 @@ public static class ScopeServiceEndpoints
                         ct);
                     break;
 
+                case ServiceImplementationKind.Scripting:
+                    await HandleScriptingServiceChatStreamAsync(
+                        http,
+                        target,
+                        normalizedPrompt,
+                        request.SessionId,
+                        scopeId,
+                        actorRuntime,
+                        subscriptionProvider,
+                        ct);
+                    break;
+
                 default:
                     throw new InvalidOperationException(
                         $"Service implementation '{target.Artifact.ImplementationKind}' does not support SSE stream invocation.");
@@ -1091,6 +1103,144 @@ public static class ScopeServiceEndpoints
 
     internal static bool ShouldEmitSyntheticRunFinished(AGUIEvent.EventOneofCase terminalEventCase) =>
         terminalEventCase == AGUIEvent.EventOneofCase.TextMessageEnd;
+
+    private static async Task HandleScriptingServiceChatStreamAsync(
+        HttpContext http,
+        ServiceInvocationResolvedTarget target,
+        string prompt,
+        string? sessionId,
+        string scopeId,
+        IActorRuntime actorRuntime,
+        IActorEventSubscriptionProvider subscriptionProvider,
+        CancellationToken ct)
+    {
+        var actorId = target.Service.PrimaryActorId;
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new InvalidOperationException(
+                "Script runtime actor is not available. The service may not be activated.");
+
+        var actor = await actorRuntime.GetAsync(actorId);
+        if (actor is null)
+            throw new InvalidOperationException(
+                $"Script runtime actor '{actorId}' could not be resolved. The service may not be activated.");
+
+        var writer = new AGUISseWriter(http.Response);
+        http.Response.StatusCode = StatusCodes.Status200OK;
+        http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+        http.Response.Headers.CacheControl = "no-store";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+        await http.Response.StartAsync(ct);
+
+        var runId = Guid.NewGuid().ToString("N");
+        await writer.WriteAsync(new AGUIEvent
+        {
+            RunStarted = new RunStartedEvent { ThreadId = actorId, RunId = runId },
+        }, ct);
+
+        var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var ctr = ct.Register(() => tcs.TrySetCanceled());
+
+        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+            actorId,
+            async envelope =>
+            {
+                try
+                {
+                    var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
+                    if (aguiEvent is null) return;
+
+                    await writer.WriteAsync(aguiEvent, CancellationToken.None);
+
+                    if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
+                        or AGUIEvent.EventOneofCase.RunError
+                        or AGUIEvent.EventOneofCase.TextMessageEnd)
+                    {
+                        tcs.TrySetResult(aguiEvent.EventCase);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            },
+            ct);
+
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = prompt,
+            SessionId = sessionId ?? string.Empty,
+            ScopeId = scopeId,
+        };
+
+        var bearerToken = ExtractBearerToken(http);
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
+
+        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+        if (userConfigStore != null)
+        {
+            try
+            {
+                var userConfig = await userConfigStore.GetAsync(ct);
+                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                    chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+            }
+            catch
+            {
+                // Best-effort; fall back to provider default if config unavailable.
+            }
+        }
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(chatRequest),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actorId },
+            },
+        };
+        await actor.HandleEventAsync(envelope, ct);
+
+        var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
+        if (completedTask == tcs.Task)
+        {
+            if (tcs.Task.IsFaulted)
+            {
+                var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
+                var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
+                await writer.WriteAsync(new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = isAuthRequired
+                            ? "NyxID authentication required. Please sign in."
+                            : (ex?.Message ?? "An error occurred."),
+                        Code = isAuthRequired ? "authentication_required" : null,
+                    },
+                }, CancellationToken.None);
+            }
+            else
+            {
+                var terminalEventCase = tcs.Task.Result;
+                if (ShouldEmitSyntheticRunFinished(terminalEventCase))
+                {
+                    await writer.WriteAsync(new AGUIEvent
+                    {
+                        RunFinished = new RunFinishedEvent { ThreadId = actorId, RunId = runId },
+                    }, CancellationToken.None);
+                }
+            }
+        }
+        else
+        {
+            await writer.WriteAsync(new AGUIEvent
+            {
+                RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
+            }, CancellationToken.None);
+        }
+    }
 
     private static async Task<IResult> HandleInvokeAsync(
         HttpContext http,

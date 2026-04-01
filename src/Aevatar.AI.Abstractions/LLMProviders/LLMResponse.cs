@@ -36,6 +36,9 @@ public sealed class LLMStreamChunk
     /// <summary>本块增量 tool_call（若存在）。</summary>
     public ToolCall? DeltaToolCall { get; init; }
 
+    /// <summary>完成原因（通常最后一块才有），如 stop / length / max_tokens。</summary>
+    public string? FinishReason { get; init; }
+
     /// <summary>是否为最后一块。</summary>
     public bool IsLast { get; init; }
 

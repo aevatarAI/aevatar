@@ -144,7 +144,7 @@ public sealed class NyxIdLLMProviderRoutingTests
         new(
             name: "nyxid",
             defaultModel: "gpt-4o-mini",
-            gatewayEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
+            nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
             accessTokenAccessor: static () => null,
             routeLookupClient: new HttpClient(handler));
 
