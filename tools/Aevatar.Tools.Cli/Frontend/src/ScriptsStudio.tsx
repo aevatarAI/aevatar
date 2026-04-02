@@ -1426,7 +1426,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
 
     let accumulated = '';
-    await api.scope.streamDefaultChat(scopeId, inputText, undefined, (frame: any) => {
+    await api.scope.streamDefaultChat(scopeId, inputText, undefined, undefined, (frame: any) => {
       if (frame.textMessageContent?.delta) {
         accumulated += frame.textMessageContent.delta;
       } else if (frame.type === 'TEXT_MESSAGE_CONTENT' && frame.delta) {

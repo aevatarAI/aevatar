@@ -70,7 +70,7 @@ export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onIn
         </div>
       ) : null}
 
-      <section className="flex-1 min-h-0 grid grid-cols-[280px_minmax(0,1fr)] bg-[#F2F1EE]">
+      <section className="explorer-page flex-1 min-h-0 grid grid-cols-[280px_minmax(0,1fr)] bg-[#F2F1EE]">
         <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-4">
           {store.loading ? (
             <div className="py-8 flex flex-col items-center justify-center gap-2 text-[13px] text-gray-400">

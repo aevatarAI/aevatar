@@ -4,7 +4,7 @@ public interface IChatHistoryStore
 {
     Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default);
     Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(string scopeId, string conversationId, CancellationToken ct = default);
-    Task SaveMessagesAsync(string scopeId, string conversationId, IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default);
+    Task SaveMessagesAsync(string scopeId, string conversationId, ConversationMeta meta, IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default);
     Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default);
 }
 
@@ -17,7 +17,9 @@ public sealed record ConversationMeta(
     string ServiceKind,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    int MessageCount);
+    int MessageCount,
+    string? LlmRoute = null,
+    string? LlmModel = null);
 
 public sealed record StoredChatMessage(
     string Id,

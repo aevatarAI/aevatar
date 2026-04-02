@@ -25,8 +25,7 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, NyxIdAgentToolSource>());
 
-        // Remote approval handler — agents that need local-first + remote fallback
-        // compose PriorityApprovalHandler(LocalApprovalHandler, this) in their ctor.
+        // Remote approval handler for timeout escalation (NyxID Telegram/app push).
         services.TryAddSingleton<IToolApprovalHandler>(sp =>
             new NyxIdToolApprovalHandler(sp.GetRequiredService<NyxIdApiClient>()));
 

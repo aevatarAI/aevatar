@@ -268,6 +268,8 @@ const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
 const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
+const APPEARANCE_THEME_STORAGE_KEY = 'aevatar.app.appearance-theme';
+const COLOR_MODE_STORAGE_KEY = 'aevatar.app.color-mode';
 
 function normalizeRuntimeMode(value: unknown): RuntimeMode {
   return String(value || '').trim().toLowerCase() === 'remote' ? 'remote' : 'local';
@@ -458,6 +460,31 @@ function readStoredPreviousWorkspacePage(): NonSettingsWorkspacePage {
     return isNonSettingsWorkspacePage(raw) ? raw : 'studio';
   } catch {
     return 'studio';
+  }
+}
+
+function readStoredAppearanceTheme() {
+  if (typeof window === 'undefined') {
+    return 'blue';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(APPEARANCE_THEME_STORAGE_KEY);
+    return APPEARANCE_OPTIONS.some(option => option.id === raw) ? raw! : 'blue';
+  } catch {
+    return 'blue';
+  }
+}
+
+function readStoredColorMode(): 'light' | 'dark' {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+
+  try {
+    return window.localStorage.getItem(COLOR_MODE_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
   }
 }
 
@@ -714,8 +741,8 @@ function createEmptyStudioSettings(): StudioSettingsState {
     localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
     runtimeMode: 'local',
     ornnBaseUrl: DEFAULT_ORNN_BASE_URL,
-    appearanceTheme: 'blue',
-    colorMode: 'light',
+    appearanceTheme: readStoredAppearanceTheme(),
+    colorMode: readStoredColorMode(),
     secretsFilePath: '',
     defaultProviderName: '',
     providerTypes: [],
@@ -1116,6 +1143,29 @@ function App() {
       // Ignore storage errors in restricted browser contexts.
     }
   }, [previousWorkspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(APPEARANCE_THEME_STORAGE_KEY, settingsState.appearanceTheme || 'blue');
+      window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, settingsState.colorMode || 'light');
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [settingsState.appearanceTheme, settingsState.colorMode]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.documentElement.style.colorScheme = settingsState.colorMode;
+    document.body.style.background = settingsState.colorMode === 'dark' ? '#0b1220' : '#f7f6f3';
+    document.body.style.color = settingsState.colorMode === 'dark' ? '#e5e7eb' : '#1f2328';
+  }, [settingsState.colorMode]);
 
   useEffect(() => {
     const workspaceReady = !authSession.loading && (!authSession.enabled || authSession.authenticated);
@@ -3293,7 +3343,12 @@ function App() {
 
 
   if (authSession.loading) {
-    return <AppLoadingScreen />;
+    return (
+      <AppLoadingScreen
+        appearanceTheme={settingsState.appearanceTheme}
+        colorMode={settingsState.colorMode}
+      />
+    );
   }
 
   if (authSession.enabled && !authSession.authenticated) {
@@ -3302,6 +3357,8 @@ function App() {
         providerDisplayName={authSession.providerDisplayName}
         loginUrl={authSession.loginUrl}
         errorMessage={authSession.errorMessage}
+        appearanceTheme={settingsState.appearanceTheme}
+        colorMode={settingsState.colorMode}
       />
     );
   }
@@ -5245,9 +5302,16 @@ function CloudConfigSection(props: {
   );
 }
 
-function AppLoadingScreen() {
+function AppLoadingScreen(props: {
+  appearanceTheme: string;
+  colorMode: 'light' | 'dark';
+}) {
   return (
-    <div className="min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8">
+    <div
+      className="studio-shell min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8"
+      data-appearance={props.appearanceTheme || 'blue'}
+      data-color-mode={props.colorMode || 'light'}
+    >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[960px] items-center justify-center">
         <div className="w-full max-w-[460px] rounded-[32px] border border-[#E6E3DE] bg-white/96 p-8 shadow-[0_28px_70px_rgba(15,23,42,0.08)]">
           <div className="panel-eyebrow">Aevatar App</div>
@@ -5268,12 +5332,14 @@ function AppAuthenticationGate(props: {
   providerDisplayName: string;
   loginUrl: string;
   errorMessage: string;
+  appearanceTheme: string;
+  colorMode: 'light' | 'dark';
 }) {
   return (
     <div
       className="studio-shell min-h-screen bg-[#F2F1EE] px-6 py-8 text-gray-800"
-      data-appearance="blue"
-      data-color-mode="light"
+      data-appearance={props.appearanceTheme || 'blue'}
+      data-color-mode={props.colorMode || 'light'}
     >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1040px] items-center justify-center">
         <div className="grid w-full max-w-[920px] gap-6 rounded-[36px] border border-[#E6E3DE] bg-white/96 p-6 shadow-[0_30px_72px_rgba(15,23,42,0.08)] md:grid-cols-[minmax(0,1.1fr)_320px] md:p-8">

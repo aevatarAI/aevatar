@@ -53,6 +53,10 @@ public sealed class NyxIdApiKeysTool : IAgentTool
             "allow_all_nodes": {
               "type": "boolean",
               "description": "Allow all nodes"
+            },
+            "callback_url": {
+              "type": "string",
+              "description": "Webhook callback URL for channel bot relay (for create or update)"
             }
           }
         }
@@ -111,6 +115,8 @@ public sealed class NyxIdApiKeysTool : IAgentTool
         if (aas.HasValue) p["allow_all_services"] = aas.Value;
         var aan = args.Bool("allow_all_nodes");
         if (aan.HasValue) p["allow_all_nodes"] = aan.Value;
+        var callbackUrl = args.Str("callback_url");
+        if (callbackUrl != null) p["callback_url"] = callbackUrl;
         return p;
     }
 }

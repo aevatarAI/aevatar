@@ -48,7 +48,6 @@ import type {
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 const nyxIdChatActorTypeName = "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent";
-const nyxIdChatConversationPrefix = "NyxIdChat:";
 const nyxIdChatServiceId = "nyxid-chat";
 const nyxIdChatLabel = "NyxID Chat";
 
@@ -438,7 +437,6 @@ const ChatPage: React.FC = () => {
           kind: "chat",
         },
       ],
-      preferredActorId: `${nyxIdChatConversationPrefix}${scopeId}`,
       scopeId,
       serviceId: nyxIdChatServiceId,
     });
@@ -543,10 +541,7 @@ const ChatPage: React.FC = () => {
     }
 
     const conversationId =
-      activeConversationId ||
-      (selectedService.kind === "nyxid-chat"
-        ? `${nyxIdChatConversationPrefix}${scopeId}`
-        : createConversationId());
+      activeConversationId || createConversationId();
     const userMessage: ChatMessage = {
       content: trimmedPrompt,
       id: createClientId(),

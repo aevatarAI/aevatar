@@ -118,7 +118,6 @@ jest.mock('@/shared/studio/api', () => ({
           scriptDefinitionActorId: '',
           scriptSourceHash: '',
           staticActorTypeName: '',
-          staticPreferredActorId: '',
         },
         {
           revisionId: 'rev-1',
@@ -145,7 +144,6 @@ jest.mock('@/shared/studio/api', () => ({
           scriptDefinitionActorId: '',
           scriptSourceHash: '',
           staticActorTypeName: '',
-          staticPreferredActorId: '',
         },
       ],
     })),

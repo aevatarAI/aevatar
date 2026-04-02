@@ -169,16 +169,16 @@ export default function UserConfigEditor({ flash }: Props) {
     <div className="space-y-4 max-w-[780px]">
       {/* Tabs + Save */}
       <div className="flex items-center justify-between">
-        <div className="flex gap-1 rounded-lg bg-[#F2F1EE] p-0.5">
+        <div className="workspace-segmented-control">
           <button
             onClick={() => setTab('fields')}
-            className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-colors ${tab === 'fields' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`workspace-segmented-button ${tab === 'fields' ? 'active' : ''}`}
           >
             Fields
           </button>
           <button
             onClick={() => setTab('raw')}
-            className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-colors ${tab === 'raw' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`workspace-segmented-button ${tab === 'raw' ? 'active' : ''}`}
           >
             Raw
           </button>
@@ -186,7 +186,7 @@ export default function UserConfigEditor({ flash }: Props) {
         <button
           onClick={tab === 'fields' ? saveFields : saveRaw}
           disabled={saving}
-          className="inline-flex items-center gap-1 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] disabled:opacity-50"
+          className="solid-action !min-h-[34px] disabled:opacity-50"
         >
           {saving ? <Loader2 size={12} className="animate-spin" /> : null}
           Save
@@ -194,16 +194,16 @@ export default function UserConfigEditor({ flash }: Props) {
       </div>
 
       {tab === 'raw' ? (
-        <div className="rounded-2xl border border-[#EEEAE4] bg-white p-1">
+        <div className="workspace-editor-frame">
           <textarea
             value={rawJson}
             onChange={e => setRawJson(e.target.value)}
-            className="w-full min-h-[400px] max-h-[70vh] p-4 text-[13px] font-mono leading-relaxed text-gray-700 resize-y outline-none"
+            className="panel-textarea !min-h-[400px] !max-h-[70vh] !border-0 !bg-transparent !shadow-none p-4"
             spellCheck={false}
           />
         </div>
       ) : (
-        <div className="rounded-2xl border border-[#EEEAE4] bg-white divide-y divide-[#EEEAE4]">
+        <div className="workspace-card divide-y divide-[#EEEAE4]">
           {FIELDS.map(field => (
             <div key={field.key} className="px-5 py-4">
               <div className="flex items-center gap-4">
@@ -216,7 +216,7 @@ export default function UserConfigEditor({ flash }: Props) {
                     <select
                       value={config[field.key] ?? ''}
                       onChange={e => updateField(field.key, e.target.value)}
-                      className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-1.5 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      className="panel-input"
                     >
                       {field.options?.map(opt => (
                         <option key={opt} value={opt}>{opt}</option>
@@ -228,7 +228,7 @@ export default function UserConfigEditor({ flash }: Props) {
                       value={config[field.key] ?? ''}
                       onChange={e => updateField(field.key, field.type === 'number' ? e.target.value : e.target.value)}
                       placeholder={field.placeholder}
-                      className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-1.5 text-[13px] text-gray-700 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      className="panel-input"
                     />
                   )}
                 </div>

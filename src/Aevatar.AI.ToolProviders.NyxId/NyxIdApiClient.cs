@@ -288,13 +288,19 @@ public sealed class NyxIdApiClient
         PostAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}/verify", "{}", ct);
 
     public Task<string> ListConversationRoutesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/channel-relay/routes", ct);
+        GetAsync(token, "/api/v1/channel-conversations", ct);
+
+    public Task<string> GetConversationRouteAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
 
     public Task<string> CreateConversationRouteAsync(string token, string body, CancellationToken ct) =>
-        PostAsync(token, "/api/v1/channel-relay/routes", body, ct);
+        PostAsync(token, "/api/v1/channel-conversations", body, ct);
+
+    public Task<string> UpdateConversationRouteAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", body, ct);
 
     public Task<string> DeleteConversationRouteAsync(string token, string id, CancellationToken ct) =>
-        DeleteAsync(token, $"/api/v1/channel-relay/routes/{Uri.EscapeDataString(id)}", ct);
+        DeleteAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
 
     // ─── HTTP helpers ───
 

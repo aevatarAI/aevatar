@@ -177,9 +177,6 @@ function createBaseProps(overrides = {}) {
     gAgentTypes: [],
     gAgentTypesLoading: false,
     gAgentTypesError: null,
-    gAgentActorGroups: [],
-    gAgentActorsLoading: false,
-    gAgentActorsError: null,
     bindingActivationRevisionId: '',
     bindingRetirementRevisionId: '',
     onSwitchStudioView: jest.fn(),
@@ -362,12 +359,6 @@ describe('StudioEditorPage', () => {
               typeName: 'OrdersGAgent',
               fullName: 'Tests.OrdersGAgent',
               assemblyName: 'Tests',
-            },
-          ],
-          gAgentActorGroups: [
-            {
-              gAgentType: 'Tests.OrdersGAgent',
-              actorIds: ['orders-1'],
             },
           ],
           onBindGAgent,

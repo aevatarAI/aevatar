@@ -43,6 +43,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
             new NyxIdProxyTool(_client, _logger),
+            new NyxIdCodeExecuteTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),

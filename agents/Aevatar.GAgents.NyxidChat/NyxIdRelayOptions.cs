@@ -6,14 +6,15 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class NyxIdRelayOptions
 {
     /// <summary>
-    /// HMAC-SHA256 shared secret for verifying webhook signatures from NyxID.
-    /// Must match the webhook_secret configured in the NyxID API key's callback settings.
-    /// </summary>
-    public string? WebhookSecret { get; set; }
-
-    /// <summary>
     /// Maximum time (in seconds) to wait for the agent to produce a complete response.
     /// Default: 120 seconds.
     /// </summary>
     public int ResponseTimeoutSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// The public URL of the relay webhook endpoint. Auto-derived from the server's own
+    /// address at startup. The agent uses this to auto-configure API keys with callback_url.
+    /// Example: "https://aevatar.example.com/api/webhooks/nyxid-relay"
+    /// </summary>
+    public string? RelayCallbackUrl { get; set; }
 }

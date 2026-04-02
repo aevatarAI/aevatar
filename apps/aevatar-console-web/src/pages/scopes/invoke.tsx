@@ -580,7 +580,6 @@ const ScopeInvokePage: React.FC = () => {
   );
   const currentBindingActor =
     currentBindingRevision?.primaryActorId ||
-    currentBindingRevision?.staticPreferredActorId ||
     bindingQuery.data?.primaryActorId ||
     '';
 
@@ -999,7 +998,7 @@ const ScopeInvokePage: React.FC = () => {
               buildRuntimeGAgentsHref({
                 scopeId,
                 actorId:
-                  currentBindingRevision?.staticPreferredActorId || undefined,
+                  currentBindingRevision?.primaryActorId || undefined,
                 actorTypeName:
                   currentBindingRevision?.staticActorTypeName || undefined,
               }),
@@ -1236,7 +1235,7 @@ const ScopeInvokePage: React.FC = () => {
                             buildRuntimeGAgentsHref({
                               scopeId,
                               actorId:
-                                currentBindingRevision.staticPreferredActorId ||
+                                currentBindingRevision.primaryActorId ||
                                 undefined,
                               actorTypeName:
                                 currentBindingRevision.staticActorTypeName ||

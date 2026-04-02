@@ -14,6 +14,25 @@ export type ChatMessage = {
   thinking?: string;
   /** Tool calls */
   toolCalls?: ToolCallInfo[];
+  /** Pending tool approval request from the agent */
+  pendingApproval?: PendingApprovalInfo;
+  /** Pending human_input request from a workflow */
+  pendingHumanInput?: PendingHumanInputInfo;
+};
+
+export type PendingApprovalInfo = {
+  requestId: string;
+  toolName: string;
+  toolCallId: string;
+  argumentsJson: string;
+  isDestructive: boolean;
+  timeoutSeconds: number;
+};
+
+export type PendingHumanInputInfo = {
+  stepId: string;
+  runId: string;
+  prompt: string;
 };
 
 export type StepInfo = {
@@ -55,6 +74,8 @@ export type ConversationMeta = {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  llmRoute?: string;
+  llmModel?: string;
 };
 
 export type StoredChatMessage = {

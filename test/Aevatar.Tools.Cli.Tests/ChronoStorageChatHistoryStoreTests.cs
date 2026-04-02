@@ -66,7 +66,7 @@ public sealed class ChronoStorageChatHistoryStoreTests
         storageServer.StoreText(
             "aevatar-studio",
             "user-prefix/scope-a/chat-histories/_meta/NyxIdChat:scope-a.json",
-            """{"title":"original question","serviceId":"nyxid-chat","serviceKind":"nyxid-chat","createdAtMs":1711968000000,"updatedAtMs":1711968000000,"messageCount":1}""",
+            """{"title":"original question","serviceId":"nyxid-chat","serviceKind":"nyxid-chat","createdAtMs":1711968000000,"updatedAtMs":1711968000000,"messageCount":1,"llmRoute":"","llmModel":"gpt-5.3-codex"}""",
             "2026-04-01T00:01:00Z");
 
         var store = CreateStore(storageServer);
@@ -75,6 +75,8 @@ public sealed class ChronoStorageChatHistoryStoreTests
         index.Conversations.Should().HaveCount(1);
         index.Conversations[0].Title.Should().Be("original question");
         index.Conversations[0].MessageCount.Should().Be(1);
+        index.Conversations[0].LlmRoute.Should().Be("");
+        index.Conversations[0].LlmModel.Should().Be("gpt-5.3-codex");
     }
 
     [Fact]
@@ -141,11 +143,24 @@ public sealed class ChronoStorageChatHistoryStoreTests
             new StoredChatMessage("u1", "user", "hello sidecar", 1711968000000, "complete"),
             new StoredChatMessage("a1", "assistant", "hi there", 1711968060000, "complete"),
         };
+        var meta = new ConversationMeta(
+            "test-conv",
+            "hello sidecar",
+            "nyxid-chat",
+            "nyxid-chat",
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968000000),
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968060000),
+            2,
+            LlmRoute: "",
+            LlmModel: "gpt-5.3-codex");
 
-        await store.SaveMessagesAsync("scope-a", "test-conv", messages);
+        await store.SaveMessagesAsync("scope-a", "test-conv", meta, messages);
 
         storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/test-conv.jsonl");
         storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/_meta/test-conv.json");
+        var sidecarJson = Encoding.UTF8.GetString(storageServer.Objects["aevatar-studio:user-prefix/scope-a/chat-histories/_meta/test-conv.json"]);
+        sidecarJson.Should().Contain("\"llmRoute\":\"\"");
+        sidecarJson.Should().Contain("\"llmModel\":\"gpt-5.3-codex\"");
     }
 
     [Fact]
@@ -182,8 +197,16 @@ public sealed class ChronoStorageChatHistoryStoreTests
         {
             new StoredChatMessage("u1", "user", "hello", 1711968000000, "complete"),
         };
+        var meta = new ConversationMeta(
+            "NyxIdChat:scope-a",
+            "hello",
+            "nyxid-chat",
+            "nyxid-chat",
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968000000),
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968000000),
+            1);
 
-        await store.SaveMessagesAsync("scope-a", "NyxIdChat:scope-a", messages);
+        await store.SaveMessagesAsync("scope-a", "NyxIdChat:scope-a", meta, messages);
 
         storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/NyxIdChat:scope-a.jsonl");
         storageServer.Objects.Should().NotContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/index.json");

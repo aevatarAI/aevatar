@@ -540,7 +540,6 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: string;
       displayName?: string;
       actorTypeName: string;
-      preferredActorId?: string;
       endpoints: Array<{
         endpointId: string;
         displayName?: string;
@@ -553,7 +552,7 @@ jest.mock("@/shared/studio/api", () => ({
       scopeId: input.scopeId,
       displayName: input.displayName || "orders-gagent",
       targetKind: "gagent",
-      targetName: input.preferredActorId || input.displayName || "orders-gagent",
+      targetName: input.actorTypeName || input.displayName || "orders-gagent",
       revisionId: "rev-gagent-1",
       expectedActorId: "scope-gagent:scope-1:default:dep-1",
     })),
@@ -595,7 +594,6 @@ jest.mock("@/shared/studio/api", () => ({
           scriptDefinitionActorId: "",
           scriptSourceHash: "",
           staticActorTypeName: "",
-          staticPreferredActorId: "",
         },
         {
           revisionId: "rev-1",
@@ -622,7 +620,6 @@ jest.mock("@/shared/studio/api", () => ({
           scriptDefinitionActorId: "",
           scriptSourceHash: "",
           staticActorTypeName: "",
-          staticPreferredActorId: "",
         },
       ],
     })),
@@ -1141,7 +1138,6 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               props.onBindGAgent?.({
                 displayName: "orders-gagent",
                 actorTypeName: "Tests.OrdersGAgent, Tests",
-                preferredActorId: "orders-gagent",
                 endpointId: "run",
                 endpointDisplayName: "Run",
                 requestTypeUrl:
@@ -1163,7 +1159,6 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 {
                   displayName: "orders-gagent",
                   actorTypeName: "Tests.OrdersGAgent, Tests",
-                  preferredActorId: "orders-gagent",
                   endpointId: "run",
                   endpointDisplayName: "Run",
                   requestTypeUrl:
@@ -1187,7 +1182,6 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 {
                   displayName: "orders-gagent",
                   actorTypeName: "Tests.OrdersGAgent, Tests",
-                  preferredActorId: "orders-gagent",
                   endpoints: [
                     {
                       endpointId: "run",
@@ -2026,7 +2020,6 @@ describe("StudioPage", () => {
         scopeId: "scope-1",
         displayName: "orders-gagent",
         actorTypeName: "Tests.OrdersGAgent, Tests",
-        preferredActorId: "orders-gagent",
         endpoints: [
           {
             endpointId: "run",
@@ -2083,7 +2076,6 @@ describe("StudioPage", () => {
         scopeId: "scope-1",
         displayName: "orders-gagent",
         actorTypeName: "Tests.OrdersGAgent, Tests",
-        preferredActorId: "orders-gagent",
         endpoints: [
           {
             endpointId: "run",

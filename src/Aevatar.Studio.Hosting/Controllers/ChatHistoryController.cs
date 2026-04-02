@@ -44,7 +44,7 @@ public static class ChatHistoryEndpoints
         [FromServices] IChatHistoryStore store,
         CancellationToken ct)
     {
-        await store.SaveMessagesAsync(scopeId, conversationId, request.Messages, ct);
+        await store.SaveMessagesAsync(scopeId, conversationId, request.Meta, request.Messages, ct);
         return Results.Ok();
     }
 

@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  AlignLeft,
+  Brain,
+  Check,
+  ChevronDown,
+  Copy as CopyIcon,
+  FileText,
+  MoreHorizontal,
+  Pencil,
+  RotateCcw,
+  Search,
+  Trash2,
+} from 'lucide-react';
 import {
   normalizeBackendSseFrame,
   extractStepCompletedOutput,
@@ -10,14 +23,112 @@ import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageConte
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
+import { createPortal } from 'react-dom';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+const USER_LLM_ROUTE_GATEWAY = '';
+const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
+const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
+const CONVERSATION_ROUTE_DEFAULT_VALUE = '__config_default__';
+const CONVERSATION_ROUTE_GATEWAY_VALUE = '__gateway__';
+const LLM_ROUTE_HEADER_KEY = 'nyxid.route_preference';
+const LLM_MODEL_HEADER_KEY = 'aevatar.model_override';
+
 // ── Helpers ─────────────────────────────────────────────────────────────────────
+
+type UserConfigProviderStatus = {
+  provider_slug: string;
+  provider_name: string;
+  status: string;
+  source?: string;
+};
 
 function genId() {
   return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
 }
+
+function normalizeUserLlmRoute(value: unknown): string {
+  const normalized = String(value || '').trim();
+  if (!normalized || /^auto$/i.test(normalized) || /^gateway$/i.test(normalized)) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.includes('://') || normalized.startsWith('//')) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.startsWith('/')) {
+    return normalized;
+  }
+
+  return `/api/v1/proxy/s/${normalized.replace(/^\/+|\/+$/g, '')}`;
+}
+
+function routePathFromProviderSlug(slug: string) {
+  const normalized = String(slug || '').trim();
+  return normalized ? `/api/v1/proxy/s/${normalized}` : USER_LLM_ROUTE_GATEWAY;
+}
+
+function trimOptional(value: string | undefined) {
+  const trimmed = String(value || '').trim();
+  return trimmed || undefined;
+}
+
+function buildConversationHeaders(
+  llmRoute: string | undefined,
+  llmModel: string | undefined,
+) {
+  const headers: Record<string, string> = {};
+  if (llmRoute !== undefined) {
+    headers[LLM_ROUTE_HEADER_KEY] = llmRoute;
+  }
+
+  const normalizedModel = trimOptional(llmModel);
+  if (normalizedModel) {
+    headers[LLM_MODEL_HEADER_KEY] = normalizedModel;
+  }
+
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function encodeRouteSelectValue(route: string | undefined) {
+  if (route === undefined) {
+    return CONVERSATION_ROUTE_DEFAULT_VALUE;
+  }
+
+  return route === USER_LLM_ROUTE_GATEWAY
+    ? CONVERSATION_ROUTE_GATEWAY_VALUE
+    : route;
+}
+
+function decodeRouteSelectValue(value: string) {
+  if (value === CONVERSATION_ROUTE_DEFAULT_VALUE) {
+    return undefined;
+  }
+
+  return value === CONVERSATION_ROUTE_GATEWAY_VALUE
+    ? USER_LLM_ROUTE_GATEWAY
+    : normalizeUserLlmRoute(value);
+}
+
+function describeRoute(route: string | undefined, routeOptions: Array<{ value: string; label: string }>) {
+  if (route === undefined) {
+    return 'Config default';
+  }
+
+  if (route === USER_LLM_ROUTE_GATEWAY) {
+    return 'NyxID Gateway';
+  }
+
+  return routeOptions.find(option => option.value === route)?.label || route;
+}
+
+type LlmModelGroup = {
+  id: string;
+  label: string;
+  models: string[];
+};
 
 /** Lightweight markdown rendering for chat content */
 type RenderTone = 'assistant' | 'user';
@@ -42,8 +153,8 @@ function renderInline(text: string, tone: RenderTone) {
 
     if (token.kind === 'link') {
       const linkClass = tone === 'user'
-        ? 'underline underline-offset-2 decoration-white/60 hover:decoration-white text-white break-all'
-        : 'underline underline-offset-2 decoration-blue-300 hover:decoration-blue-500 text-blue-600 hover:text-blue-700 break-all';
+        ? 'scope-chat-link-user'
+        : 'scope-chat-link';
       const content = token.bold ? <strong>{token.text}</strong> : token.text;
       return (
         <a
@@ -284,6 +395,43 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
+function getThinkingDurationLabel(msg: ChatMessage): string | null {
+  if (!msg.thinking?.trim()) {
+    return null;
+  }
+
+  const allTimestamps = (msg.events ?? [])
+    .map(evt => {
+      if (typeof evt.timestamp === 'number' && Number.isFinite(evt.timestamp)) {
+        return evt.timestamp;
+      }
+
+      const numeric = Number(evt.timestamp);
+      return Number.isFinite(numeric) ? numeric : null;
+    })
+    .filter((value): value is number => value !== null);
+
+  const reasoningTimestamps = (msg.events ?? [])
+    .filter(evt => evt.type === 'CUSTOM' && evt.name === 'aevatar.llm.reasoning')
+    .map(evt => {
+      if (typeof evt.timestamp === 'number' && Number.isFinite(evt.timestamp)) {
+        return evt.timestamp;
+      }
+
+      const numeric = Number(evt.timestamp);
+      return Number.isFinite(numeric) ? numeric : null;
+    })
+    .filter((value): value is number => value !== null);
+
+  const timestamps = reasoningTimestamps.length >= 2 ? reasoningTimestamps : allTimestamps;
+  if (timestamps.length < 2) {
+    return null;
+  }
+
+  const durationMs = Math.max(timestamps[timestamps.length - 1] - timestamps[0], 0);
+  return `${(durationMs / 1000).toFixed(3)} 秒`;
+}
+
 // ── Step Indicator ─────────────────────────────────────────────────────────────
 
 function StepIndicator({ step }: { step: StepInfo }) {
@@ -343,26 +491,37 @@ function ToolCallIndicator({ tool }: { tool: ToolCallInfo }) {
 
 // ── Thinking Block ─────────────────────────────────────────────────────────────
 
-function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boolean }) {
-  const [open, setOpen] = useState(false);
+function ThinkingBlock({
+  text,
+  isStreaming,
+  durationLabel,
+}: {
+  text: string;
+  isStreaming: boolean;
+  durationLabel?: string | null;
+}) {
+  const [open, setOpen] = useState(true);
   if (!text) return null;
+
+  const title = durationLabel
+    ? `思考了 ${durationLabel}`
+    : isStreaming
+      ? '思考中'
+      : '思考过程';
+
   return (
-    <div className="mb-2">
+    <div className="mb-4">
       <button
+        type="button"
         onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 py-1"
+        className="scope-chat-thinking-toggle flex items-center gap-2 text-[15px] font-semibold transition-colors"
       >
-        <svg
-          className={`w-3 h-3 transition-transform ${open ? 'rotate-90' : ''}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
-        <span>Thinking</span>
-        {isStreaming && <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />}
+        <Brain size={18} className="shrink-0" />
+        <span>{title}</span>
+        <ChevronDown size={17} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="ml-4 pl-3 border-l-2 border-purple-100 text-[13px] text-gray-400 italic whitespace-pre-wrap max-h-[200px] overflow-auto">
+        <div className="scope-chat-thinking-body mt-3 ml-4 pl-4 text-[14px] leading-7 whitespace-pre-wrap">
           {text}
         </div>
       )}
@@ -374,26 +533,49 @@ function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boole
 
 type BubbleActionKind = 'copy' | 'markdown' | 'plain' | 'regenerate';
 
-function BubbleActionButton(props: {
-  label: string;
+function MessageIconButton(props: {
   title: string;
   active?: boolean;
-  disabled?: boolean;
+  emphasis?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={props.title}
+      onClick={props.onClick}
+      className={`scope-chat-action-button flex h-[34px] w-[34px] items-center justify-center rounded-full transition-colors ${
+        props.emphasis
+          ? 'scope-chat-action-button--emphasis'
+          : props.active
+            ? 'scope-chat-action-button--active'
+            : ''
+      }`}
+    >
+      {props.children}
+    </button>
+  );
+}
+
+function MessageMenuItem(props: {
+  icon: ReactNode;
+  label: string;
+  danger?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={props.onClick}
-      disabled={props.disabled}
-      title={props.title}
-      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-        props.active
-          ? 'border-blue-200 bg-blue-50 text-blue-700'
-          : 'border-[#E6E3DE] bg-white text-gray-500 hover:bg-[#F7F5F2] hover:text-gray-700'
-      } disabled:cursor-not-allowed disabled:opacity-40`}
+      className={`scope-chat-menu-item flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-medium transition-colors ${
+        props.danger
+          ? 'scope-chat-menu-item--danger'
+          : ''
+      }`}
     >
-      {props.label}
+      <span className={props.danger ? 'scope-chat-menu-item-icon-danger' : 'scope-chat-menu-item-icon'}>{props.icon}</span>
+      <span>{props.label}</span>
     </button>
   );
 }
@@ -401,25 +583,38 @@ function BubbleActionButton(props: {
 function ChatBubble({
   msg,
   canRegenerate,
+  canEdit,
   onCopy,
   onCopyMarkdown,
   onCopyPlainText,
   onRegenerate,
+  onEdit,
+  onDelete,
+  onApprove,
 }: {
   msg: ChatMessage;
   canRegenerate: boolean;
+  canEdit: boolean;
   onCopy: (msg: ChatMessage) => Promise<boolean>;
   onCopyMarkdown: (msg: ChatMessage) => Promise<boolean>;
   onCopyPlainText: (msg: ChatMessage) => Promise<boolean>;
   onRegenerate: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onApprove?: (requestId: string, approved: boolean) => void;
 }) {
   const isUser = msg.role === 'user';
   const [stepsOpen, setStepsOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<BubbleActionKind | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const actionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const menuTriggerRef = useRef<HTMLDivElement | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const hasSteps = msg.steps && msg.steps.length > 0;
   const hasTools = msg.toolCalls && msg.toolCalls.length > 0;
   const displayContent = getVisibleMessageContent(msg);
+  const thinkingDurationLabel = getThinkingDurationLabel(msg);
 
   useEffect(() => {
     return () => {
@@ -428,6 +623,69 @@ function ChatBubble({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Node)) {
+        return;
+      }
+
+      if (menuRef.current?.contains(event.target) || menuTriggerRef.current?.contains(event.target)) {
+        return;
+      }
+
+      if (menuRef.current) {
+        setMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const updateMenuPosition = () => {
+      const trigger = menuTriggerRef.current;
+      const menu = menuRef.current;
+      if (!trigger || !menu) {
+        return;
+      }
+
+      const triggerRect = trigger.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const viewportPadding = 12;
+      const offset = 10;
+
+      let left = triggerRect.right - menuRect.width;
+      left = Math.max(viewportPadding, Math.min(left, window.innerWidth - menuRect.width - viewportPadding));
+
+      let top = isUser
+        ? triggerRect.bottom + offset
+        : triggerRect.top - menuRect.height - offset;
+      top = Math.max(viewportPadding, Math.min(top, window.innerHeight - menuRect.height - viewportPadding));
+
+      setMenuPosition({ top, left });
+    };
+
+    const rafId = window.requestAnimationFrame(updateMenuPosition);
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [isUser, menuOpen]);
 
   function showActionFeedback(kind: BubbleActionKind) {
     if (actionTimerRef.current) {
@@ -448,126 +706,230 @@ function ChatBubble({
     }
   }
 
-  if (isUser) {
-    return (
-      <div className="flex flex-col items-end">
-        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#2563eb] text-white px-4 py-3 text-[14px] leading-relaxed">
-          <div className="break-words">{renderContent(msg.content, 'user')}</div>
-        </div>
-        <div className="mt-2 flex items-center gap-2">
-          <BubbleActionButton
-            label={activeAction === 'copy' ? '已复制' : '复制'}
-            title="复制当前消息"
-            active={activeAction === 'copy'}
-            onClick={() => { void handleCopyClick('copy', onCopy); }}
+  function renderMenu() {
+    if (typeof document === 'undefined') {
+      return null;
+    }
+
+    return createPortal(
+      <div
+        ref={menuRef}
+        className="scope-chat-menu fixed z-[80] w-[236px] overflow-hidden rounded-[22px]"
+        style={menuPosition ? { top: menuPosition.top, left: menuPosition.left } : { visibility: 'hidden', top: 0, left: 0 }}
+      >
+        <div className="py-2">
+          <MessageMenuItem
+            icon={<FileText size={16} />}
+            label="复制为 Markdown"
+            onClick={() => {
+              setMenuOpen(false);
+              void handleCopyClick('markdown', onCopyMarkdown);
+            }}
+          />
+          <MessageMenuItem
+            icon={<AlignLeft size={16} />}
+            label="复制为纯文本"
+            onClick={() => {
+              setMenuOpen(false);
+              void handleCopyClick('plain', onCopyPlainText);
+            }}
           />
         </div>
-      </div>
+        <div className="scope-chat-menu-divider py-2">
+          <MessageMenuItem
+            icon={<Trash2 size={16} />}
+            label="删除消息"
+            danger
+            onClick={() => {
+              setMenuOpen(false);
+              onDelete();
+            }}
+          />
+        </div>
+      </div>,
+      document.body,
     );
   }
 
-  return (
-    <div className="flex gap-3">
-      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mt-1">
-        <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-        </svg>
-      </div>
-
-      <div className="flex-1 min-w-0 max-w-[85%]">
-        {/* Thinking */}
-        {msg.thinking && (
-          <ThinkingBlock text={msg.thinking} isStreaming={msg.status === 'streaming'} />
-        )}
-
-        {/* Steps + Tool Calls (collapsible) */}
-        {(hasSteps || hasTools) && (
-          <div className="mb-1">
-            <button
-              onClick={() => setStepsOpen(v => !v)}
-              className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 py-1"
-            >
-              <svg
-                className={`w-3 h-3 transition-transform ${stepsOpen ? 'rotate-90' : ''}`}
-                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-              <span>
-                {(msg.steps?.length || 0) + (msg.toolCalls?.length || 0)} action{((msg.steps?.length || 0) + (msg.toolCalls?.length || 0)) > 1 ? 's' : ''}
-              </span>
-              {(msg.steps?.some(s => s.status === 'running') || msg.toolCalls?.some(t => t.status === 'running')) && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              )}
-            </button>
-            {stepsOpen && (
-              <div className="pl-1 border-l-2 border-gray-100 ml-1.5 mb-2">
-                {msg.steps?.map((step, i) => <StepIndicator key={`s-${i}`} step={step} />)}
-                {msg.toolCalls?.map((tool, i) => <ToolCallIndicator key={`t-${i}`} tool={tool} />)}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Text content */}
-        <div className="text-[14px] leading-relaxed text-gray-800">
-          <div className="break-words">
-            {renderContent(displayContent, 'assistant')}
-            {msg.status === 'streaming' && displayContent && (
-              <span className="inline-block w-[2px] h-[18px] bg-gray-400 animate-blink ml-0.5 align-text-bottom" />
-            )}
-          </div>
-          {!displayContent && msg.status === 'streaming' && (
-            <div className="flex items-center gap-1.5 py-2">
-              <span className="block w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="block w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />
-              <span className="block w-1.5 h-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '400ms' }} />
-            </div>
-          )}
+  if (isUser) {
+    return (
+      <div className="flex flex-col items-end">
+        <div className="scope-chat-user-bubble max-w-[80%] rounded-[30px] rounded-br-[14px] px-5 py-3.5 text-[14px] leading-relaxed text-white">
+          <div className="break-words">{renderContent(msg.content, 'user')}</div>
         </div>
-
-        {/* Error */}
-        {msg.status === 'error' && msg.error && (
-          <div className="mt-2 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2">
-            <svg className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-            </svg>
-            <span className="text-[13px] text-red-600">{msg.error}</span>
-          </div>
-        )}
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <BubbleActionButton
-            label={activeAction === 'copy' ? '已复制' : '复制'}
-            title="复制当前回复"
+        <div className="relative mt-2.5 flex items-center gap-1.5">
+          <MessageIconButton
+            title={activeAction === 'copy' ? '已复制' : '复制消息'}
             active={activeAction === 'copy'}
             onClick={() => { void handleCopyClick('copy', onCopy); }}
-          />
-          <BubbleActionButton
-            label={activeAction === 'markdown' ? 'Markdown 已复制' : '复制 Markdown'}
-            title="按 Markdown 复制当前回复"
-            active={activeAction === 'markdown'}
-            onClick={() => { void handleCopyClick('markdown', onCopyMarkdown); }}
-          />
-          <BubbleActionButton
-            label={activeAction === 'plain' ? '纯文本已复制' : '复制纯文本'}
-            title="按纯文本复制当前回复"
-            active={activeAction === 'plain'}
-            onClick={() => { void handleCopyClick('plain', onCopyPlainText); }}
-          />
+          >
+            <CopyIcon size={17} />
+          </MessageIconButton>
           {canRegenerate && (
-            <BubbleActionButton
-              label={activeAction === 'regenerate' ? '重新生成中' : '重新生成'}
-              title="从这一轮消息重新生成回复"
+            <MessageIconButton
+              title="重新生成回复"
               active={activeAction === 'regenerate'}
               onClick={() => {
                 onRegenerate();
                 showActionFeedback('regenerate');
               }}
-            />
+            >
+              <RotateCcw size={17} />
+            </MessageIconButton>
+          )}
+          {canEdit && (
+            <MessageIconButton
+              title="编辑消息"
+              onClick={() => {
+                setMenuOpen(false);
+                onEdit();
+              }}
+            >
+              <Pencil size={17} />
+            </MessageIconButton>
+          )}
+          <div ref={menuTriggerRef} className="relative">
+            <MessageIconButton
+              title="更多操作"
+              emphasis
+              onClick={() => setMenuOpen(v => !v)}
+            >
+              <MoreHorizontal size={17} />
+            </MessageIconButton>
+          </div>
+        </div>
+        {menuOpen ? renderMenu() : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-[94%]">
+      {msg.thinking && (
+        <ThinkingBlock
+          text={msg.thinking}
+          isStreaming={msg.status === 'streaming'}
+          durationLabel={thinkingDurationLabel}
+        />
+      )}
+
+      {(hasSteps || hasTools) && (
+        <div className="mb-2">
+          <button
+            type="button"
+            onClick={() => setStepsOpen(v => !v)}
+            className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 py-1"
+          >
+            <ChevronDown size={15} className={`transition-transform ${stepsOpen ? 'rotate-180' : ''}`} />
+            <span>
+              {(msg.steps?.length || 0) + (msg.toolCalls?.length || 0)} action{((msg.steps?.length || 0) + (msg.toolCalls?.length || 0)) > 1 ? 's' : ''}
+            </span>
+            {(msg.steps?.some(s => s.status === 'running') || msg.toolCalls?.some(t => t.status === 'running')) && (
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+            )}
+          </button>
+          {stepsOpen && (
+            <div className="pl-1 border-l-2 border-gray-100 ml-1.5 mb-2">
+              {msg.steps?.map((step, i) => <StepIndicator key={`s-${i}`} step={step} />)}
+              {msg.toolCalls?.map((tool, i) => <ToolCallIndicator key={`t-${i}`} tool={tool} />)}
+            </div>
           )}
         </div>
+      )}
+
+      <div className="text-[14px] leading-[2.05] text-gray-900">
+        <div className="break-words">
+          {renderContent(displayContent, 'assistant')}
+          {msg.status === 'streaming' && displayContent && (
+            <span className="ml-0.5 inline-block h-[18px] w-[2px] animate-blink align-text-bottom bg-gray-400" />
+          )}
+        </div>
+        {!displayContent && msg.status === 'streaming' && (
+          <div className="flex items-center gap-1.5 py-2">
+            <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />
+            <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '400ms' }} />
+          </div>
+        )}
       </div>
+
+      {msg.status === 'error' && msg.error && (
+        <div className="mt-3 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2.5">
+          <svg className="mt-0.5 h-4 w-4 shrink-0 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          <span className="text-[13px] text-red-600">{msg.error}</span>
+        </div>
+      )}
+
+      {msg.pendingHumanInput && (
+        <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
+          <span className="text-[12px] text-blue-600">Waiting for your input...</span>
+        </div>
+      )}
+
+      {msg.pendingApproval && (
+        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex items-center gap-2 mb-2">
+            <svg className="h-4 w-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" />
+            </svg>
+            <span className="text-[13px] font-medium text-amber-700">Tool Approval Required</span>
+          </div>
+          <div className="text-[12px] text-amber-600 mb-3">
+            <span className="font-mono bg-amber-100 px-1.5 py-0.5 rounded">{msg.pendingApproval.toolName}</span>
+            {msg.pendingApproval.isDestructive && (
+              <span className="ml-2 text-red-500 text-[11px]">destructive</span>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onApprove?.(msg.pendingApproval!.requestId, true)}
+              className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => onApprove?.(msg.pendingApproval!.requestId, false)}
+              className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+            >
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="relative mt-3.5 flex items-center gap-1.5">
+        <MessageIconButton
+          title={activeAction === 'copy' ? '已复制' : '复制回复'}
+          active={activeAction === 'copy'}
+          onClick={() => { void handleCopyClick('copy', onCopy); }}
+        >
+          <CopyIcon size={17} />
+        </MessageIconButton>
+        {canRegenerate && (
+          <MessageIconButton
+            title="重新生成回复"
+            active={activeAction === 'regenerate'}
+            onClick={() => {
+              onRegenerate();
+              showActionFeedback('regenerate');
+            }}
+          >
+            <RotateCcw size={17} />
+          </MessageIconButton>
+        )}
+        <div ref={menuTriggerRef} className="relative">
+          <MessageIconButton
+            title="更多操作"
+            emphasis
+            onClick={() => setMenuOpen(v => !v)}
+          >
+            <MoreHorizontal size={17} />
+          </MessageIconButton>
+        </div>
+      </div>
+      {menuOpen ? renderMenu() : null}
     </div>
   );
 }
@@ -596,29 +958,297 @@ function ServiceSelector({
   );
 }
 
+function ConversationLlmConfigBar({
+  routeValue,
+  routeOptions,
+  modelValue,
+  modelGroups,
+  effectiveRoute,
+  effectiveRouteLabel,
+  effectiveModel,
+  modelsLoading,
+  disabled,
+  onRouteChange,
+  onModelChange,
+  onReset,
+}: {
+  routeValue: string | undefined;
+  routeOptions: Array<{ value: string; label: string }>;
+  modelValue: string | undefined;
+  modelGroups: LlmModelGroup[];
+  effectiveRoute: string;
+  effectiveRouteLabel: string;
+  effectiveModel: string;
+  modelsLoading: boolean;
+  disabled?: boolean;
+  onRouteChange: (value: string | undefined) => void;
+  onModelChange: (value: string | undefined) => void;
+  onReset: () => void;
+}) {
+  const hasOverride = routeValue !== undefined || !!trimOptional(modelValue);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelPosition, setPanelPosition] = useState<{ top: number; left: number; height: number; width: number } | null>(null);
+  const selectedModel = trimOptional(modelValue) || effectiveModel;
+  const routeChips = [
+    { value: CONVERSATION_ROUTE_DEFAULT_VALUE, label: 'Config default' },
+    ...routeOptions.map(option => ({ value: option.value, label: option.label })),
+  ];
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredGroups = modelGroups
+    .map(group => ({
+      ...group,
+      models: normalizedQuery
+        ? group.models.filter(model => model.toLowerCase().includes(normalizedQuery))
+        : group.models,
+    }))
+    .filter(group => group.models.length > 0);
+  const exactModelMatch = Boolean(
+    query.trim()
+      && modelGroups.some(group => group.models.some(model => model.toLowerCase() === normalizedQuery)),
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setPanelPosition(null);
+      setQuery('');
+      return;
+    }
+
+    const updatePanelPosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) {
+        return;
+      }
+
+      const triggerRect = trigger.getBoundingClientRect();
+      const viewportPadding = 12;
+      const offset = 12;
+      const preferredHeight = 460;
+      const preferredWidth = 380;
+      const panelWidth = Math.min(preferredWidth, window.innerWidth - viewportPadding * 2);
+      const spaceAbove = Math.max(0, triggerRect.top - viewportPadding - offset);
+      const spaceBelow = Math.max(0, window.innerHeight - triggerRect.bottom - viewportPadding - offset);
+      const panelHeight = Math.min(preferredHeight, window.innerHeight - viewportPadding * 2);
+      const preferAbove = spaceAbove >= panelHeight || spaceAbove >= spaceBelow;
+
+      let left = triggerRect.left;
+      left = Math.max(viewportPadding, Math.min(left, window.innerWidth - panelWidth - viewportPadding));
+
+      let top = preferAbove
+        ? triggerRect.top - panelHeight - offset
+        : triggerRect.bottom + offset;
+      top = Math.max(viewportPadding, Math.min(top, window.innerHeight - panelHeight - viewportPadding));
+
+      setPanelPosition({ top, left, height: panelHeight, width: panelWidth });
+    };
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Node)) {
+        return;
+      }
+
+      if (triggerRef.current?.contains(event.target) || panelRef.current?.contains(event.target)) {
+        return;
+      }
+
+      setOpen(false);
+    };
+
+    const rafId = window.requestAnimationFrame(updatePanelPosition);
+    document.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('resize', updatePanelPosition);
+    window.addEventListener('scroll', updatePanelPosition, true);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      document.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('resize', updatePanelPosition);
+      window.removeEventListener('scroll', updatePanelPosition, true);
+    };
+  }, [open]);
+
+  const handleModelSelect = (nextModel: string | undefined) => {
+    onModelChange(trimOptional(nextModel));
+    setOpen(false);
+    setQuery('');
+  };
+
+  const renderPanel = () => {
+    if (!open || typeof document === 'undefined') {
+      return null;
+    }
+
+    return createPortal(
+      <div
+        ref={panelRef}
+        className="scope-chat-llm-panel fixed z-[90] w-[380px] max-w-[calc(100vw-24px)] overflow-hidden"
+        style={panelPosition ? {
+          top: panelPosition.top,
+          left: panelPosition.left,
+          height: panelPosition.height,
+          width: panelPosition.width,
+        } : { visibility: 'hidden', top: 0, left: 0 }}
+      >
+        <div className="scope-chat-llm-panel-header">
+          <div className="scope-chat-llm-panel-title">Conversation model</div>
+          {hasOverride ? (
+            <button
+              type="button"
+              onClick={() => {
+                onReset();
+                setOpen(false);
+              }}
+              className="scope-chat-llm-reset"
+            >
+              Reset
+            </button>
+          ) : null}
+        </div>
+
+        <div className="scope-chat-llm-search">
+          <Search size={15} className="scope-chat-llm-search-icon" />
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && query.trim()) {
+                event.preventDefault();
+                handleModelSelect(query.trim());
+              }
+            }}
+            placeholder={modelsLoading ? 'Loading models...' : 'Search models...'}
+            className="scope-chat-llm-search-input"
+          />
+        </div>
+
+        <div className="scope-chat-llm-route-strip">
+          {routeChips.map(option => {
+            const isActive = encodeRouteSelectValue(routeValue) === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onRouteChange(decodeRouteSelectValue(option.value))}
+                className={`scope-chat-llm-route-chip ${isActive ? 'is-active' : ''}`}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="scope-chat-llm-options">
+          {query.trim() && !exactModelMatch ? (
+            <button
+              type="button"
+              onClick={() => handleModelSelect(query.trim())}
+              className="scope-chat-llm-option scope-chat-llm-option--manual"
+            >
+              <div className="scope-chat-llm-option-main">
+                <Check size={15} className="opacity-0" />
+                <span>Use “{query.trim()}”</span>
+              </div>
+              <span className="scope-chat-llm-option-meta">Manual model</span>
+            </button>
+          ) : null}
+
+          {!modelsLoading && filteredGroups.length === 0 ? (
+            <div className="scope-chat-llm-empty">No models for {effectiveRouteLabel}</div>
+          ) : null}
+
+          {filteredGroups.map(group => (
+            <div key={group.id} className="scope-chat-llm-group">
+              <div className="scope-chat-llm-group-label">{group.label}</div>
+              {group.models.map(model => {
+                const isActive = selectedModel === model;
+                return (
+                  <button
+                    key={model}
+                    type="button"
+                    onClick={() => handleModelSelect(model)}
+                    className={`scope-chat-llm-option ${isActive ? 'is-active' : ''}`}
+                  >
+                    <div className="scope-chat-llm-option-main">
+                      <Check size={15} className={isActive ? 'opacity-100' : 'opacity-0'} />
+                      <span>{model}</span>
+                    </div>
+                    <span className="scope-chat-llm-option-meta">{model}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>,
+      document.body,
+    );
+  };
+
+  return (
+    <div className="scope-chat-llm-bar">
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(value => !value)}
+        className="scope-chat-llm-trigger"
+      >
+        <span className="scope-chat-llm-trigger-label">{selectedModel || 'Provider default'}</span>
+        <ChevronDown
+          size={15}
+          className={`scope-chat-llm-chevron shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      <span className="scope-chat-llm-inline-route">{effectiveRoute === USER_LLM_ROUTE_GATEWAY ? effectiveRouteLabel : `via ${effectiveRouteLabel}`}</span>
+      {renderPanel()}
+    </div>
+  );
+}
+
 // ── Chat Input ──────────────────────────────────────────────────────────────────
 
 function ChatInput({
+  value,
+  onChange,
   onSend,
   onStop,
   isStreaming,
   disabled,
+  focusToken,
+  footer,
 }: {
+  value: string;
+  onChange: (text: string) => void;
   onSend: (text: string) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled: boolean;
+  focusToken: number;
+  footer?: ReactNode;
 }) {
-  const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSend = useCallback(() => {
-    const trimmed = text.trim();
+    const trimmed = value.trim();
     if (!trimmed || isStreaming || disabled) return;
     onSend(trimmed);
-    setText('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, isStreaming, disabled, onSend]);
+  }, [value, isStreaming, disabled, onSend]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+  }, [value]);
+
+  useEffect(() => {
+    if (!focusToken) return;
+    textareaRef.current?.focus();
+  }, [focusToken]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -636,41 +1266,48 @@ function ChatInput({
 
   return (
     <div className="relative">
-      <div className="flex items-end rounded-2xl border border-[#E6E3DE] bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent">
-        <textarea
-          ref={textareaRef}
-          rows={1}
-          className="flex-1 resize-none bg-transparent px-4 py-3 text-[14px] focus:outline-none placeholder:text-gray-400"
-          value={text}
-          onChange={e => { setText(e.target.value); handleInput(); }}
-          onKeyDown={handleKeyDown}
-          placeholder="Send a message..."
-          disabled={disabled}
-        />
-        <div className="flex-shrink-0 p-1.5">
-          {isStreaming ? (
-            <button
-              onClick={onStop}
-              className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
-              title="Stop"
-            >
-              <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                <rect x="6" y="6" width="12" height="12" rx="1" />
-              </svg>
-            </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!text.trim() || disabled}
-              className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#18181B] text-white hover:bg-[#333] disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
-              title="Send"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
-              </svg>
-            </button>
-          )}
+      <div className="rounded-2xl border border-[#E6E3DE] bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent">
+        <div className="flex items-end">
+          <textarea
+            ref={textareaRef}
+            rows={1}
+            className="min-h-[82px] flex-1 resize-none bg-transparent px-4 pt-4 pb-3 text-[14px] focus:outline-none placeholder:text-gray-400"
+            value={value}
+            onChange={e => { onChange(e.target.value); handleInput(); }}
+            onKeyDown={handleKeyDown}
+            placeholder="Send a message..."
+            disabled={disabled}
+          />
+          <div className="flex-shrink-0 p-2">
+            {isStreaming ? (
+              <button
+                onClick={onStop}
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
+                title="Stop"
+              >
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!value.trim() || disabled}
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#18181B] text-white hover:bg-[#333] disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                title="Send"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+                </svg>
+              </button>
+            )}
+          </div>
         </div>
+        {footer ? (
+          <div className="flex items-center gap-3 px-4 pb-3">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -781,8 +1418,9 @@ function ConversationSidebar({
             <div
               key={conv.id}
               className={`group relative w-full text-left px-3 py-2.5 border-b border-[#F0EDE8] transition-colors cursor-pointer ${
-                isActive ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-[#F7F5F2] border-l-2 border-l-transparent'
+                isActive ? 'border-l-2' : 'hover:bg-[#F7F5F2] border-l-2 border-l-transparent'
               }`}
+              style={isActive ? { background: 'var(--accent-soft-end)', borderLeftColor: 'var(--accent)' } : undefined}
               onClick={() => onSelect(conv.id)}
             >
               <div className="text-[13px] font-medium text-gray-700 truncate pr-6">{conv.title || 'Untitled'}</div>
@@ -843,6 +1481,8 @@ export default function ScopePage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [debugEvents, setDebugEvents] = useState<RuntimeEvent[]>([]);
   const [showDebug, setShowDebug] = useState(false);
+  const [composerText, setComposerText] = useState('');
+  const [composerFocusToken, setComposerFocusToken] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -851,6 +1491,13 @@ export default function ScopePage() {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [globalDefaultModel, setGlobalDefaultModel] = useState('');
+  const [globalPreferredRoute, setGlobalPreferredRoute] = useState(USER_LLM_ROUTE_GATEWAY);
+  const [llmProviders, setLlmProviders] = useState<UserConfigProviderStatus[]>([]);
+  const [modelsByProvider, setModelsByProvider] = useState<Record<string, string[]>>({});
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [conversationRoute, setConversationRoute] = useState<string | undefined>(undefined);
+  const [conversationModel, setConversationModel] = useState<string | undefined>(undefined);
 
   // Load services on mount
   useEffect(() => {
@@ -878,12 +1525,116 @@ export default function ScopePage() {
     }).catch(() => {});
   }, [scopeId]);
 
+  useEffect(() => {
+    if (!scopeId) return;
+    let cancelled = false;
+    setModelsLoading(true);
+
+    (async () => {
+      try {
+        const [userConfigData, modelData] = await Promise.all([
+          api.userConfig.get(),
+          api.userConfig.models(),
+        ]);
+        if (cancelled) return;
+        setGlobalDefaultModel(trimOptional(userConfigData?.defaultModel) || '');
+        setGlobalPreferredRoute(normalizeUserLlmRoute(userConfigData?.preferredLlmRoute));
+        setLlmProviders(modelData?.providers ?? []);
+        setModelsByProvider(modelData?.models_by_provider ?? {});
+      } catch {
+        if (cancelled) return;
+        setGlobalDefaultModel('');
+        setGlobalPreferredRoute(USER_LLM_ROUTE_GATEWAY);
+        setLlmProviders([]);
+        setModelsByProvider({});
+      } finally {
+        if (!cancelled) {
+          setModelsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scopeId]);
+
   // Auto-scroll on new messages
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const activeService = services.find(s => s.id === selectedService) || services[0];
+  const readyProviders = useMemo(
+    () => llmProviders.filter(provider => provider.status === 'ready'),
+    [llmProviders],
+  );
+  const gatewayProviders = useMemo(
+    () => readyProviders.filter(provider => (provider.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) === USER_CONFIG_PROVIDER_SOURCE_GATEWAY),
+    [readyProviders],
+  );
+  const serviceProviders = useMemo(
+    () => llmProviders.filter(provider => provider.source === USER_CONFIG_PROVIDER_SOURCE_SERVICE),
+    [llmProviders],
+  );
+  const routeOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [
+      { value: USER_LLM_ROUTE_GATEWAY, label: 'NyxID Gateway' },
+    ];
+    const seen = new Set(options.map(option => option.value));
+
+    for (const provider of serviceProviders) {
+      const route = routePathFromProviderSlug(provider.provider_slug);
+      if (!provider.provider_slug || seen.has(route)) continue;
+      seen.add(route);
+      options.push({
+        value: route,
+        label: provider.provider_name || provider.provider_slug,
+      });
+    }
+
+    for (const route of [globalPreferredRoute, conversationRoute]) {
+      if (route && !seen.has(route)) {
+        seen.add(route);
+        options.push({ value: route, label: route });
+      }
+    }
+
+    return options;
+  }, [conversationRoute, globalPreferredRoute, serviceProviders]);
+  const effectiveRoute = conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
+  const effectiveRouteLabel = describeRoute(effectiveRoute, routeOptions);
+  const effectiveModel = trimOptional(conversationModel) || globalDefaultModel;
+  const modelGroups = useMemo<LlmModelGroup[]>(() => {
+    const providerGroup = effectiveRoute === USER_LLM_ROUTE_GATEWAY
+      ? gatewayProviders
+      : llmProviders.filter(provider => routePathFromProviderSlug(provider.provider_slug) === effectiveRoute);
+    const groups: LlmModelGroup[] = providerGroup
+      .map(provider => {
+        const models = Array.from(new Set((modelsByProvider[provider.provider_slug] || []).filter(Boolean)));
+        return {
+          id: provider.provider_slug || provider.provider_name,
+          label: provider.provider_name || provider.provider_slug,
+          models,
+        };
+      })
+      .filter(group => group.models.length > 0);
+
+    const selected = trimOptional(conversationModel) || trimOptional(globalDefaultModel);
+    if (selected && !groups.some(group => group.models.includes(selected))) {
+      groups.unshift({
+        id: '__current__',
+        label: 'Current',
+        models: [selected],
+      });
+    }
+
+    return groups;
+  }, [conversationModel, effectiveRoute, gatewayProviders, globalDefaultModel, llmProviders, modelsByProvider]);
+  const conversationHeaders = useMemo(
+    () => buildConversationHeaders(conversationRoute, conversationModel),
+    [conversationModel, conversationRoute],
+  );
 
   // Auto-create new chat when switching services
   const prevServiceRef = useRef(selectedService);
@@ -893,6 +1644,9 @@ export default function ScopePage() {
       setMessages([]);
       setDebugEvents([]);
       setActiveConvId(null);
+      setComposerText('');
+      setConversationRoute(undefined);
+      setConversationModel(undefined);
     }
   }, [selectedService]);
 
@@ -910,16 +1664,10 @@ export default function ScopePage() {
   }, [scopeId]);
 
   // Save current conversation to chrono-storage (called after streaming completes)
-  const saveCurrentConversation = useCallback((msgs: ChatMessage[]) => {
-    if (!scopeId || msgs.length === 0) return;
-    // Actor ID = conversation identity.
-    // nyxid-chat: deterministic (same actor reused, server-side history).
-    // Other services: unique per conversation (new actor per chat session).
-    const actorId = activeService.kind === 'nyxid-chat'
-      ? `NyxIdChat:${scopeId}`
-      : `${activeService.id}:${genId()}`;
-    // Conversation ID = actor ID
-    const convId = activeConvId || actorId;
+  const saveCurrentConversation = useCallback((msgs: ChatMessage[], actorIdOverride?: string) => {
+    const actorId = trimOptional(actorIdOverride) || trimOptional(activeConvId ?? undefined);
+    if (!scopeId || msgs.length === 0 || !actorId) return;
+    const convId = actorId;
     const firstUserMsg = msgs.find(m => m.role === 'user');
     const title = (firstUserMsg?.content || 'Untitled').slice(0, 60);
     const now = new Date().toISOString();
@@ -940,6 +1688,8 @@ export default function ScopePage() {
       createdAt: conversations.find(c => c.id === convId)?.createdAt || now,
       updatedAt: now,
       messageCount: storedMsgs.length,
+      ...(conversationRoute !== undefined ? { llmRoute: conversationRoute } : {}),
+      ...(trimOptional(conversationModel) ? { llmModel: trimOptional(conversationModel) } : {}),
     };
     // Update local state immediately
     setActiveConvId(convId);
@@ -952,7 +1702,67 @@ export default function ScopePage() {
     saveTimerRef.current = setTimeout(() => {
       api.chatHistory.saveConversation(scopeId, convId, meta, storedMsgs).catch(() => {});
     }, 500);
-  }, [scopeId, activeConvId, activeService, conversations]);
+  }, [scopeId, activeConvId, activeService, conversationModel, conversationRoute, conversations]);
+
+  const persistConversationOverrides = useCallback((
+    nextRoute: string | undefined,
+    nextModel: string | undefined,
+  ) => {
+    if (!scopeId || !activeConvId || isStreaming || messages.length === 0) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const existing = conversations.find(conv => conv.id === activeConvId);
+    const firstUserMsg = messages.find(message => message.role === 'user');
+    const title = (existing?.title || firstUserMsg?.content || 'Untitled').slice(0, 60);
+    const storedMsgs = messages
+      .filter(message => message.status !== 'streaming')
+      .map(message => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
+        status: message.status === 'streaming' ? 'complete' : message.status,
+        ...(message.error ? { error: message.error } : {}),
+        ...(message.thinking ? { thinking: message.thinking } : {}),
+      }));
+    const meta: ConversationMeta = {
+      id: activeConvId,
+      actorId: existing?.actorId,
+      title,
+      serviceId: existing?.serviceId || activeService.id,
+      serviceKind: existing?.serviceKind || activeService.kind,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      messageCount: storedMsgs.length,
+      ...(nextRoute !== undefined ? { llmRoute: nextRoute } : {}),
+      ...(trimOptional(nextModel) ? { llmModel: trimOptional(nextModel) } : {}),
+    };
+
+    setConversations(prev => [meta, ...prev.filter(conv => conv.id !== activeConvId)]);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      api.chatHistory.saveConversation(scopeId, activeConvId, meta, storedMsgs).catch(() => {});
+    }, 300);
+  }, [scopeId, activeConvId, isStreaming, messages, conversations, activeService]);
+
+  const handleConversationRouteChange = useCallback((value: string | undefined) => {
+    setConversationRoute(value);
+    persistConversationOverrides(value, conversationModel);
+  }, [conversationModel, persistConversationOverrides]);
+
+  const handleConversationModelChange = useCallback((value: string | undefined) => {
+    const normalized = trimOptional(value);
+    setConversationModel(normalized);
+    persistConversationOverrides(conversationRoute, normalized);
+  }, [conversationRoute, persistConversationOverrides]);
+
+  const handleResetConversationLlm = useCallback(() => {
+    setConversationRoute(undefined);
+    setConversationModel(undefined);
+    persistConversationOverrides(undefined, undefined);
+  }, [persistConversationOverrides]);
 
   // ── Send / regenerate message ──
   const streamChatTurn = useCallback(async (
@@ -993,6 +1803,7 @@ export default function ScopePage() {
     const events: RuntimeEvent[] = [];
     const steps: StepInfo[] = [];
     const toolCalls: ToolCallInfo[] = [];
+    let resolvedActorId = trimOptional(activeConvId ?? undefined) || '';
     let thinking = '';
     let contentText = '';
     let lastWasReasoning = false;
@@ -1013,6 +1824,11 @@ export default function ScopePage() {
       if (!evt) return;
       events.push(evt);
       setDebugEvents([...events]);
+
+      if (!resolvedActorId && evt.type === 'RUN_STARTED' && typeof evt.threadId === 'string' && evt.threadId.trim()) {
+        resolvedActorId = evt.threadId.trim();
+        setActiveConvId(prev => prev || resolvedActorId);
+      }
 
       const wasReasoning = lastWasReasoning;
       lastWasReasoning = false;
@@ -1062,12 +1878,76 @@ export default function ScopePage() {
           break;
         }
 
+        case 'TOOL_APPROVAL_REQUEST': {
+          updateAssistant({
+            pendingApproval: {
+              requestId: String(evt.requestId || ''),
+              toolName: String(evt.toolName || ''),
+              toolCallId: String(evt.toolCallId || ''),
+              argumentsJson: String(evt.argumentsJson || ''),
+              isDestructive: !!evt.isDestructive,
+              timeoutSeconds: typeof evt.timeoutSeconds === 'number' ? evt.timeoutSeconds : 15,
+            },
+          });
+          break;
+        }
+
+        case 'HUMAN_INPUT_REQUEST': {
+          const prompt = String(evt.prompt || '');
+          updateAssistant({
+            content: prompt || 'Waiting for your input...',
+            status: 'complete',
+            pendingHumanInput: {
+              stepId: String(evt.stepId || ''),
+              runId: String(evt.runId || ''),
+              prompt,
+            },
+          });
+          break;
+        }
+
         case 'RUN_ERROR': {
           updateAssistant({ status: 'error', error: String(evt.message || 'Unknown error') });
           break;
         }
 
         case 'CUSTOM': {
+          // TOOL_APPROVAL_REQUEST arrives as CUSTOM from the generic AGUI endpoint.
+          // Payload is a protobuf Any wrapping a Struct, so fields may be under .value
+          if (String(evt.name || '') === 'TOOL_APPROVAL_REQUEST') {
+            const raw = (evt.payload ?? evt.value ?? {}) as any;
+            const p = (raw?.value ?? raw) as any;
+            updateAssistant({
+              pendingApproval: {
+                requestId: String(p.requestId ?? p.request_id ?? ''),
+                toolName: String(p.toolName ?? p.tool_name ?? ''),
+                toolCallId: String(p.toolCallId ?? p.tool_call_id ?? ''),
+                argumentsJson: String(p.argumentsJson ?? p.arguments_json ?? ''),
+                isDestructive: !!(p.isDestructive ?? p.is_destructive),
+                timeoutSeconds: typeof p.timeoutSeconds === 'number' ? p.timeoutSeconds
+                  : typeof p.timeout_seconds === 'number' ? p.timeout_seconds : 15,
+              },
+            });
+            break;
+          }
+
+          // human_input request arrives as CUSTOM from workflow endpoints
+          if (String(evt.name || '') === 'aevatar.human_input.request') {
+            const raw = (evt.payload ?? evt.value ?? {}) as any;
+            const p = (raw?.value ?? raw) as any;
+            const prompt = String(p?.prompt ?? p?.Prompt ?? '');
+            updateAssistant({
+              content: prompt || 'Waiting for your input...',
+              status: 'complete',
+              pendingHumanInput: {
+                stepId: String(p?.stepId ?? p?.step_id ?? ''),
+                runId: String(p?.runId ?? p?.run_id ?? ''),
+                prompt,
+              },
+            });
+            break;
+          }
+
           const stepOutput = extractStepCompletedOutput(evt);
           if (stepOutput && !contentText) {
             contentText = stepOutput;
@@ -1094,20 +1974,20 @@ export default function ScopePage() {
     };
 
     try {
+      const requestActorId = trimOptional(activeConvId ?? undefined) || undefined;
       if (activeService.kind === 'nyxid-chat') {
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
             scopeId,
             'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
-            `NyxIdChat:${scopeId}`,
             'NyxID Chat',
             'nyxid-chat',
           );
           nyxidChatBoundRef.current = true;
         }
-        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal);
+        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
       } else {
-        await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal);
+        await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
       }
 
       setMessages(prev => {
@@ -1116,7 +1996,7 @@ export default function ScopePage() {
         if (last?.role === 'assistant' && last.status !== 'error') {
           updated[updated.length - 1] = { ...last, status: 'complete', events, steps: [...steps], toolCalls: [...toolCalls], thinking };
         }
-        saveCurrentConversation(updated);
+        saveCurrentConversation(updated, resolvedActorId);
         return updated;
       });
     } catch (e: any) {
@@ -1126,7 +2006,7 @@ export default function ScopePage() {
           status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
         });
         setMessages(prev => {
-          saveCurrentConversation(prev);
+          saveCurrentConversation(prev, resolvedActorId);
           return prev;
         });
       }
@@ -1134,16 +2014,63 @@ export default function ScopePage() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, messages, activeService, saveCurrentConversation]);
+  }, [scopeId, isStreaming, messages, activeService, conversationHeaders, saveCurrentConversation]);
 
   const handleSend = useCallback((text: string) => {
-    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true });
-  }, [messages, streamChatTurn]);
+    setComposerText('');
 
-  const handleRegenerate = useCallback((assistantIndex: number) => {
+    // Check if the last assistant message has a pending human_input request.
+    // If so, resume the workflow run instead of starting a new chat turn.
+    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+    if (lastAssistant?.pendingHumanInput && scopeId) {
+      const { stepId, runId } = lastAssistant.pendingHumanInput;
+      // Clear the pending state and add user message
+      setMessages(prev => {
+        const updated = prev.map(m =>
+          m.id === lastAssistant.id ? { ...m, pendingHumanInput: undefined } : m,
+        );
+        updated.push({
+          id: `user-${Date.now()}`,
+          role: 'user',
+          content: text,
+          timestamp: Date.now(),
+          status: 'complete',
+        });
+        return updated;
+      });
+      // Resume the workflow with user input
+      void api.scope.resumeRun(scopeId, runId, { stepId, userInput: text, approved: true })
+        .then(() => {
+          // After resume, the SSE stream from the original run should continue delivering events.
+          // If the run was a draft-run, the SSE connection may already be closed.
+          // In that case, we'd need to re-subscribe. For now, trust the existing stream.
+        })
+        .catch((err: any) => {
+          setMessages(prev => {
+            const updated = [...prev];
+            updated.push({
+              id: `error-${Date.now()}`,
+              role: 'assistant',
+              content: '',
+              timestamp: Date.now(),
+              status: 'error',
+              error: `Failed to resume workflow: ${err?.message || 'Unknown error'}`,
+            });
+            return updated;
+          });
+        });
+      return;
+    }
+
+    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true });
+  }, [messages, streamChatTurn, scopeId]);
+
+  const handleRegenerate = useCallback((messageIndex: number) => {
     if (isStreaming) return;
 
-    const userIndex = findPreviousUserMessageIndex(messages, assistantIndex);
+    const userIndex = messages[messageIndex]?.role === 'user'
+      ? messageIndex
+      : findPreviousUserMessageIndex(messages, messageIndex);
     if (userIndex < 0) return;
 
     const prompt = messages[userIndex]?.content.trim();
@@ -1152,6 +2079,45 @@ export default function ScopePage() {
     const baseMessages = messages.slice(0, userIndex + 1);
     void streamChatTurn(prompt, { baseMessages, includeUserMessage: false });
   }, [isStreaming, messages, streamChatTurn]);
+
+  const handleDeleteMessage = useCallback(async (messageIndex: number) => {
+    const nextMessages = messages.slice(0, messageIndex);
+    setMessages(nextMessages);
+    setDebugEvents([]);
+
+    if (nextMessages.length === 0) {
+      if (scopeId && activeConvId) {
+        try {
+          await api.chatHistory.deleteConversation(scopeId, activeConvId);
+        } catch {
+          // Ignore delete failures and still clear local state.
+        }
+      }
+      setActiveConvId(null);
+      setConversationRoute(undefined);
+      setConversationModel(undefined);
+      setConversations(prev => prev.filter(conv => conv.id !== activeConvId));
+      return;
+    }
+
+    saveCurrentConversation(nextMessages);
+  }, [messages, scopeId, activeConvId, saveCurrentConversation]);
+
+  const handleEditMessage = useCallback((messageIndex: number) => {
+    const message = messages[messageIndex];
+    if (!message || message.role !== 'user') {
+      return;
+    }
+
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsStreaming(false);
+    setComposerText(message.content);
+    setComposerFocusToken(token => token + 1);
+    setMessages(messages.slice(0, messageIndex));
+    setDebugEvents([]);
+    setActiveConvId(null);
+  }, [messages]);
 
   const handleCopyMessage = useCallback((msg: ChatMessage) => {
     return copyTextToClipboard(buildMessageCopyText(msg));
@@ -1165,6 +2131,155 @@ export default function ScopePage() {
     return copyTextToClipboard(buildMessagePlainText(msg));
   }, []);
 
+  const handleToolApproval = useCallback(async (requestId: string, approved: boolean) => {
+    if (!scopeId) return;
+    const activeService = services.find(s => s.id === selectedService);
+    if (!activeService) return;
+    if (activeService.kind !== 'nyxid-chat') return;
+    const targetMessage = messages.find(message =>
+      message.role === 'assistant' && message.pendingApproval?.requestId === requestId,
+    );
+    if (!targetMessage) return;
+
+    const actorId = trimOptional(activeConvId ?? undefined);
+    if (!actorId) return;
+    const targetMessageId = targetMessage.id;
+
+    const clearPendingApproval = (items: ChatMessage[]) =>
+      items.map(message =>
+        message.pendingApproval?.requestId === requestId
+          ? { ...message, pendingApproval: undefined }
+          : message,
+      );
+
+    if (!approved) {
+      setMessages(prev => {
+        const updated = clearPendingApproval(prev);
+        saveCurrentConversation(updated);
+        return updated;
+      });
+      return;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setIsStreaming(true);
+    setDebugEvents([]);
+    setMessages(prev => prev.map(message =>
+      message.id === targetMessageId
+        ? { ...message, pendingApproval: undefined, status: 'streaming' }
+        : message,
+    ));
+
+    const events: RuntimeEvent[] = [...(targetMessage.events ?? [])];
+    const toolCalls: ToolCallInfo[] = (targetMessage.toolCalls ?? []).map(toolCall => ({ ...toolCall }));
+    let contentText = targetMessage.content;
+
+    const updateApprovalAssistant = (patch: Partial<ChatMessage>) => {
+      setMessages(prev => prev.map(message =>
+        message.id === targetMessageId
+          ? { ...message, ...patch }
+          : message,
+      ));
+    };
+
+    const finalizeApprovalAssistant = (status: ChatMessage['status'], error?: string) => {
+      setMessages(prev => {
+        const updated = prev.map(message => {
+          if (message.id !== targetMessageId) {
+            return message;
+          }
+
+          const nextStatus = status === 'complete' && message.status === 'error'
+            ? 'error'
+            : status;
+          return {
+            ...message,
+            status: nextStatus,
+            ...(error ? { error } : {}),
+            events,
+            toolCalls: [...toolCalls],
+          };
+        });
+        saveCurrentConversation(updated);
+        return updated;
+      });
+    };
+
+    try {
+      await api.nyxidChat.approveToolCall(
+        scopeId,
+        actorId,
+        requestId,
+        true,
+        (frame: any) => {
+          const evt = normalizeBackendSseFrame(frame);
+          if (!evt) return;
+
+          events.push(evt);
+          setDebugEvents([...events]);
+
+          switch (evt.type) {
+            case 'TEXT_MESSAGE_CONTENT': {
+              contentText += String(evt.delta || '');
+              updateApprovalAssistant({ content: contentText });
+              break;
+            }
+            case 'TOOL_CALL_START': {
+              toolCalls.push({
+                id: String(evt.toolCallId || ''),
+                name: String(evt.toolName || ''),
+                status: 'running',
+              });
+              updateApprovalAssistant({ toolCalls: [...toolCalls] });
+              break;
+            }
+            case 'TOOL_CALL_END': {
+              const callId = String(evt.toolCallId || '');
+              const existing = toolCalls.find(toolCall => toolCall.id === callId && toolCall.status === 'running');
+              if (existing) {
+                existing.status = 'done';
+                existing.result = String(evt.result || '');
+              }
+              updateApprovalAssistant({ toolCalls: [...toolCalls] });
+              break;
+            }
+            case 'TOOL_APPROVAL_REQUEST': {
+              updateApprovalAssistant({
+                pendingApproval: {
+                  requestId: String(evt.requestId || ''),
+                  toolName: String(evt.toolName || ''),
+                  toolCallId: String(evt.toolCallId || ''),
+                  argumentsJson: String(evt.argumentsJson || ''),
+                  isDestructive: !!evt.isDestructive,
+                  timeoutSeconds: typeof evt.timeoutSeconds === 'number' ? evt.timeoutSeconds : 15,
+                },
+              });
+              break;
+            }
+            case 'RUN_ERROR': {
+              updateApprovalAssistant({ status: 'error', error: String(evt.message || 'Error') });
+              break;
+            }
+          }
+        },
+        controller.signal,
+      );
+
+      finalizeApprovalAssistant('complete');
+    } catch (err) {
+      if ((err as Error | undefined)?.name === 'AbortError') {
+        finalizeApprovalAssistant('complete');
+      } else {
+        finalizeApprovalAssistant('error', err instanceof Error ? err.message : 'Approval failed');
+      }
+    } finally {
+      setIsStreaming(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+    }
+  }, [scopeId, selectedService, services, messages, activeConvId, saveCurrentConversation]);
+
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
   }, []);
@@ -1173,7 +2288,9 @@ export default function ScopePage() {
     setMessages([]);
     setDebugEvents([]);
     setActiveConvId(null);
-    nyxidChatBoundRef.current = false;
+    setComposerText('');
+    setConversationRoute(undefined);
+    setConversationModel(undefined);
   }, []);
 
   const handleSelectConversation = useCallback(async (convId: string) => {
@@ -1192,7 +2309,10 @@ export default function ScopePage() {
         error: m.error ?? undefined, thinking: m.thinking ?? undefined,
       })));
       setActiveConvId(convId);
+      setConversationRoute(conv?.llmRoute);
+      setConversationModel(trimOptional(conv?.llmModel));
       setDebugEvents([]);
+      setComposerText('');
     } catch { /* ignore */ }
   }, [scopeId, activeConvId, conversations, selectedService]);
 
@@ -1204,6 +2324,8 @@ export default function ScopePage() {
       if (activeConvId === convId) {
         setMessages([]);
         setActiveConvId(null);
+        setConversationRoute(undefined);
+        setConversationModel(undefined);
         setDebugEvents([]);
       }
     } catch { /* ignore */ }
@@ -1287,7 +2409,7 @@ export default function ScopePage() {
       const prompt = parsed.prompt || '';
       const serviceId = activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id;
       if (activeService.kind === 'nyxid-chat' && !nyxidChatBoundRef.current) {
-        await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', `NyxIdChat:${scopeId}`, 'NyxID Chat', 'nyxid-chat');
+        await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', 'NyxID Chat', 'nyxid-chat');
         nyxidChatBoundRef.current = true;
       }
       await api.scope.streamInvoke(scopeId, serviceId, prompt, (frame) => {
@@ -1368,9 +2490,9 @@ export default function ScopePage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="scope-page flex flex-col h-full">
       {/* Header */}
-      <header className="flex-shrink-0 border-b border-[#E6E3DE] bg-white/95 backdrop-blur-sm px-5">
+      <header className="workspace-page-header flex-shrink-0 border-b border-[#E6E3DE] bg-white/95 backdrop-blur-sm px-5">
         <div className="h-[52px] flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="text-[14px] font-semibold text-gray-800">Console</div>
@@ -1386,8 +2508,13 @@ export default function ScopePage() {
             <button
               onClick={() => setShowDebug(v => !v)}
               className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition-colors ${
-                showDebug ? 'border-blue-300 bg-blue-50 text-blue-600' : 'border-[#E6E3DE] text-gray-400 hover:bg-[#F7F5F2]'
+                showDebug ? '' : 'border-[#E6E3DE] text-gray-400 hover:bg-[#F7F5F2]'
               }`}
+              style={showDebug ? {
+                borderColor: 'rgba(var(--accent-rgb), 0.28)',
+                background: 'var(--accent-soft-end)',
+                color: 'var(--accent-text)',
+              } : undefined}
             >
               Debug
             </button>
@@ -1688,7 +2815,13 @@ export default function ScopePage() {
         <div className="max-w-3xl mx-auto py-6 px-4 space-y-5">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mb-4 shadow-lg shadow-indigo-200">
+              <div
+                className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4 shadow-lg"
+                style={{
+                  background: 'linear-gradient(135deg, var(--accent-gradient-start) 0%, var(--accent-gradient-end) 100%)',
+                  boxShadow: '0 16px 32px var(--accent-shadow-strong)',
+                }}
+              >
                 <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
                 </svg>
@@ -1707,11 +2840,15 @@ export default function ScopePage() {
             <ChatBubble
               key={msg.id}
               msg={msg}
-              canRegenerate={msg.role === 'assistant' && !isStreaming && findPreviousUserMessageIndex(messages, index) >= 0}
+              canRegenerate={!isStreaming && (msg.role === 'user' || findPreviousUserMessageIndex(messages, index) >= 0)}
+              canEdit={msg.role === 'user'}
               onCopy={handleCopyMessage}
               onCopyMarkdown={handleCopyMessageMarkdown}
               onCopyPlainText={handleCopyMessagePlainText}
               onRegenerate={() => handleRegenerate(index)}
+              onEdit={() => handleEditMessage(index)}
+              onDelete={() => { void handleDeleteMessage(index); }}
+              onApprove={handleToolApproval}
             />
           ))}
           <div ref={scrollRef} />
@@ -1729,13 +2866,34 @@ export default function ScopePage() {
       <div className="flex-shrink-0 border-t border-[#E6E3DE] bg-white px-4 py-3">
         <div className="max-w-3xl mx-auto">
           <ChatInput
+            value={composerText}
+            onChange={setComposerText}
             onSend={handleSend}
             onStop={handleStop}
             isStreaming={isStreaming}
             disabled={!scopeId}
+            focusToken={composerFocusToken}
+            footer={(
+              <ConversationLlmConfigBar
+                routeValue={conversationRoute}
+                routeOptions={routeOptions}
+                modelValue={conversationModel}
+                modelGroups={modelGroups}
+                effectiveRoute={effectiveRoute}
+                effectiveRouteLabel={effectiveRouteLabel}
+                effectiveModel={effectiveModel}
+                modelsLoading={modelsLoading}
+                disabled={isStreaming || !scopeId}
+                onRouteChange={handleConversationRouteChange}
+                onModelChange={handleConversationModelChange}
+                onReset={handleResetConversationLlm}
+              />
+            )}
           />
           <div className="mt-1.5 text-center text-[11px] text-gray-300">
             Service: {activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id}
+            {' · Route: '}{effectiveRouteLabel}
+            {' · Model: '}{effectiveModel || 'provider default'}
             {' · Scope: '}{scopeId.slice(0, 16)}...
           </div>
         </div>

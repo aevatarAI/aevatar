@@ -15,8 +15,8 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
 
     public string Description =>
         "Manage channel bots (Telegram, Discord, Lark, Feishu) and conversation routes. " +
-        "Actions: list, show, register (platform + bot_token), delete, verify, " +
-        "routes (list routes), create_route (bot_id + agent api_key_id), delete_route.";
+        "Bot actions: list, show, register, delete, verify. " +
+        "Route actions: routes, show_route, create_route, delete_route.";
 
     public string ParametersSchema => """
         {
@@ -24,12 +24,12 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "register", "delete", "verify", "routes", "create_route", "delete_route"],
+              "enum": ["list", "show", "register", "delete", "verify", "routes", "show_route", "create_route", "delete_route"],
               "description": "Action to perform (default: list)"
             },
             "id": {
               "type": "string",
-              "description": "Bot ID (for show/delete/verify) or route ID (for delete_route)"
+              "description": "Bot ID (for show/delete/verify) or route ID (for show_route/delete_route)"
             },
             "platform": {
               "type": "string",
@@ -44,13 +44,26 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
               "type": "string",
               "description": "Label for the bot (for register)"
             },
-            "bot_id": {
+            "channel_bot_id": {
               "type": "string",
               "description": "Bot ID (for create_route)"
             },
-            "api_key_id": {
+            "agent_api_key_id": {
               "type": "string",
-              "description": "NyxID API key ID with callback_url (for create_route)"
+              "description": "NyxID API key ID with callback_url configured (for create_route)"
+            },
+            "platform_conversation_id": {
+              "type": "string",
+              "description": "Platform chat ID, or '*' for default/wildcard (for create_route)"
+            },
+            "platform_conversation_type": {
+              "type": "string",
+              "enum": ["private", "group", "channel"],
+              "description": "Conversation type (for create_route, default: private)"
+            },
+            "default_agent": {
+              "type": "boolean",
+              "description": "Make this the default agent for the bot (for create_route)"
             }
           }
         }
@@ -75,12 +88,15 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
             "verify" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.VerifyChannelBotAsync(token, id, ct),
             "register" => await RegisterBotAsync(token, args, ct),
+
             "routes" => await _client.ListConversationRoutesAsync(token, ct),
+            "show_route" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetConversationRouteAsync(token, id, ct),
             "create_route" => await CreateRouteAsync(token, args, ct),
             "delete_route" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteConversationRouteAsync(token, id, ct),
 
-            "show" or "delete" or "verify" or "delete_route" =>
+            "show" or "delete" or "verify" or "show_route" or "delete_route" =>
                 $"{{\"error\":\"'id' is required for {action}\"}}",
             _ => await _client.ListChannelBotsAsync(token, ct),
         };
@@ -102,12 +118,26 @@ public sealed class NyxIdChannelBotsTool : IAgentTool
 
     private async Task<string> CreateRouteAsync(string token, ToolArgs args, CancellationToken ct)
     {
-        var botId = args.Str("bot_id");
-        var apiKeyId = args.Str("api_key_id");
+        var botId = args.Str("channel_bot_id") ?? args.Str("bot_id");
+        var apiKeyId = args.Str("agent_api_key_id") ?? args.Str("api_key_id");
         if (string.IsNullOrWhiteSpace(botId) || string.IsNullOrWhiteSpace(apiKeyId))
-            return """{"error":"'bot_id' and 'api_key_id' are required for create_route"}""";
+            return """{"error":"'channel_bot_id' and 'agent_api_key_id' are required for create_route"}""";
 
-        return await _client.CreateConversationRouteAsync(token,
-            JsonSerializer.Serialize(new { bot_id = botId, api_key_id = apiKeyId }), ct);
+        var payload = new Dictionary<string, object?>
+        {
+            ["channel_bot_id"] = botId,
+            ["agent_api_key_id"] = apiKeyId,
+        };
+
+        var convId = args.Str("platform_conversation_id");
+        if (!string.IsNullOrWhiteSpace(convId)) payload["platform_conversation_id"] = convId;
+
+        var convType = args.Str("platform_conversation_type");
+        if (!string.IsNullOrWhiteSpace(convType)) payload["platform_conversation_type"] = convType;
+
+        var defaultAgent = args.Bool("default_agent");
+        if (defaultAgent.HasValue) payload["default_agent"] = defaultAgent.Value;
+
+        return await _client.CreateConversationRouteAsync(token, JsonSerializer.Serialize(payload), ct);
     }
 }

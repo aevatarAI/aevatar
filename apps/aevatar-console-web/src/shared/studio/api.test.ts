@@ -303,7 +303,6 @@ describe('studioApi host-session requests', () => {
         expectedActorId: 'orders-gagent:dep-1',
         gAgent: {
           actorTypeName: 'Tests.OrdersGAgent, Tests',
-          preferredActorId: 'orders-gagent',
         },
       }),
     } as Response);
@@ -313,7 +312,6 @@ describe('studioApi host-session requests', () => {
       scopeId: 'scope-1',
       displayName: 'orders-gagent',
       actorTypeName: 'Tests.OrdersGAgent, Tests',
-      preferredActorId: 'orders-gagent',
       revisionId: 'rev-1',
       endpoints: [
         {
@@ -328,10 +326,9 @@ describe('studioApi host-session requests', () => {
 
     expect(result.implementationKind).toBe('gagent');
     expect(result.targetKind).toBe('gagent');
-    expect(result.targetName).toBe('orders-gagent');
+    expect(result.targetName).toBe('Tests.OrdersGAgent, Tests');
     expect(result.gAgent).toEqual({
       actorTypeName: 'Tests.OrdersGAgent, Tests',
-      preferredActorId: 'orders-gagent',
     });
 
     const [input, init] = fetchMock.mock.calls[0] as [
@@ -345,7 +342,6 @@ describe('studioApi host-session requests', () => {
       displayName: 'orders-gagent',
       gagent: {
         actorTypeName: 'Tests.OrdersGAgent, Tests',
-        preferredActorId: 'orders-gagent',
         endpoints: [
           {
             endpointId: 'run',

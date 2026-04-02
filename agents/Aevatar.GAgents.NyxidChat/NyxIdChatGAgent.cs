@@ -22,6 +22,8 @@ namespace Aevatar.GAgents.NyxidChat;
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private readonly SkillRegistry? _skillRegistry;
+    private readonly IToolApprovalHandler? _remoteApprovalHandler;
+    private readonly NyxIdRelayOptions? _relayOptions;
 
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -31,31 +33,20 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         SkillRegistry? skillRegistry = null,
-        IToolApprovalHandler? approvalHandler = null)
+        IToolApprovalHandler? approvalHandler = null,
+        NyxIdRelayOptions? relayOptions = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
-               approvalHandler: ComposeApprovalHandler(approvalHandler))
+               approvalHandler: new YieldApprovalHandler())
     {
         _skillRegistry = skillRegistry;
+        // Keep reference to the DI-injected remote handler (NyxIdToolApprovalHandler)
+        // for timeout escalation in HandleToolApprovalTimeout.
+        _remoteApprovalHandler = approvalHandler;
+        _relayOptions = relayOptions;
     }
 
-    /// <summary>
-    /// Compose the approval handler chain.
-    /// Currently goes directly to NyxID remote approval (Telegram / mobile app, 45s poll)
-    /// because local chat-based approval is blocked by the actor single-thread model:
-    /// the grain cannot process ToolApprovalDecisionEvent while HandleChatRequest
-    /// holds the write scope, causing an inevitable 15s deadlock-timeout.
-    ///
-    /// TODO: Once the actor model supports reentrant event handling for approval decisions
-    /// (e.g. via a separate approval inbox or cooperative scheduling), compose as:
-    ///   new PriorityApprovalHandler(new LocalApprovalHandler(), remoteHandler)
-    /// to enable local-first + NyxID-remote-fallback.
-    /// </summary>
-    private static IToolApprovalHandler? ComposeApprovalHandler(IToolApprovalHandler? remoteHandler)
-    {
-        // Remote handler (NyxIdToolApprovalHandler) is injected from DI.
-        // Local handler is skipped until the reentrancy issue is resolved.
-        return remoteHandler;
-    }
+    /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
+    protected override IToolApprovalHandler? ResolveRemoteApprovalHandler() => _remoteApprovalHandler;
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
@@ -76,14 +67,33 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     /// </summary>
     protected override string DecorateSystemPrompt(string basePrompt)
     {
-        if (_skillRegistry == null || _skillRegistry.Count == 0)
-            return basePrompt;
+        var prompt = basePrompt;
 
-        var skillSection = _skillRegistry.BuildSystemPromptSection();
-        if (string.IsNullOrEmpty(skillSection))
-            return basePrompt;
+        // Inject relay callback URL so the agent can auto-configure channel bots
+        if (!string.IsNullOrWhiteSpace(_relayOptions?.RelayCallbackUrl))
+        {
+            prompt += $"""
 
-        return basePrompt + "\n" + skillSection;
+## Relay Configuration (Auto-Injected)
+
+This agent's relay callback URL is: `{_relayOptions.RelayCallbackUrl}`
+
+When setting up channel bots, use this URL as the `callback_url` for API keys. You can create an API key with this callback automatically:
+```
+nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_url="{_relayOptions.RelayCallbackUrl}"
+```
+Then create a conversation route linking the bot to this API key.
+""";
+        }
+
+        if (_skillRegistry != null && _skillRegistry.Count > 0)
+        {
+            var skillSection = _skillRegistry.BuildSystemPromptSection();
+            if (!string.IsNullOrEmpty(skillSection))
+                prompt += "\n" + skillSection;
+        }
+
+        return prompt;
     }
 
     private bool RequiresNyxIdProviderMigration()

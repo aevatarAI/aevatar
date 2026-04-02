@@ -616,11 +616,79 @@ public static class ScopeGAgentEndpoints
             };
         }
 
+        // ToolApprovalRequestEvent → AGUI CustomEvent.
+        // Use TypeUrl string match to avoid TypeRegistry issues (AI.Abstractions
+        // proto types are not registered in the AGUI SSE writer's TypeRegistry).
+        // Serialize fields into a Struct so the JSON formatter can handle it.
+        if (payload.TypeUrl.EndsWith("ToolApprovalRequestEvent", StringComparison.Ordinal))
+        {
+            var approvalPayload = BuildToolApprovalStruct(payload);
+            return new AGUIEvent
+            {
+                Custom = new CustomEvent
+                {
+                    Name = "TOOL_APPROVAL_REQUEST",
+                    Payload = Any.Pack(approvalPayload),
+                },
+            };
+        }
+
         // Also accept pre-wrapped AGUIEvent
         if (payload.Is(AGUIEvent.Descriptor))
             return payload.Unpack<AGUIEvent>();
 
         return null;
+    }
+
+    /// <summary>
+    /// Decode ToolApprovalRequestEvent from raw Any bytes into a google.protobuf.Struct
+    /// so the AGUI SSE JsonFormatter can serialize it without needing the AI.Abstractions
+    /// type registered in its TypeRegistry.
+    /// </summary>
+    private static Google.Protobuf.WellKnownTypes.Struct BuildToolApprovalStruct(Any payload)
+    {
+        // Decode the raw bytes using the well-known field numbers from ai_messages.proto:
+        //   string request_id = 1; string session_id = 2; string tool_name = 3;
+        //   string tool_call_id = 4; string arguments_json = 5; string approval_mode = 6;
+        //   bool is_destructive = 7; int32 timeout_seconds = 8;
+        var s = new Google.Protobuf.WellKnownTypes.Struct();
+        try
+        {
+            var input = new CodedInputStream(payload.Value.ToByteArray());
+            string requestId = "", toolName = "", toolCallId = "", argumentsJson = "";
+            bool isDestructive = false;
+            int timeoutSeconds = 15;
+
+            while (!input.IsAtEnd)
+            {
+                var tag = input.ReadTag();
+                switch (WireFormat.GetTagFieldNumber(tag))
+                {
+                    case 1: requestId = input.ReadString(); break;
+                    case 3: toolName = input.ReadString(); break;
+                    case 4: toolCallId = input.ReadString(); break;
+                    case 5: argumentsJson = input.ReadString(); break;
+                    case 7: isDestructive = input.ReadBool(); break;
+                    case 8: timeoutSeconds = input.ReadInt32(); break;
+                    default: input.SkipLastField(); break;
+                }
+            }
+
+            s.Fields["requestId"] = Value.ForString(requestId);
+            s.Fields["toolName"] = Value.ForString(toolName);
+            s.Fields["toolCallId"] = Value.ForString(toolCallId);
+            s.Fields["argumentsJson"] = Value.ForString(argumentsJson);
+            s.Fields["isDestructive"] = Value.ForBool(isDestructive);
+            s.Fields["timeoutSeconds"] = Value.ForNumber(timeoutSeconds);
+        }
+        catch
+        {
+            // Fallback: empty struct — frontend will show approval without details
+            s.Fields["requestId"] = Value.ForString("");
+            s.Fields["error"] = Value.ForString("Failed to decode approval request");
+        }
+
+        return s;
     }
 
     internal static Type? ResolveAgentType(string typeName)

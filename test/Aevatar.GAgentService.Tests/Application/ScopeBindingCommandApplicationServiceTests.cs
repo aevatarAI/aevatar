@@ -458,7 +458,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 ScopeBindingImplementationKind.GAgent,
                 GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                "gagent-orders",
                 [
                     new ScopeBindingGAgentEndpoint(
                         "run",
@@ -478,10 +477,10 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
         revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
-        revisionCommand.Spec.StaticSpec.PreferredActorId.Should().Be("gagent-orders");
+        revisionCommand.Spec.StaticSpec.PreferredActorId.Should().BeEmpty();
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         result.GAgent.Should().NotBeNull();
-        result.GAgent!.PreferredActorId.Should().Be("gagent-orders");
+        result.GAgent!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
     }
 
     [Fact]
@@ -499,7 +498,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                "gagent-orders",
                 [])));
 
         await act.Should().ThrowAsync<InvalidOperationException>()
@@ -869,7 +867,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                "gagent-orders",
                 [
                     new ScopeBindingGAgentEndpoint(
                         "run",

@@ -55,9 +55,7 @@ import type { PlaygroundPromptHistoryEntry } from '@/shared/playground/promptHis
 import {
   buildRuntimeGAgentAssemblyQualifiedName,
   buildRuntimeGAgentTypeLabel,
-  collectRuntimeGAgentActorIds,
   matchesRuntimeGAgentTypeDescriptor,
-  type RuntimeGAgentActorGroup,
   type RuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
 import type {
@@ -145,7 +143,6 @@ type StudioGAgentBindingEndpointDraft = {
 type StudioGAgentBindingDraft = {
   readonly displayName: string;
   readonly actorTypeName: string;
-  readonly preferredActorId: string;
   readonly endpoints: readonly StudioGAgentBindingEndpointDraft[];
   readonly openRunsEndpointId: string;
   readonly prompt: string;
@@ -185,7 +182,6 @@ function createStudioGAgentBindingDraft(
   return {
     displayName,
     actorTypeName: '',
-    preferredActorId: '',
     endpoints: [defaultEndpoint],
     openRunsEndpointId: defaultEndpoint.endpointId,
     prompt: '',
@@ -1152,7 +1148,6 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   const currentContext = describeStudioScopeBindingRevisionContext(currentRevision);
   const currentActor =
     currentRevision?.primaryActorId ||
-    currentRevision?.staticPreferredActorId ||
     binding?.primaryActorId ||
     '';
   const [detailsOpen, setDetailsOpen] = React.useState(false);
@@ -1473,7 +1468,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
               history.push(
                 buildRuntimeGAgentsHref({
                   scopeId,
-                  actorId: currentRevision?.staticPreferredActorId || undefined,
+                  actorId: currentRevision?.primaryActorId || undefined,
                   actorTypeName: currentRevision?.staticActorTypeName || undefined,
                 }),
               )
@@ -3339,9 +3334,6 @@ export type StudioEditorPageProps = {
   readonly gAgentTypes: readonly RuntimeGAgentTypeDescriptor[];
   readonly gAgentTypesLoading: boolean;
   readonly gAgentTypesError: unknown;
-  readonly gAgentActorGroups: readonly RuntimeGAgentActorGroup[];
-  readonly gAgentActorsLoading: boolean;
-  readonly gAgentActorsError: unknown;
   readonly bindingActivationRevisionId: string;
   readonly bindingRetirementRevisionId: string;
   readonly onSwitchStudioView: (view: 'editor' | 'execution') => void;
@@ -3376,7 +3368,6 @@ export type StudioEditorPageProps = {
   readonly onBindGAgent: (input: {
     displayName?: string;
     actorTypeName: string;
-    preferredActorId?: string;
     endpoints?: Array<{
       endpointId: string;
       displayName?: string;
@@ -3454,9 +3445,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   gAgentTypes,
   gAgentTypesLoading,
   gAgentTypesError,
-  gAgentActorGroups,
-  gAgentActorsLoading,
-  gAgentActorsError,
   bindingActivationRevisionId,
   bindingRetirementRevisionId,
   onSwitchStudioView,
@@ -3512,23 +3500,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       ) || null,
     [gAgentDraft.actorTypeName, gAgentTypes],
   );
-  const savedGAgentActorIds = React.useMemo(
-    () =>
-      collectRuntimeGAgentActorIds(
-        gAgentDraft.actorTypeName,
-        gAgentActorGroups,
-        selectedDiscoveredGAgentType,
-      ),
-    [gAgentActorGroups, gAgentDraft.actorTypeName, selectedDiscoveredGAgentType],
-  );
-  const selectedSavedGAgentActorId = React.useMemo(() => {
-    const normalizedPreferredActorId = gAgentDraft.preferredActorId.trim();
-    if (!normalizedPreferredActorId || !savedGAgentActorIds.includes(normalizedPreferredActorId)) {
-      return undefined;
-    }
-
-    return normalizedPreferredActorId;
-  }, [gAgentDraft.preferredActorId, savedGAgentActorIds]);
   const launchableGAgentEndpoints = React.useMemo(
     () =>
       gAgentDraft.endpoints.filter((endpoint) => endpoint.endpointId.trim().length > 0),
@@ -3707,7 +3678,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         {
           displayName: gAgentDraft.displayName,
           actorTypeName: gAgentDraft.actorTypeName,
-          preferredActorId: gAgentDraft.preferredActorId,
           endpoints: gAgentDraft.endpoints.map((endpoint) => ({
             endpointId: endpoint.endpointId,
             displayName: endpoint.displayName,
@@ -4754,54 +4724,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   setGAgentDraft((current) => ({
                     ...current,
                     actorTypeName: event.target.value,
-                  }))
-                }
-              />
-              <Select
-                aria-label="Saved GAgent actor id"
-                allowClear
-                showSearch
-                style={{ width: '100%' }}
-                placeholder={
-                  gAgentActorsLoading
-                    ? 'Loading saved actors'
-                    : savedGAgentActorIds.length > 0
-                    ? 'Reuse a saved actor id (optional)'
-                    : 'No saved actors for the selected type'
-                }
-                value={selectedSavedGAgentActorId}
-                optionFilterProp="label"
-                options={savedGAgentActorIds.map((actorId) => ({
-                  value: actorId,
-                  label: actorId,
-                }))}
-                notFoundContent={
-                  gAgentActorsLoading ? 'Loading actor ids...' : 'No saved actors found.'
-                }
-                onChange={(value) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    preferredActorId: value ?? '',
-                  }))
-                }
-              />
-              {gAgentActorsError ? (
-                <Typography.Text type="danger">
-                  {describeError(gAgentActorsError)}
-                </Typography.Text>
-              ) : (
-                <Typography.Text type="secondary">
-                  Saved actor ids come from previous GAgent draft runs. You can still type a custom actor id below.
-                </Typography.Text>
-              )}
-              <Input
-                aria-label="GAgent preferred actor id"
-                placeholder="Preferred actor id (optional)"
-                value={gAgentDraft.preferredActorId}
-                onChange={(event) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    preferredActorId: event.target.value,
                   }))
                 }
               />

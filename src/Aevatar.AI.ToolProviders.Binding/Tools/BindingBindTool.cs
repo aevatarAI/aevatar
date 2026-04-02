@@ -208,7 +208,7 @@ public sealed class BindingBindTool : IAgentTool
         return new ScopeBindingUpsertRequest(
             ScopeId: scopeId,
             ImplementationKind: ScopeBindingImplementationKind.GAgent,
-            GAgent: new ScopeBindingGAgentSpec(gagentType, null, []),
+            GAgent: new ScopeBindingGAgentSpec(gagentType, []),
             DisplayName: args.Str("display_name") ?? shortType,
             ServiceId: serviceId ?? $"agent-{shortType.ToLowerInvariant()}");
     }

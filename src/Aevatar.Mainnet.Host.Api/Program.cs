@@ -38,7 +38,11 @@ builder.Services.AddNyxIdAuthentication();
 builder.AddAevatarAuthentication();
 builder.Services.AddNyxIdChat(relay =>
 {
-    relay.WebhookSecret = builder.Configuration["Aevatar:NyxIdRelay:WebhookSecret"];
+    // Auto-derive relay callback URL from server's own address
+    var publicUrl = builder.Configuration["Aevatar:PublicUrl"]
+                    ?? builder.Configuration[WebHostDefaults.ServerUrlsKey]?.Split(';').FirstOrDefault()?.Trim()
+                    ?? "http://127.0.0.1:5080";
+    relay.RelayCallbackUrl = $"{publicUrl.TrimEnd('/')}/api/webhooks/nyxid-relay";
 });
 builder.Services.AddStreamingProxy();
 builder.Services.AddChatbotClassifier();

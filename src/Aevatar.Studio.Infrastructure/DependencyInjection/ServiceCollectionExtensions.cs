@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INyxIdUserLlmPreferencesStore, ChronoStorageNyxIdUserLlmPreferencesStore>();
         services.AddSingleton<IUserMemoryStore, ChronoStorageUserMemoryStore>();
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
+        services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         services.AddSingleton<IGAgentActorStore, ChronoStorageGAgentActorStore>();
         services.AddSingleton<IChatHistoryStore, ChronoStorageChatHistoryStore>();
         services.AddSingleton<IWorkflowStoragePort, ChronoStorageWorkflowStoragePort>();

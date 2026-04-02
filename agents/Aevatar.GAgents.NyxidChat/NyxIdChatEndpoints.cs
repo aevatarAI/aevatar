@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Google.Protobuf.WellKnownTypes;
@@ -10,6 +11,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -24,6 +26,7 @@ public static class NyxIdChatEndpoints
         group.MapGet("/{scopeId}/nyxid-chat/conversations", HandleListConversationsAsync);
         group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:stream", HandleStreamMessageAsync);
         group.MapDelete("/{scopeId}/nyxid-chat/conversations/{actorId}", HandleDeleteConversationAsync);
+        group.MapPost("/{scopeId}/nyxid-chat/conversations/{actorId}:approve", HandleApproveAsync);
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages
         app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync).WithTags("NyxIdRelay");
@@ -122,6 +125,7 @@ public static class NyxIdChatEndpoints
             chatRequest.Metadata["scope_id"] = scopeId;
             await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
             await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
+            await InjectConnectedServicesAsync(http, accessToken, chatRequest.Metadata, ct);
 
             var envelope = new EventEnvelope
             {
@@ -254,6 +258,134 @@ public static class NyxIdChatEndpoints
         return removed ? Results.Ok() : Results.NotFound();
     }
 
+    /// <summary>
+    /// Handles tool approval decisions from the frontend.
+    /// Opens an SSE connection to stream the continuation chat response.
+    /// </summary>
+    private static async Task HandleApproveAsync(
+        HttpContext http,
+        string scopeId,
+        string actorId,
+        NyxIdApprovalRequest request,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Endpoints");
+        var writer = new NyxIdChatSseWriter(http.Response);
+
+        try
+        {
+            var accessToken = ExtractBearerToken(http);
+            if (string.IsNullOrWhiteSpace(accessToken))
+            {
+                http.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.RequestId))
+            {
+                http.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
+
+            var actor = await actorRuntime.GetAsync(actorId);
+            if (actor == null)
+            {
+                http.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+
+            await writer.StartAsync(ct);
+            await writer.WriteRunStartedAsync(actorId, ct);
+
+            var messageId = Guid.NewGuid().ToString("N");
+            var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var ctr = ct.Register(() => tcs.TrySetCanceled());
+
+            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+                actor.Id,
+                async envelope =>
+                {
+                    try
+                    {
+                        var terminalFrame = await MapAndWriteEventAsync(envelope, messageId, writer);
+                        if (!string.IsNullOrWhiteSpace(terminalFrame))
+                            tcs.TrySetResult(terminalFrame);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.TrySetException(ex);
+                    }
+                },
+                ct);
+
+            // Send the approval decision to the actor
+            var decisionEvent = new ToolApprovalDecisionEvent
+            {
+                RequestId = request.RequestId,
+                SessionId = request.SessionId ?? scopeId,
+                Approved = request.Approved,
+                Reason = request.Reason ?? string.Empty,
+            };
+
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(decisionEvent),
+                Route = new EnvelopeRoute
+                {
+                    Direct = new DirectRoute { TargetActorId = actor.Id },
+                },
+            };
+
+            await actor.HandleEventAsync(envelope, ct);
+
+            // Wait for the continuation chat to complete (or timeout)
+            var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
+
+            if (completedTask == tcs.Task)
+            {
+                if (tcs.Task.IsFaulted)
+                {
+                    var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
+                    await writer.WriteRunErrorAsync(ex?.Message ?? "An error occurred.", CancellationToken.None);
+                }
+                else if (string.Equals(tcs.Task.Result, "TEXT_MESSAGE_END", StringComparison.Ordinal))
+                {
+                    await writer.WriteRunFinishedAsync(CancellationToken.None);
+                }
+            }
+            else
+            {
+                await writer.WriteRunErrorAsync("Approval continuation timed out.", CancellationToken.None);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Client disconnected
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "NyxID approval stream failed for actor {ActorId}", actorId);
+            if (!writer.Started)
+            {
+                http.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                return;
+            }
+
+            await writer.WriteRunErrorAsync(ex.Message, CancellationToken.None);
+        }
+    }
+
+    public sealed record NyxIdApprovalRequest(
+        string? RequestId,
+        bool Approved = true,
+        string? Reason = null,
+        string? SessionId = null);
+
     private static async Task InjectUserConfigMetadataAsync(
         HttpContext http,
         IDictionary<string, string> metadata,
@@ -300,6 +432,118 @@ public static class NyxIdChatEndpoints
         }
     }
 
+    private static async Task InjectConnectedServicesAsync(
+        HttpContext http,
+        string accessToken,
+        IDictionary<string, string> metadata,
+        CancellationToken ct)
+    {
+        var client = http.RequestServices.GetService<NyxIdApiClient>();
+        if (client is null)
+            return;
+
+        try
+        {
+            // Use IMemoryCache with 60s TTL to avoid calling DiscoverProxyServices on every request.
+            var cache = http.RequestServices.GetService<IMemoryCache>();
+            var cacheKey = $"nyxid:services:{ComputeTokenHash(accessToken)}";
+
+            string? servicesJson = null;
+            if (cache is not null)
+                servicesJson = cache.Get<string>(cacheKey);
+
+            if (servicesJson is null)
+            {
+                servicesJson = await client.DiscoverProxyServicesAsync(accessToken, ct);
+                cache?.Set(cacheKey, servicesJson, TimeSpan.FromSeconds(60));
+            }
+
+            var context = BuildConnectedServicesContext(servicesJson);
+            if (!string.IsNullOrWhiteSpace(context))
+                metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
+        }
+        catch
+        {
+            // Best-effort — agent still works without capability context
+        }
+    }
+
+    private static string BuildConnectedServicesContext(string servicesJson)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("<connected-services>");
+        sb.AppendLine("Your capabilities based on connected services:");
+
+        var slugs = new List<string>();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(servicesJson);
+            var root = doc.RootElement;
+
+            // Handle both array and object-with-array responses
+            JsonElement items = root;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("services", out var svc))
+                    items = svc;
+                else if (root.TryGetProperty("data", out var data))
+                    items = data;
+            }
+
+            if (items.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in items.EnumerateArray())
+                {
+                    var slug = item.TryGetProperty("slug", out var s) ? s.GetString() : null;
+                    var name = item.TryGetProperty("name", out var n) ? n.GetString()
+                             : item.TryGetProperty("label", out var l) ? l.GetString()
+                             : slug;
+                    var proxyUrl = item.TryGetProperty("proxy_url", out var p) ? p.GetString() : null;
+                    var baseUrl = item.TryGetProperty("endpoint_url", out var e) ? e.GetString()
+                                : item.TryGetProperty("base_url", out var b) ? b.GetString()
+                                : null;
+
+                    if (string.IsNullOrWhiteSpace(slug)) continue;
+                    slugs.Add(slug);
+
+                    sb.Append($"- **{name ?? slug}** (slug: `{slug}`)");
+                    if (!string.IsNullOrWhiteSpace(baseUrl))
+                        sb.Append($" — base: {baseUrl}");
+                    sb.AppendLine();
+                }
+            }
+        }
+        catch
+        {
+            // Parse failure — return what we have
+        }
+
+        if (slugs.Count == 0)
+        {
+            sb.AppendLine("No services connected yet. Use nyxid_catalog to browse and connect services.");
+        }
+
+        sb.AppendLine("Use nyxid_proxy with slug + path to call any service. Use code_execute for sandbox.");
+        sb.AppendLine("</connected-services>");
+
+        // Append API hints for connected services
+        var hints = NyxIdServiceApiHints.BuildHintsSection(slugs);
+        if (!string.IsNullOrEmpty(hints))
+        {
+            sb.AppendLine();
+            sb.Append(hints);
+        }
+
+        return sb.ToString();
+    }
+
+    private static string ComputeTokenHash(string token)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        return Convert.ToHexStringLower(bytes)[..16]; // Short hash for cache key
+    }
+
     private static string? ExtractBearerToken(HttpContext http)
     {
         var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
@@ -331,36 +575,11 @@ public static class NyxIdChatEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Relay");
 
-        // Read body for signature verification and parsing
-        http.Request.EnableBuffering();
-        var bodyBytes = await ReadRequestBodyAsync(http.Request, ct);
-        var bodyString = Encoding.UTF8.GetString(bodyBytes);
-
-        // Verify HMAC signature if webhook secret is configured
-        if (!string.IsNullOrWhiteSpace(relayOptions.WebhookSecret))
-        {
-            var signature = http.Request.Headers["X-NyxID-Signature"].FirstOrDefault();
-            var timestamp = http.Request.Headers["X-NyxID-Timestamp"].FirstOrDefault();
-
-            if (string.IsNullOrWhiteSpace(signature))
-                return Results.Json(new { error = "Missing X-NyxID-Signature header" }, statusCode: 401);
-
-            var signPayload = string.IsNullOrWhiteSpace(timestamp)
-                ? bodyString
-                : $"{timestamp}.{bodyString}";
-
-            if (!VerifyHmacSignature(relayOptions.WebhookSecret, signPayload, signature))
-            {
-                logger.LogWarning("Relay webhook signature verification failed");
-                return Results.Json(new { error = "Invalid signature" }, statusCode: 401);
-            }
-        }
-
         // Parse the relay payload
         RelayMessage? message;
         try
         {
-            message = JsonSerializer.Deserialize<RelayMessage>(bodyString, RelayJsonOptions);
+            message = await http.Request.ReadFromJsonAsync<RelayMessage>(RelayJsonOptions, ct);
         }
         catch (JsonException ex)
         {
@@ -434,6 +653,7 @@ public static class NyxIdChatEndpoints
         chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
         chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
         chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
+        await InjectConnectedServicesAsync(http, userToken, chatRequest.Metadata, ct);
 
         var envelope = new EventEnvelope
         {
@@ -465,25 +685,6 @@ public static class NyxIdChatEndpoints
         }
 
         return Results.Json(new { reply = new { text = replyText } });
-    }
-
-    private static async Task<byte[]> ReadRequestBodyAsync(HttpRequest request, CancellationToken ct)
-    {
-        using var ms = new MemoryStream();
-        request.Body.Position = 0;
-        await request.Body.CopyToAsync(ms, ct);
-        return ms.ToArray();
-    }
-
-    private static bool VerifyHmacSignature(string secret, string payload, string expectedSignature)
-    {
-        var keyBytes = Encoding.UTF8.GetBytes(secret);
-        var payloadBytes = Encoding.UTF8.GetBytes(payload);
-        var hashBytes = HMACSHA256.HashData(keyBytes, payloadBytes);
-        var computed = Convert.ToHexStringLower(hashBytes);
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(computed),
-            Encoding.UTF8.GetBytes(expectedSignature.ToLowerInvariant()));
     }
 
     // ─── Relay payload models ───

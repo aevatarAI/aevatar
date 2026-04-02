@@ -110,7 +110,7 @@ message PendingToolApprovalState {
   string arguments_json = 5;
   bool is_destructive = 6;
   string timeout_callback_id = 7;
-  bytes timeout_lease = 8;
+  // field 8 reserved (was timeout_lease bytes, removed — lease kept in-memory only)
   map<string, string> metadata = 9;
 }
 

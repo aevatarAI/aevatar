@@ -16,6 +16,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Core;
@@ -34,7 +35,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private string _appliedEventModules = string.Empty;
     private string _appliedEventRoutes = string.Empty;
     private IServiceProvider? _appliedModuleServices;
-    private readonly Middleware.LocalApprovalHandler? _localApprovalHandler;
 
     public RoleGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -53,18 +53,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             toolSources,
             approvalHandler)
     {
-        _localApprovalHandler = approvalHandler switch
-        {
-            Middleware.LocalApprovalHandler local => local,
-            Middleware.PriorityApprovalHandler => ExtractLocalHandler(approvalHandler),
-            _ => null,
-        };
     }
-
-    private static Middleware.LocalApprovalHandler? ExtractLocalHandler(IToolApprovalHandler handler) =>
-        handler is Middleware.PriorityApprovalHandler priority
-            ? priority.LocalHandler as Middleware.LocalApprovalHandler
-            : null;
 
     /// <summary>Role name.</summary>
     public string RoleName { get; private set; } = "";
@@ -75,12 +64,315 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         await PersistDomainEventAsync(evt);
     }
 
-    /// <summary>Handles tool approval decisions from the frontend.</summary>
-    [EventHandler]
-    public Task HandleToolApprovalDecision(ToolApprovalDecisionEvent evt)
+    /// <summary>Handles tool approval decisions from the frontend or NyxID remote.</summary>
+    [EventHandler(AllowSelfHandling = true)]
+    public async Task HandleToolApprovalDecision(ToolApprovalDecisionEvent evt)
     {
-        _localApprovalHandler?.SubmitDecision(evt.RequestId, evt.Approved, evt.Reason);
-        return Task.CompletedTask;
+        // ─── Multi-turn continuation ───
+        var pending = State.PendingApproval;
+        if (pending == null || pending.RequestId != evt.RequestId)
+            return;
+
+        // Cancel the escalation timeout
+        await CancelApprovalTimeoutAsync(pending);
+
+        if (evt.Approved)
+        {
+            Logger.LogInformation(
+                "[{Role}] Tool approval APPROVED. Executing tool={Tool} request={RequestId}",
+                RoleName, pending.ToolName, pending.RequestId);
+
+            // Restore metadata context (NyxID access token etc.) so tool execution can
+            // read AgentToolRequestContext.TryGet(NyxIdAccessToken).
+            var prevMetadata = AgentToolRequestContext.CurrentMetadata;
+            try
+            {
+                AgentToolRequestContext.CurrentMetadata = pending.Metadata.Count > 0
+                    ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
+                    : null;
+
+                // Execute the yielded tool call
+                var toolResult = await Tools.ExecuteToolCallAsync(
+                    new ToolCall
+                    {
+                        Id = pending.ToolCallId,
+                        Name = pending.ToolName,
+                        ArgumentsJson = pending.ArgumentsJson,
+                    },
+                    CancellationToken.None);
+
+                Logger.LogInformation(
+                    "[{Role}] Tool executed. result length={Len} request={RequestId}",
+                    RoleName, toolResult.Content?.Length ?? 0, pending.RequestId);
+
+                // Clear pending state
+                await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+
+                // Build continuation prompt with the actual tool result
+                var continuation = BuildContinuationPrompt(pending, toolResult.Content);
+
+                Logger.LogInformation(
+                    "[{Role}] Dispatching continuation chat. request={RequestId}",
+                    RoleName, pending.RequestId);
+
+                // Self-continuation: dispatch ChatRequestEvent to own inbox (new turn).
+                var continuationRequest = new ChatRequestEvent
+                {
+                    Prompt = continuation,
+                    SessionId = Guid.NewGuid().ToString("N"),
+                    ScopeId = pending.SessionId,
+                };
+                foreach (var kv in pending.Metadata)
+                    continuationRequest.Metadata[kv.Key] = kv.Value;
+
+                await SendToAsync(Id, continuationRequest);
+
+                Logger.LogInformation(
+                    "[{Role}] Continuation dispatched. request={RequestId}",
+                    RoleName, pending.RequestId);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex,
+                    "[{Role}] Approval continuation FAILED. request={RequestId}",
+                    RoleName, pending.RequestId);
+
+                // Still clear pending so we don't get stuck
+                try { await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId }); }
+                catch { /* best effort */ }
+
+                throw; // Re-throw so the SSE endpoint sees the error
+            }
+            finally
+            {
+                AgentToolRequestContext.CurrentMetadata = prevMetadata;
+            }
+        }
+        else
+        {
+            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+        }
+    }
+
+    /// <summary>
+    /// Handles local approval timeout: escalate to NyxID remote.
+    /// Calls the remote handler directly within the actor turn. This blocks the actor
+    /// for up to 45s while NyxID polls for a decision, but guarantees the call works
+    /// (background Task.Run cannot reliably call SendToAsync outside actor context).
+    /// </summary>
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
+    public async Task HandleToolApprovalTimeout(ToolApprovalTimeoutFiredEvent evt)
+    {
+        var pending = State.PendingApproval;
+        if (pending == null || pending.RequestId != evt.RequestId)
+            return;
+
+        Logger.LogInformation(
+            "[{Role}] Tool approval local timeout. Escalating to NyxID remote. request={RequestId}",
+            RoleName, evt.RequestId);
+
+        var remoteHandler = ResolveRemoteApprovalHandler();
+        if (remoteHandler == null)
+        {
+            Logger.LogWarning("[{Role}] No remote approval handler configured. Clearing pending. request={RequestId}",
+                RoleName, evt.RequestId);
+            await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+            return;
+        }
+
+        // Restore metadata (NyxID access token) for the remote handler
+        var prevMetadata = AgentToolRequestContext.CurrentMetadata;
+        try
+        {
+            AgentToolRequestContext.CurrentMetadata = pending.Metadata.Count > 0
+                ? new Dictionary<string, string>(pending.Metadata, StringComparer.Ordinal)
+                : null;
+
+            var result = await remoteHandler.RequestApprovalAsync(
+                new ToolApprovalRequest
+                {
+                    RequestId = pending.RequestId,
+                    ToolName = pending.ToolName,
+                    ToolCallId = pending.ToolCallId,
+                    ArgumentsJson = pending.ArgumentsJson,
+                    ApprovalMode = ToolApprovalMode.Auto,
+                    IsDestructive = pending.IsDestructive,
+                },
+                CancellationToken.None);
+
+            if (result.Decision == ToolApprovalDecision.Approved)
+            {
+                Logger.LogInformation("[{Role}] NyxID remote approved. request={RequestId}", RoleName, evt.RequestId);
+                await HandleToolApprovalDecision(new ToolApprovalDecisionEvent
+                {
+                    RequestId = pending.RequestId,
+                    Approved = true,
+                    Reason = result.Reason ?? "Approved via NyxID remote.",
+                });
+                return;
+            }
+
+            Logger.LogWarning("[{Role}] NyxID remote denied/timed out: {Reason}. request={RequestId}",
+                RoleName, result.Reason, evt.RequestId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] NyxID remote approval failed. request={RequestId}",
+                RoleName, evt.RequestId);
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = prevMetadata;
+        }
+
+        // Remote failed/denied/timed out → clear pending
+        await PersistDomainEventAsync(new ClearPendingApprovalEvent { RequestId = pending.RequestId });
+    }
+
+    /// <summary>Override in subclasses to provide the NyxID remote approval handler for timeout escalation.</summary>
+    protected virtual IToolApprovalHandler? ResolveRemoteApprovalHandler() => null;
+
+    // ─── Approval continuation constants ───
+
+    private const int ApprovalLocalTimeoutSeconds = 15;
+
+    // ─── Approval helpers ───
+
+    private PendingToolApprovalState? DetectPendingApproval(
+        SessionReplayRecord replayRecord,
+        ChatRequestEvent request)
+    {
+        return DetectPendingApprovalFromHistory(request);
+    }
+
+    private PendingToolApprovalState? DetectPendingApprovalFromHistory(ChatRequestEvent request)
+    {
+        // Scan recent history messages for approval_required marker
+        for (var i = History.Messages.Count - 1; i >= 0; i--)
+        {
+            var msg = History.Messages[i];
+            if (msg.Role != "tool" || string.IsNullOrWhiteSpace(msg.Content))
+                continue;
+
+            if (!msg.Content.Contains(Middleware.ToolApprovalMiddleware.ApprovalRequiredKey))
+                continue;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(msg.Content);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                    continue;
+                if (!doc.RootElement.TryGetProperty("approval_required", out var ar) || !ar.GetBoolean())
+                    continue;
+
+                var requestId = doc.RootElement.TryGetProperty("request_id", out var rid)
+                    ? rid.GetString() ?? Guid.NewGuid().ToString("N")
+                    : Guid.NewGuid().ToString("N");
+                var toolName = doc.RootElement.TryGetProperty("tool_name", out var tn)
+                    ? tn.GetString() ?? "" : "";
+                var toolCallId = doc.RootElement.TryGetProperty("tool_call_id", out var tcid)
+                    ? tcid.GetString() ?? "" : "";
+                var args = doc.RootElement.TryGetProperty("arguments", out var a)
+                    ? a.GetString() ?? "{}" : "{}";
+
+                var pending = new PendingToolApprovalState
+                {
+                    RequestId = requestId,
+                    SessionId = request.SessionId ?? "",
+                    ToolName = toolName,
+                    ToolCallId = toolCallId,
+                    ArgumentsJson = args,
+                    IsDestructive = true,
+                };
+                // Preserve metadata (NyxID access token etc.) for continuation
+                foreach (var kv in request.Metadata)
+                    pending.Metadata[kv.Key] = kv.Value;
+
+                return pending;
+            }
+            catch (JsonException)
+            {
+                // Not valid JSON, skip
+            }
+        }
+
+        return null;
+    }
+
+    // Stored lease from the last scheduled timeout, kept in-memory for cancellation.
+    // Not persisted — if the actor deactivates, the durable callback runtime handles
+    // re-delivery; the actor's HandleToolApprovalTimeout idempotently checks pending state.
+    private Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease? _approvalTimeoutLease;
+
+    private async Task ScheduleApprovalTimeoutAsync(PendingToolApprovalState pending)
+    {
+        var callbackId = $"tool-approval-timeout-{pending.RequestId}";
+        pending.TimeoutCallbackId = callbackId;
+        try
+        {
+            _approvalTimeoutLease = await ScheduleSelfDurableTimeoutAsync(
+                callbackId,
+                TimeSpan.FromSeconds(ApprovalLocalTimeoutSeconds),
+                new ToolApprovalTimeoutFiredEvent
+                {
+                    RequestId = pending.RequestId,
+                    SessionId = pending.SessionId,
+                });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] Failed to schedule approval timeout", RoleName);
+        }
+    }
+
+    private async Task CancelApprovalTimeoutAsync(PendingToolApprovalState pending)
+    {
+        if (_approvalTimeoutLease == null)
+            return;
+
+        try
+        {
+            await CancelDurableCallbackAsync(_approvalTimeoutLease);
+            _approvalTimeoutLease = null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[{Role}] Failed to cancel approval timeout", RoleName);
+        }
+    }
+
+    private static string BuildContinuationPrompt(PendingToolApprovalState pending, string? toolResult)
+    {
+        return $"[System continuation] The user approved the tool call '{pending.ToolName}'. " +
+               $"The tool was executed and returned the following result:\n\n" +
+               $"{toolResult ?? "(no output)"}\n\n" +
+               "Please continue with the original task based on this result.";
+    }
+
+    // ─── Pending approval state transitions ───
+
+    private static RoleGAgentState ApplyPendingApproval(
+        RoleGAgentState current,
+        PendingToolApprovalPersistedEvent evt)
+    {
+        var next = current.Clone();
+        next.PendingApproval = evt.Pending;
+        return next;
+    }
+
+    private static RoleGAgentState ApplyClearPendingApproval(
+        RoleGAgentState current,
+        ClearPendingApprovalEvent evt)
+    {
+        if (current.PendingApproval == null)
+            return current;
+        if (!string.IsNullOrWhiteSpace(evt.RequestId) &&
+            current.PendingApproval.RequestId != evt.RequestId)
+            return current;
+
+        var next = current.Clone();
+        next.PendingApproval = null;
+        return next;
     }
 
     /// <summary>Returns agent description.</summary>
@@ -93,6 +385,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             .On<InitializeRoleAgentEvent>(ApplyInitializeRoleAgent)
             .On<RoleChatSessionStartedEvent>(ApplyChatSessionStarted)
             .On<RoleChatSessionCompletedEvent>(ApplyChatSessionCompleted)
+            .On<PendingToolApprovalPersistedEvent>(ApplyPendingApproval)
+            .On<ClearPendingApprovalEvent>(ApplyClearPendingApproval)
             .OrCurrent();
 
     protected override Task OnStateChangedAfterConfigAppliedAsync(RoleGAgentState state, CancellationToken ct)
@@ -140,7 +434,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     /// Handles ChatRequestEvent via streaming LLM call.
     /// Publishes text stream events and tool call events.
     /// </summary>
-    [EventHandler]
+    [EventHandler(AllowSelfHandling = true)]
     public virtual async Task HandleChatRequest(ChatRequestEvent request)
     {
         var trackedSession = ResolveTrackedSession(request);
@@ -179,13 +473,6 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         using var timeoutCts = timeoutMs > 0 ? new CancellationTokenSource(timeoutMs) : null;
         var streamCt = timeoutCts?.Token ?? CancellationToken.None;
 
-        // 配置本地审批的 publish 回调（如果已启用）
-        _localApprovalHandler?.SetPublishCallback(async evt =>
-        {
-            evt.SessionId = request.SessionId;
-            await PublishAsync(evt, TopologyAudience.Parent);
-        });
-
         // ─── AG-UI: TEXT_MESSAGE_START ───
         await PublishAsync(new TextMessageStartEvent
         {
@@ -221,6 +508,30 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 useWorkflowFailureMarker
                     ? BuildLlmFailureContent(ex.Message)
                     : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}");
+        }
+
+        // ─── Detect approval-pending tool result and set up continuation ───
+        var pendingApproval = DetectPendingApproval(replayRecord, request);
+        if (pendingApproval != null)
+        {
+            await PersistDomainEventAsync(new PendingToolApprovalPersistedEvent
+            {
+                Pending = pendingApproval,
+            });
+
+            await PublishAsync(new ToolApprovalRequestEvent
+            {
+                RequestId = pendingApproval.RequestId,
+                SessionId = pendingApproval.SessionId,
+                ToolName = pendingApproval.ToolName,
+                ToolCallId = pendingApproval.ToolCallId,
+                ArgumentsJson = pendingApproval.ArgumentsJson,
+                IsDestructive = pendingApproval.IsDestructive,
+                ApprovalMode = "yield",
+                TimeoutSeconds = ApprovalLocalTimeoutSeconds,
+            }, TopologyAudience.Parent);
+
+            await ScheduleApprovalTimeoutAsync(pendingApproval);
         }
 
         await PersistSessionCompletionAsync(request, replayRecord);

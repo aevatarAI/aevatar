@@ -122,7 +122,7 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
     }
 
     public async Task SaveMessagesAsync(
-        string scopeId, string conversationId, IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default)
+        string scopeId, string conversationId, ConversationMeta meta, IReadOnlyList<StoredChatMessage> messages, CancellationToken ct = default)
     {
         var context = TryResolveMessages(scopeId, conversationId)
             ?? throw new InvalidOperationException("Chat history storage is not available.");
@@ -133,7 +133,7 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
         // Best-effort sidecar write after .jsonl succeeds.
         try
         {
-            await WriteSidecarAsync(scopeId, conversationId, messages, ct);
+            await WriteSidecarAsync(scopeId, conversationId, meta, messages, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -202,7 +202,9 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
         string ServiceKind,
         long CreatedAtMs,
         long UpdatedAtMs,
-        int MessageCount);
+        int MessageCount,
+        string? LlmRoute,
+        string? LlmModel);
 
     private async Task<ConversationMeta?> TryReadSidecarMetaAsync(
         string scopeId, string conversationId, CancellationToken ct)
@@ -228,7 +230,9 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
                 ServiceKind: sidecar.ServiceKind,
                 CreatedAt: FromUnixTimestampMilliseconds(sidecar.CreatedAtMs),
                 UpdatedAt: FromUnixTimestampMilliseconds(sidecar.UpdatedAtMs),
-                MessageCount: sidecar.MessageCount);
+                MessageCount: sidecar.MessageCount,
+                LlmRoute: sidecar.LlmRoute,
+                LlmModel: sidecar.LlmModel);
         }
         catch (JsonException ex)
         {
@@ -260,7 +264,7 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
                 var bytes = await _blobClient.TryDownloadAsync(messagesContext, ct);
                 if (bytes is null) return;
                 var messages = DeserializeJsonl(bytes);
-                await WriteSidecarAsync(scopeId, conversationId, messages, ct);
+                await WriteSidecarAsync(scopeId, conversationId, meta, messages, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -314,21 +318,59 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
 
     private async Task WriteSidecarAsync(
         string scopeId, string conversationId,
+        ConversationMeta meta,
         IReadOnlyList<StoredChatMessage> messages, CancellationToken ct)
     {
         var context = TryResolveSidecar(scopeId, conversationId);
         if (context is null) return;
 
-        var meta = BuildMetaFromMessages(scopeId, conversationId, messages, storageObject: null);
+        var inferredMeta = BuildMetaFromMessages(scopeId, conversationId, messages, storageObject: null);
+        var normalizedMeta = NormalizeMeta(conversationId, meta, inferredMeta);
         var sidecar = new SidecarPayload(
-            meta.Title,
-            meta.ServiceId,
-            meta.ServiceKind,
-            meta.CreatedAt.ToUnixTimeMilliseconds(),
-            meta.UpdatedAt.ToUnixTimeMilliseconds(),
-            meta.MessageCount);
+            normalizedMeta.Title,
+            normalizedMeta.ServiceId,
+            normalizedMeta.ServiceKind,
+            normalizedMeta.CreatedAt.ToUnixTimeMilliseconds(),
+            normalizedMeta.UpdatedAt.ToUnixTimeMilliseconds(),
+            normalizedMeta.MessageCount,
+            normalizedMeta.LlmRoute,
+            normalizedMeta.LlmModel);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(sidecar, JsonOptions);
         await _blobClient.UploadAsync(context, bytes, "application/json", ct);
+    }
+
+    private static ConversationMeta NormalizeMeta(
+        string conversationId,
+        ConversationMeta meta,
+        ConversationMeta fallback)
+    {
+        var title = string.IsNullOrWhiteSpace(meta.Title)
+            ? fallback.Title
+            : meta.Title.Trim();
+        var serviceId = string.IsNullOrWhiteSpace(meta.ServiceId)
+            ? fallback.ServiceId
+            : meta.ServiceId.Trim();
+        var serviceKind = string.IsNullOrWhiteSpace(meta.ServiceKind)
+            ? fallback.ServiceKind
+            : meta.ServiceKind.Trim();
+        var createdAt = meta.CreatedAt == default ? fallback.CreatedAt : meta.CreatedAt;
+        var updatedAt = meta.UpdatedAt == default ? fallback.UpdatedAt : meta.UpdatedAt;
+        var messageCount = meta.MessageCount > 0 || fallback.MessageCount == 0
+            ? meta.MessageCount
+            : fallback.MessageCount;
+        var llmRoute = meta.LlmRoute is null ? null : meta.LlmRoute.Trim();
+        var llmModel = string.IsNullOrWhiteSpace(meta.LlmModel) ? null : meta.LlmModel.Trim();
+
+        return new ConversationMeta(
+            Id: conversationId,
+            Title: title,
+            ServiceId: serviceId,
+            ServiceKind: serviceKind,
+            CreatedAt: createdAt,
+            UpdatedAt: updatedAt,
+            MessageCount: messageCount,
+            LlmRoute: llmRoute,
+            LlmModel: llmModel);
     }
 
     private static bool IsSidecarStale(

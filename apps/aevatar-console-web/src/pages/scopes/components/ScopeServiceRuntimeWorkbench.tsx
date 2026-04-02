@@ -798,11 +798,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 />
                 <RuntimeMetricCard
                   label="Actor"
-                  value={
-                    currentRevision.primaryActorId ||
-                    currentRevision.staticPreferredActorId ||
-                    "n/a"
-                  }
+                  value={currentRevision.primaryActorId || "n/a"}
                 />
               </div>
               {describeStudioScopeBindingRevisionContext(currentRevision) ? (

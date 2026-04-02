@@ -164,7 +164,6 @@ public static class ScopeServiceEndpoints
                         ? null
                         : new ScopeBindingGAgentSpec(
                             request.GAgent.ActorTypeName,
-                            request.GAgent.PreferredActorId,
                             (request.GAgent.Endpoints ?? [])
                             .Select(endpoint => new ScopeBindingGAgentEndpoint(
                                 endpoint.EndpointId,
@@ -903,8 +902,10 @@ public static class ScopeServiceEndpoints
                         http,
                         target,
                         normalizedPrompt,
+                        request.ActorId,
                         request.SessionId,
                         scopeId,
+                        scopedHeaders,
                         actorRuntime,
                         subscriptionProvider,
                         ct);
@@ -917,6 +918,7 @@ public static class ScopeServiceEndpoints
                         normalizedPrompt,
                         request.SessionId,
                         scopeId,
+                        scopedHeaders,
                         actorRuntime,
                         subscriptionProvider,
                         ct);
@@ -951,28 +953,28 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         ServiceInvocationResolvedTarget target,
         string prompt,
+        string? actorId,
         string? sessionId,
         string scopeId,
+        IReadOnlyDictionary<string, string>? headers,
         IActorRuntime actorRuntime,
         IActorEventSubscriptionProvider subscriptionProvider,
         CancellationToken ct)
     {
         var plan = target.Artifact.DeploymentPlan.StaticPlan;
-        var preferredActorId = string.IsNullOrWhiteSpace(plan.PreferredActorId)
+        var resolvedActorId = string.IsNullOrWhiteSpace(actorId)
             ? null
-            : plan.PreferredActorId.Trim();
-
-        // Resolve the actor type and create/reuse the actor.
+            : actorId.Trim();
         var agentType = ScopeGAgentEndpoints.ResolveAgentType(plan.ActorTypeName);
         if (agentType is null)
             throw new InvalidOperationException(
                 $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
 
         IActor actor;
-        if (preferredActorId is not null)
+        if (resolvedActorId is not null)
         {
-            var existing = await actorRuntime.GetAsync(preferredActorId);
-            actor = existing ?? await actorRuntime.CreateAsync(agentType, preferredActorId, ct);
+            var existing = await actorRuntime.GetAsync(resolvedActorId);
+            actor = existing ?? await actorRuntime.CreateAsync(agentType, resolvedActorId, ct);
         }
         else
         {
@@ -1026,31 +1028,7 @@ public static class ScopeServiceEndpoints
             SessionId = sessionId ?? string.Empty,
             ScopeId = scopeId,
         };
-
-        // Forward the caller's Bearer token so NyxID-backed GAgents can pass it
-        // to the NyxID LLM gateway. Other LLM providers ignore this metadata key.
-        var bearerToken = ExtractBearerToken(http);
-        if (!string.IsNullOrWhiteSpace(bearerToken))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-
-        // Forward the user's preferred model from their config so the LLM provider
-        // uses the correct model (e.g. deepseek-chat) instead of a hardcoded default.
-        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
-        if (userConfigStore != null)
-        {
-            try
-            {
-                var userConfig = await userConfigStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                    chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
-                    chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
-            }
-            catch
-            {
-                // Best-effort; fall back to provider default if config unavailable.
-            }
-        }
+        CopyHeaders(headers, chatRequest.Metadata);
 
         var envelope = new EventEnvelope
         {
@@ -1112,6 +1090,7 @@ public static class ScopeServiceEndpoints
         string prompt,
         string? sessionId,
         string scopeId,
+        IReadOnlyDictionary<string, string>? headers,
         IActorRuntime actorRuntime,
         IActorEventSubscriptionProvider subscriptionProvider,
         CancellationToken ct)
@@ -1173,25 +1152,7 @@ public static class ScopeServiceEndpoints
             SessionId = sessionId ?? string.Empty,
             ScopeId = scopeId,
         };
-
-        var bearerToken = ExtractBearerToken(http);
-        if (!string.IsNullOrWhiteSpace(bearerToken))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-
-        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
-        if (userConfigStore != null)
-        {
-            try
-            {
-                var userConfig = await userConfigStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                    chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-            }
-            catch
-            {
-                // Best-effort; fall back to provider default if config unavailable.
-            }
-        }
+        CopyHeaders(headers, chatRequest.Metadata);
 
         var envelope = new EventEnvelope
         {
@@ -1650,8 +1611,7 @@ public static class ScopeServiceEndpoints
                     revision.Implementation?.Scripting?.Revision ?? string.Empty,
                     revision.Implementation?.Scripting?.DefinitionActorId ?? string.Empty,
                     revision.Implementation?.Scripting?.SourceHash ?? string.Empty,
-                    revision.Implementation?.Static?.ActorTypeName ?? string.Empty,
-                    revision.Implementation?.Static?.PreferredActorId ?? string.Empty);
+                    revision.Implementation?.Static?.ActorTypeName ?? string.Empty);
             })
             .OrderByDescending(x => x.IsDefaultServing)
             .ThenByDescending(x => x.IsActiveServing)
@@ -1900,9 +1860,11 @@ public static class ScopeServiceEndpoints
                 try
                 {
                     var userConfig = await userConfigStore.GetAsync(cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
+                        !string.IsNullOrWhiteSpace(userConfig.DefaultModel))
                         scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
+                        !string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
                         scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
                 }
                 catch
@@ -1924,6 +1886,19 @@ public static class ScopeServiceEndpoints
             var bearerToken = auth["Bearer ".Length..].Trim();
             metadata["nyxid.access_token"] = bearerToken;
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+        }
+    }
+
+    private static void CopyHeaders(
+        IReadOnlyDictionary<string, string>? source,
+        IDictionary<string, string> target)
+    {
+        if (source == null)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            target[key] = value;
         }
     }
 
@@ -2099,17 +2074,6 @@ public static class ScopeServiceEndpoints
         await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
     }
 
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(authHeader))
-            return null;
-
-        return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? authHeader["Bearer ".Length..].Trim()
-            : null;
-    }
-
     public sealed record InvokeScopeServiceHttpRequest(
         string? CommandId,
         string? CorrelationId,
@@ -2144,11 +2108,11 @@ public static class ScopeServiceEndpoints
 
     public sealed record ScopeBindingGAgentHttpRequest(
         string ActorTypeName,
-        string? PreferredActorId,
         IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints);
 
     public sealed record StreamScopeServiceHttpRequest(
         string Prompt,
+        string? ActorId = null,
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
         string? RevisionId = null);
@@ -2246,8 +2210,7 @@ public static class ScopeServiceEndpoints
         string ScriptRevision = "",
         string ScriptDefinitionActorId = "",
         string ScriptSourceHash = "",
-        string StaticActorTypeName = "",
-        string StaticPreferredActorId = "");
+        string StaticActorTypeName = "");
 
     public sealed record ScopeBindingActivationHttpResponse(
         string ScopeId,

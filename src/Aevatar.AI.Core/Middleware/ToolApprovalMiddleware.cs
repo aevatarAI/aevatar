@@ -39,8 +39,17 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
             return;
         }
 
-        // Auto 模式分类器
-        if (mode == ToolApprovalMode.Auto)
+        // Runtime argument-based check: tool can inspect call arguments to decide.
+        // Returns true → requires approval, false → skip, null → fall through to static check.
+        var runtimeDecision = context.Tool.RequiresApproval(context.ArgumentsJson);
+        if (runtimeDecision == false)
+        {
+            await next();
+            return;
+        }
+
+        // Auto 模式分类器 (only when runtime check returned null)
+        if (runtimeDecision == null && mode == ToolApprovalMode.Auto)
         {
             if (context.Tool.IsReadOnly)
             {
@@ -117,6 +126,27 @@ public sealed class ToolApprovalMiddleware : IToolCallMiddleware
                 context.Result = $"Tool '{context.ToolName}' approval timed out. " +
                                  "The tool was not executed. Please try again or approve when prompted.";
                 return;
+
+            case ToolApprovalDecision.Yield:
+                // 非阻塞 yield：返回 pending result，不增加 denial counter。
+                // Actor 层检测此 result 后持久化 pending state 并走事件化续传。
+                context.Terminate = true;
+                context.Result = BuildApprovalPendingResult(request);
+                return;
         }
     }
+
+    /// <summary>Approval pending marker key in tool result JSON.</summary>
+    public const string ApprovalRequiredKey = "approval_required";
+
+    private static string BuildApprovalPendingResult(ToolApprovalRequest request) =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            approval_required = true,
+            request_id = request.RequestId,
+            tool_name = request.ToolName,
+            tool_call_id = request.ToolCallId,
+            arguments = request.ArgumentsJson,
+            message = "This tool requires user approval before execution. An approval request has been sent.",
+        });
 }

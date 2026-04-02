@@ -57,6 +57,10 @@ public sealed class ToolApprovalResult
 
     public static ToolApprovalResult TimedOut(string? reason = null) =>
         new() { Decision = ToolApprovalDecision.Timeout, Reason = reason ?? "Approval request timed out" };
+
+    /// <summary>Non-blocking yield: middleware returns a pending result without blocking.</summary>
+    public static ToolApprovalResult Yielded(string requestId) =>
+        new() { Decision = ToolApprovalDecision.Yield, Reason = requestId };
 }
 
 /// <summary>工具审批决策。</summary>
@@ -70,4 +74,7 @@ public enum ToolApprovalDecision
 
     /// <summary>审批超时。</summary>
     Timeout = 2,
+
+    /// <summary>非阻塞 yield：中间件返回 pending result，tool 不执行，由 actor 续传。</summary>
+    Yield = 3,
 }

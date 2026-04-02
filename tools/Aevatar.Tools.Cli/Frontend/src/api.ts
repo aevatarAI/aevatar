@@ -496,7 +496,6 @@ export const scope = {
   bindGAgent: (
     scopeId: string,
     actorTypeName: string,
-    preferredActorId?: string,
     displayName?: string,
     serviceId?: string,
   ) =>
@@ -508,7 +507,6 @@ export const scope = {
         ...(serviceId ? { serviceId } : {}),
         gagent: {
           actorTypeName,
-          preferredActorId: preferredActorId || null,
           endpoints: [
             { endpointId: 'chat', displayName: 'Chat', kind: 'chat', requestTypeUrl: '', responseTypeUrl: '', description: '' },
           ],
@@ -554,12 +552,16 @@ export const scope = {
   streamDefaultChat: (
     scopeId: string,
     prompt: string,
+    actorId?: string,
     sessionId?: string,
     onFrame?: (frame: any) => void,
     signal?: AbortSignal,
+    headers?: Record<string, string>,
   ) => {
     const body: any = { prompt };
+    if (actorId) body.actorId = actorId;
     if (sessionId) body.sessionId = sessionId;
+    if (headers && Object.keys(headers).length > 0) body.headers = headers;
     return streamSse(
       `/scopes/${enc(scopeId)}/invoke/chat:stream`,
       body, onFrame ?? (() => {}), signal,
@@ -574,8 +576,12 @@ export const scope = {
     onFrame?: (frame: any) => void,
     signal?: AbortSignal,
     endpointId: string = 'chat',
+    headers?: Record<string, string>,
+    actorId?: string,
   ) => {
     const body: any = { prompt };
+    if (headers && Object.keys(headers).length > 0) body.headers = headers;
+    if (actorId) body.actorId = actorId;
     return streamSse(
       `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/${enc(endpointId)}:stream`,
       body, onFrame ?? (() => {}), signal,
@@ -585,6 +591,17 @@ export const scope = {
   /** GET /api/services?tenantId=... — list services in scope */
   listServices: (scopeId: string, take = 20) =>
     request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
+
+  /** POST /api/scopes/{scopeId}/runs/{runId}:resume — resume a suspended workflow run (human_input) */
+  resumeRun: (
+    scopeId: string,
+    runId: string,
+    data: { stepId: string; userInput?: string; approved?: boolean; actorId?: string },
+  ) =>
+    request<any>(`/scopes/${enc(scopeId)}/runs/${enc(runId)}:resume`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   /** GET /api/actors/{actorId} — actor snapshot for run logs */
   getActorSnapshot: (actorId: string) =>
@@ -622,12 +639,30 @@ export const nyxidChat = {
 
   deleteConversation: (scopeId: string, actorId: string) =>
     request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
+
+  /** Send tool approval decision and stream the continuation response. */
+  approveToolCall: (
+    scopeId: string,
+    actorId: string,
+    requestId: string,
+    approved: boolean,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+    sessionId?: string,
+    reason?: string,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}:approve`,
+      { requestId, approved, reason: reason ?? '', sessionId: sessionId ?? '' },
+      onFrame ?? (() => {}),
+      signal,
+    ),
 };
 
 /* ─── Chat History APIs (local, chrono-storage backed) ─── */
 export const chatHistory = {
   getIndex: (scopeId: string) =>
-    request<{ conversations: Array<{ id: string; title: string; serviceId: string; serviceKind: string; createdAt: string; updatedAt: string; messageCount: number }> }>(
+    request<{ conversations: Array<{ id: string; title: string; serviceId: string; serviceKind: string; createdAt: string; updatedAt: string; messageCount: number; llmRoute?: string; llmModel?: string }> }>(
       `/scopes/${enc(scopeId)}/chat-history`,
     ),
 
