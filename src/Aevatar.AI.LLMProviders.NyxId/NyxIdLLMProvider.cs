@@ -68,7 +68,6 @@ public sealed class NyxIdLLMProvider : ILLMProvider
         var route = await ResolveRouteAsync(request, ct);
         var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
 
-        // Wrap the inner stream to enrich errors with NyxID response body details.
         await foreach (var chunk in EnrichErrors(provider.ChatStreamAsync(route.Request, ct), route).WithCancellation(ct))
             yield return chunk;
     }
@@ -90,21 +89,30 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                         yield break;
                     current = enumerator.Current;
                 }
-                catch (System.ClientModel.ClientResultException cre)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    var rawResponse = cre.GetRawResponse();
-                    var body = rawResponse != null
-                        ? System.Text.Encoding.UTF8.GetString(rawResponse.Content.ToArray())
-                        : null;
+                    string? body = null;
+                    int? status = null;
+                    for (var cur = ex; cur != null; cur = cur.InnerException)
+                    {
+                        if (cur is System.ClientModel.ClientResultException cre)
+                        {
+                            status = cre.Status;
+                            var raw = cre.GetRawResponse();
+                            if (raw != null)
+                                body = System.Text.Encoding.UTF8.GetString(raw.Content.ToArray());
+                            break;
+                        }
+                    }
 
-                    _logger?.LogWarning(
-                        "NyxID LLM gateway error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
-                        cre.Status, route.RouteName, route.Endpoint, body);
+                    _logger?.LogWarning(ex,
+                        "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
+                        status, route.RouteName, route.Endpoint, body);
 
                     var detail = !string.IsNullOrWhiteSpace(body)
-                        ? $"{cre.Message} | NyxID response: {body}"
-                        : cre.Message;
-                    throw new InvalidOperationException(detail, cre);
+                        ? $"{ex.Message} | NyxID response: {body}"
+                        : ex.Message;
+                    throw new InvalidOperationException(detail, ex);
                 }
 
                 yield return current;

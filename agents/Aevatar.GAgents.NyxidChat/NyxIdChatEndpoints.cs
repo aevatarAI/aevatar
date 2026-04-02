@@ -37,12 +37,7 @@ public static class NyxIdChatEndpoints
             last_check = DateTimeOffset.UtcNow,
         })).WithTags("NyxIdRelay");
 
-        // Pairing management endpoints (called by bot owner via Console/agent)
-        var pairingGroup = app.MapGroup("/api/scopes/{scopeId}/nyxid-chat/pairing").WithTags("NyxIdRelay");
-        pairingGroup.MapGet("/pending", HandleListPendingPairingsAsync);
-        pairingGroup.MapPost("/approve/{code}", HandleApprovePairingAsync);
-        pairingGroup.MapGet("/paired", HandleListPairedAsync);
-        pairingGroup.MapDelete("/paired/{platform}/{senderPlatformId}", HandleUnpairAsync);
+        // Access control for relay is handled by NyxID's route configuration.
 
         return app;
     }
@@ -617,7 +612,6 @@ public static class NyxIdChatEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] NyxIdChatActorStore actorStore,
-        [FromServices] NyxIdRelayPairingStore pairingStore,
         [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -644,44 +638,23 @@ public static class NyxIdChatEndpoints
         if (string.IsNullOrWhiteSpace(userToken))
             return Results.Json(new { error = "Missing X-NyxID-User-Token header" }, statusCode: 401);
 
-        // Parse the JWT sub claim to resolve the user's scope ID for chrono-storage.
-        // We can't rely on auth middleware (it ran before this handler, and the relay
-        // endpoint is unauthenticated). Instead, decode the JWT payload directly.
+        // Parse the JWT sub claim to resolve the user's scope for chrono-storage config access.
+        // Auth middleware already ran, so we manually set HttpContext.User with a synthetic identity.
         var jwtScopeId = TryExtractJwtSubject(userToken);
         var scopeId = jwtScopeId ?? message.Agent?.ApiKeyId ?? "default";
 
-        // Set Authorization header + X-Aevatar-Scope-Id so that IAppScopeResolver
-        // and any downstream service reads (InjectUserConfigMetadataAsync) can
-        // resolve the user's chrono-storage scope even though auth middleware already ran.
-        http.Request.Headers.Authorization = $"Bearer {userToken}";
-        http.Request.Headers["X-Aevatar-Scope-Id"] = scopeId;
-        var platform = message.Platform ?? "unknown";
-        var senderPlatformId = message.Sender?.PlatformId ?? "unknown";
-        var senderDisplayName = message.Sender?.DisplayName;
-        var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
-
-        // ─── Pairing gate ───
-        // Unpaired senders get a pairing code instead of LLM response.
-        // Bot owner must approve the code before the sender can trigger LLM calls.
-        if (!await pairingStore.IsPairedAsync(scopeId, platform, senderPlatformId, ct))
+        if (!string.IsNullOrWhiteSpace(jwtScopeId))
         {
-            var code = await pairingStore.CreatePairingRequestAsync(
-                scopeId, platform, senderPlatformId, senderDisplayName, conversationPlatformId, ct);
-
-            logger.LogInformation(
-                "Unpaired sender: platform={Platform}, sender={Sender}, code={Code}",
-                platform, senderPlatformId, code);
-
-            var pairingReply = $"You are not paired with this agent yet.\n\n" +
-                               $"Please send this pairing code to the bot owner for approval:\n" +
-                               $"**{code}**\n\n" +
-                               $"Once approved, you can start chatting.";
-
-            return Results.Json(new { reply = new { text = pairingReply } });
+            var claims = new[] { new System.Security.Claims.Claim("sub", jwtScopeId) };
+            var identity = new System.Security.Claims.ClaimsIdentity(claims, "NyxIdRelay");
+            http.User = new System.Security.Claims.ClaimsPrincipal(identity);
         }
 
-        // ─── Paired sender — proceed with LLM ───
+        // Access control is handled by NyxID's route configuration (wildcard or per-conversation).
+        // If NyxID forwarded the message, it's already authorized.
 
+        var platform = message.Platform ?? "unknown";
+        var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
         var conversationId = message.Conversation?.Id;
         if (string.IsNullOrWhiteSpace(conversationId))
             conversationId = $"{platform}-{conversationPlatformId}";
@@ -690,7 +663,7 @@ public static class NyxIdChatEndpoints
 
         logger.LogInformation(
             "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
-            platform, conversationId, senderDisplayName);
+            platform, conversationId, message.Sender?.DisplayName);
 
         // Get or create actor
         var actor = await actorRuntime.GetAsync(actorId)
@@ -850,54 +823,4 @@ public static class NyxIdChatEndpoints
         public string? Text { get; set; }
     }
 
-    // ─── Pairing management endpoints ───
-
-    private static Task<IResult> HandleListPendingPairingsAsync(
-        string scopeId,
-        [FromServices] NyxIdRelayPairingStore pairingStore)
-    {
-        var pending = pairingStore.ListPending(scopeId);
-        return Task.FromResult(Results.Json(new { pending }));
-    }
-
-    private static async Task<IResult> HandleApprovePairingAsync(
-        string scopeId,
-        string code,
-        [FromServices] NyxIdRelayPairingStore pairingStore,
-        CancellationToken ct)
-    {
-        var request = await pairingStore.ApprovePairingAsync(code, ct);
-        if (request == null)
-            return Results.Json(new { error = "Pairing code not found or expired" }, statusCode: 404);
-
-        return Results.Json(new
-        {
-            status = "paired",
-            platform = request.Platform,
-            sender_platform_id = request.SenderPlatformId,
-            sender_display_name = request.SenderDisplayName,
-        });
-    }
-
-    private static async Task<IResult> HandleListPairedAsync(
-        string scopeId,
-        [FromServices] NyxIdRelayPairingStore pairingStore,
-        CancellationToken ct)
-    {
-        var paired = await pairingStore.ListPairedAsync(scopeId, ct);
-        return Results.Json(new { paired });
-    }
-
-    private static async Task<IResult> HandleUnpairAsync(
-        string scopeId,
-        string platform,
-        string senderPlatformId,
-        [FromServices] NyxIdRelayPairingStore pairingStore,
-        CancellationToken ct)
-    {
-        var removed = await pairingStore.UnpairAsync(scopeId, platform, senderPlatformId, ct);
-        return removed
-            ? Results.Json(new { status = "unpaired" })
-            : Results.Json(new { error = "Sender not found" }, statusCode: 404);
-    }
 }
