@@ -618,166 +618,209 @@ public static class NyxIdChatEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Relay");
 
-        // Parse the relay payload
-        RelayMessage? message;
         try
         {
-            message = await http.Request.ReadFromJsonAsync<RelayMessage>(RelayJsonOptions, ct);
-        }
-        catch (JsonException ex)
-        {
-            logger.LogWarning(ex, "Failed to parse relay payload");
-            return Results.Json(new { error = "Invalid payload" }, statusCode: 400);
-        }
-
-        if (message is null || string.IsNullOrWhiteSpace(message.Content?.Text))
-            return Results.Json(new { error = "Empty message content" }, statusCode: 400);
-
-        // Extract user token from NyxID headers
-        var userToken = http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(userToken))
-            return Results.Json(new { error = "Missing X-NyxID-User-Token header" }, statusCode: 401);
-
-        // Parse the JWT sub claim to resolve the user's scope for chrono-storage config access.
-        // Auth middleware already ran, so we manually set HttpContext.User with a synthetic identity.
-        var jwtScopeId = TryExtractJwtSubject(userToken);
-        var scopeId = jwtScopeId ?? message.Agent?.ApiKeyId ?? "default";
-
-        if (!string.IsNullOrWhiteSpace(jwtScopeId))
-        {
-            var claims = new[] { new System.Security.Claims.Claim("sub", jwtScopeId) };
-            var identity = new System.Security.Claims.ClaimsIdentity(claims, "NyxIdRelay");
-            http.User = new System.Security.Claims.ClaimsPrincipal(identity);
-        }
-
-        // Access control is handled by NyxID's route configuration (wildcard or per-conversation).
-        // If NyxID forwarded the message, it's already authorized.
-
-        var platform = message.Platform ?? "unknown";
-        var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
-        var conversationId = message.Conversation?.Id;
-        if (string.IsNullOrWhiteSpace(conversationId))
-            conversationId = $"{platform}-{conversationPlatformId}";
-
-        var actorId = $"nyxid-relay-{conversationId}";
-
-        logger.LogInformation(
-            "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
-            platform, conversationId, message.Sender?.DisplayName);
-
-        // Get or create actor
-        var actor = await actorRuntime.GetAsync(actorId)
-                    ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-
-        // Ensure conversation is tracked in store
-        await actorStore.EnsureActorAsync(scopeId, actorId, ct);
-
-        // Subscribe to actor events and collect response
-        var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var responseBuilder = new StringBuilder();
-        string? errorMessage = null;
-        using var ctr = ct.Register(() => responseTcs.TrySetCanceled());
-
-        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-            actor.Id,
-            envelope =>
+            // ─── Parse payload ───
+            RelayMessage? message;
+            try
             {
-                var payload = envelope.Payload;
-                if (payload is null) return Task.CompletedTask;
-
-                if (payload.Is(TextMessageContentEvent.Descriptor))
-                {
-                    var evt = payload.Unpack<TextMessageContentEvent>();
-                    if (!string.IsNullOrEmpty(evt.Delta))
-                        responseBuilder.Append(evt.Delta);
-                }
-                else if (payload.Is(TextMessageEndEvent.Descriptor))
-                {
-                    var evt = payload.Unpack<TextMessageEndEvent>();
-                    // Capture LLM errors that the actor embeds in the end event content
-                    if (!string.IsNullOrEmpty(evt.Content))
-                    {
-                        const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
-                        const string llmFailedPrefix = "LLM request failed:";
-                        if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
-                            errorMessage = evt.Content[llmErrorPrefix.Length..].Trim();
-                        else if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
-                            errorMessage = evt.Content.Trim();
-                    }
-                    responseTcs.TrySetResult(responseBuilder.ToString());
-                }
-
-                return Task.CompletedTask;
-            },
-            ct);
-
-        // Build and dispatch ChatRequestEvent
-        var chatRequest = new ChatRequestEvent
-        {
-            Prompt = message.Content.Text,
-            SessionId = conversationId,
-            ScopeId = scopeId,
-        };
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
-        chatRequest.Metadata["scope_id"] = scopeId;
-        chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
-        chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
-        chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
-        // Inject user's preferred model and route from chrono-storage config
-        await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
-        await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
-
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(chatRequest),
-            Route = new EnvelopeRoute
+                message = await http.Request.ReadFromJsonAsync<RelayMessage>(RelayJsonOptions, ct);
+            }
+            catch (JsonException ex)
             {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
+                logger.LogWarning(ex, "Failed to parse relay payload");
+                return FriendlyReply("I received a message but couldn't understand it. Please try again.");
+            }
 
-        await actor.HandleEventAsync(envelope, ct);
+            if (message is null || string.IsNullOrWhiteSpace(message.Content?.Text))
+                return FriendlyReply("I received an empty message. Please send some text.");
 
-        // Wait for response
-        var timeoutMs = relayOptions.ResponseTimeoutSeconds * 1000;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(timeoutMs, ct));
-        sw.Stop();
+            // ─── Auth ───
+            var userToken = http.Request.Headers["X-NyxID-User-Token"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(userToken))
+            {
+                logger.LogWarning("Relay callback missing X-NyxID-User-Token header");
+                return FriendlyReply("Authentication is not configured properly. " +
+                    "Please ask the bot owner to check the channel relay setup.");
+            }
 
-        string replyText;
-        if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
-        {
-            replyText = responseTcs.Task.Result;
+            // Resolve user scope for chrono-storage config access
+            var jwtScopeId = TryExtractJwtSubject(userToken);
+            var scopeId = jwtScopeId ?? message.Agent?.ApiKeyId ?? "default";
+
+            if (!string.IsNullOrWhiteSpace(jwtScopeId))
+            {
+                var claims = new[] { new System.Security.Claims.Claim("sub", jwtScopeId) };
+                var identity = new System.Security.Claims.ClaimsIdentity(claims, "NyxIdRelay");
+                http.User = new System.Security.Claims.ClaimsPrincipal(identity);
+            }
+
+            // ─── Resolve conversation ───
+            var platform = message.Platform ?? "unknown";
+            var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
+            var conversationId = message.Conversation?.Id;
+            if (string.IsNullOrWhiteSpace(conversationId))
+                conversationId = $"{platform}-{conversationPlatformId}";
+
+            var actorId = $"nyxid-relay-{conversationId}";
+
             logger.LogInformation(
-                "Relay response ready in {ElapsedMs}ms, length={Length}",
-                sw.ElapsedMilliseconds, replyText.Length);
-        }
-        else
-        {
-            var partial = responseBuilder.ToString();
-            logger.LogWarning(
-                "Relay response timed out after {ElapsedMs}ms, partial_length={Length}",
-                sw.ElapsedMilliseconds, partial.Length);
-            replyText = partial.Length > 0
-                ? partial
-                : "Sorry, the request timed out. Please try again.";
-        }
+                "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
+                platform, conversationId, message.Sender?.DisplayName);
 
-        if (!string.IsNullOrWhiteSpace(errorMessage))
-        {
-            logger.LogWarning("Relay LLM error for conversation={ConversationId}: {Error}", conversationId, errorMessage);
-            replyText = $"[Error] {errorMessage}";
-        }
-        else if (string.IsNullOrWhiteSpace(replyText))
-        {
-            logger.LogWarning("Relay produced empty response for conversation={ConversationId}", conversationId);
-            replyText = "(No response generated)";
-        }
+            // ─── Get or create actor ───
+            var actor = await actorRuntime.GetAsync(actorId)
+                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
+            await actorStore.EnsureActorAsync(scopeId, actorId, ct);
 
-        return Results.Json(new { reply = new { text = replyText } });
+            // ─── Subscribe and collect response ───
+            var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var responseBuilder = new StringBuilder();
+            string? errorMessage = null;
+            using var ctr = ct.Register(() => responseTcs.TrySetCanceled());
+
+            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+                actor.Id,
+                envelope =>
+                {
+                    var payload = envelope.Payload;
+                    if (payload is null) return Task.CompletedTask;
+
+                    if (payload.Is(TextMessageContentEvent.Descriptor))
+                    {
+                        var evt = payload.Unpack<TextMessageContentEvent>();
+                        if (!string.IsNullOrEmpty(evt.Delta))
+                            responseBuilder.Append(evt.Delta);
+                    }
+                    else if (payload.Is(TextMessageEndEvent.Descriptor))
+                    {
+                        var evt = payload.Unpack<TextMessageEndEvent>();
+                        if (!string.IsNullOrEmpty(evt.Content))
+                        {
+                            const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+                            const string llmFailedPrefix = "LLM request failed:";
+                            if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+                                errorMessage = evt.Content[llmErrorPrefix.Length..].Trim();
+                            else if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+                                errorMessage = evt.Content.Trim();
+                        }
+                        responseTcs.TrySetResult(responseBuilder.ToString());
+                    }
+
+                    return Task.CompletedTask;
+                },
+                ct);
+
+            // ─── Dispatch to actor ───
+            var chatRequest = new ChatRequestEvent
+            {
+                Prompt = message.Content.Text,
+                SessionId = conversationId,
+                ScopeId = scopeId,
+            };
+            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
+            chatRequest.Metadata["scope_id"] = scopeId;
+            chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
+            chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
+            chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
+            await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
+            await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
+
+            var envelope = new EventEnvelope
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(chatRequest),
+                Route = new EnvelopeRoute
+                {
+                    Direct = new DirectRoute { TargetActorId = actor.Id },
+                },
+            };
+
+            await actor.HandleEventAsync(envelope, ct);
+
+            // ─── Wait for response ───
+            var timeoutMs = relayOptions.ResponseTimeoutSeconds * 1000;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(timeoutMs, ct));
+            sw.Stop();
+
+            string replyText;
+            if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
+            {
+                replyText = responseTcs.Task.Result;
+                logger.LogInformation("Relay response in {ElapsedMs}ms, length={Length}",
+                    sw.ElapsedMilliseconds, replyText.Length);
+            }
+            else
+            {
+                var partial = responseBuilder.ToString();
+                logger.LogWarning("Relay timed out after {ElapsedMs}ms, partial={Length}",
+                    sw.ElapsedMilliseconds, partial.Length);
+                replyText = partial.Length > 0
+                    ? partial
+                    : "Sorry, it's taking too long to respond. Please try again.";
+            }
+
+            // ─── Translate errors to friendly messages ───
+            if (!string.IsNullOrWhiteSpace(errorMessage))
+            {
+                logger.LogWarning("Relay LLM error: conversation={ConversationId}, error={Error}",
+                    conversationId, errorMessage);
+
+                replyText = ClassifyError(errorMessage);
+            }
+            else if (string.IsNullOrWhiteSpace(replyText))
+            {
+                logger.LogWarning("Relay empty response: conversation={ConversationId}", conversationId);
+                replyText = "Sorry, I wasn't able to generate a response. Please try again.";
+            }
+
+            return FriendlyReply(replyText);
+        }
+        catch (OperationCanceledException)
+        {
+            return FriendlyReply("The request was cancelled. Please try again.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Relay handler unexpected error");
+            return FriendlyReply("Sorry, an unexpected error occurred. Please try again later.");
+        }
     }
+
+    /// <summary>Classify a technical LLM error into a user-friendly message.</summary>
+    private static string ClassifyError(string error)
+    {
+        if (error.Contains("403", StringComparison.Ordinal) ||
+            error.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
+            return "Sorry, I can't reach the AI service right now. " +
+                   "The bot owner may need to check their NyxID LLM provider settings.";
+
+        if (error.Contains("401", StringComparison.Ordinal) ||
+            error.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("authentication", StringComparison.OrdinalIgnoreCase))
+            return "Sorry, authentication with the AI service failed. " +
+                   "The bot owner may need to reconnect their LLM provider in NyxID.";
+
+        if (error.Contains("429", StringComparison.Ordinal) ||
+            error.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("too many", StringComparison.OrdinalIgnoreCase))
+            return "Sorry, the AI service is busy right now. Please wait a moment and try again.";
+
+        if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+            return "Sorry, the AI service took too long to respond. Please try again.";
+
+        if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
+            error.Contains("not found", StringComparison.OrdinalIgnoreCase))
+            return "Sorry, the configured AI model is not available. " +
+                   "The bot owner may need to update their model settings.";
+
+        return "Sorry, something went wrong while generating a response. Please try again later.";
+    }
+
+    private static IResult FriendlyReply(string text) =>
+        Results.Json(new { reply = new { text } });
 
     // ─── Relay payload models ───
 
