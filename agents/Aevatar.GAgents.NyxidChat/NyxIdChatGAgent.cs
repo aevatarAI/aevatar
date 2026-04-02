@@ -94,30 +94,38 @@ Then create a default conversation route linking the bot to this API key.
     }
 
     /// <summary>
-    /// Resolves the relay callback URL from the user's chrono-storage config.
-    /// Reads remoteRuntimeBaseUrl and appends the relay webhook path.
+    /// Resolves the relay callback URL. Tries chrono-storage user config first,
+    /// falls back to the well-known remote runtime default.
     /// </summary>
     private string? ResolveRelayCallbackUrl()
     {
-        if (_userConfigStore == null) return null;
+        const string relayPath = "/api/webhooks/nyxid-relay";
 
-        try
+        // Try reading from user config (chrono-storage)
+        if (_userConfigStore != null)
         {
-            // Synchronous wait is acceptable here — DecorateSystemPrompt is called once
-            // during initialization, and the config is typically cached.
-            var config = _userConfigStore.GetAsync(CancellationToken.None)
-                .ConfigureAwait(false).GetAwaiter().GetResult();
+            try
+            {
+                var config = _userConfigStore.GetAsync(CancellationToken.None)
+                    .ConfigureAwait(false).GetAwaiter().GetResult();
 
-            var baseUrl = UserConfigRuntime.ResolveActiveRuntimeBaseUrl(config);
-            if (string.IsNullOrWhiteSpace(baseUrl)) return null;
+                var baseUrl = config.RemoteRuntimeBaseUrl;
+                if (!string.IsNullOrWhiteSpace(baseUrl) && !IsLocalAddress(baseUrl))
+                    return $"{baseUrl.TrimEnd('/')}{relayPath}";
+            }
+            catch
+            {
+                // Fall through to default
+            }
+        }
 
-            return $"{baseUrl.TrimEnd('/')}/api/webhooks/nyxid-relay";
-        }
-        catch
-        {
-            return null;
-        }
+        // Fall back to the well-known default
+        return $"{UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl}{relayPath}";
     }
+
+    private static bool IsLocalAddress(string url) =>
+        url.Contains("127.0.0.1") || url.Contains("localhost") ||
+        url.Contains("0.0.0.0") || url.Contains("+:") || url.Contains("*:");
 
     private bool RequiresNyxIdProviderMigration()
     {

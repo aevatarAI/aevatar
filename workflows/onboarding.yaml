@@ -18,16 +18,21 @@ steps:
       timeout_ms: "15000"
       optional: "true"
       on_missing: "skip"
+      on_error: "continue"
     next: route_by_status
 
   # ── Step 2: Branch based on LLM status ──
+  # NyxID /api/v1/llm/status returns JSON with provider info.
+  # An empty/error response means no provider configured.
+  # A response containing "ready" or provider names means configured.
+  # We use isBlank to detect empty/failed responses.
   - id: route_by_status
     type: conditional
     parameters:
-      condition: "${if(isBlank(input), 'false', 'true')}"
+      condition: "${if(isBlank(variables.check_llm_status), 'no_provider', 'has_provider')}"
     branches:
-      true: already_configured
-      false: select_provider
+      has_provider: already_configured
+      no_provider: select_provider
 
   # ── Already configured path ──
   - id: already_configured
@@ -45,13 +50,14 @@ steps:
       timeout: "600"
     next: route_post_setup
 
+  # human_input stores output in variables.<stepId>, so use variables.already_configured
   - id: route_post_setup
     type: conditional
     parameters:
-      condition: "${if(eq(lower(trim(variables.post_setup_choice)), 'add'), 'true', 'false')}"
+      condition: "${if(eq(lower(trim(variables.already_configured)), 'add'), 'true', 'false')}"
     branches:
-      true: select_provider
-      false: complete
+      "true": select_provider
+      "false": complete
 
   # ── Provider selection ──
   - id: select_provider
@@ -73,16 +79,17 @@ steps:
     next: map_provider
 
   # ── Map provider choice to slug ──
+  # human_input output is stored in variables.<stepId> = variables.select_provider
   - id: map_provider
     type: switch
     parameters:
-      condition: "${trim(variables.provider_choice)}"
+      condition: "${trim(variables.select_provider)}"
     branches:
       "1": set_slug_anthropic
       "2": set_slug_openai
       "3": set_slug_deepseek
       "4": ask_custom_endpoint
-      default: set_slug_openai
+      _default: set_slug_openai
 
   - id: set_slug_anthropic
     type: assign
@@ -96,7 +103,7 @@ steps:
     parameters:
       target: service_label
       value: "Anthropic (Claude)"
-    next: ask_api_key
+    next: clear_custom_endpoint
 
   - id: set_slug_openai
     type: assign
@@ -110,7 +117,7 @@ steps:
     parameters:
       target: service_label
       value: "OpenAI"
-    next: ask_api_key
+    next: clear_custom_endpoint
 
   - id: set_slug_deepseek
     type: assign
@@ -124,6 +131,14 @@ steps:
     parameters:
       target: service_label
       value: "DeepSeek"
+    next: clear_custom_endpoint
+
+  # For non-custom providers, clear custom_endpoint so payload_template doesn't send it
+  - id: clear_custom_endpoint
+    type: assign
+    parameters:
+      target: custom_endpoint
+      value: ""
     next: ask_api_key
 
   # ── Custom endpoint path ──
@@ -141,6 +156,14 @@ steps:
       variable: custom_endpoint_url
       timeout: "600"
       on_timeout: "fail"
+    next: save_custom_endpoint
+
+  # Copy human_input output (variables.ask_custom_endpoint) to a named variable
+  - id: save_custom_endpoint
+    type: assign
+    parameters:
+      target: custom_endpoint
+      value: "${variables.ask_custom_endpoint}"
     next: set_slug_custom
 
   - id: set_slug_custom
@@ -169,6 +192,10 @@ steps:
     next: create_service
 
   # ── Create service on NyxID ──
+  # variables.ask_api_key = user's API key (from human_input step ID)
+  # variables.service_slug = provider slug (from assign)
+  # variables.service_label = display label (from assign)
+  # variables.custom_endpoint = endpoint URL or "" (from assign)
   - id: create_service
     type: connector_call
     parameters:
@@ -178,8 +205,7 @@ steps:
       path: /api/v1/keys
       timeout_ms: "30000"
       stdin_mode: template
-      payload_template: >
-        {"service_slug":"${variables.service_slug}","credential":"${variables.api_key}","label":"${variables.service_label}","endpoint_url":"${variables.custom_endpoint_url}"}
+      payload_template: '{"service_slug":"${variables.service_slug}","credential":"${variables.ask_api_key}","label":"${variables.service_label}","endpoint_url":"${variables.custom_endpoint}"}'
     on_error:
       strategy: fallback
       fallback_step: create_failed
@@ -194,9 +220,7 @@ steps:
       method: GET
       path: /api/v1/llm/status
       timeout_ms: "15000"
-    on_error:
-      strategy: fallback
-      fallback_step: verify_failed
+      on_error: "continue"
     next: complete
 
   # ── Success ──
@@ -224,13 +248,14 @@ steps:
       timeout: "600"
     next: route_retry
 
+  # human_input output stored in variables.create_failed (step ID)
   - id: route_retry
     type: conditional
     parameters:
-      condition: "${if(eq(lower(trim(variables.retry_choice)), 'yes'), 'true', 'false')}"
+      condition: "${if(eq(lower(trim(variables.create_failed)), 'yes'), 'true', 'false')}"
     branches:
-      true: ask_api_key
-      false: exit_failed
+      "true": ask_api_key
+      "false": exit_failed
 
   - id: verify_failed
     type: human_input

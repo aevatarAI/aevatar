@@ -33,6 +33,8 @@ export type PendingHumanInputInfo = {
   stepId: string;
   runId: string;
   prompt: string;
+  serviceId?: string;
+  actorId?: string;
 };
 
 export type StepInfo = {
@@ -59,7 +61,7 @@ export type ServiceEndpoint = {
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: 'nyxid-chat' | 'service';
+  kind: 'nyxid-chat' | 'onboarding' | 'service';
   endpoints: ServiceEndpoint[];
 };
 

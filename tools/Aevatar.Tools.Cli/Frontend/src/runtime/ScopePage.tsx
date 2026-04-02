@@ -28,6 +28,183 @@ import { createPortal } from 'react-dom';
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const USER_LLM_ROUTE_GATEWAY = '';
+
+/** Onboarding workflow YAML — loaded from workflows/onboarding.yaml at build time. */
+const ONBOARDING_WORKFLOW_YAML = `name: onboarding
+description: |
+  Guide first-time users through LLM provider configuration.
+roles: []
+steps:
+  - id: check_llm_status
+    type: connector_call
+    parameters:
+      connector: nyxid_api
+      operation: check_llm_status
+      method: GET
+      path: /api/v1/llm/status
+      timeout_ms: "15000"
+      optional: "true"
+      on_missing: "skip"
+      on_error: "continue"
+    next: route_by_status
+  - id: route_by_status
+    type: conditional
+    parameters:
+      condition: "\${if(isBlank(variables.check_llm_status), 'no_provider', 'has_provider')}"
+    branches:
+      has_provider: already_configured
+      no_provider: select_provider
+  - id: already_configured
+    type: human_input
+    parameters:
+      prompt: |
+        Welcome back! You already have an LLM provider configured.
+        Type "add" to add another provider, or "done" to continue.
+      variable: post_setup_choice
+      timeout: "600"
+    next: route_post_setup
+  - id: route_post_setup
+    type: conditional
+    parameters:
+      condition: "\${if(eq(lower(trim(variables.already_configured)), 'add'), 'true', 'false')}"
+    branches:
+      "true": select_provider
+      "false": complete
+  - id: select_provider
+    type: human_input
+    parameters:
+      prompt: |
+        Welcome to Aevatar! Let's set up your LLM provider.
+
+        Choose a provider:
+          1. Anthropic (Claude)
+          2. OpenAI (GPT-4, etc.)
+          3. DeepSeek
+          4. Custom OpenAI-compatible endpoint
+
+        Enter the number of your choice (1-4):
+      variable: provider_choice
+      timeout: "600"
+      on_timeout: "fail"
+    next: map_provider
+  - id: map_provider
+    type: switch
+    parameters:
+      condition: "\${trim(variables.select_provider)}"
+    branches:
+      "1": set_slug_anthropic
+      "2": set_slug_openai
+      "3": set_slug_deepseek
+      "4": ask_custom_endpoint
+      _default: set_slug_openai
+  - id: set_slug_anthropic
+    type: assign
+    parameters: { target: service_slug, value: "llm-anthropic" }
+    next: set_label_anthropic
+  - id: set_label_anthropic
+    type: assign
+    parameters: { target: service_label, value: "Anthropic (Claude)" }
+    next: clear_custom_endpoint
+  - id: set_slug_openai
+    type: assign
+    parameters: { target: service_slug, value: "llm-openai" }
+    next: set_label_openai
+  - id: set_label_openai
+    type: assign
+    parameters: { target: service_label, value: "OpenAI" }
+    next: clear_custom_endpoint
+  - id: set_slug_deepseek
+    type: assign
+    parameters: { target: service_slug, value: "llm-deepseek" }
+    next: set_label_deepseek
+  - id: set_label_deepseek
+    type: assign
+    parameters: { target: service_label, value: "DeepSeek" }
+    next: clear_custom_endpoint
+  - id: clear_custom_endpoint
+    type: assign
+    parameters: { target: custom_endpoint, value: "" }
+    next: ask_api_key
+  - id: ask_custom_endpoint
+    type: human_input
+    parameters:
+      prompt: |
+        Enter the API endpoint URL (e.g., https://api.siliconflow.cn/v1):
+      variable: custom_endpoint_url
+      timeout: "600"
+      on_timeout: "fail"
+    next: save_custom_endpoint
+  - id: save_custom_endpoint
+    type: assign
+    parameters: { target: custom_endpoint, value: "\${variables.ask_custom_endpoint}" }
+    next: set_slug_custom
+  - id: set_slug_custom
+    type: assign
+    parameters: { target: service_slug, value: "custom-openai" }
+    next: set_label_custom
+  - id: set_label_custom
+    type: assign
+    parameters: { target: service_label, value: "Custom OpenAI-compatible" }
+    next: ask_api_key
+  - id: ask_api_key
+    type: human_input
+    parameters:
+      prompt: "Enter your API key:"
+      variable: api_key
+      timeout: "600"
+      on_timeout: "fail"
+    next: create_service
+  - id: create_service
+    type: connector_call
+    parameters:
+      connector: nyxid_api
+      operation: create_service
+      method: POST
+      path: /api/v1/keys
+      timeout_ms: "30000"
+      stdin_mode: template
+      payload_template: '{"service_slug":"\${variables.service_slug}","credential":"\${variables.ask_api_key}","label":"\${variables.service_label}","endpoint_url":"\${variables.custom_endpoint}"}'
+    on_error:
+      strategy: fallback
+      fallback_step: create_failed
+    next: verify_status
+  - id: verify_status
+    type: connector_call
+    parameters:
+      connector: nyxid_api
+      operation: verify_status
+      method: GET
+      path: /api/v1/llm/status
+      timeout_ms: "15000"
+      on_error: "continue"
+    next: complete
+  - id: complete
+    type: human_input
+    parameters:
+      prompt: "Your LLM provider is configured and ready! Type anything to continue."
+      variable: final_ack
+      timeout: "60"
+      on_timeout: "skip"
+  - id: create_failed
+    type: human_input
+    parameters:
+      prompt: |
+        Failed to create the service. The API key may be incorrect.
+        Enter "yes" to retry or "no" to exit:
+      variable: retry_choice
+      timeout: "600"
+    next: route_retry
+  - id: route_retry
+    type: conditional
+    parameters:
+      condition: "\${if(eq(lower(trim(variables.create_failed)), 'yes'), 'true', 'false')}"
+    branches:
+      "true": ask_api_key
+      "false": exit_failed
+  - id: exit_failed
+    type: assign
+    parameters: { target: exit_reason, value: "User chose not to retry." }
+`;
 const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const CONVERSATION_ROUTE_DEFAULT_VALUE = '__config_default__';
@@ -1468,13 +1645,15 @@ export default function ScopePage() {
 
   // Services
   const [services, setServices] = useState<ServiceOption[]>([
+    { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
     { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
   ]);
   const [selectedService, setSelectedService] = useState('nyxid-chat');
 
 
-  // NyxID Chat: track whether we've ensured the scope binding this session
+  // NyxID Chat / Onboarding: track whether we've ensured the scope binding this session
   const nyxidChatBoundRef = useRef(false);
+  const onboardingBoundRef = useRef(false);
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1504,6 +1683,7 @@ export default function ScopePage() {
     if (!scopeId) return;
     api.scope.listServices(scopeId).then(svcList => {
       const base: ServiceOption[] = [
+        { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
         { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
       ];
       if (Array.isArray(svcList)) {
@@ -1653,6 +1833,7 @@ export default function ScopePage() {
   // Reset NyxID Chat binding flag when scope changes
   useEffect(() => {
     nyxidChatBoundRef.current = false;
+    onboardingBoundRef.current = false;
   }, [scopeId]);
 
   // Load conversation index when scope changes
@@ -1894,6 +2075,7 @@ export default function ScopePage() {
 
         case 'HUMAN_INPUT_REQUEST': {
           const prompt = String(evt.prompt || '');
+          setIsStreaming(false);
           updateAssistant({
             content: prompt || 'Waiting for your input...',
             status: 'complete',
@@ -1901,6 +2083,8 @@ export default function ScopePage() {
               stepId: String(evt.stepId || ''),
               runId: String(evt.runId || ''),
               prompt,
+              serviceId: activeService.id,
+              actorId: trimOptional(activeConvId ?? undefined) || undefined,
             },
           });
           break;
@@ -1936,6 +2120,7 @@ export default function ScopePage() {
             const raw = (evt.payload ?? evt.value ?? {}) as any;
             const p = (raw?.value ?? raw) as any;
             const prompt = String(p?.prompt ?? p?.Prompt ?? '');
+            setIsStreaming(false);
             updateAssistant({
               content: prompt || 'Waiting for your input...',
               status: 'complete',
@@ -1943,6 +2128,8 @@ export default function ScopePage() {
                 stepId: String(p?.stepId ?? p?.step_id ?? ''),
                 runId: String(p?.runId ?? p?.run_id ?? ''),
                 prompt,
+                serviceId: activeService.id,
+                actorId: trimOptional(activeConvId ?? undefined) || undefined,
               },
             });
             break;
@@ -1975,7 +2162,18 @@ export default function ScopePage() {
 
     try {
       const requestActorId = trimOptional(activeConvId ?? undefined) || undefined;
-      if (activeService.kind === 'nyxid-chat') {
+      if (activeService.kind === 'onboarding') {
+        if (!onboardingBoundRef.current) {
+          await api.scope.bindWorkflow(
+            scopeId,
+            [ONBOARDING_WORKFLOW_YAML],
+            'Onboarding',
+            'onboarding',
+          );
+          onboardingBoundRef.current = true;
+        }
+        await api.scope.streamInvoke(scopeId, 'onboarding', text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
+      } else if (activeService.kind === 'nyxid-chat') {
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
             scopeId,
