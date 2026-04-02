@@ -592,13 +592,14 @@ export const scope = {
   listServices: (scopeId: string, take = 20) =>
     request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
 
-  /** POST /api/scopes/{scopeId}/runs/{runId}:resume — resume a suspended workflow run (human_input) */
+  /** POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume — resume a suspended workflow run (human_input) */
   resumeRun: (
     scopeId: string,
+    serviceId: string,
     runId: string,
     data: { stepId: string; userInput?: string; approved?: boolean; actorId?: string },
   ) =>
-    request<any>(`/scopes/${enc(scopeId)}/runs/${enc(runId)}:resume`, {
+    request<any>(`/scopes/${enc(scopeId)}/services/${enc(serviceId)}/runs/${enc(runId)}:resume`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),

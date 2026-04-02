@@ -7,79 +7,26 @@ description: |
 roles: []
 
 steps:
-  # ── Step 1: Check if user already has an LLM provider ──
-  - id: check_llm_status
-    type: connector_call
-    parameters:
-      connector: nyxid_api
-      operation: check_llm_status
-      method: GET
-      path: /api/v1/llm/status
-      timeout_ms: "15000"
-      optional: "true"
-      on_missing: "skip"
-      on_error: "continue"
-    next: route_by_status
-
-  # ── Step 2: Branch based on LLM status ──
-  # NyxID /api/v1/llm/status returns JSON with provider info.
-  # An empty/error response means no provider configured.
-  # A response containing "ready" or provider names means configured.
-  # We use isBlank to detect empty/failed responses.
-  - id: route_by_status
-    type: conditional
-    parameters:
-      condition: "${if(isBlank(variables.check_llm_status), 'no_provider', 'has_provider')}"
-    branches:
-      has_provider: already_configured
-      no_provider: select_provider
-
-  # ── Already configured path ──
-  - id: already_configured
-    type: human_input
-    parameters:
-      prompt: |
-        Welcome back! You already have an LLM provider configured.
-
-        You can:
-        - Type "add" to add another provider
-        - Type "done" to continue to Aevatar
-
-        What would you like to do?
-      variable: post_setup_choice
-      timeout: "600"
-    next: route_post_setup
-
-  # human_input stores output in variables.<stepId>, so use variables.already_configured
-  - id: route_post_setup
-    type: conditional
-    parameters:
-      condition: "${if(eq(lower(trim(variables.already_configured)), 'add'), 'true', 'false')}"
-    branches:
-      "true": select_provider
-      "false": complete
-
-  # ── Provider selection ──
+  # ── Pick Provider — always start here ──
   - id: select_provider
     type: human_input
     parameters:
       prompt: |
-        Welcome to Aevatar! Let's set up your LLM provider.
+        No AI service connected. Let's set one up.
 
-        Choose a provider:
-          1. Anthropic (Claude) — best for complex reasoning
-          2. OpenAI (GPT-4, etc.) — widely used, broad capabilities
-          3. DeepSeek — cost-effective, strong performance
-          4. Custom OpenAI-compatible endpoint (SiliconFlow, Groq, local models, etc.)
+        Pick a provider:
+          1. Anthropic (Claude)
+          2. OpenAI
+          3. DeepSeek
+          4. Custom OpenAI-compatible endpoint (SiliconFlow, Groq, etc.)
 
-        Enter the number of your choice (1-4):
+        Enter the number (1-4):
       variable: provider_choice
       timeout: "600"
       on_timeout: "fail"
     next: map_provider
 
-  # ── Map provider choice to slug ──
-  # human_input output is stored in variables.<stepId> = variables.select_provider
+  # switch uses _default for fallback
   - id: map_provider
     type: switch
     parameters:
@@ -133,7 +80,6 @@ steps:
       value: "DeepSeek"
     next: clear_custom_endpoint
 
-  # For non-custom providers, clear custom_endpoint so payload_template doesn't send it
   - id: clear_custom_endpoint
     type: assign
     parameters:
@@ -146,19 +92,13 @@ steps:
     type: human_input
     parameters:
       prompt: |
-        Enter the API endpoint URL for your OpenAI-compatible provider.
-        Examples:
-          - https://api.siliconflow.cn/v1
-          - https://api.groq.com/openai/v1
-          - http://localhost:11434/v1 (Ollama)
-
-        Endpoint URL:
+        Enter the API endpoint URL:
+        (e.g. https://api.siliconflow.cn/v1)
       variable: custom_endpoint_url
       timeout: "600"
       on_timeout: "fail"
     next: save_custom_endpoint
 
-  # Copy human_input output (variables.ask_custom_endpoint) to a named variable
   - id: save_custom_endpoint
     type: assign
     parameters:
@@ -180,7 +120,7 @@ steps:
       value: "Custom OpenAI-compatible"
     next: ask_api_key
 
-  # ── API Key collection ──
+  # ── Credential Entry ──
   - id: ask_api_key
     type: human_input
     parameters:
@@ -191,11 +131,7 @@ steps:
       on_timeout: "fail"
     next: create_service
 
-  # ── Create service on NyxID ──
-  # variables.ask_api_key = user's API key (from human_input step ID)
-  # variables.service_slug = provider slug (from assign)
-  # variables.service_label = display label (from assign)
-  # variables.custom_endpoint = endpoint URL or "" (from assign)
+  # ── Create service on NyxID (Verification) ──
   - id: create_service
     type: connector_call
     parameters:
@@ -211,7 +147,7 @@ steps:
       fallback_step: create_failed
     next: verify_status
 
-  # ── Verify the provider is now available ──
+  # ── Verify connection ──
   - id: verify_status
     type: connector_call
     parameters:
@@ -228,48 +164,34 @@ steps:
     type: human_input
     parameters:
       prompt: |
-        Your LLM provider is configured and ready!
-        You can now start using Aevatar. Type anything to continue.
+        Connected! Your LLM provider is ready.
+        Type anything to continue.
       variable: final_ack
       timeout: "60"
       on_timeout: "skip"
 
-  # ── Error handling ──
+  # ── Error: creation failed → retry or change provider ──
   - id: create_failed
     type: human_input
     parameters:
       prompt: |
-        Failed to create the service. This could mean:
-        - The API key format is incorrect
-        - The key has expired or has insufficient permissions
+        Connection failed. The API key may be invalid or expired.
 
-        Would you like to try again? Enter "yes" to retry or "no" to exit:
+        Type "retry" to try a different key, or "change" to pick another provider:
       variable: retry_choice
       timeout: "600"
     next: route_retry
 
-  # human_input output stored in variables.create_failed (step ID)
   - id: route_retry
     type: conditional
     parameters:
-      condition: "${if(eq(lower(trim(variables.create_failed)), 'yes'), 'true', 'false')}"
+      condition: "${if(eq(lower(trim(variables.create_failed)), 'change'), 'true', 'false')}"
     branches:
-      "true": ask_api_key
-      "false": exit_failed
-
-  - id: verify_failed
-    type: human_input
-    parameters:
-      prompt: |
-        The service was created but verification failed.
-        This may resolve itself shortly. You can proceed to use Aevatar.
-        Type anything to continue.
-      variable: verify_ack
-      timeout: "60"
-      on_timeout: "skip"
+      "true": select_provider
+      "false": ask_api_key
 
   - id: exit_failed
     type: assign
     parameters:
       target: exit_reason
-      value: "User chose not to retry after service creation failure."
+      value: "User exited onboarding."

@@ -30,6 +30,12 @@ public static class NyxIdChatEndpoints
 
         // NyxID Channel Bot Relay webhook — receives forwarded platform messages
         app.MapPost("/api/webhooks/nyxid-relay", HandleRelayWebhookAsync).WithTags("NyxIdRelay");
+        app.MapGet("/api/webhooks/nyxid-relay/health", () => Results.Json(new
+        {
+            status = "ok",
+            endpoint = "/api/webhooks/nyxid-relay",
+            last_check = DateTimeOffset.UtcNow,
+        })).WithTags("NyxIdRelay");
 
         return app;
     }
@@ -670,18 +676,33 @@ public static class NyxIdChatEndpoints
 
         // Wait for response
         var timeoutMs = relayOptions.ResponseTimeoutSeconds * 1000;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(timeoutMs, ct));
+        sw.Stop();
 
         string replyText;
         if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
         {
             replyText = responseTcs.Task.Result;
+            logger.LogInformation(
+                "Relay response ready in {ElapsedMs}ms, length={Length}",
+                sw.ElapsedMilliseconds, replyText.Length);
         }
         else
         {
-            replyText = responseBuilder.Length > 0
-                ? responseBuilder.ToString() // partial response is better than nothing
+            var partial = responseBuilder.ToString();
+            logger.LogWarning(
+                "Relay response timed out after {ElapsedMs}ms, partial_length={Length}",
+                sw.ElapsedMilliseconds, partial.Length);
+            replyText = partial.Length > 0
+                ? partial
                 : "Sorry, the request timed out. Please try again.";
+        }
+
+        if (string.IsNullOrWhiteSpace(replyText))
+        {
+            logger.LogWarning("Relay produced empty response for conversation={ConversationId}", conversationId);
+            replyText = "(No response generated)";
         }
 
         return Results.Json(new { reply = new { text = replyText } });

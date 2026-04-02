@@ -29,60 +29,21 @@ import { createPortal } from 'react-dom';
 
 const USER_LLM_ROUTE_GATEWAY = '';
 
-/** Onboarding workflow YAML — loaded from workflows/onboarding.yaml at build time. */
+/** Onboarding workflow YAML — embedded from workflows/onboarding.yaml. */
 const ONBOARDING_WORKFLOW_YAML = `name: onboarding
-description: |
-  Guide first-time users through LLM provider configuration.
+description: Guide first-time users through LLM provider configuration.
 roles: []
 steps:
-  - id: check_llm_status
-    type: connector_call
-    parameters:
-      connector: nyxid_api
-      operation: check_llm_status
-      method: GET
-      path: /api/v1/llm/status
-      timeout_ms: "15000"
-      optional: "true"
-      on_missing: "skip"
-      on_error: "continue"
-    next: route_by_status
-  - id: route_by_status
-    type: conditional
-    parameters:
-      condition: "\${if(isBlank(variables.check_llm_status), 'no_provider', 'has_provider')}"
-    branches:
-      has_provider: already_configured
-      no_provider: select_provider
-  - id: already_configured
-    type: human_input
-    parameters:
-      prompt: |
-        Welcome back! You already have an LLM provider configured.
-        Type "add" to add another provider, or "done" to continue.
-      variable: post_setup_choice
-      timeout: "600"
-    next: route_post_setup
-  - id: route_post_setup
-    type: conditional
-    parameters:
-      condition: "\${if(eq(lower(trim(variables.already_configured)), 'add'), 'true', 'false')}"
-    branches:
-      "true": select_provider
-      "false": complete
   - id: select_provider
     type: human_input
     parameters:
       prompt: |
-        Welcome to Aevatar! Let's set up your LLM provider.
-
-        Choose a provider:
+        No AI service connected. Pick a provider:
           1. Anthropic (Claude)
-          2. OpenAI (GPT-4, etc.)
+          2. OpenAI
           3. DeepSeek
           4. Custom OpenAI-compatible endpoint
-
-        Enter the number of your choice (1-4):
+        Enter the number (1-4):
       variable: provider_choice
       timeout: "600"
       on_timeout: "fail"
@@ -128,8 +89,7 @@ steps:
   - id: ask_custom_endpoint
     type: human_input
     parameters:
-      prompt: |
-        Enter the API endpoint URL (e.g., https://api.siliconflow.cn/v1):
+      prompt: "Enter the API endpoint URL (e.g. https://api.siliconflow.cn/v1):"
       variable: custom_endpoint_url
       timeout: "600"
       on_timeout: "fail"
@@ -181,29 +141,27 @@ steps:
   - id: complete
     type: human_input
     parameters:
-      prompt: "Your LLM provider is configured and ready! Type anything to continue."
+      prompt: "Connected! Your LLM provider is ready. Type anything to continue."
       variable: final_ack
       timeout: "60"
       on_timeout: "skip"
   - id: create_failed
     type: human_input
     parameters:
-      prompt: |
-        Failed to create the service. The API key may be incorrect.
-        Enter "yes" to retry or "no" to exit:
+      prompt: "Connection failed. The API key may be invalid. Type \\"retry\\" to try again, or \\"change\\" to pick another provider:"
       variable: retry_choice
       timeout: "600"
     next: route_retry
   - id: route_retry
     type: conditional
     parameters:
-      condition: "\${if(eq(lower(trim(variables.create_failed)), 'yes'), 'true', 'false')}"
+      condition: "\${if(eq(lower(trim(variables.create_failed)), 'change'), 'true', 'false')}"
     branches:
-      "true": ask_api_key
-      "false": exit_failed
+      "true": select_provider
+      "false": ask_api_key
   - id: exit_failed
     type: assign
-    parameters: { target: exit_reason, value: "User chose not to retry." }
+    parameters: { target: exit_reason, value: "User exited onboarding." }
 `;
 const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
@@ -2221,8 +2179,9 @@ export default function ScopePage() {
     // If so, resume the workflow run instead of starting a new chat turn.
     const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
     if (lastAssistant?.pendingHumanInput && scopeId) {
-      const { stepId, runId } = lastAssistant.pendingHumanInput;
-      // Clear the pending state and add user message
+      const { stepId, runId, serviceId: resumeServiceId } = lastAssistant.pendingHumanInput;
+      const svcId = resumeServiceId || selectedService || 'default';
+      // Clear the pending state and add user message.
       setMessages(prev => {
         const updated = prev.map(m =>
           m.id === lastAssistant.id ? { ...m, pendingHumanInput: undefined } : m,
@@ -2236,26 +2195,15 @@ export default function ScopePage() {
         });
         return updated;
       });
-      // Resume the workflow with user input
-      void api.scope.resumeRun(scopeId, runId, { stepId, userInput: text, approved: true })
-        .then(() => {
-          // After resume, the SSE stream from the original run should continue delivering events.
-          // If the run was a draft-run, the SSE connection may already be closed.
-          // In that case, we'd need to re-subscribe. For now, trust the existing stream.
-        })
+      // Resume the workflow. The ORIGINAL SSE stream from the initial streamChatTurn
+      // is still alive and will deliver continuation events (next human_input prompt, etc).
+      void api.scope.resumeRun(scopeId, svcId, runId, { stepId, userInput: text, approved: true })
         .catch((err: any) => {
-          setMessages(prev => {
-            const updated = [...prev];
-            updated.push({
-              id: `error-${Date.now()}`,
-              role: 'assistant',
-              content: '',
-              timestamp: Date.now(),
-              status: 'error',
-              error: `Failed to resume workflow: ${err?.message || 'Unknown error'}`,
-            });
-            return updated;
-          });
+          setMessages(prev => [...prev, {
+            id: `error-${Date.now()}`, role: 'assistant' as const, content: '',
+            timestamp: Date.now(), status: 'error' as const,
+            error: `Failed to resume workflow: ${err?.message || 'Unknown error'}`,
+          }]);
         });
       return;
     }
@@ -2482,6 +2430,20 @@ export default function ScopePage() {
     abortRef.current?.abort();
   }, []);
 
+  // Auto-start onboarding workflow when the service is selected and chat is empty.
+  const onboardingAutoStartedRef = useRef(false);
+  useEffect(() => {
+    if (selectedService !== 'onboarding' || isStreaming || messages.length > 0) {
+      if (selectedService !== 'onboarding') onboardingAutoStartedRef.current = false;
+      return;
+    }
+    if (onboardingAutoStartedRef.current) return;
+    onboardingAutoStartedRef.current = true;
+    // Kick off the workflow with a synthetic prompt — the workflow ignores it
+    // and immediately runs its first step (check_llm_status → select_provider).
+    void streamChatTurn('start', { baseMessages: [], includeUserMessage: false });
+  }, [selectedService, isStreaming, messages.length, streamChatTurn]);
+
   const handleNewChat = useCallback(() => {
     setMessages([]);
     setDebugEvents([]);
@@ -2489,6 +2451,7 @@ export default function ScopePage() {
     setComposerText('');
     setConversationRoute(undefined);
     setConversationModel(undefined);
+    onboardingAutoStartedRef.current = false;
   }, []);
 
   const handleSelectConversation = useCallback(async (convId: string) => {
