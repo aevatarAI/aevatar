@@ -4,12 +4,46 @@ import type { MainnetConnectorDto, MainnetRoleDto } from "./types.js";
 const logger = pino({ name: "workflow:mainnet-client" });
 
 const AEVATAR_MAINNET_URL = process.env["AEVATAR_MAINNET_URL"] ?? "http://localhost:6688";
-const SCOPE_ID = process.env["SCOPE_ID"] ?? "76fe9d91-1f1d-4234-9352-819a7c28f709";
 
 function buildHeaders(authorization?: string): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (authorization) headers["Authorization"] = authorization;
   return headers;
+}
+
+interface AuthMeResponse {
+  enabled?: boolean;
+  authenticated?: boolean;
+  scopeId?: string | null;
+}
+
+async function resolveAuthenticatedScopeId(authorization?: string): Promise<string> {
+  if (!authorization) {
+    throw new Error("Workflow binding requires Authorization.");
+  }
+
+  const url = `${AEVATAR_MAINNET_URL}/api/auth/me`;
+  logger.info({ url }, "Resolving authenticated scope for workflow binding");
+
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: buildHeaders(authorization),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    logger.error({ status: resp.status, body }, "Failed to resolve authenticated scope");
+    throw new Error(`Resolve authenticated scope failed: HTTP ${resp.status} — ${body}`);
+  }
+
+  const payload = await resp.json() as AuthMeResponse;
+  if (!payload.authenticated || !payload.scopeId?.trim()) {
+    logger.error({ payload }, "Authenticated scope is unavailable for workflow binding");
+    throw new Error("Authenticated scope is unavailable.");
+  }
+
+  return payload.scopeId.trim();
 }
 
 /**
@@ -79,8 +113,9 @@ export async function uploadWorkflow(
   revisionId?: string,
   authorization?: string,
 ): Promise<Record<string, unknown>> {
-  const url = `${AEVATAR_MAINNET_URL}/api/scopes/${SCOPE_ID}/binding`;
-  logger.info({ url, workflowId, name }, "Binding workflow to scope");
+  const scopeId = await resolveAuthenticatedScopeId(authorization);
+  const url = `${AEVATAR_MAINNET_URL}/api/scopes/${scopeId}/binding`;
+  logger.info({ url, workflowId, name, scopeId }, "Binding workflow to scope");
 
   const body: Record<string, unknown> = {
     ImplementationKind: "Workflow",
