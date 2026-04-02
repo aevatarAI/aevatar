@@ -135,15 +135,18 @@ const ActorsPage: React.FC = () => {
 
   return (
     <AevatarPageShell
-      content="Explorer is now an entity workbench. Actor discovery stays on stage while timeline, snapshot, and graph context slide into the inspector."
+      layoutMode="document"
       title="Runtime Explorer"
+      titleHelp="Explorer is now an entity workbench. Actor discovery stays on stage while timeline, snapshot, and graph context slide into the inspector."
     >
       <AevatarWorkbenchLayout
+        layoutMode="document"
         rail={
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
-              description="Paste a known actor ID or search discovered runtime agents."
+              layoutMode="document"
               title="Actor Focus"
+              titleHelp="Paste a known actor ID or search discovered runtime agents."
             >
               <Space direction="vertical" size={12} style={{ width: "100%" }}>
                 <Input
@@ -160,7 +163,7 @@ const ActorsPage: React.FC = () => {
               </Space>
             </AevatarPanel>
 
-            <AevatarPanel title="Explorer Digest">
+            <AevatarPanel layoutMode="document" title="Explorer Digest">
               <Space direction="vertical" size={6}>
                 <Typography.Text strong>
                   {filteredActors.length} actor entries in view
@@ -174,8 +177,9 @@ const ActorsPage: React.FC = () => {
         }
         stage={
           <AevatarPanel
-            description="Actor cards replace the old multi-panel explorer so the stage remains readable even when the runtime catalog is large."
+            layoutMode="document"
             title="Observed Actors"
+            titleHelp="Actor cards replace the old multi-panel explorer so the stage remains readable even when the runtime catalog is large."
           >
             {actorsQuery.error ? (
               <Alert
@@ -238,8 +242,8 @@ const ActorsPage: React.FC = () => {
         ) : (
           <>
             <AevatarPanel
-              description="Current actor state and completion signal."
               title="Snapshot"
+              titleHelp="Current actor state and completion signal."
             >
               <div
                 style={{
@@ -262,8 +266,8 @@ const ActorsPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="The event feed replaces the old timeline table."
               title="Timeline"
+              titleHelp="The event feed replaces the old timeline table."
             >
               {timelineQuery.data?.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -299,8 +303,8 @@ const ActorsPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="Graph context stays summarized here instead of becoming a full secondary canvas."
               title="Topology Digest"
+              titleHelp="Graph context stays summarized here instead of becoming a full secondary canvas."
             >
               <div
                 style={{

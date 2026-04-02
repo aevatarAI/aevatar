@@ -814,6 +814,7 @@ export const studioApi = {
         body: JSON.stringify(
           compactObject({
             implementationKind: "gagent",
+            serviceId: trimOptional(input.serviceId),
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
               actorTypeName: input.actorTypeName.trim(),

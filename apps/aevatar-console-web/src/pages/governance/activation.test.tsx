@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react';
+import { waitFor } from '@testing-library/react';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import GovernanceActivationPage from './activation';
@@ -86,15 +86,16 @@ describe('GovernanceActivationPage', () => {
     );
   });
 
-  it('hydrates activation revision choices from the current service revision list', async () => {
+  it('redirects the activation shortcut route into the unified governance workbench', async () => {
     renderWithQueryClient(React.createElement(GovernanceActivationPage));
 
-    expect(await screen.findByText('rev-2 · Published')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Load activation capability' }));
-
-    expect(await screen.findByText('Current service context')).toBeTruthy();
-    expect(screen.getAllByText('Activation').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('rev-2').length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/governance');
+    });
+    expect(window.location.search).toContain('tenantId=tenant-a');
+    expect(window.location.search).toContain('appId=app-a');
+    expect(window.location.search).toContain('namespace=default');
+    expect(window.location.search).toContain('serviceId=service-alpha');
+    expect(window.location.search).toContain('view=activation');
   });
 });

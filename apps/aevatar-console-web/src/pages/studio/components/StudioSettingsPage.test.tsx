@@ -113,7 +113,7 @@ function createBaseProps(overrides: Partial<SettingsProps> = {}): SettingsProps 
 }
 
 describe('StudioSettingsPage', () => {
-  it('renders the provider catalog as stable cards and selects another provider', () => {
+  it('shows sectioned settings navigation and selects another provider', () => {
     const onSelectProviderName = jest.fn();
 
     render(
@@ -124,16 +124,28 @@ describe('StudioSettingsPage', () => {
       />,
     );
 
-    expect(screen.getByText('Provider catalog')).toBeInTheDocument();
-    expect(screen.getByText('Provider detail')).toBeInTheDocument();
-    expect(screen.getByText('Provider routing')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runtime' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('tab', { name: 'AI Providers' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('tab', { name: 'Workflow Sources' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Advanced' })).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Studio provider endpoint'),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Studio provider API key')).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
+
+    expect(screen.getByText('Provider catalog')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     expect(onSelectProviderName).toHaveBeenCalledWith('zephyr');
   });
 
-  it('opens advanced settings and keeps runtime actions available', async () => {
+  it('keeps provider connection and secrets in Advanced and runtime actions in Runtime', () => {
     const onTestRuntime = jest.fn();
 
     render(
@@ -144,13 +156,37 @@ describe('StudioSettingsPage', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }));
-
-    expect(await screen.findByText('Runtime connection')).toBeInTheDocument();
-    expect(screen.getAllByText('Workflow sources').length).toBeGreaterThan(0);
-
     fireEvent.click(screen.getByRole('button', { name: 'Test runtime' }));
 
     expect(onTestRuntime).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByLabelText('Studio provider endpoint'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+
+    expect(screen.getByText('Workflow source management')).toBeInTheDocument();
+    expect(screen.getByText('Provider connection')).toBeInTheDocument();
+    expect(screen.getByText('Provider secrets')).toBeInTheDocument();
+    expect(screen.getByLabelText('Studio provider endpoint')).toBeInTheDocument();
+    expect(screen.getByLabelText('Studio provider API key')).toBeInTheDocument();
+  });
+
+  it('treats runtime editing as host-managed in embedded mode', () => {
+    render(
+      <StudioSettingsPage
+        {...createBaseProps({
+          hostMode: 'embedded',
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText('Runtime is host-managed in embedded mode'),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Studio runtime base URL')).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Check host runtime' }),
+    ).toBeInTheDocument();
   });
 });

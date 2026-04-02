@@ -98,6 +98,12 @@ describe("RunsInspectorPane", () => {
     );
 
     expect(screen.getByText("Run digest")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "A compact summary of the current run state, identifiers, and latest visible output.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
     expect(screen.getByText("Selection")).toBeInTheDocument();
     expect(screen.getByText("Runtime sidecars")).toBeInTheDocument();
     expect(screen.getByText("Latest message")).toBeInTheDocument();

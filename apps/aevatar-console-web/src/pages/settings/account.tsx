@@ -72,8 +72,8 @@ const AccountSettingsPage: React.FC = () => {
   return (
     <SettingsPageShell content="Manage your signed-in identity, operator access posture, and browser-backed session.">
       <AevatarPanel
-        description="Identity is presented like an operator surface, not a detached profile page."
         title="Operator Account"
+        titleHelp="Identity is presented like an operator surface, not a detached profile page."
       >
         {authSession ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

@@ -56,13 +56,14 @@
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
     A["MainLayout<br/>100vh viewport shell"] --> B["AevatarPageShell<br/>PageContainer + page content"]
-    B --> C["AevatarWorkbenchLayout<br/>rail + stage + optional aside"]
+    B --> C["AevatarTwoPaneLayout<br/>rail + stage (default)"]
     C --> D["Rail<br/>filters / navigation / query card"]
     C --> E["Stage<br/>primary task canvas"]
-    C --> F["StageAside<br/>secondary insight on wide screens"]
-    B --> G["AevatarContextDrawer<br/>detail / config / mutation"]
-    B --> H["Focused Modal<br/>diff / promotion / compare"]
-    B --> I["Bottom Dock<br/>logs / timeline / validation console"]
+    B --> F["AevatarContextDrawer<br/>detail / config / mutation"]
+    B --> G["Focused Modal<br/>diff / promotion / compare"]
+    B --> H["Bottom Dock<br/>logs / timeline / validation console"]
+    B --> I["AevatarWorkbenchLayout<br/>stageAside only when simultaneous visibility is required"]
+    I --> J["StageAside<br/>secondary insight on wide screens"]
 ```
 
 ## 5. Token 契约
@@ -108,10 +109,12 @@ flowchart TB
 推荐顺序如下：
 
 1. `AevatarPageShell`
-2. `AevatarWorkbenchLayout`
+2. `AevatarTwoPaneLayout`
 3. `AevatarPanel`
 4. `AevatarContextDrawer`
 5. 可选的 `Modal / Console Dock`
+
+只有当“主舞台内容”和“次级洞察”必须同时常驻可见时，才升级为 `AevatarWorkbenchLayout + stageAside`。
 
 标准骨架示例：
 
@@ -123,7 +126,7 @@ import {
   AevatarPageShell,
   AevatarPanel,
   AevatarStatusTag,
-  AevatarWorkbenchLayout,
+  AevatarTwoPaneLayout,
 } from "@/shared/ui/aevatarPageShells";
 
 const ExamplePage: React.FC = () => {
@@ -140,7 +143,7 @@ const ExamplePage: React.FC = () => {
         </Space>
       }
     >
-      <AevatarWorkbenchLayout
+      <AevatarTwoPaneLayout
         rail={
           <AevatarPanel title="Navigator">
             Filters, query cards, or task shortcuts live here.
@@ -149,11 +152,6 @@ const ExamplePage: React.FC = () => {
         stage={
           <AevatarPanel title="Main Stage" minHeight={520}>
             The core user task must stay here.
-          </AevatarPanel>
-        }
-        stageAside={
-          <AevatarPanel title="Secondary Insight">
-            Optional on ultra-wide screens, stacked back into stage on smaller screens.
           </AevatarPanel>
         }
       />
@@ -173,7 +171,7 @@ const ExamplePage: React.FC = () => {
 
 ## 7. 页面类型模板
 
-未来新增任何后端能力页面时，只允许从以下模板中选择一个起步。
+未来新增任何后端能力页面时，默认都应从“两段工作区 + Drawer/Modal”起步。只有确实存在“必须与主舞台同时可见”的次级洞察时，才升级为 `AevatarWorkbenchLayout + stageAside`。
 
 ### 7.1 Card Flow Workspace
 
@@ -222,7 +220,7 @@ const ExamplePage: React.FC = () => {
 
 - 左侧参数配置
 - 中间执行预览与主结果
-- 宽屏可选 `stageAside` 展示结果洞察
+- 结果洞察默认进入 Drawer；只有必须并排观测时才启用 `stageAside`
 - 复杂协议、端点说明走 Drawer
 
 ### 7.4 Mission Control
@@ -363,7 +361,7 @@ const ExamplePage: React.FC = () => {
 页面第一版只做三件事：
 
 - 放进 `AevatarPageShell`
-- 用 `AevatarWorkbenchLayout` 切出 `rail` 和 `stage`
+- 用 `AevatarTwoPaneLayout` 切出 `rail` 和 `stage`
 - 加一个空的 `AevatarContextDrawer`
 
 只要这三步完成，页面节奏就已经不会跑偏。
@@ -423,6 +421,7 @@ const ExamplePage: React.FC = () => {
 以下模式在 Aevatar Console 中应视为禁止：
 
 - 旧式“三栏平铺”，导致三块内容同时竞争首屏注意力
+- 新页面默认先挂常驻 `stageAside`，把本应后置的上下文摊回首屏
 - 首屏大表格直接铺满，没有用户任务主语
 - 用独立 detail route 承载对象详情
 - 页面整体滚动，没有 100vh 视口边界
@@ -436,7 +435,7 @@ const ExamplePage: React.FC = () => {
 一个新页面只有同时满足以下条件，才算符合设计系统：
 
 1. 继承 `MainLayout` 的 100vh 视口语义
-2. 采用 `AevatarPageShell + AevatarWorkbenchLayout`
+2. 默认采用 `AevatarPageShell + AevatarTwoPaneLayout`；只有有明确同时可见诉求时才升级到 `AevatarWorkbenchLayout`
 3. 主工作区明确回答“用户当前在做什么”
 4. 详情、配置、治理动作进入 Drawer 或 Modal
 5. 所有状态标签使用统一语义色

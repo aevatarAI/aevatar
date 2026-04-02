@@ -291,6 +291,30 @@ describe('StudioEditorPage', () => {
     expect(onSaveDraft).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps scope binding details collapsed until requested', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('No active binding')).toBeInTheDocument();
+    expect(screen.queryByText('No published binding')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /show details/i }));
+
+    expect(await screen.findByText('No published binding')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /hide details/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('No published binding')).not.toBeInTheDocument();
+    });
+  });
+
   it('guides published projects toward Project Invoke', async () => {
     const onOpenProjectInvoke = jest.fn();
 

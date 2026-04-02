@@ -1571,6 +1571,42 @@ describe("StudioPage", () => {
     expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
     expect(screen.getByText("Current draft")).toBeTruthy();
     expect(screen.getByPlaceholderText("Search workflows")).toBeTruthy();
+    expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
+      display: "flex",
+      flex: "1",
+      flexDirection: "column",
+      minHeight: "0",
+      overflow: "hidden",
+    });
+  });
+
+  it("hydrates an editable blank draft when a scope workflow has no YAML source yet", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      workflowStorageMode: "scope",
+    });
+    mockWorkflowFile = {
+      ...mockWorkflowFile,
+      name: "scope-demo",
+      directoryId: "scope:scope-1",
+      directoryLabel: "scope-1",
+      yaml: "",
+      document: null,
+      findings: [
+        {
+          level: "error",
+          path: "/",
+          message: "Workflow YAML is not available yet.",
+        },
+      ],
+    };
+
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    expect(await screen.findByText("Current draft")).toBeTruthy();
+    expect(screen.queryByText("No draft loaded")).toBeNull();
   });
 
   it("tries to restore auth first and then loads Studio when the host session recovers", async () => {

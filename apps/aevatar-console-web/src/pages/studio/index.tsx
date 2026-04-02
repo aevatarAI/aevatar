@@ -107,7 +107,6 @@ import {
   type StudioRoleDraftItem,
   StudioRolesPage,
   StudioSettingsPage,
-  type StudioWorkflowLayout,
   StudioWorkflowsPage,
   StudioWorkspaceAlerts,
 } from './components/StudioWorkbenchSections';
@@ -917,8 +916,6 @@ const StudioPage: React.FC = () => {
     readInitialStudioView(initialState),
   );
   const [workflowSearch, setWorkflowSearch] = useState('');
-  const [workflowLayout, setWorkflowLayout] =
-    useState<StudioWorkflowLayout>('grid');
   const [showWorkflowDirectoryForm, setShowWorkflowDirectoryForm] =
     useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
@@ -1394,27 +1391,69 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    if (!activeSourceReady || draftSourceKey === activeWorkflowSourceKey) {
+    if (!activeSourceReady) {
+      return;
+    }
+    if (draftSourceKey === activeWorkflowSourceKey && draftYaml.trim()) {
       return;
     }
 
-    setDraftSourceKey(activeWorkflowSourceKey);
-    setDraftYaml(sourceYaml);
-    setDraftWorkflowName(sourceWorkflowName);
-    setDraftFileName(sourceFileName);
-    setDraftDirectoryId(sourceDirectoryId);
-    setDraftWorkflowLayout(sourceWorkflowLayout);
-    setSaveNotice(null);
+    let disposed = false;
+    const hydrateDraftFromSource = async () => {
+      let nextYaml = sourceYaml;
+
+      if (!nextYaml.trim() && activeWorkflowFile?.document) {
+        try {
+          const serialized = await studioApi.serializeYaml({
+            document: activeWorkflowFile.document,
+            availableWorkflowNames: workflowNames,
+            availableStepTypes,
+          });
+          nextYaml = serialized?.yaml || '';
+        } catch {
+          // Keep the final fallback below when Studio cannot serialize the loaded document.
+        }
+      }
+
+      if (!nextYaml.trim() && selectedWorkflowId) {
+        nextYaml = buildBlankDraftYaml(
+          sourceWorkflowName || activeWorkflowFile?.name || 'draft',
+        );
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      setDraftSourceKey(activeWorkflowSourceKey);
+      setDraftYaml(nextYaml);
+      setDraftWorkflowName(sourceWorkflowName);
+      setDraftFileName(sourceFileName);
+      setDraftDirectoryId(sourceDirectoryId);
+      setDraftWorkflowLayout(sourceWorkflowLayout);
+      setSaveNotice(null);
+    };
+
+    void hydrateDraftFromSource();
+
+    return () => {
+      disposed = true;
+    };
   }, [
+    activeWorkflowFile?.document,
     activeSourceReady,
     activeWorkflowSourceKey,
+    availableStepTypes,
     defaultDirectoryId,
     draftSourceKey,
+    draftYaml,
+    selectedWorkflowId,
     sourceDirectoryId,
     sourceFileName,
     sourceWorkflowLayout,
     sourceWorkflowName,
     sourceYaml,
+    workflowNames,
   ]);
 
   useEffect(() => {
@@ -1886,6 +1925,7 @@ const StudioPage: React.FC = () => {
   };
 
   const resetDraftFromSource = () => {
+    setDraftSourceKey(activeWorkflowSourceKey);
     setDraftYaml(sourceYaml);
     setDraftWorkflowName(sourceWorkflowName);
     setDraftFileName(sourceFileName);
@@ -1894,6 +1934,66 @@ const StudioPage: React.FC = () => {
     setSaveNotice(null);
     void parseYamlQuery.refetch();
   };
+
+  const ensureActiveWorkflowDraftLoaded = useCallback(() => {
+    if (activeWorkflowSourceKey && activeSourceReady) {
+      if (
+        draftSourceKey !== activeWorkflowSourceKey ||
+        !draftYaml.trim() ||
+        !draftWorkflowName.trim()
+      ) {
+        setDraftSourceKey(activeWorkflowSourceKey);
+        setDraftYaml(sourceYaml);
+        setDraftWorkflowName(sourceWorkflowName);
+        setDraftFileName(sourceFileName);
+        setDraftDirectoryId(sourceDirectoryId);
+        setDraftWorkflowLayout(sourceWorkflowLayout);
+        setSaveNotice(null);
+      }
+      return;
+    }
+
+    const fallbackWorkflowId =
+      selectedWorkflowId || workflowsQuery.data?.[0]?.workflowId || '';
+    if (fallbackWorkflowId) {
+      setSelectedWorkflowId(fallbackWorkflowId);
+      setTemplateWorkflow('');
+      setDraftMode('');
+      setLegacySource('');
+      return;
+    }
+
+    setSelectedWorkflowId('');
+    setTemplateWorkflow('');
+    setDraftMode('new');
+    setLegacySource('');
+    setDraftDirectoryId((current) => current || defaultDirectoryId);
+    setDraftWorkflowLayout(null);
+  }, [
+    activeSourceReady,
+    activeWorkflowSourceKey,
+    defaultDirectoryId,
+    draftSourceKey,
+    draftWorkflowName,
+    draftYaml,
+    selectedWorkflowId,
+    sourceDirectoryId,
+    sourceFileName,
+    sourceWorkflowLayout,
+    sourceWorkflowName,
+    sourceYaml,
+    workflowsQuery.data,
+  ]);
+
+  const handleSwitchStudioView = useCallback(
+    (view: StudioViewMode) => {
+      if (view === 'editor') {
+        ensureActiveWorkflowDraftLoaded();
+      }
+      setStudioView(view);
+    },
+    [ensureActiveWorkflowDraftLoaded],
+  );
 
   const handleSaveDraft = async () => {
     const directoryId = draftDirectoryId || defaultDirectoryId;
@@ -3926,8 +4026,8 @@ const StudioPage: React.FC = () => {
     },
     {
       key: 'settings',
-      label: 'Config',
-      description: 'Manage runtime, workflow sources, and provider config.',
+      label: 'Workspace settings',
+      description: 'Manage AI providers and review runtime and workflow setup.',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
   ];
@@ -3941,6 +4041,9 @@ const StudioPage: React.FC = () => {
 
   const applyWorkspacePageSelection = React.useCallback(
     (page: StudioWorkspacePage) => {
+      if (page === 'studio') {
+        ensureActiveWorkflowDraftLoaded();
+      }
       setWorkspacePage(page);
       if (page === 'studio' && studioView !== 'execution') {
         setStudioView('editor');
@@ -3952,7 +4055,7 @@ const StudioPage: React.FC = () => {
         setLegacySource('');
       }
     },
-    [studioView],
+    [ensureActiveWorkflowDraftLoaded, studioView],
   );
 
   const pageTitle =
@@ -3968,20 +4071,20 @@ const StudioPage: React.FC = () => {
           ? 'Role catalog'
           : workspacePage === 'connectors'
             ? 'Connector catalog'
-            : 'Config';
+            : 'Workspace settings';
 
   const pageToolbar =
     workspacePage === 'studio' ? (
       <Space wrap size={[8, 8]}>
         <Button
           type={studioView === 'editor' ? 'primary' : 'default'}
-          onClick={() => setStudioView('editor')}
+          onClick={() => handleSwitchStudioView('editor')}
         >
           Edit
         </Button>
         <Button
           type={studioView === 'execution' ? 'primary' : 'default'}
-          onClick={() => setStudioView('execution')}
+          onClick={() => handleSwitchStudioView('execution')}
         >
           Runs
         </Button>
@@ -4061,45 +4164,55 @@ const StudioPage: React.FC = () => {
 
   const currentPageContent =
     workspacePage === 'workflows' ? (
-      <StudioWorkflowsPage
-        workflows={workflowsQuery}
-        workspaceSettings={workspaceSettingsQuery}
-        workflowStorageMode={
-          appContextQuery.data?.workflowStorageMode || 'workspace'
-        }
-        selectedWorkflowId={selectedWorkflowId}
-        selectedDirectoryId={draftDirectoryId || defaultDirectoryId}
-        templateWorkflow={templateWorkflow}
-        draftMode={draftMode}
-        activeWorkflowName={activeWorkflowName}
-        activeWorkflowDescription={activeWorkflowDescription}
-        activeWorkflowSourceKey={activeWorkflowSourceKey}
-        workflowSearch={workflowSearch}
-        workflowLayout={workflowLayout}
-        showDirectoryForm={showWorkflowDirectoryForm}
-        directoryPath={directoryPath}
-        directoryLabel={directoryLabel}
-        workflowImportPending={workflowImportPending}
-        workflowImportInputRef={workflowImportInputRef}
-        onOpenWorkflow={openWorkspaceWorkflow}
-        onStartBlankDraft={startBlankDraft}
-        onOpenCurrentDraft={() => {
-          setWorkspacePage('studio');
-          setStudioView('editor');
+      <div
+        data-testid="studio-workflows-viewport"
+        style={{
+          display: 'flex',
+          flex: 1,
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
-        onSelectDirectoryId={setDraftDirectoryId}
-        onSetWorkflowSearch={setWorkflowSearch}
-        onSetWorkflowLayout={setWorkflowLayout}
-        onToggleDirectoryForm={() =>
-          setShowWorkflowDirectoryForm((current) => !current)
-        }
-        onSetDirectoryPath={setDirectoryPath}
-        onSetDirectoryLabel={setDirectoryLabel}
-        onAddDirectory={() => void handleAddDirectory()}
-        onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
-        onWorkflowImportClick={() => workflowImportInputRef.current?.click()}
-        onWorkflowImportChange={handleWorkflowImport}
-      />
+      >
+        <StudioWorkflowsPage
+          workflows={workflowsQuery}
+          workspaceSettings={workspaceSettingsQuery}
+          workflowStorageMode={
+            appContextQuery.data?.workflowStorageMode || 'workspace'
+          }
+          selectedWorkflowId={selectedWorkflowId}
+          selectedDirectoryId={draftDirectoryId || defaultDirectoryId}
+          templateWorkflow={templateWorkflow}
+          draftMode={draftMode}
+          activeWorkflowName={activeWorkflowName}
+          activeWorkflowDescription={activeWorkflowDescription}
+          activeWorkflowSourceKey={activeWorkflowSourceKey}
+          workflowSearch={workflowSearch}
+          showDirectoryForm={showWorkflowDirectoryForm}
+          directoryPath={directoryPath}
+          directoryLabel={directoryLabel}
+          workflowImportPending={workflowImportPending}
+          workflowImportInputRef={workflowImportInputRef}
+          onOpenWorkflow={openWorkspaceWorkflow}
+          onStartBlankDraft={startBlankDraft}
+          onOpenCurrentDraft={() => {
+            ensureActiveWorkflowDraftLoaded();
+            setWorkspacePage('studio');
+            setStudioView('editor');
+          }}
+          onSelectDirectoryId={setDraftDirectoryId}
+          onSetWorkflowSearch={setWorkflowSearch}
+          onToggleDirectoryForm={() =>
+            setShowWorkflowDirectoryForm((current) => !current)
+          }
+          onSetDirectoryPath={setDirectoryPath}
+          onSetDirectoryLabel={setDirectoryLabel}
+          onAddDirectory={() => void handleAddDirectory()}
+          onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
+          onWorkflowImportClick={() => workflowImportInputRef.current?.click()}
+          onWorkflowImportChange={handleWorkflowImport}
+        />
+      </div>
     ) : workspacePage === 'studio' ? (
       studioView === 'execution' ? (
         <StudioExecutionPage
@@ -4121,7 +4234,7 @@ const StudioPage: React.FC = () => {
           executionNotice={executionNotice}
           logsPopoutMode={logsPopoutMode === 'popout'}
           logsDetached={logsDetached}
-          onSwitchStudioView={setStudioView}
+          onSwitchStudioView={handleSwitchStudioView}
           onOpenExecution={openExecution}
           onSaveDraft={() => void handleSaveDraft()}
           onExportDraft={() => void handleExportDraft()}
@@ -4192,7 +4305,7 @@ const StudioPage: React.FC = () => {
           gAgentActorsError={gAgentActorsQuery.isError ? gAgentActorsQuery.error : null}
           bindingActivationRevisionId={bindingActivationRevisionId}
           bindingRetirementRevisionId={bindingRetirementRevisionId}
-          onSwitchStudioView={setStudioView}
+          onSwitchStudioView={handleSwitchStudioView}
           onExportDraft={() => void handleExportDraft()}
           onSelectGraphNode={(nodeId) => {
             setSelectedGraphNodeId(nodeId);
@@ -4424,76 +4537,90 @@ const StudioPage: React.FC = () => {
         onUpdateConnectorCatalog={updateConnectorCatalogDraft}
       />
     ) : (
-      <StudioSettingsPage
-        workspaceSettings={workspaceSettingsQuery}
-        settings={settingsQuery}
-        settingsDraft={settingsDraft}
-        selectedProvider={selectedProvider}
-        hostMode={studioHostMode}
-        workflowStorageMode={
-          appContextQuery.data?.workflowStorageMode ?? 'workspace'
-        }
-        settingsDirty={settingsDirty}
-        settingsPending={settingsPending}
-        runtimeTestPending={runtimeTestPending}
-        settingsNotice={settingsNotice}
-        runtimeTestResult={runtimeTestResult}
-        directoryPath={directoryPath}
-        directoryLabel={directoryLabel}
-        onSaveSettings={() => void handleSaveSettings()}
-        onTestRuntime={() => void handleTestRuntime()}
-        onSetSettingsDraft={setSettingsDraft}
-        onAddProvider={() => {
-          if (!settingsDraft) {
-            return;
-          }
-
-          const nextProvider = createProviderDraft(
-            settingsDraft.providerTypes,
-            settingsDraft.providers,
-          );
-          setSettingsDraft({
-            ...settingsDraft,
-            providers: [nextProvider, ...settingsDraft.providers],
-            defaultProviderName:
-              settingsDraft.defaultProviderName || nextProvider.providerName,
-          });
-          setSelectedProviderName(nextProvider.providerName);
+      <div
+        style={{
+          display: 'flex',
+          flex: 1,
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
-        onSelectProviderName={setSelectedProviderName}
-        onDeleteSelectedProvider={() => {
-          if (!settingsDraft || !selectedProvider) {
-            return;
+      >
+        <StudioSettingsPage
+          workspaceSettings={workspaceSettingsQuery}
+          settings={settingsQuery}
+          settingsDraft={settingsDraft}
+          selectedProvider={selectedProvider}
+          hostMode={studioHostMode}
+          workflowStorageMode={
+            appContextQuery.data?.workflowStorageMode ?? 'workspace'
           }
+          settingsDirty={settingsDirty}
+          settingsPending={settingsPending}
+          runtimeTestPending={runtimeTestPending}
+          settingsNotice={settingsNotice}
+          runtimeTestResult={runtimeTestResult}
+          directoryPath={directoryPath}
+          directoryLabel={directoryLabel}
+          onSaveSettings={() => void handleSaveSettings()}
+          onTestRuntime={() => void handleTestRuntime()}
+          onSetSettingsDraft={setSettingsDraft}
+          onAddProvider={() => {
+            if (!settingsDraft) {
+              return;
+            }
 
-          const nextProviders = settingsDraft.providers.filter(
-            (provider) => provider.providerName !== selectedProvider.providerName,
-          );
-          setSettingsDraft({
-            ...settingsDraft,
-            providers: nextProviders,
-            defaultProviderName:
-              settingsDraft.defaultProviderName === selectedProvider.providerName
-                ? nextProviders[0]?.providerName || ''
-                : settingsDraft.defaultProviderName,
-          });
-          setSelectedProviderName(nextProviders[0]?.providerName || '');
-        }}
-        onSetDefaultProvider={() => {
-          if (!settingsDraft || !selectedProvider) {
-            return;
+            const nextProvider = createProviderDraft(
+              settingsDraft.providerTypes,
+              settingsDraft.providers,
+            );
+            setSettingsDraft({
+              ...settingsDraft,
+              providers: [nextProvider, ...settingsDraft.providers],
+              defaultProviderName:
+                settingsDraft.defaultProviderName || nextProvider.providerName,
+            });
+            setSelectedProviderName(nextProvider.providerName);
+          }}
+          onSelectProviderName={setSelectedProviderName}
+          onDeleteSelectedProvider={() => {
+            if (!settingsDraft || !selectedProvider) {
+              return;
+            }
+
+            const nextProviders = settingsDraft.providers.filter(
+              (provider) =>
+                provider.providerName !== selectedProvider.providerName,
+            );
+            setSettingsDraft({
+              ...settingsDraft,
+              providers: nextProviders,
+              defaultProviderName:
+                settingsDraft.defaultProviderName ===
+                selectedProvider.providerName
+                  ? nextProviders[0]?.providerName || ''
+                  : settingsDraft.defaultProviderName,
+            });
+            setSelectedProviderName(nextProviders[0]?.providerName || '');
+          }}
+          onSetDefaultProvider={() => {
+            if (!settingsDraft || !selectedProvider) {
+              return;
+            }
+
+            setSettingsDraft({
+              ...settingsDraft,
+              defaultProviderName: selectedProvider.providerName,
+            });
+          }}
+          onSetDirectoryPath={setDirectoryPath}
+          onSetDirectoryLabel={setDirectoryLabel}
+          onAddDirectory={() => void handleAddDirectory()}
+          onRemoveDirectory={(directoryId) =>
+            void handleRemoveDirectory(directoryId)
           }
-
-          setSettingsDraft({
-            ...settingsDraft,
-            defaultProviderName: selectedProvider.providerName,
-          });
-        }}
-        onSetDirectoryPath={setDirectoryPath}
-        onSetDirectoryLabel={setDirectoryLabel}
-        onAddDirectory={() => void handleAddDirectory()}
-        onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
-      />
+        />
+      </div>
     );
 
   const pageContainerTitle =

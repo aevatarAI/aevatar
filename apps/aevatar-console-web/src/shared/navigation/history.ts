@@ -31,6 +31,11 @@ function navigate(target: string, replace: boolean): void {
     return;
   }
 
+  const currentTarget = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (replace && nextTarget === currentTarget) {
+    return;
+  }
+
   if (replace) {
     window.history.replaceState(window.history.state, "", nextTarget);
   } else {
