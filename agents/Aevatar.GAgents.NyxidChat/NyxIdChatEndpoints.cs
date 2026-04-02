@@ -623,6 +623,7 @@ public static class NyxIdChatEndpoints
         // Subscribe to actor events and collect response
         var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var responseBuilder = new StringBuilder();
+        string? errorMessage = null;
         using var ctr = ct.Register(() => responseTcs.TrySetCanceled());
 
         await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
@@ -640,6 +641,17 @@ public static class NyxIdChatEndpoints
                 }
                 else if (payload.Is(TextMessageEndEvent.Descriptor))
                 {
+                    var evt = payload.Unpack<TextMessageEndEvent>();
+                    // Capture LLM errors that the actor embeds in the end event content
+                    if (!string.IsNullOrEmpty(evt.Content))
+                    {
+                        const string llmErrorPrefix = "[[AEVATAR_LLM_ERROR]]";
+                        const string llmFailedPrefix = "LLM request failed:";
+                        if (evt.Content.StartsWith(llmErrorPrefix, StringComparison.Ordinal))
+                            errorMessage = evt.Content[llmErrorPrefix.Length..].Trim();
+                        else if (evt.Content.StartsWith(llmFailedPrefix, StringComparison.Ordinal))
+                            errorMessage = evt.Content.Trim();
+                    }
                     responseTcs.TrySetResult(responseBuilder.ToString());
                 }
 
@@ -699,7 +711,12 @@ public static class NyxIdChatEndpoints
                 : "Sorry, the request timed out. Please try again.";
         }
 
-        if (string.IsNullOrWhiteSpace(replyText))
+        if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            logger.LogWarning("Relay LLM error for conversation={ConversationId}: {Error}", conversationId, errorMessage);
+            replyText = $"[Error] {errorMessage}";
+        }
+        else if (string.IsNullOrWhiteSpace(replyText))
         {
             logger.LogWarning("Relay produced empty response for conversation={ConversationId}", conversationId);
             replyText = "(No response generated)";
