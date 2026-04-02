@@ -7,4 +7,5 @@ public interface INyxIdUserLlmPreferencesStore
 
 public sealed record NyxIdUserLlmPreferences(
     string DefaultModel,
-    string PreferredRoute);
+    string PreferredRoute,
+    int MaxToolRounds = 0);

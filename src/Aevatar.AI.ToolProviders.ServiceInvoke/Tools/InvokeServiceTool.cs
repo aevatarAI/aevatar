@@ -73,18 +73,20 @@ public sealed class InvokeServiceTool : IAgentTool
             if (string.IsNullOrWhiteSpace(endpointId))
                 return """{"error":"'endpoint_id' is required"}""";
 
+            var (resolvedTenantId, resolvedAppId, resolvedNamespace) = ResolveScope();
+
             var identity = new ServiceIdentity
             {
-                TenantId = _options.TenantId ?? string.Empty,
-                AppId = _options.AppId ?? string.Empty,
-                Namespace = _options.Namespace ?? string.Empty,
+                TenantId = resolvedTenantId ?? string.Empty,
+                AppId = resolvedAppId ?? string.Empty,
+                Namespace = resolvedNamespace ?? string.Empty,
                 ServiceId = serviceId,
             };
 
             var payloadJson = args.RawOrStr("payload");
             var catalog = await _catalogReader.GetAsync(identity, ct);
             if (catalog == null)
-                return JsonSerializer.Serialize(new { error = $"Service '{serviceId}' was not found in scope '{_options.TenantId}:{_options.AppId}:{_options.Namespace}'." });
+                return JsonSerializer.Serialize(new { error = $"Service '{serviceId}' was not found in scope '{resolvedTenantId}:{resolvedAppId}:{resolvedNamespace}'." });
 
             var endpoint = catalog.Endpoints
                 .FirstOrDefault(e => string.Equals(e.EndpointId, endpointId, StringComparison.OrdinalIgnoreCase));
@@ -105,8 +107,8 @@ public sealed class InvokeServiceTool : IAgentTool
                 Caller = new ServiceInvocationCaller
                 {
                     ServiceKey = string.Empty,
-                    TenantId = _options.TenantId ?? string.Empty,
-                    AppId = _options.AppId ?? string.Empty,
+                    TenantId = resolvedTenantId ?? string.Empty,
+                    AppId = resolvedAppId ?? string.Empty,
                 },
             };
 
@@ -137,6 +139,26 @@ public sealed class InvokeServiceTool : IAgentTool
         {
             return JsonSerializer.Serialize(new { error = $"Invocation failed: {ex.Message}" });
         }
+    }
+
+    private (string? TenantId, string? AppId, string? Namespace) ResolveScope()
+    {
+        var tenantId = _options.TenantId;
+        var appId = _options.AppId;
+        var ns = _options.Namespace;
+
+        if (_options.EnableDynamicScopeResolution &&
+            string.IsNullOrWhiteSpace(tenantId))
+        {
+            tenantId = AgentToolRequestContext.TryGet("scope_id");
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                appId = string.IsNullOrWhiteSpace(appId) ? "default" : appId;
+                ns = string.IsNullOrWhiteSpace(ns) ? "default" : ns;
+            }
+        }
+
+        return (tenantId, appId, ns);
     }
 
     private async Task<Any> PackPayloadAsync(

@@ -87,15 +87,37 @@ public sealed class ListServicesTool : IAgentTool
 
     private async Task<IReadOnlyList<ServiceCatalogSnapshot>> QueryServicesAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(_options.TenantId) &&
-            !string.IsNullOrWhiteSpace(_options.AppId) &&
-            !string.IsNullOrWhiteSpace(_options.Namespace))
+        var (tenantId, appId, ns) = ResolveScope();
+
+        if (!string.IsNullOrWhiteSpace(tenantId) &&
+            !string.IsNullOrWhiteSpace(appId) &&
+            !string.IsNullOrWhiteSpace(ns))
         {
             return await _catalogReader.QueryByScopeAsync(
-                _options.TenantId, _options.AppId, _options.Namespace, _options.MaxListResults, ct);
+                tenantId, appId, ns, _options.MaxListResults, ct);
         }
 
         return await _catalogReader.QueryAllAsync(_options.MaxListResults, ct);
+    }
+
+    private (string? TenantId, string? AppId, string? Namespace) ResolveScope()
+    {
+        var tenantId = _options.TenantId;
+        var appId = _options.AppId;
+        var ns = _options.Namespace;
+
+        if (_options.EnableDynamicScopeResolution &&
+            string.IsNullOrWhiteSpace(tenantId))
+        {
+            tenantId = AgentToolRequestContext.TryGet("scope_id");
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                appId = string.IsNullOrWhiteSpace(appId) ? "default" : appId;
+                ns = string.IsNullOrWhiteSpace(ns) ? "default" : ns;
+            }
+        }
+
+        return (tenantId, appId, ns);
     }
 
     private static bool MatchesFilter(ServiceCatalogSnapshot snapshot, string filter)

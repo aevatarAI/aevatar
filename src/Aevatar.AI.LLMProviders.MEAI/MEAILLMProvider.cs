@@ -325,16 +325,13 @@ public sealed class MEAILLMProvider : ILLMProvider
             hasOptions = true;
         }
 
-        // 注册 Tools
+        // 注册 Tools — 使用工具自身的 ParametersSchema，让 LLM 看到真实参数结构
         if (request.Tools is { Count: > 0 })
         {
             options.Tools = [];
             foreach (var tool in request.Tools)
             {
-                options.Tools.Add(AIFunctionFactory.Create(
-                    (string input) => tool.ExecuteAsync(input),
-                    tool.Name,
-                    tool.Description));
+                options.Tools.Add(new AgentToolAIFunction(tool));
             }
             hasOptions = true;
         }

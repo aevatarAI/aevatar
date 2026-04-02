@@ -31,9 +31,10 @@ public sealed class ServiceInvokeAgentToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.TenantId) ||
-            string.IsNullOrWhiteSpace(_options.AppId) ||
-            string.IsNullOrWhiteSpace(_options.Namespace))
+        if (!_options.EnableDynamicScopeResolution &&
+            (string.IsNullOrWhiteSpace(_options.TenantId) ||
+             string.IsNullOrWhiteSpace(_options.AppId) ||
+             string.IsNullOrWhiteSpace(_options.Namespace)))
         {
             _logger.LogDebug("ServiceInvoke scope not fully configured (tenant/app/namespace required), skipping");
             return Task.FromResult<IReadOnlyList<IAgentTool>>([]);

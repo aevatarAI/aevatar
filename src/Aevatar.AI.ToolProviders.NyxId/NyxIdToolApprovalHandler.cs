@@ -74,6 +74,7 @@ public sealed class NyxIdToolApprovalHandler : IToolApprovalHandler
                 {
                     case "approved":
                         return ToolApprovalResult.Approved("Approved via NyxID.");
+                    case "rejected":
                     case "denied":
                         var reason = ExtractReason(statusResponse);
                         return ToolApprovalResult.Denied(reason ?? "Denied via NyxID.");

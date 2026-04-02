@@ -1,0 +1,212 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Loader2 } from 'lucide-react';
+import * as api from '../../api';
+
+type Props = { flash: (msg: string, type: 'success' | 'error') => void };
+
+/** Field definitions derived from config.template.json. */
+const FIELDS: FieldDef[] = [
+  {
+    key: 'defaultModel',
+    label: 'Default Model',
+    type: 'text',
+    placeholder: 'e.g. deepseek-chat, claude-sonnet-4-20250514',
+    description: 'Override the LLM model used for chat. Leave empty to use provider default.',
+  },
+  {
+    key: 'preferredLlmRoute',
+    label: 'Preferred LLM Route',
+    type: 'text',
+    placeholder: 'e.g. chrono-llm, /api/v1/proxy/s/my-service',
+    description: 'Route LLM requests to a specific NyxID proxy service. Empty = gateway default.',
+  },
+  {
+    key: 'maxToolRounds',
+    label: 'Max Tool Rounds',
+    type: 'number',
+    placeholder: '0',
+    description: 'Maximum tool-call iterations per chat turn. 0 = unlimited (recommended).',
+  },
+  {
+    key: 'runtimeMode',
+    label: 'Runtime Mode',
+    type: 'select',
+    options: ['local', 'remote'],
+    description: 'Which backend runtime to use for workflow execution.',
+  },
+  {
+    key: 'localRuntimeBaseUrl',
+    label: 'Local Runtime URL',
+    type: 'text',
+    placeholder: 'http://127.0.0.1:5080',
+    description: 'Base URL for the local runtime backend.',
+  },
+  {
+    key: 'remoteRuntimeBaseUrl',
+    label: 'Remote Runtime URL',
+    type: 'text',
+    placeholder: 'https://aevatar-console-backend-api.aevatar.ai',
+    description: 'Base URL for the remote runtime backend.',
+  },
+];
+
+type FieldDef = {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  placeholder?: string;
+  description?: string;
+  options?: string[];
+};
+
+export default function UserConfigEditor({ flash }: Props) {
+  const [tab, setTab] = useState<'fields' | 'raw'>('fields');
+  const [config, setConfig] = useState<Record<string, any>>({});
+  const [rawJson, setRawJson] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.userConfig.get();
+      setConfig(data ?? {});
+      setRawJson(JSON.stringify(data ?? {}, null, 2));
+    } catch {
+      setConfig({});
+      setRawJson('{}');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  function updateField(key: string, value: any) {
+    setConfig(prev => ({ ...prev, [key]: value }));
+  }
+
+  async function saveFields() {
+    setSaving(true);
+    try {
+      const payload: Record<string, any> = {};
+      for (const field of FIELDS) {
+        const v = config[field.key];
+        if (field.type === 'number') {
+          const n = parseInt(v, 10);
+          if (!isNaN(n) && n > 0) payload[field.key] = n;
+          // omit 0 or empty → server treats as unset
+        } else if (typeof v === 'string' && v.trim() !== '') {
+          payload[field.key] = v.trim();
+        }
+      }
+      await api.userConfig.save(payload);
+      flash('Config saved', 'success');
+      await load();
+    } catch (e: any) {
+      flash(e?.message || 'Save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveRaw() {
+    setSaving(true);
+    try {
+      const parsed = JSON.parse(rawJson);
+      await api.userConfig.save(parsed);
+      flash('Config saved (raw)', 'success');
+      await load();
+    } catch (e: any) {
+      flash(e?.message || 'Invalid JSON or save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="py-12 flex flex-col items-center gap-2 text-[13px] text-gray-400">
+        <Loader2 size={24} className="animate-spin" />
+        <span>Loading config...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4 max-w-[780px]">
+      {/* Tabs + Save */}
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1 rounded-lg bg-[#F2F1EE] p-0.5">
+          <button
+            onClick={() => setTab('fields')}
+            className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-colors ${tab === 'fields' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Fields
+          </button>
+          <button
+            onClick={() => setTab('raw')}
+            className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-colors ${tab === 'raw' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            Raw
+          </button>
+        </div>
+        <button
+          onClick={tab === 'fields' ? saveFields : saveRaw}
+          disabled={saving}
+          className="inline-flex items-center gap-1 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={12} className="animate-spin" /> : null}
+          Save
+        </button>
+      </div>
+
+      {tab === 'raw' ? (
+        <div className="rounded-2xl border border-[#EEEAE4] bg-white p-1">
+          <textarea
+            value={rawJson}
+            onChange={e => setRawJson(e.target.value)}
+            className="w-full min-h-[400px] max-h-[70vh] p-4 text-[13px] font-mono leading-relaxed text-gray-700 resize-y outline-none"
+            spellCheck={false}
+          />
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-[#EEEAE4] bg-white divide-y divide-[#EEEAE4]">
+          {FIELDS.map(field => (
+            <div key={field.key} className="px-5 py-4">
+              <div className="flex items-baseline justify-between gap-4">
+                <div className="min-w-0">
+                  <label className="block text-[13px] font-semibold text-gray-800">{field.label}</label>
+                  {field.description && (
+                    <p className="text-[11px] text-gray-400 mt-0.5">{field.description}</p>
+                  )}
+                </div>
+                <div className="flex-shrink-0 w-[320px]">
+                  {field.type === 'select' ? (
+                    <select
+                      value={config[field.key] ?? ''}
+                      onChange={e => updateField(field.key, e.target.value)}
+                      className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-1.5 text-[13px] text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    >
+                      {field.options?.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type === 'number' ? 'number' : 'text'}
+                      value={config[field.key] ?? ''}
+                      onChange={e => updateField(field.key, field.type === 'number' ? e.target.value : e.target.value)}
+                      placeholder={field.placeholder}
+                      className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-1.5 text-[13px] text-gray-700 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

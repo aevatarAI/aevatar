@@ -117,6 +117,46 @@ public sealed class ToolCallLoop
 
             if (terminated || !response.HasToolCalls)
             {
+                // ─── Fallback: parse text-based function calls (DSML/XML) ───
+                // Some LLMs emit tool invocations as DSML-formatted text instead of
+                // structured FunctionCallContent. Detect and execute them.
+                if (!terminated && response.Content != null)
+                {
+                    var parsed = TextToolCallParser.Parse(response.Content);
+                    if (parsed.ToolCalls.Count > 0)
+                    {
+                        // Run PostSampling hook — same gate as structured calls
+                        if (_hooks != null)
+                        {
+                            var postCtx = new AIGAgentExecutionHookContext
+                            {
+                                LLMResponse = new LLMResponse
+                                {
+                                    Content = parsed.CleanedContent,
+                                    ToolCalls = parsed.ToolCalls,
+                                },
+                            };
+                            postCtx.Items["tool_call_count"] = parsed.ToolCalls.Count;
+                            await _hooks.RunPostSamplingAsync(postCtx, ct);
+
+                            if (postCtx.Items.TryGetValue("block_tool_calls", out var block)
+                                && block is true)
+                            {
+                                if (parsed.CleanedContent != null)
+                                    messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
+                                return parsed.CleanedContent;
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(parsed.CleanedContent))
+                            messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
+                        messages.Add(new ChatMessage { Role = "assistant", ToolCalls = parsed.ToolCalls });
+                        await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
+                        accumulatedContent = null;
+                        continue;
+                    }
+                }
+
                 // Recovery: if the response was truncated by max_tokens, inject a continuation
                 // nudge and retry instead of exiting — mirrors Claude Code's recovery logic.
                 if (!terminated
@@ -172,8 +212,39 @@ public sealed class ToolCallLoop
         };
         var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
         var finalContent = finalResponse?.Content;
+
+        // ─── Fallback: the final no-tools call may still contain DSML text calls ───
         if (finalContent != null)
+        {
+            var finalParsed = TextToolCallParser.Parse(finalContent);
+            if (finalParsed.ToolCalls.Count > 0)
+            {
+                if (!string.IsNullOrWhiteSpace(finalParsed.CleanedContent))
+                    messages.Add(ChatMessage.Assistant(finalParsed.CleanedContent));
+                messages.Add(new ChatMessage { Role = "assistant", ToolCalls = finalParsed.ToolCalls });
+                await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
+
+                // One more LLM call to summarize
+                var summaryRequest = new LLMRequest
+                {
+                    Messages = [..messages],
+                    RequestId = finalRequest.RequestId,
+                    Metadata = finalRequest.Metadata,
+                    Tools = null,
+                    Model = finalRequest.Model,
+                    Temperature = finalRequest.Temperature,
+                    MaxTokens = finalRequest.MaxTokens,
+                };
+                var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
+                var summaryContent = summaryResponse?.Content;
+                if (summaryContent != null)
+                    messages.Add(ChatMessage.Assistant(summaryContent));
+                return summaryContent;
+            }
+
             messages.Add(ChatMessage.Assistant(finalContent));
+        }
+
         return finalContent;
     }
 

@@ -1,0 +1,171 @@
+// ─────────────────────────────────────────────────────────────
+// Multi-Agent coordination messages.
+// Commands, domain events, and inter-agent messaging primitives.
+// ─────────────────────────────────────────────────────────────
+syntax = "proto3";
+package aevatar.multiagent;
+option csharp_namespace = "Aevatar.Foundation.Abstractions.MultiAgent";
+
+import "google/protobuf/timestamp.proto";
+
+// ═══════════════════════════════════════════════════════════════
+// Inter-agent messaging
+// ═══════════════════════════════════════════════════════════════
+
+message AgentMessage {
+  string from_agent_id = 1;
+  string content = 2;
+  string summary = 3;
+  google.protobuf.Timestamp sent_at = 4;
+}
+
+message ShutdownRequestEvent {
+  string request_id = 1;
+  string reason = 2;
+}
+
+message ShutdownResponseEvent {
+  string request_id = 1;
+  bool approve = 2;
+  string reason = 3;
+}
+
+message PlanApprovalResponseEvent {
+  string request_id = 1;
+  bool approve = 2;
+  string feedback = 3;
+}
+
+message IdleNotificationEvent {
+  string agent_id = 1;
+  string reason = 2;
+  string completed_task_id = 3;
+  google.protobuf.Timestamp idle_since = 4;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TaskBoard — commands
+// ═══════════════════════════════════════════════════════════════
+
+message CreateTaskCommand {
+  string task_id = 1;
+  string content = 2;
+  string active_form = 3;
+  repeated string blocked_by = 4;
+}
+
+message ClaimTaskCommand {
+  string task_id = 1;
+  string agent_id = 2;
+}
+
+message CompleteTaskCommand {
+  string task_id = 1;
+  string agent_id = 2;
+  string output = 3;
+}
+
+message FailTaskCommand {
+  string task_id = 1;
+  string agent_id = 2;
+  string error = 3;
+}
+
+message RequestWorkCommand {
+  string agent_id = 1;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TaskBoard — domain events (persisted via event sourcing)
+// ═══════════════════════════════════════════════════════════════
+
+message TaskCreatedEvent {
+  string task_id = 1;
+  string content = 2;
+  string active_form = 3;
+  repeated string blocked_by = 4;
+  int32 sequence = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+}
+
+message TaskClaimedEvent {
+  string task_id = 1;
+  string agent_id = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+}
+
+message TaskCompletedEvent {
+  string task_id = 1;
+  string agent_id = 2;
+  string output = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+message TaskFailedEvent {
+  string task_id = 1;
+  string agent_id = 2;
+  string error = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+message TaskUnblockedEvent {
+  string task_id = 1;
+  string completed_dependency = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+}
+
+message WorkAssignedEvent {
+  string task_id = 1;
+  string agent_id = 2;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TeamManager — commands
+// ═══════════════════════════════════════════════════════════════
+
+message RegisterMemberCommand {
+  string agent_id = 1;
+  string agent_name = 2;
+  string agent_type = 3;
+}
+
+message UnregisterMemberCommand {
+  string agent_id = 1;
+}
+
+message UpdateMemberStatusCommand {
+  string agent_id = 1;
+  string status = 2;
+}
+
+message BroadcastMessageCommand {
+  string from_agent_id = 1;
+  string content = 2;
+  string summary = 3;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TeamManager — domain events
+// ═══════════════════════════════════════════════════════════════
+
+message MemberRegisteredEvent {
+  string agent_id = 1;
+  string agent_name = 2;
+  string agent_type = 3;
+  google.protobuf.Timestamp occurred_at = 4;
+}
+
+message MemberUnregisteredEvent {
+  string agent_id = 1;
+}
+
+message MemberStatusUpdatedEvent {
+  string agent_id = 1;
+  string status = 2;
+}
+
+message TeamBroadcastSentEvent {
+  string from_agent_id = 1;
+  string content = 2;
+  int32 recipient_count = 3;
+}

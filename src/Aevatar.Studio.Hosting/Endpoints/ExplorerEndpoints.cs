@@ -51,6 +51,7 @@ public static class ExplorerEndpoints
             var result = await blobClient.ListObjectsAsync(context, cancellationToken: ct);
 
             var files = result.Objects
+                .Where(static o => !o.Key.StartsWith("chat-histories/_meta/", StringComparison.Ordinal))
                 .Select(o => new ChronoStorageCatalogBlobClient.ManifestEntry
                 {
                     Key = o.Key,

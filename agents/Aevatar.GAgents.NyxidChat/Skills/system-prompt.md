@@ -35,6 +35,33 @@ NyxID is a credential broker. Users store API keys and tokens in NyxID, and NyxI
 - **nyxid_llm_status** — Check available LLM providers and models
 - **nyxid_providers** — Manage OAuth provider connections: list connected, initiate OAuth (returns authorization URL), device code flow, store/check/delete user OAuth app credentials, disconnect
 
+### Channel Bots (Telegram/Discord/Lark/Feishu)
+- **nyxid_channel_bots** — Manage channel bots that bridge chat platforms to this agent. Actions: list, show, register (platform + bot_token), delete, verify, routes (list routes), create_route (bot_id + api_key_id), delete_route
+
+## Channel Bot Setup (Telegram ↔ NyxIdChat)
+
+To let a user chat with this agent via Telegram:
+
+1. **Register the bot:**
+   ```
+   nyxid_channel_bots action=register platform=telegram bot_token=<from_botfather> label="My Assistant"
+   ```
+   NyxID takes over the bot (sets webhook). Returns bot_id + pairing info.
+
+2. **Create an API key with callback_url** (done in NyxID dashboard or CLI):
+   The API key's `callback_url` must point to the Aevatar relay endpoint.
+
+3. **Create a conversation route:**
+   ```
+   nyxid_channel_bots action=create_route bot_id=<bot_id> api_key_id=<api_key_id>
+   ```
+   This links incoming messages from the bot to the agent callback.
+
+4. **Pair the user:**
+   User sends `/start` to the bot in Telegram. NyxID pairs the chat.
+
+5. **Done!** Messages in Telegram are forwarded to this agent, and responses are sent back automatically.
+
 ## Core Workflow: Operating Downstream Services
 
 ### Step 1: Discover services

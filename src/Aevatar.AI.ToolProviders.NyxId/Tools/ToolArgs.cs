@@ -12,11 +12,18 @@ internal sealed class ToolArgs
     private readonly Dictionary<string, JsonElement> _props;
     private readonly string _raw;
 
-    private ToolArgs(Dictionary<string, JsonElement> props, string raw)
+    private ToolArgs(Dictionary<string, JsonElement> props, string raw, string? parseError = null)
     {
         _props = props;
         _raw = raw;
+        ParseError = parseError;
     }
+
+    /// <summary>Whether the JSON parsing failed. When true, all property lookups return null.</summary>
+    public bool HasParseError => ParseError != null;
+
+    /// <summary>The parse error message, or null if parsing succeeded.</summary>
+    public string? ParseError { get; }
 
     /// <summary>Parse JSON arguments from the LLM. Never throws.</summary>
     public static ToolArgs Parse(string? json)
@@ -33,9 +40,9 @@ internal sealed class ToolArgs
                 dict[prop.Name] = prop.Value.Clone();
             return new ToolArgs(dict, raw);
         }
-        catch
+        catch (JsonException ex)
         {
-            return new ToolArgs([], raw);
+            return new ToolArgs([], raw, $"Invalid JSON: {ex.Message}");
         }
     }
 

@@ -17,6 +17,7 @@ public sealed class ExecutionService
     private const string ExecutionStreamFailedCode = "EXECUTION_STREAM_FAILED";
 
     private readonly IStudioWorkspaceStore _store;
+    private readonly IUserConfigStore? _userConfigStore;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IStudioBackendRequestAuthSnapshotProvider? _authSnapshotProvider;
     private readonly string _observationSessionId = Guid.NewGuid().ToString("N");
@@ -24,11 +25,13 @@ public sealed class ExecutionService
     public ExecutionService(
         IStudioWorkspaceStore store,
         IHttpClientFactory httpClientFactory,
-        IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null)
+        IStudioBackendRequestAuthSnapshotProvider? authSnapshotProvider = null,
+        IUserConfigStore? userConfigStore = null)
     {
         _store = store;
         _httpClientFactory = httpClientFactory;
         _authSnapshotProvider = authSnapshotProvider;
+        _userConfigStore = userConfigStore;
     }
 
     public async Task<IReadOnlyList<ExecutionSummary>> ListAsync(CancellationToken cancellationToken = default)
@@ -51,10 +54,9 @@ public sealed class ExecutionService
         if (!ShouldUsePublishedWorkflowRun(request))
             throw new InvalidOperationException("scopeId and workflowId are required. Executions must target a registered scope service.");
 
-        var settings = await _store.GetSettingsAsync(cancellationToken);
-        var runtimeBaseUrl = string.IsNullOrWhiteSpace(request.RuntimeBaseUrl)
-            ? settings.RuntimeBaseUrl
-            : request.RuntimeBaseUrl.Trim().TrimEnd('/');
+        var runtimeBaseUrl = request.RuntimeBaseUrl?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(runtimeBaseUrl))
+            runtimeBaseUrl = await ResolveRuntimeBaseUrlAsync(cancellationToken);
 
         var executionId = Guid.NewGuid().ToString("N");
         var startedAtUtc = DateTimeOffset.UtcNow;
@@ -1090,4 +1092,29 @@ public sealed class ExecutionService
             record.Frames
                 .Select(frame => new ExecutionFrameDto(frame.ReceivedAtUtc, frame.Payload))
                 .ToList());
+
+    /// <summary>
+    /// Resolve runtime base URL: user config (runtimeMode + local/remote URLs) takes priority;
+    /// falls back to workspace settings if user config is unavailable.
+    /// </summary>
+    private async Task<string> ResolveRuntimeBaseUrlAsync(CancellationToken ct)
+    {
+        if (_userConfigStore != null)
+        {
+            try
+            {
+                var userConfig = await _userConfigStore.GetAsync(ct);
+                var resolved = UserConfigRuntime.ResolveActiveRuntimeBaseUrl(userConfig);
+                if (!string.IsNullOrWhiteSpace(resolved))
+                    return resolved;
+            }
+            catch
+            {
+                // Fall through to workspace settings
+            }
+        }
+
+        var settings = await _store.GetSettingsAsync(ct);
+        return settings.RuntimeBaseUrl;
+    }
 }

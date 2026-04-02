@@ -216,7 +216,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatAsync(userMessage, maxRounds, requestId, metadata, ct);
     }
 
     /// <summary>流式 Chat。</summary>
@@ -234,7 +235,24 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync(userMessage, maxRounds, requestId, metadata, ct);
+    }
+
+    /// <summary>
+    /// Resolve maxToolRounds: metadata override > EffectiveConfig > int.MaxValue (no limit).
+    /// </summary>
+    private int ResolveMaxToolRounds(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata != null
+            && metadata.TryGetValue(LLMRequestMetadataKeys.MaxToolRoundsOverride, out var overrideValue)
+            && int.TryParse(overrideValue, out var overrideRounds)
+            && overrideRounds > 0)
+        {
+            return overrideRounds;
+        }
+
+        return EffectiveConfig.MaxToolRounds;
     }
 
     /// <summary>注册单个工具。</summary>

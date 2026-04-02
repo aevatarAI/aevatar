@@ -760,6 +760,7 @@ export default function ScopePage() {
     const toolCalls: ToolCallInfo[] = [];
     let thinking = '';
     let contentText = '';
+    let lastWasReasoning = false;
 
     const updateAssistant = (patch: Partial<ChatMessage>) => {
       setMessages(prev => {
@@ -777,6 +778,10 @@ export default function ScopePage() {
       if (!evt) return;
       events.push(evt);
       setDebugEvents([...events]);
+
+      // Reset reasoning tracking for every event; the reasoning branch re-sets it to true.
+      const wasReasoning = lastWasReasoning;
+      lastWasReasoning = false;
 
       switch (evt.type) {
         case 'TEXT_MESSAGE_CONTENT': {
@@ -841,7 +846,12 @@ export default function ScopePage() {
           // Extract reasoning/thinking delta
           const reasoningDelta = extractReasoningDelta(evt);
           if (reasoningDelta) {
+            // Insert paragraph break when reasoning resumes after non-reasoning events
+            if (thinking && !wasReasoning) {
+              thinking += '\n\n';
+            }
             thinking += reasoningDelta;
+            lastWasReasoning = true;
             updateAssistant({ thinking });
             break;
           }

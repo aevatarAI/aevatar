@@ -172,6 +172,7 @@ message WorkflowExecutionKernelState
   map<string, RetryBackoffState> retry_backoffs_by_step_id = 8;
   bool current_step_dispatch_pending = 9;
   string current_step_timeout_callback_id = 10;
+  map<string, string> execution_ids_by_step_id = 11;
 }
 
 message PendingDelayState
@@ -300,6 +301,7 @@ message ParallelParentState
   int32 expected = 1;
   repeated ParallelItemResult collected = 2;
   VoteConfigState vote_config = 3;
+  repeated string collected_step_ids = 4;
 }
 
 message ParallelFanOutModuleState
@@ -307,6 +309,7 @@ message ParallelFanOutModuleState
   map<string, ParallelParentState> parents = 1;
   map<string, string> vote_step_to_parent = 2;
   map<string, bool> parent_worker_success = 3;
+  BackpressureQueueState backpressure = 4;
 }
 
 message ForEachItemResult
@@ -319,11 +322,13 @@ message ForEachParentState
 {
   int32 expected = 1;
   repeated ForEachItemResult collected = 2;
+  repeated string collected_step_ids = 3;
 }
 
 message ForEachModuleState
 {
   map<string, ForEachParentState> parents = 1;
+  BackpressureQueueState backpressure = 2;
 }
 
 message MapReduceItemResult
@@ -345,12 +350,14 @@ message MapReduceParentState
   string reduce_type = 3;
   string reduce_role = 4;
   string reduce_prompt_prefix = 5;
+  repeated string collected_step_ids = 6;
 }
 
 message MapReduceModuleState
 {
   map<string, MapReduceParentState> parents = 1;
   map<string, string> reduce_step_to_parent = 2;
+  BackpressureQueueState backpressure = 3;
 }
 
 message RaceState
@@ -439,4 +446,23 @@ message CacheModuleState
   map<string, CacheEntryState> cache_entries = 1;
   map<string, PendingCacheCallState> pending_by_cache_key = 2;
   map<string, string> child_step_to_cache_key = 3;
+}
+
+// Backpressure admission control state (shared by parallel/foreach/mapreduce modules)
+
+message BackpressureQueueEntry
+{
+  string step_id = 1;
+  string step_type = 2;
+  string run_id = 3;
+  string input = 4;
+  string target_role = 5;
+  map<string, string> parameters = 6;
+}
+
+message BackpressureQueueState
+{
+  repeated BackpressureQueueEntry queue = 1;
+  int32 active_workers = 2;
+  int32 max_concurrent_workers = 3;
 }

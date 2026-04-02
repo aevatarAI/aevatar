@@ -25,6 +25,15 @@ public sealed class NyxIdProxyTool : IAgentTool
         "Omit slug to discover all proxyable services. " +
         "Provide slug + path to send a proxied request.";
 
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.Auto;
+
+    /// <summary>
+    /// Proxy tool can execute POST/PUT/PATCH/DELETE against external services,
+    /// so it is potentially destructive. Combined with Auto approval mode,
+    /// the ToolApprovalMiddleware will require approval before execution.
+    /// </summary>
+    public bool IsDestructive => true;
+
     public string ParametersSchema => """
         {
           "type": "object",
@@ -61,7 +70,15 @@ public sealed class NyxIdProxyTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        _logger.LogDebug("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
+
         var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+        {
+            _logger.LogWarning("[nyxid_proxy] Argument parse failed: {Error}, raw={Raw}", args.ParseError, args.Raw);
+            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}";
+        }
+
         var slug = args.Str("slug") ?? args.Str("service");
         var path = args.Str("path");
         var method = args.Str("method", "GET");
@@ -71,7 +88,7 @@ public sealed class NyxIdProxyTool : IAgentTool
         // No slug → discover mode
         if (string.IsNullOrWhiteSpace(slug))
         {
-            // If action=discover was explicitly passed, or just no slug at all
+            _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery. raw={Raw}", args.Raw);
             return await _client.DiscoverProxyServicesAsync(token, ct);
         }
 

@@ -76,33 +76,48 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             {
                 Expected = items.Length,
             };
-            await SaveStateAsync(state, ctx, ct);
+
+            if (state.Backpressure.MaxConcurrentWorkers == 0)
+                state.Backpressure = BackpressureHelper.Initialize(
+                    BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
                 evt.StepId, items.Length, subStepType);
 
-            // ─── Dispatch sub-step for each item ───
+            // ─── Dispatch sub-step for each item (with backpressure) ───
+            var bpApplied = false;
             for (var i = 0; i < items.Length; i++)
             {
-                var subReq = new StepRequestEvent
-                {
-                    StepId = $"{evt.StepId}_item_{i}",
-                    StepType = subStepType,
-                    RunId = runId,
-                    Input = items[i].Trim(),
-                    TargetRole = subTargetRole ?? "",
-                };
-
-                // Forward parent parameters to sub-steps (prefixed ones)
+                var subParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var (key, value) in evt.Parameters)
                 {
                     if (key.StartsWith("sub_param_"))
-                        subReq.Parameters[key["sub_param_".Length..]] = value;
+                        subParams[key["sub_param_".Length..]] = value;
                 }
 
-                await ctx.PublishAsync(subReq, TopologyAudience.Self, ct);
+                var entry = BackpressureHelper.ToQueueEntry(
+                    $"{evt.StepId}_item_{i}", subStepType, runId, items[i].Trim(), subTargetRole ?? "", subParams);
+
+                if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
+                {
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(entry), TopologyAudience.Self, ct);
+                }
+                else if (!bpApplied)
+                {
+                    bpApplied = true;
+                    await ctx.PublishAsync(new BackpressureAppliedEvent
+                    {
+                        StepId = evt.StepId,
+                        RunId = runId,
+                        QueuedCount = state.Backpressure.Queue.Count,
+                        ActiveCount = state.Backpressure.ActiveWorkers,
+                        MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
+                    }, TopologyAudience.Self, ct);
+                }
             }
+            // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
+            await SaveStateAsync(state, ctx, ct);
         }
         else
         {
@@ -117,8 +132,13 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
 
             if (parent == null || parentKey == null || !state.Parents.TryGetValue(parentKey, out var parentState)) return;
 
+            // Deduplicate: ignore if this item step was already collected
+            if (parentState.CollectedStepIds.Contains(evt.StepId))
+                return;
+            parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Collected.Add(evt.ToForEachItemResult());
             state.Parents[parentKey] = parentState;
+            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
 
             if (parentState.Collected.Count >= parentState.Expected)
             {
@@ -144,6 +164,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             {
                 await SaveStateAsync(state, ctx, ct);
             }
+
+            if (drained != null)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
         }
     }
 

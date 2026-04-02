@@ -302,7 +302,8 @@ public sealed class StreamingToolExecutor : IDisposable
                 ToolArguments = call.ArgumentsJson,
                 ToolCallId = call.Id,
             };
-            if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
+            try { if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct); }
+            catch { /* Hook failures must not crash tool execution */ }
 
             // Re-resolve tool after hooks — hooks may have rewritten the tool name.
             var effectiveToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!;
@@ -355,7 +356,8 @@ public sealed class StreamingToolExecutor : IDisposable
                     : $"Tool '{toolCallContext.ToolName}' returned no result");
 
             toolCtx.ToolResult = toolResult;
-            if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
+            try { if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct); }
+            catch { /* Hook failures must not crash tool execution */ }
 
             lock (_lock)
             {
@@ -383,7 +385,7 @@ public sealed class StreamingToolExecutor : IDisposable
                 _hasErrored = true;
                 tracked.Status = ToolStatus.Completed;
                 tracked.Result = new ToolExecutionResult(
-                    tracked.Call.Id, $"{{\"error\":\"{ex.Message}\"}}", IsError: true);
+                    tracked.Call.Id, ToolManager.BuildErrorJson(ex.Message), IsError: true);
             }
         }
         finally

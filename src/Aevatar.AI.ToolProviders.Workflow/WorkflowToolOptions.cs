@@ -11,4 +11,7 @@ public sealed class WorkflowToolOptions
 
     /// <summary>Maximum graph traversal depth for actor_inspect subgraph queries (default: 2).</summary>
     public int MaxGraphDepth { get; set; } = 2;
+
+    /// <summary>Maximum YAML content size in characters for create/update operations (default: 100,000).</summary>
+    public int MaxYamlSizeChars { get; set; } = 100_000;
 }

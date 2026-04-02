@@ -36,7 +36,10 @@ builder.AddStudioCapability();
 // Authentication: config-driven, provider-agnostic
 builder.Services.AddNyxIdAuthentication();
 builder.AddAevatarAuthentication();
-builder.Services.AddNyxIdChat();
+builder.Services.AddNyxIdChat(relay =>
+{
+    relay.WebhookSecret = builder.Configuration["Aevatar:NyxIdRelay:WebhookSecret"];
+});
 builder.Services.AddStreamingProxy();
 builder.Services.AddChatbotClassifier();
 builder.Services.AddNyxIdTools(o =>

@@ -4,6 +4,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
+using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Attributes;
 
@@ -29,10 +30,26 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
-        SkillRegistry? skillRegistry = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
+        SkillRegistry? skillRegistry = null,
+        IToolApprovalHandler? approvalHandler = null)
+        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
+               approvalHandler: ComposeApprovalHandler(approvalHandler))
     {
         _skillRegistry = skillRegistry;
+    }
+
+    /// <summary>
+    /// Compose local-first + NyxID-remote-fallback approval chain.
+    /// Local handler publishes ToolApprovalRequestEvent to the chat UI (15s timeout).
+    /// On timeout, PriorityApprovalHandler falls back to NyxID remote approval
+    /// (Telegram / mobile app, 45s poll).
+    /// </summary>
+    private static IToolApprovalHandler ComposeApprovalHandler(IToolApprovalHandler? remoteHandler)
+    {
+        var local = new LocalApprovalHandler();
+        return remoteHandler != null
+            ? new PriorityApprovalHandler(local, remoteHandler)
+            : local;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
@@ -81,10 +98,11 @@ public sealed class NyxIdChatGAgent : RoleGAgent
                 : roleName.Trim(),
             ProviderName = NyxIdChatServiceDefaults.ProviderName,
             SystemPrompt = NyxIdChatSystemPrompt.Value,
+            // 0 = use ChatRuntime default (40). User config can override.
             MaxToolRounds = State.ConfigOverrides?.HasMaxToolRounds == true &&
                             State.ConfigOverrides.MaxToolRounds > 0
                 ? State.ConfigOverrides.MaxToolRounds
-                : 5,
+                : 0,
             EventModules = State.EventModules ?? string.Empty,
             EventRoutes = State.EventRoutes ?? string.Empty,
         };

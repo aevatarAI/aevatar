@@ -10,6 +10,7 @@ namespace Aevatar.Studio.Infrastructure.Storage;
 internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
 {
     private const string ChatHistoriesDir = "chat-histories";
+    private const string MetaDir = $"{ChatHistoriesDir}/_meta";
     private const string LegacyIndexKey = $"{ChatHistoriesDir}/index.json";
     private const string NyxIdChatActorPrefix = "nyxid-chat-";
     private const string LegacyConversationPrefix = "conv-";
@@ -44,13 +45,45 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
             if (context is null)
                 return EmptyIndex;
 
+            // Single list call for the entire chat-histories/ prefix.
             var objects = await _blobClient.ListObjectsAsync(context, ChatHistoriesDir, ct);
             if (objects.Objects.Count == 0)
                 return EmptyIndex;
 
-            var conversations = await Task.WhenAll(objects.Objects
-                .Where(static o => IsConversationFile(o.Key))
-                .Select(o => TryBuildConversationMetaAsync(scopeId, o, ct)));
+            // Partition into .jsonl conversation files and _meta/ sidecar files.
+            var jsonlByConvId = new Dictionary<string, ChronoStorageCatalogBlobClient.StorageObject>(StringComparer.Ordinal);
+            var metaByConvId = new Dictionary<string, ChronoStorageCatalogBlobClient.StorageObject>(StringComparer.Ordinal);
+
+            foreach (var obj in objects.Objects)
+            {
+                if (IsMetaFile(obj.Key))
+                {
+                    var convId = TryExtractMetaConversationId(obj.Key);
+                    if (convId is not null)
+                        metaByConvId[convId] = obj;
+                }
+                else if (IsConversationFile(obj.Key))
+                {
+                    var convId = TryExtractConversationId(obj.Key);
+                    if (convId is not null)
+                        jsonlByConvId[convId] = obj;
+                }
+            }
+
+            if (jsonlByConvId.Count == 0)
+                return EmptyIndex;
+
+            // For each conversation, prefer sidecar if fresh; fallback to full download.
+            var tasks = new List<Task<ConversationMeta?>>(jsonlByConvId.Count);
+            foreach (var (convId, jsonlObj) in jsonlByConvId)
+            {
+                if (metaByConvId.TryGetValue(convId, out var metaObj) && !IsSidecarStale(metaObj, jsonlObj))
+                    tasks.Add(TryReadSidecarMetaAsync(scopeId, convId, ct));
+                else
+                    tasks.Add(TryBuildAndBackfillMetaAsync(scopeId, convId, jsonlObj, ct));
+            }
+
+            var conversations = await Task.WhenAll(tasks);
 
             return new ChatHistoryIndex(conversations
                 .Where(static c => c is not null)
@@ -96,11 +129,33 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
 
         var jsonl = SerializeJsonl(messages);
         await _blobClient.UploadAsync(context, jsonl, "application/x-ndjson", ct);
+
+        // Best-effort sidecar write after .jsonl succeeds.
+        try
+        {
+            await WriteSidecarAsync(scopeId, conversationId, messages, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to write sidecar for conversation {ConversationId}", conversationId);
+        }
+
         await DeleteLegacyIndexIfExistsAsync(scopeId, ct);
     }
 
     public async Task DeleteConversationAsync(string scopeId, string conversationId, CancellationToken ct = default)
     {
+        // Delete sidecar first, then .jsonl — avoids orphan sidecar pointing to deleted conversation.
+        var metaContext = TryResolveSidecar(scopeId, conversationId);
+        if (metaContext is not null)
+        {
+            try { await _blobClient.DeleteIfExistsAsync(metaContext, ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to delete sidecar for conversation {ConversationId}", conversationId);
+            }
+        }
+
         var messagesContext = TryResolveMessages(scopeId, conversationId);
         if (messagesContext is not null)
         {
@@ -139,15 +194,89 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
         }
     }
 
-    private async Task<ConversationMeta?> TryBuildConversationMetaAsync(
+    // ── Sidecar read/write helpers ──────────────────────────────────────
+
+    private sealed record SidecarPayload(
+        string Title,
+        string ServiceId,
+        string ServiceKind,
+        long CreatedAtMs,
+        long UpdatedAtMs,
+        int MessageCount);
+
+    private async Task<ConversationMeta?> TryReadSidecarMetaAsync(
+        string scopeId, string conversationId, CancellationToken ct)
+    {
+        var context = TryResolveSidecar(scopeId, conversationId);
+        if (context is null)
+            return null;
+
+        var payload = await _blobClient.TryDownloadAsync(context, ct);
+        if (payload is null)
+            return null;
+
+        try
+        {
+            var sidecar = JsonSerializer.Deserialize<SidecarPayload>(payload, JsonOptions);
+            if (sidecar is null)
+                return null;
+
+            return new ConversationMeta(
+                Id: conversationId,
+                Title: sidecar.Title,
+                ServiceId: sidecar.ServiceId,
+                ServiceKind: sidecar.ServiceKind,
+                CreatedAt: FromUnixTimestampMilliseconds(sidecar.CreatedAtMs),
+                UpdatedAt: FromUnixTimestampMilliseconds(sidecar.UpdatedAtMs),
+                MessageCount: sidecar.MessageCount);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Malformed sidecar for conversation {ConversationId}", conversationId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Fallback: download full .jsonl, build meta, and best-effort write sidecar for next time.
+    /// </summary>
+    private async Task<ConversationMeta?> TryBuildAndBackfillMetaAsync(
         string scopeId,
+        string conversationId,
+        ChronoStorageCatalogBlobClient.StorageObject jsonlObj,
+        CancellationToken ct)
+    {
+        var meta = await TryBuildConversationMetaFromJsonl(scopeId, conversationId, jsonlObj, ct);
+        if (meta is null)
+            return null;
+
+        // Best-effort backfill — don't block the response on this.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var messagesContext = TryResolveMessages(scopeId, conversationId);
+                if (messagesContext is null) return;
+                var bytes = await _blobClient.TryDownloadAsync(messagesContext, ct);
+                if (bytes is null) return;
+                var messages = DeserializeJsonl(bytes);
+                await WriteSidecarAsync(scopeId, conversationId, messages, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Best-effort sidecar backfill failed for {ConversationId}", conversationId);
+            }
+        }, ct);
+
+        return meta;
+    }
+
+    private async Task<ConversationMeta?> TryBuildConversationMetaFromJsonl(
+        string scopeId,
+        string conversationId,
         ChronoStorageCatalogBlobClient.StorageObject storageObject,
         CancellationToken ct)
     {
-        var conversationId = TryExtractConversationId(storageObject.Key);
-        if (string.IsNullOrWhiteSpace(conversationId))
-            return null;
-
         var context = TryResolveMessages(scopeId, conversationId);
         if (context is null)
             return null;
@@ -157,40 +286,80 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
             return null;
 
         var messages = DeserializeJsonl(payload);
+        return BuildMetaFromMessages(scopeId, conversationId, messages, storageObject);
+    }
+
+    private static ConversationMeta BuildMetaFromMessages(
+        string scopeId,
+        string conversationId,
+        IReadOnlyList<StoredChatMessage> messages,
+        ChronoStorageCatalogBlobClient.StorageObject? storageObject)
+    {
         if (messages.Count == 0)
         {
-            var fallbackTimestamp = TryParseStorageTimestamp(storageObject.LastModified) ?? DateTimeOffset.UtcNow;
-            var (fallbackServiceId, fallbackServiceKind) = InferConversationService(scopeId, conversationId);
-            return new ConversationMeta(
-                Id: conversationId,
-                Title: conversationId,
-                ServiceId: fallbackServiceId,
-                ServiceKind: fallbackServiceKind,
-                CreatedAt: fallbackTimestamp,
-                UpdatedAt: fallbackTimestamp,
-                MessageCount: 0);
+            var fallbackTimestamp = (storageObject is not null ? TryParseStorageTimestamp(storageObject.LastModified) : null)
+                ?? DateTimeOffset.UtcNow;
+            var (fsi, fsk) = InferConversationService(scopeId, conversationId);
+            return new ConversationMeta(conversationId, conversationId, fsi, fsk, fallbackTimestamp, fallbackTimestamp, 0);
         }
 
         var title = BuildConversationTitle(messages, conversationId);
-        var createdAt = messages
-            .Select(static message => FromUnixTimestampMilliseconds(message.Timestamp))
-            .DefaultIfEmpty(TryParseStorageTimestamp(storageObject.LastModified) ?? DateTimeOffset.UtcNow)
-            .Min();
-        var updatedAt = messages
-            .Select(static message => FromUnixTimestampMilliseconds(message.Timestamp))
-            .DefaultIfEmpty(createdAt)
-            .Max();
+        var defaultTs = (storageObject is not null ? TryParseStorageTimestamp(storageObject.LastModified) : null)
+            ?? DateTimeOffset.UtcNow;
+        var createdAt = messages.Select(static m => FromUnixTimestampMilliseconds(m.Timestamp)).DefaultIfEmpty(defaultTs).Min();
+        var updatedAt = messages.Select(static m => FromUnixTimestampMilliseconds(m.Timestamp)).DefaultIfEmpty(createdAt).Max();
         var (serviceId, serviceKind) = InferConversationService(scopeId, conversationId);
-
-        return new ConversationMeta(
-            Id: conversationId,
-            Title: title,
-            ServiceId: serviceId,
-            ServiceKind: serviceKind,
-            CreatedAt: createdAt,
-            UpdatedAt: updatedAt,
-            MessageCount: messages.Count);
+        return new ConversationMeta(conversationId, title, serviceId, serviceKind, createdAt, updatedAt, messages.Count);
     }
+
+    private async Task WriteSidecarAsync(
+        string scopeId, string conversationId,
+        IReadOnlyList<StoredChatMessage> messages, CancellationToken ct)
+    {
+        var context = TryResolveSidecar(scopeId, conversationId);
+        if (context is null) return;
+
+        var meta = BuildMetaFromMessages(scopeId, conversationId, messages, storageObject: null);
+        var sidecar = new SidecarPayload(
+            meta.Title,
+            meta.ServiceId,
+            meta.ServiceKind,
+            meta.CreatedAt.ToUnixTimeMilliseconds(),
+            meta.UpdatedAt.ToUnixTimeMilliseconds(),
+            meta.MessageCount);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(sidecar, JsonOptions);
+        await _blobClient.UploadAsync(context, bytes, "application/json", ct);
+    }
+
+    private static bool IsSidecarStale(
+        ChronoStorageCatalogBlobClient.StorageObject metaObj,
+        ChronoStorageCatalogBlobClient.StorageObject jsonlObj)
+    {
+        var metaTs = TryParseStorageTimestamp(metaObj.LastModified);
+        var jsonlTs = TryParseStorageTimestamp(jsonlObj.LastModified);
+        if (metaTs is null || jsonlTs is null)
+            return true; // Can't compare — treat as stale.
+        return metaTs.Value < jsonlTs.Value;
+    }
+
+    private ChronoStorageCatalogBlobClient.RemoteScopeContext? TryResolveSidecar(string scopeId, string conversationId)
+    {
+        try
+        {
+            return _blobClient.TryResolveContext(
+                _options.UserConfigPrefix,
+                $"{MetaDir}/{conversationId}.json");
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Chrono-storage context could not be resolved for sidecar {ConversationId}", conversationId);
+            return null;
+        }
+    }
+
+    private static bool IsMetaFile(string key) =>
+        key.StartsWith($"{MetaDir}/", StringComparison.Ordinal) &&
+        key.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<StoredChatMessage> DeserializeJsonl(byte[] payload)
     {
@@ -259,6 +428,17 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
         var fileName = key[(ChatHistoriesDir.Length + 1)..];
         return fileName.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
             ? fileName[..^".jsonl".Length]
+            : null;
+    }
+
+    private static string? TryExtractMetaConversationId(string key)
+    {
+        if (!IsMetaFile(key))
+            return null;
+
+        var fileName = key[(MetaDir.Length + 1)..];
+        return fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^".json".Length]
             : null;
     }
 

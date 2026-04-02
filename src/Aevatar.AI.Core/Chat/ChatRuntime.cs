@@ -25,7 +25,11 @@ public sealed record ContextCompressionConfig(
 /// <summary>Chat 执行运行时。调 LLM，管理历史，集成 Middleware。</summary>
 public sealed class ChatRuntime
 {
-    private const int DefaultMaxToolRounds = 40;
+    /// <summary>
+    /// Default max tool rounds. int.MaxValue = no artificial limit;
+    /// the loop runs until the LLM stops calling tools (matching Claude Code behaviour).
+    /// </summary>
+    private const int DefaultMaxToolRounds = int.MaxValue;
     private readonly Func<ILLMProvider> _providerFactory;
     private readonly ChatHistory _history;
     private readonly ToolCallLoop _toolLoop;
@@ -218,9 +222,19 @@ public sealed class ChatRuntime
                     var messages = BuildMessagesWithPending(baseRequest, userMsg);
                     string? finalContent = null;
                     var lengthRecoveryCount = 0;
+                    var hasStreamedTextContent = false;
 
                     for (var round = 0; round < effectiveMaxToolRounds; round++)
                     {
+                        // Emit a paragraph separator between agent loop rounds so the
+                        // frontend can visually separate each "thinking pass".
+                        // Only if a prior round actually streamed text content (not just tool calls).
+                        if (hasStreamedTextContent)
+                        {
+                            await channel.Writer.WriteAsync(
+                                new LLMStreamChunk { DeltaContent = "\n\n" }, runToken);
+                        }
+
                         // Create a streaming tool executor for mid-stream dispatch.
                         // Tools start executing as soon as their tool_use block completes
                         // in the stream, before the full LLM response finishes.
@@ -261,6 +275,9 @@ public sealed class ChatRuntime
                                     streamingExecutor.AddTool(toolCall);
                             });
 
+                        if (!string.IsNullOrEmpty(roundResult.Content))
+                            hasStreamedTextContent = true;
+
                         if (roundResult.Terminated)
                         {
                             streamingExecutor.Discard();
@@ -271,6 +288,68 @@ public sealed class ChatRuntime
 
                         if (roundResult.ToolCalls is not { Count: > 0 })
                         {
+                            // ─── Fallback: parse text-based function calls (DSML/XML) ───
+                            if (roundResult.Content != null)
+                            {
+                                var parsed = TextToolCallParser.Parse(roundResult.Content);
+                                if (parsed.ToolCalls.Count > 0)
+                                {
+                                    // Run PostSampling hook — same gate as structured calls
+                                    var fallbackBlocked = false;
+                                    if (_hooks != null)
+                                    {
+                                        var postCtx = new AIGAgentExecutionHookContext
+                                        {
+                                            LLMResponse = new LLMResponse
+                                            {
+                                                Content = parsed.CleanedContent,
+                                                ToolCalls = parsed.ToolCalls,
+                                            },
+                                        };
+                                        postCtx.Items["tool_call_count"] = parsed.ToolCalls.Count;
+                                        await _hooks.RunPostSamplingAsync(postCtx, runToken);
+
+                                        if (postCtx.Items.TryGetValue("block_tool_calls", out var block)
+                                            && block is true)
+                                        {
+                                            fallbackBlocked = true;
+                                        }
+                                    }
+
+                                    if (fallbackBlocked)
+                                    {
+                                        AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, toolCalls: null);
+                                        finalContent = parsed.CleanedContent;
+                                        break;
+                                    }
+
+                                    AppendAssistantMessage(messages, pendingHistoryMessages, parsed.CleanedContent, toolCalls: null);
+
+                                    var textToolCallMsg = new ChatMessage
+                                    {
+                                        Role = "assistant",
+                                        ToolCalls = parsed.ToolCalls,
+                                    };
+                                    messages.Add(textToolCallMsg);
+                                    pendingHistoryMessages.Add(textToolCallMsg);
+
+                                    // Execute parsed tool calls via a fresh executor
+                                    using var textToolExecutor = new StreamingToolExecutor(
+                                        _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                                        requestMetadata: baseRequest.Metadata);
+                                    foreach (var tc in parsed.ToolCalls)
+                                        textToolExecutor.AddTool(tc);
+                                    await foreach (var result in textToolExecutor.GetRemainingResultsAsync(runToken))
+                                    {
+                                        var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                                        messages.Add(toolMsg);
+                                        pendingHistoryMessages.Add(toolMsg);
+                                    }
+
+                                    continue; // next round
+                                }
+                            }
+
                             // Recovery: if truncated by max_tokens, inject continuation nudge and retry.
                             if (ToolCallLoop.IsLengthTruncated(roundResult.FinishReason)
                                 && lengthRecoveryCount < ToolCallLoop.MaxLengthRecoveries)
@@ -341,6 +420,12 @@ public sealed class ChatRuntime
 
                     if (finalContent == null)
                     {
+                        if (hasStreamedTextContent)
+                        {
+                            await channel.Writer.WriteAsync(
+                                new LLMStreamChunk { DeltaContent = "\n\n" }, runToken);
+                        }
+
                         var finalRequest = new LLMRequest
                         {
                             Messages = [..messages],
@@ -359,8 +444,61 @@ public sealed class ChatRuntime
                             channel.Writer,
                             runToken,
                             () => wroteOutput = true);
-                        AppendAssistantMessage(messages, pendingHistoryMessages, finalRound.Content, toolCalls: null);
-                        finalContent = finalRound.Content;
+
+                        // ─── Fallback: the final no-tools call may still contain DSML text calls ───
+                        // When maxRounds is exhausted, LLM is called without tools. If it outputs
+                        // DSML/XML function call blocks as text, parse and execute them.
+                        var finalParsed = finalRound.Content != null
+                            ? TextToolCallParser.Parse(finalRound.Content)
+                            : null;
+                        if (finalParsed?.ToolCalls.Count > 0)
+                        {
+                            AppendAssistantMessage(messages, pendingHistoryMessages, finalParsed.CleanedContent, toolCalls: null);
+
+                            var finalToolCallMsg = new ChatMessage
+                            {
+                                Role = "assistant",
+                                ToolCalls = finalParsed.ToolCalls,
+                            };
+                            messages.Add(finalToolCallMsg);
+                            pendingHistoryMessages.Add(finalToolCallMsg);
+
+                            using var finalToolExecutor = new StreamingToolExecutor(
+                                _toolLoop.Tools, _hooks, _toolLoop.ToolMiddlewares,
+                                requestMetadata: baseRequest.Metadata);
+                            foreach (var tc in finalParsed.ToolCalls)
+                                finalToolExecutor.AddTool(tc);
+                            await foreach (var result in finalToolExecutor.GetRemainingResultsAsync(runToken))
+                            {
+                                var toolMsg = ToolCallLoop.BuildToolResultMessage(result.CallId, result.Result);
+                                messages.Add(toolMsg);
+                                pendingHistoryMessages.Add(toolMsg);
+                            }
+
+                            // One more LLM call to summarize (still without tools).
+                            // Use the updated message list so the model can see the
+                            // tool results produced by the parsed final-round call.
+                            var summaryRequest = new LLMRequest
+                            {
+                                Messages = [..messages],
+                                RequestId = finalRequest.RequestId,
+                                Metadata = finalRequest.Metadata,
+                                Tools = null,
+                                Model = finalRequest.Model,
+                                Temperature = finalRequest.Temperature,
+                                MaxTokens = finalRequest.MaxTokens,
+                            };
+                            var summaryRound = await StreamLlmRoundAsync(
+                                provider, summaryRequest, channel.Writer, runToken,
+                                () => wroteOutput = true);
+                            AppendAssistantMessage(messages, pendingHistoryMessages, summaryRound.Content, toolCalls: null);
+                            finalContent = summaryRound.Content;
+                        }
+                        else
+                        {
+                            AppendAssistantMessage(messages, pendingHistoryMessages, finalRound.Content, toolCalls: null);
+                            finalContent = finalRound.Content;
+                        }
                     }
 
                     runContext.Result = finalContent;

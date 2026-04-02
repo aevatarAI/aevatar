@@ -3,6 +3,7 @@ import { Loader2, ExternalLink, Pencil, Save, X, Trash2 } from 'lucide-react';
 import type { ManifestEntry } from './types';
 import RolesCatalogEditor from './editors/RolesCatalogEditor';
 import ConnectorsCatalogEditor from './editors/ConnectorsCatalogEditor';
+import UserConfigEditor from './editors/UserConfigEditor';
 import ExplorerContentView from './ExplorerContentView';
 
 type Props = {
@@ -43,9 +44,10 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
   const fileType = entry?.type ?? 'file';
   const isReadOnly = fileType === 'workflow' || fileType === 'script';
 
-  // Rich editors for roles and connectors
+  // Rich editors for specific file types
   if (fileType === 'roles') return <RolesCatalogEditor flash={flash} />;
   if (fileType === 'connectors') return <ConnectorsCatalogEditor flash={flash} />;
+  if (fileType === 'config') return <UserConfigEditor flash={flash} />;
 
   const fileName = selectedKey.split('/').pop() || selectedKey;
 

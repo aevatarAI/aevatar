@@ -16,4 +16,8 @@ public sealed class ServiceInvokeOptions
 
     /// <summary>Whether to enable the invoke_service tool.</summary>
     public bool EnableInvoke { get; set; } = true;
+
+    /// <summary>When true, tools resolve scope dynamically from AgentToolRequestContext at execution time,
+    /// allowing registration even when TenantId/AppId/Namespace are not statically configured.</summary>
+    public bool EnableDynamicScopeResolution { get; set; }
 }

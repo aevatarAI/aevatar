@@ -84,4 +84,5 @@ public sealed record UserConfig(
     string PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
-    string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
+    string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
+    int MaxToolRounds = 0);

@@ -56,6 +56,11 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
                 ? UserConfigLlmRoute.Normalize(routeElement.GetString())
                 : UserConfigLlmRouteDefaults.Gateway;
 
+            var maxToolRounds = doc.RootElement.TryGetProperty("maxToolRounds", out var maxToolRoundsElement)
+                && maxToolRoundsElement.ValueKind == JsonValueKind.Number
+                ? maxToolRoundsElement.GetInt32()
+                : 0;
+
             var hasRuntimeMode = doc.RootElement.TryGetProperty("runtimeMode", out var runtimeModeElement);
             var hasLocalRuntimeBaseUrl = doc.RootElement.TryGetProperty("localRuntimeBaseUrl", out var localRuntimeElement);
             var hasRemoteRuntimeBaseUrl = doc.RootElement.TryGetProperty("remoteRuntimeBaseUrl", out var remoteRuntimeElement);
@@ -71,7 +76,8 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
                         _defaultLocalRuntimeBaseUrl),
                     RemoteRuntimeBaseUrl: UserConfigRuntime.NormalizeBaseUrl(
                         hasRemoteRuntimeBaseUrl ? remoteRuntimeElement.GetString() : null,
-                        _defaultRemoteRuntimeBaseUrl));
+                        _defaultRemoteRuntimeBaseUrl),
+                    MaxToolRounds: maxToolRounds);
             }
 
             var legacyRuntimeBaseUrl = doc.RootElement.TryGetProperty("runtimeBaseUrl", out var runtimeElement)
@@ -84,6 +90,7 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
                 {
                     DefaultModel = defaultModel,
                     PreferredLlmRoute = preferredLlmRoute,
+                    MaxToolRounds = maxToolRounds,
                 };
             }
 
@@ -120,18 +127,21 @@ internal sealed class ChronoStorageUserConfigStore : IUserConfigStore
             throw new InvalidOperationException(
                 "User config storage is not available. Chrono-storage is disabled or the remote context could not be resolved.");
 
-        var json = JsonSerializer.SerializeToUtf8Bytes(new
+        var payload = new Dictionary<string, object?>
         {
-            defaultModel = config.DefaultModel,
-            preferredLlmRoute = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
-            runtimeMode = UserConfigRuntime.NormalizeMode(config.RuntimeMode),
-            localRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
+            ["defaultModel"] = config.DefaultModel,
+            ["preferredLlmRoute"] = UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
+            ["runtimeMode"] = UserConfigRuntime.NormalizeMode(config.RuntimeMode),
+            ["localRuntimeBaseUrl"] = UserConfigRuntime.NormalizeBaseUrl(
                 config.LocalRuntimeBaseUrl,
                 _defaultLocalRuntimeBaseUrl),
-            remoteRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
+            ["remoteRuntimeBaseUrl"] = UserConfigRuntime.NormalizeBaseUrl(
                 config.RemoteRuntimeBaseUrl,
                 _defaultRemoteRuntimeBaseUrl),
-        }, JsonOptions);
+        };
+        if (config.MaxToolRounds > 0)
+            payload["maxToolRounds"] = config.MaxToolRounds;
+        var json = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions);
         await _blobClient.UploadAsync(remoteContext, json, "application/json", cancellationToken);
     }
 

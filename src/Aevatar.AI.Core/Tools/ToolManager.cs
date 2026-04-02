@@ -3,6 +3,7 @@
 // 按名称注册/获取工具，执行 tool_call 并返回 ChatMessage
 // ─────────────────────────────────────────────────────────────
 
+using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 
@@ -47,9 +48,9 @@ public sealed class ToolManager
     public async Task<ChatMessage> ExecuteToolCallAsync(ToolCall call, CancellationToken ct = default)
     {
         var tool = Get(call.Name);
-        if (tool == null) return ChatMessage.Tool(call.Id, $"{{\"error\":\"Tool '{call.Name}' not found\"}}");
+        if (tool == null) return ChatMessage.Tool(call.Id, BuildErrorJson($"Tool '{call.Name}' not found"));
         try { return ChatMessage.Tool(call.Id, await tool.ExecuteAsync(call.ArgumentsJson, ct)); }
-        catch (Exception ex) { return ChatMessage.Tool(call.Id, $"{{\"error\":\"{ex.Message}\"}}"); }
+        catch (Exception ex) { return ChatMessage.Tool(call.Id, BuildErrorJson(ex.Message)); }
     }
 
     /// <summary>
@@ -59,8 +60,14 @@ public sealed class ToolManager
     public async Task<(string Result, Exception? Error)> ExecuteToolCallRawAsync(ToolCall call, CancellationToken ct = default)
     {
         var tool = Get(call.Name);
-        if (tool == null) return ($"{{\"error\":\"Tool '{call.Name}' not found\"}}", new InvalidOperationException($"Tool '{call.Name}' not found"));
+        if (tool == null) return (BuildErrorJson($"Tool '{call.Name}' not found"), new InvalidOperationException($"Tool '{call.Name}' not found"));
         try { return (await tool.ExecuteAsync(call.ArgumentsJson, ct), null); }
-        catch (Exception ex) { return ($"{{\"error\":\"{ex.Message}\"}}", ex); }
+        catch (Exception ex) { return (BuildErrorJson(ex.Message), ex); }
+    }
+
+    /// <summary>Build a properly JSON-escaped error object.</summary>
+    internal static string BuildErrorJson(string message)
+    {
+        return JsonSerializer.Serialize(new { error = message });
     }
 }
