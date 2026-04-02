@@ -120,6 +120,12 @@ describe('StudioInspectorPane', () => {
     );
 
     expect(screen.getByText('YAML workspace')).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        'Edit the source document directly, then validate it before saving or running.',
+      ),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
     expect(screen.getByText('Validation digest')).toBeInTheDocument();
     expect(screen.getByText('1 validation finding(s)')).toBeInTheDocument();
     expect(screen.getByText('Parsed workflow')).toBeInTheDocument();

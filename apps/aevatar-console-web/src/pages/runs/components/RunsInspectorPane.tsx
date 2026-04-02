@@ -27,6 +27,7 @@ import {
   workbenchCardBodyStyle,
   workbenchScrollableBodyStyle,
 } from "../runWorkbenchConfig";
+import { AevatarHelpTooltip } from "@/shared/ui/aevatarPageShells";
 
 type RunsInspectorPaneProps = {
   actorSnapshot?: WorkflowActorSnapshot;
@@ -59,6 +60,7 @@ type SummaryMetricProps = {
 type SectionHeaderProps = {
   action?: React.ReactNode;
   description?: React.ReactNode;
+  help?: React.ReactNode;
   title: string;
 };
 
@@ -154,11 +156,23 @@ const SummaryMetric: React.FC<SummaryMetricProps> = ({
 const SectionHeader: React.FC<SectionHeaderProps> = ({
   action,
   description,
+  help,
   title,
 }) => (
   <div style={sectionHeaderStyle}>
     <div style={{ minWidth: 0 }}>
-      <Typography.Text strong>{title}</Typography.Text>
+      <div
+        style={{
+          alignItems: "center",
+          display: "inline-flex",
+          flexWrap: "wrap",
+          gap: 6,
+          maxWidth: "100%",
+        }}
+      >
+        <Typography.Text strong>{title}</Typography.Text>
+        {help ? <AevatarHelpTooltip content={help} /> : null}
+      </div>
       {description ? (
         <Typography.Paragraph
           style={{ margin: "4px 0 0" }}
@@ -274,7 +288,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            description="A compact summary of the current run state, identifiers, and latest visible output."
+            help="A compact summary of the current run state, identifiers, and latest visible output."
             title="Run digest"
           />
           <div
@@ -378,7 +392,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            description="The currently selected timeline item and its raw event payload."
+            help="The currently selected timeline item and its raw event payload."
             title="Selection"
             action={
               selectedTraceItem ? (
@@ -451,7 +465,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       <div style={embeddedPanelStyle}>
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
-            description="Operator interactions, route profile, and the latest actor-owned state."
+            help="Operator interactions, route profile, and the latest actor-owned state."
             title="Runtime sidecars"
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

@@ -63,6 +63,7 @@ body,
 
 .aevatar-console-shell .ant-pro-page-container,
 .aevatar-console-shell .ant-pro-grid-content,
+.aevatar-console-shell .ant-pro-grid-content-children,
 .aevatar-console-shell .ant-pro-page-container-children-container {
   display: flex;
   flex: 1;
@@ -72,6 +73,16 @@ body,
 
 .aevatar-console-shell .ant-pro-page-container-children-container {
   padding-block-start: 0 !important;
+}
+
+.aevatar-console-shell .aevatar-page-shell-document.ant-pro-page-container,
+.aevatar-console-shell .aevatar-page-shell-document .ant-pro-grid-content,
+.aevatar-console-shell .aevatar-page-shell-document .ant-pro-grid-content-children,
+.aevatar-console-shell .aevatar-page-shell-document .ant-pro-page-container-children-container {
+  display: block;
+  flex: 0 0 auto;
+  height: auto;
+  min-height: fit-content;
 }
 
 .aevatar-console-shell .ant-page-header {

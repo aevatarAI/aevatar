@@ -50,6 +50,17 @@ jest.mock("@/shared/studio/api", () => ({
 }));
 
 jest.mock("@/shared/ui/aevatarPageShells", () => ({
+  AevatarContextDrawer: ({ children, open, title }: any) => {
+    const mockReact = require("react");
+    return open
+      ? mockReact.createElement(
+          "section",
+          null,
+          title ? mockReact.createElement("h2", null, title) : null,
+          children
+        )
+      : null;
+  },
   AevatarInspectorEmpty: ({ description }: any) => {
     const mockReact = require("react");
     return mockReact.createElement("div", null, description);
@@ -288,6 +299,13 @@ describe("GAgentsPage", () => {
 
     renderWithQueryClient(React.createElement(GAgentsPage));
 
+    expect(
+      (await screen.findAllByText("OrdersGAgent (Tests)")).length
+    ).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Manage actors" })).not.toBeDisabled();
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Manage actors" }));
     expect((await screen.findAllByText("Actor Registry")).length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Registry actor id"), {
       target: { value: "orders-2" },
@@ -329,6 +347,7 @@ describe("GAgentsPage", () => {
     expect(
       (await screen.findAllByText("OrdersGAgent (Tests)")).length
     ).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("tab", { name: "Draft Run" }));
     fireEvent.change(screen.getByLabelText("Draft prompt"), {
       target: { value: "hello agent" },
     });
@@ -426,6 +445,7 @@ describe("GAgentsPage", () => {
 
     renderWithQueryClient(React.createElement(GAgentsPage));
 
+    fireEvent.click(await screen.findByRole("tab", { name: "Serving" }));
     expect((await screen.findAllByText("Orders Assistant")).length).toBeGreaterThan(0);
     expect(await screen.findByText("Active binding")).toBeTruthy();
     expect((await screen.findAllByText("Tests.OrdersGAgent, Tests")).length).toBeGreaterThan(0);
@@ -483,6 +503,7 @@ describe("GAgentsPage", () => {
 
     renderWithQueryClient(React.createElement(GAgentsPage));
 
+    fireEvent.click(await screen.findByRole("tab", { name: "Publish" }));
     fireEvent.change(await screen.findByLabelText("Binding display name"), {
       target: { value: "Orders Assistant" },
     });
@@ -600,6 +621,7 @@ describe("GAgentsPage", () => {
 
     renderWithQueryClient(React.createElement(GAgentsPage));
 
+    fireEvent.click(await screen.findByRole("tab", { name: "Serving" }));
     fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
     await waitFor(() => {
       expect(

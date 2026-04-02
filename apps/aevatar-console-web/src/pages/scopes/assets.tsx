@@ -62,6 +62,7 @@ import {
   summaryFieldStyle,
   summaryMetricValueStyle,
 } from "@/shared/ui/proComponents";
+import { AevatarTitleWithHelp } from "@/shared/ui/aevatarPageShells";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import { renderMultilineText } from "./components/renderMultilineText";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
@@ -666,7 +667,7 @@ const ProjectAssetsPage: React.FC = () => {
 
   return (
     <PageContainer
-      content="Browse the workflows and scripts owned by the current project from a single asset workspace. Capability state stays on stage, while source detail moves into the inspector."
+      className="aevatar-page-shell-document"
       extra={[
         <Button
           key="open-studio"
@@ -706,15 +707,19 @@ const ProjectAssetsPage: React.FC = () => {
         </Button>,
       ]}
       onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
-      title="Project Assets"
+      title={
+        <AevatarTitleWithHelp
+          help="Browse the workflows and scripts owned by the current project from a single asset workspace. Capability state stays on stage, while source detail moves into the inspector."
+          title="Project Assets"
+        />
+      }
     >
       <div
         style={{
           display: "flex",
-          flex: 1,
           flexDirection: "column",
           gap: AEVATAR_GLOBAL_UI_SPEC.tokens.sectionGap,
-          minHeight: 0,
+          width: "100%",
         }}
       >
         <ScopeQueryCard
@@ -829,14 +834,8 @@ const ProjectAssetsPage: React.FC = () => {
             </ProCard>
 
             <ProCard
-              bodyStyle={{ display: "flex", flexDirection: "column", minHeight: 0 }}
-              style={{
-                ...buildAevatarPanelStyle(surfaceToken),
-                display: "flex",
-                flex: 1,
-                flexDirection: "column",
-                minHeight: 0,
-              }}
+              bodyStyle={{ display: "flex", flexDirection: "column" }}
+              style={buildAevatarPanelStyle(surfaceToken)}
             >
               <div
                 style={{
@@ -877,7 +876,7 @@ const ProjectAssetsPage: React.FC = () => {
                     setSelectedWorkflowId("");
                   }
                 }}
-                style={{ flex: 1, minHeight: 0, padding: "0 18px 18px" }}
+                style={{ padding: "0 18px 18px" }}
                 items={[
                   {
                     children: (

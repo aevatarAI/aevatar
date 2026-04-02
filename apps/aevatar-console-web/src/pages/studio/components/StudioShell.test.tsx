@@ -44,6 +44,12 @@ describe("StudioShell", () => {
       flex: "1",
       minHeight: "0",
     });
+    expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+      overflowX: "hidden",
+      overflowY: "auto",
+    });
 
     expect(screen.getByLabelText("Workbench")).toHaveStyle({ width: "64px" });
     expect(screen.getByLabelText("Workbench navigation")).toBeTruthy();

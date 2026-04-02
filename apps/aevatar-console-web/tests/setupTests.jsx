@@ -115,6 +115,7 @@ const ignoredConsoleErrors = [
   'Warning: An update to %s inside a test was not wrapped in act(...)',
   'Warning: [antd: Space] `direction` is deprecated. Please use `orientation` instead.',
   'Warning: [antd: List] The `List` component is deprecated. And will be removed in next major version.',
+  'Warning: [antd: Alert] `message` is deprecated. Please use `title` instead.',
 ];
 
 const errorLog = console.error;

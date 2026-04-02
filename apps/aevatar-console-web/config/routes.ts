@@ -53,6 +53,12 @@ export default [
     menuGroupKey: "build",
   },
   {
+    path: "/chat",
+    name: "Chat",
+    component: "./chat",
+    menuGroupKey: "chat",
+  },
+  {
     path: "/scopes/invoke",
     name: "Invoke Lab",
     component: "./scopes/invoke",

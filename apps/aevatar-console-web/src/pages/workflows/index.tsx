@@ -243,15 +243,18 @@ const WorkflowsPage: React.FC = () => {
 
   return (
     <AevatarPageShell
-      content="Workflow definitions now live in a card-flow library. Definition detail, role topology, and YAML inspection sit in a drawer so the library stage stays focused."
+      layoutMode="document"
       title="Workflow Library"
+      titleHelp="Workflow definitions now live in a card-flow library. Definition detail, role topology, and YAML inspection sit in a drawer so the library stage stays focused."
     >
       <AevatarWorkbenchLayout
+        layoutMode="document"
         rail={
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
-              description="Search and narrow the runtime library without losing the center stage."
+              layoutMode="document"
               title="Filter Library"
+              titleHelp="Search and narrow the runtime library without losing the center stage."
             >
               <div
                 style={{
@@ -286,7 +289,7 @@ const WorkflowsPage: React.FC = () => {
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Library Digest">
+            <AevatarPanel layoutMode="document" title="Library Digest">
               <Space direction="vertical" size={6}>
                 <Typography.Text strong>
                   {filteredItems.length} workflows in view
@@ -302,8 +305,9 @@ const WorkflowsPage: React.FC = () => {
         }
         stage={
           <AevatarPanel
-            description="The library remains scannable because the expensive definition detail now opens contextually."
+            layoutMode="document"
             title="Workflow Catalog"
+            titleHelp="The library remains scannable because the expensive definition detail now opens contextually."
           >
             {catalogQuery.error ? (
               <Alert
@@ -392,8 +396,8 @@ const WorkflowsPage: React.FC = () => {
         ) : (
           <>
             <AevatarPanel
-              description="Definition-level signals the operator needs before opening the workflow editor or Runs."
               title="Definition Summary"
+              titleHelp="Definition-level signals the operator needs before opening the workflow editor or Runs."
             >
               <Space direction="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
@@ -426,8 +430,8 @@ const WorkflowsPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="Roles and step topology are condensed here so you can assess complexity without leaving the library."
               title="Topology Signals"
+              titleHelp="Roles and step topology are condensed here so you can assess complexity without leaving the library."
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {selectedWorkflowDetail.definition.roles.map((role) => (
@@ -457,8 +461,8 @@ const WorkflowsPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="YAML stays available, but only when you intentionally pull it into view."
               title="Definition Source"
+              titleHelp="YAML stays available, but only when you intentionally pull it into view."
             >
               <pre
                 style={{

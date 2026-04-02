@@ -9,7 +9,6 @@ import {
 import type { ProListMetas } from "@ant-design/pro-components";
 import { PageContainer, ProList } from "@ant-design/pro-components";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "@umijs/max";
 import {
   Alert,
   Button,
@@ -46,6 +45,7 @@ import {
   resolveAevatarSemanticTone,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { AevatarTitleWithHelp } from "@/shared/ui/aevatarPageShells";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
 } from "./GovernanceAuditTimeline";
@@ -454,10 +454,23 @@ const WorkbenchStatusTag: React.FC<{
 };
 
 const GovernanceWorkbench: React.FC = () => {
-  const location = useLocation();
+  const locationSearch = React.useSyncExternalStore(
+    (listener) => {
+      if (typeof window === "undefined") {
+        return () => undefined;
+      }
+
+      window.addEventListener("popstate", listener);
+      return () => {
+        window.removeEventListener("popstate", listener);
+      };
+    },
+    () => (typeof window === "undefined" ? "" : window.location.search),
+    () => "",
+  );
   const view = useMemo(
-    () => readGovernanceWorkbenchView(location.search),
-    [location.search],
+    () => readGovernanceWorkbenchView(locationSearch),
+    [locationSearch],
   );
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
@@ -1451,8 +1464,12 @@ const GovernanceWorkbench: React.FC = () => {
 
   return (
     <PageContainer
-      content="Governance now follows the same focused workbench rhythm as Mission Control, Studio, and Deployments: keep the primary decision surface in the center and move heavy detail into the inspector only when it matters."
-      title="Governance"
+      title={
+        <AevatarTitleWithHelp
+          help="Governance now follows the same focused workbench rhythm as Mission Control, Studio, and Deployments: keep the primary decision surface in the center and move heavy detail into the inspector only when it matters."
+          title="Governance"
+        />
+      }
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>
         {notice ? (

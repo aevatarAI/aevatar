@@ -90,6 +90,26 @@ export function normalizeBackendSseFrame(raw: unknown): AGUIEvent | null {
     };
   }
 
+  if (frame.toolCallStart) {
+    const data = asRecord(frame.toolCallStart);
+    return {
+      type: AGUIEventType.TOOL_CALL_START,
+      timestamp,
+      toolCallId: data ? readString(data, 'toolCallId') : '',
+      toolName: data ? readString(data, 'toolName') : '',
+    };
+  }
+
+  if (frame.toolCallEnd) {
+    const data = asRecord(frame.toolCallEnd);
+    return {
+      type: AGUIEventType.TOOL_CALL_END,
+      timestamp,
+      toolCallId: data ? readString(data, 'toolCallId') : '',
+      result: data ? readString(data, 'result') : '',
+    };
+  }
+
   if (frame.textMessageStart) {
     const data = asRecord(frame.textMessageStart);
     return {

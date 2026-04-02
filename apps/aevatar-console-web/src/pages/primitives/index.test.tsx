@@ -35,9 +35,12 @@ describe("PrimitivesPage", () => {
     );
 
     expect(container.textContent).toContain("Primitive Library");
-    expect(container.textContent).toContain(
-      "Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector.",
-    );
+    expect(
+      screen.queryByText(
+        "Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector.",
+      ),
+    ).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
     expect(container.textContent).toContain("Runtime Primitives");
     expect(container.textContent).toContain("Filter Library");
     expect(container.textContent).not.toContain("Legacy draft");
