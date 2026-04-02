@@ -117,7 +117,15 @@ Complete all 3 steps in one conversation using tools — do NOT ask the user to 
 3. **Create default route** linking bot → API key:
    `nyxid_channel_bots action=create_route channel_bot_id=<bot_id> agent_api_key_id=<api_key_id> default_agent=true`
 
-Done — user can immediately chat with the bot in Telegram.
+4. **Complete pairing** — after the route is set up:
+   - Tell the user: "Now send any message to @{bot_username} on Telegram."
+   - Wait for the user to confirm they sent a message
+   - Get the user's NyxID user ID: `nyxid_account` → use the `id` field as scope_id
+   - Check pending pairing codes: `nyxid_pairing action=pending scope_id=<user_id>`
+   - Approve the code: `nyxid_pairing action=approve scope_id=<user_id> code=<PAIR-xxxx>`
+   - Confirm: "Paired! You can now chat with the bot on Telegram."
+
+**Important: Do NOT skip step 4. The bot will not respond to LLM queries until pairing is approved.**
 
 ## Notifications & Approvals
 

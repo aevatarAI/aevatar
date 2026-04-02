@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -11,23 +12,14 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<NyxIdRelayOptions>? configureRelay = null)
     {
-        // Force-load the assembly so StaticServiceImplementationAdapter.ResolveType
-        // can find NyxIdChatGAgent by type name string at service binding time.
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
 
         services.TryAddSingleton<NyxIdChatActorStore>();
         services.TryAddSingleton<NyxIdRelayPairingStore>();
+        services.TryAddSingleton(new NyxIdRelayOptions());
 
-        if (configureRelay != null)
-        {
-            var options = new NyxIdRelayOptions();
-            configureRelay(options);
-            services.TryAddSingleton(options);
-        }
-        else
-        {
-            services.TryAddSingleton(new NyxIdRelayOptions());
-        }
+        // Register pairing tool so NyxIdChat agent can approve pairing codes
+        services.AddSingleton<IAgentToolSource, NyxIdPairingToolSource>();
 
         return services;
     }

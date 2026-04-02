@@ -54,16 +54,65 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             .ChatAsync(route.Request, ct);
     }
 
-    public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
-        [EnumeratorCancellation] CancellationToken ct = default)
+        CancellationToken ct = default)
+    {
+        return ChatStreamCoreAsync(request, ct);
+    }
+
+    private async IAsyncEnumerable<LLMStreamChunk> ChatStreamCoreAsync(
+        LLMRequest request,
+        [EnumeratorCancellation] CancellationToken ct)
     {
         var route = await ResolveRouteAsync(request, ct);
-        await foreach (var chunk in CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken)
-                           .ChatStreamAsync(route.Request, ct)
-                           .WithCancellation(ct))
-        {
+        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
+
+        // Wrap the inner stream to enrich errors with NyxID response body details.
+        await foreach (var chunk in EnrichErrors(provider.ChatStreamAsync(route.Request, ct), route).WithCancellation(ct))
             yield return chunk;
+    }
+
+    private async IAsyncEnumerable<LLMStreamChunk> EnrichErrors(
+        IAsyncEnumerable<LLMStreamChunk> inner,
+        NyxIdResolvedRoute route,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var enumerator = inner.GetAsyncEnumerator(ct);
+        try
+        {
+            while (true)
+            {
+                LLMStreamChunk current;
+                try
+                {
+                    if (!await enumerator.MoveNextAsync())
+                        yield break;
+                    current = enumerator.Current;
+                }
+                catch (System.ClientModel.ClientResultException cre)
+                {
+                    var rawResponse = cre.GetRawResponse();
+                    var body = rawResponse != null
+                        ? System.Text.Encoding.UTF8.GetString(rawResponse.Content.ToArray())
+                        : null;
+
+                    _logger?.LogWarning(
+                        "NyxID LLM gateway error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
+                        cre.Status, route.RouteName, route.Endpoint, body);
+
+                    var detail = !string.IsNullOrWhiteSpace(body)
+                        ? $"{cre.Message} | NyxID response: {body}"
+                        : cre.Message;
+                    throw new InvalidOperationException(detail, cre);
+                }
+
+                yield return current;
+            }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
         }
     }
 
