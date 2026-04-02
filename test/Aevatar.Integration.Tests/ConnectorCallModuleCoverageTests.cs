@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Core;
+using Aevatar.Workflow.Abstractions.Execution;
 using Aevatar.Workflow.Core.Modules;
 using Aevatar.Workflow.Core.Connectors;
 using FluentAssertions;
@@ -19,7 +20,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenNonConnectorStep_ShouldNoop()
     {
-        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -36,7 +37,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenMissingConnectorParameter_ShouldFail()
     {
-        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -55,7 +56,7 @@ public sealed class ConnectorCallModuleCoverageTests
     [Fact]
     public async Task HandleAsync_WhenConnectorMissingAndOptionalYes_ShouldSkip()
     {
-        var module = new ConnectorCallModule(new ConfiguredConnectorRegistry());
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(new ConfiguredConnectorRegistry()));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -85,7 +86,7 @@ public sealed class ConnectorCallModuleCoverageTests
         var connector = new ThrowThenSuccessConnector("retryable");
         registry.Register(connector);
 
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -119,7 +120,7 @@ public sealed class ConnectorCallModuleCoverageTests
     {
         var registry = new ConfiguredConnectorRegistry();
         registry.Register(new DelayConnector("slow"));
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var ctx = CreateContext();
         var request = new StepRequestEvent
         {
@@ -150,7 +151,7 @@ public sealed class ConnectorCallModuleCoverageTests
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure");
         registry.Register(connector);
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent", "run-secure");
         var services = new ServiceCollection().BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
@@ -199,7 +200,7 @@ public sealed class ConnectorCallModuleCoverageTests
         var registry = new ConfiguredConnectorRegistry();
         var connector = new EchoConnector("secure-json");
         registry.Register(connector);
-        var module = new ConnectorCallModule(registry);
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
         var agent = new TestWorkflowRunAgent("connector-module-test-agent-json", "run-secure-json");
         var services = new ServiceCollection().BuildServiceProvider();
         var seedCtx = new TestEventHandlerContext(services, agent, NullLogger.Instance);
@@ -233,6 +234,60 @@ public sealed class ConnectorCallModuleCoverageTests
 
         connector.LastRequest.Should().NotBeNull();
         connector.LastRequest!.Payload.Should().Be("""{"providerName":"demo","apiKey":"sk-\"line\ntwo"}""");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenAssertResponsePathPassesAndPassThroughEnabled_ShouldKeepOriginalInput()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        registry.Register(new FixedResponseConnector("validator", """{"valid":true}"""));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-assert-pass",
+            StepType = "connector_call",
+            Input = """{"nodes":[{"temp_id":"new_0"}]}""",
+            Parameters =
+            {
+                ["connector"] = "validator",
+                ["assert_response_path"] = "valid",
+                ["pass_through_input"] = "true",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be(request.Input);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenAssertResponsePathFails_ShouldPublishFailure()
+    {
+        var registry = new ConfiguredConnectorRegistry();
+        registry.Register(new FixedResponseConnector("validator", """{"valid":false}"""));
+        var module = new ConnectorCallModule(new RegistryBackedWorkflowConnectorResolver(registry));
+        var ctx = CreateContext();
+        var request = new StepRequestEvent
+        {
+            StepId = "s-assert-fail",
+            StepType = "connector_call",
+            Input = """{"nodes":[{"temp_id":"new_0"}]}""",
+            Parameters =
+            {
+                ["connector"] = "validator",
+                ["assert_response_path"] = "valid",
+            },
+        };
+
+        await module.HandleAsync(Envelope(request), ctx, CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.Success.Should().BeFalse();
+        completed.Error.Should().Contain("assertion failed");
+        completed.Error.Should().Contain("valid");
     }
 
     private static TestEventHandlerContext CreateContext()
@@ -312,6 +367,23 @@ public sealed class ConnectorCallModuleCoverageTests
             {
                 Success = true,
                 Output = "ok",
+            });
+        }
+    }
+
+    private sealed class FixedResponseConnector(string name, string output) : IConnector
+    {
+        public string Name { get; } = name;
+        public string Type => "test";
+
+        public Task<ConnectorResponse> ExecuteAsync(ConnectorRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            _ = ct;
+            return Task.FromResult(new ConnectorResponse
+            {
+                Success = true,
+                Output = output,
             });
         }
     }

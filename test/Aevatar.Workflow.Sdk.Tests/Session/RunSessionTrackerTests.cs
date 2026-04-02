@@ -39,13 +39,17 @@ public sealed class RunSessionTrackerTests
         snapshot.StepId.Should().Be("wait-1");
         snapshot.LastSignalName.Should().Be("ops_window_open");
 
-        var resume = tracker.CreateResumeRequest(approved: true, userInput: "approved");
+        var resume = tracker.CreateResumeRequest("scope-a", approved: true, userInput: "approved", serviceId: "orders");
+        resume.ScopeId.Should().Be("scope-a");
+        resume.ServiceId.Should().Be("orders");
         resume.ActorId.Should().Be("actor-1");
         resume.RunId.Should().Be("run-1");
         resume.StepId.Should().Be("wait-1");
         resume.CommandId.Should().Be("cmd-1");
 
-        var signal = tracker.CreateSignalRequest(payload: "window=open");
+        var signal = tracker.CreateSignalRequest("scope-a", payload: "window=open", serviceId: "orders");
+        signal.ScopeId.Should().Be("scope-a");
+        signal.ServiceId.Should().Be("orders");
         signal.ActorId.Should().Be("actor-1");
         signal.RunId.Should().Be("run-1");
         signal.SignalName.Should().Be("ops_window_open");
@@ -71,8 +75,10 @@ public sealed class RunSessionTrackerTests
         });
 
         var signal = tracker.CreateSignalRequest(
+            "scope-a",
             payload: "window=open",
-            stepId: "wait-override");
+            stepId: "wait-override",
+            serviceId: "orders");
 
         signal.StepId.Should().Be("wait-override");
         signal.SignalName.Should().Be("ops_window_open");
@@ -112,7 +118,7 @@ public sealed class RunSessionTrackerTests
             Value = ParseObject("""{"actorId":"actor-1","commandId":"cmd-1"}"""),
         });
 
-        var act = () => tracker.CreateResumeRequest(approved: true);
+        var act = () => tracker.CreateResumeRequest("scope-a", approved: true, serviceId: "orders");
         var ex = act.Should().Throw<AevatarWorkflowException>();
         ex.Which.Kind.Should().Be(AevatarWorkflowErrorKind.InvalidRequest);
     }

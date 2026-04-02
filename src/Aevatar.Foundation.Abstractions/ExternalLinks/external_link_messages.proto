@@ -1,0 +1,47 @@
+// ─────────────────────────────────────────────────────────────
+// External Link messages - events for bidirectional long-lived
+// connections between actors and external services.
+// ─────────────────────────────────────────────────────────────
+syntax = "proto3";
+
+package aevatar;
+
+option csharp_namespace = "Aevatar.Foundation.Abstractions.ExternalLinks";
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+// --- Connection state events (Infrastructure → Actor) ---
+
+message ExternalLinkConnectedEvent {
+  string link_id = 1;
+  google.protobuf.Timestamp connected_at = 2;
+}
+
+message ExternalLinkDisconnectedEvent {
+  string link_id = 1;
+  string reason = 2;
+  bool will_reconnect = 3;
+  int32 reconnect_attempt = 4;
+}
+
+message ExternalLinkReconnectingEvent {
+  string link_id = 1;
+  int32 attempt = 2;
+  int32 delay_ms = 3;
+}
+
+message ExternalLinkErrorEvent {
+  string link_id = 1;
+  string error_message = 2;
+  string error_code = 3;
+}
+
+// --- Data event (Infrastructure → Actor) ---
+
+message ExternalLinkMessageReceivedEvent {
+  string link_id = 1;
+  google.protobuf.Any payload = 2;
+  bytes raw_payload = 3;
+  google.protobuf.Timestamp received_at = 4;
+}

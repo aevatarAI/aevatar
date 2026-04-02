@@ -1,7 +1,17 @@
 /* ─── Aevatar Workflow Studio – API client ─── */
 
+import { getAccessToken } from './auth/nyxid';
+
 const BASE = '/api';
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
+const CHRONO_STORAGE_SERVICE_ERROR_CODE = 'chrono_storage_service_unavailable';
+const CHRONO_STORAGE_SERVICE_DEPENDENCY = 'chrono-storage-service';
+const DEFAULT_CHRONO_STORAGE_SERVICE_MESSAGE = 'Studio could not access chrono-storage-service. It may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.';
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 type AuthRequiredDetail = {
   loginUrl?: string | null;
@@ -28,6 +38,38 @@ function notifyAuthRequired(detail: AuthRequiredDetail) {
   }));
 }
 
+function createRequestHeaders(opts?: RequestInit) {
+  const headers = new Headers(opts?.headers);
+  const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
+  if (!isFormDataBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!headers.has('Authorization')) {
+    const auth = getAuthHeaders();
+    if (auth.Authorization) {
+      headers.set('Authorization', auth.Authorization);
+    }
+  }
+
+  return headers;
+}
+
+async function parseErrorResponse(res: Response): Promise<never> {
+  const contentType = res.headers.get('content-type');
+  const body = isJsonContentType(contentType)
+    ? await res.json().catch(() => ({}))
+    : { message: await res.text().catch(() => '') };
+
+  if (res.status === 401 || body?.loginUrl) {
+    notifyAuthRequired({
+      loginUrl: body?.loginUrl,
+      message: body?.message || 'Sign in to continue.',
+    });
+  }
+
+  throw { status: res.status, ...body };
+}
+
 export function onAuthRequired(listener: (detail: AuthRequiredDetail) => void) {
   if (typeof window === 'undefined') {
     return () => undefined;
@@ -43,11 +85,7 @@ export function onAuthRequired(listener: (detail: AuthRequiredDetail) => void) {
 }
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
-  const headers = new Headers(opts?.headers);
-  const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
-  if (!isFormDataBody && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
+  const headers = createRequestHeaders(opts);
 
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
@@ -56,23 +94,21 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
 
   const contentType = res.headers.get('content-type');
   if (!res.ok) {
-    const body = isJsonContentType(contentType)
-      ? await res.json().catch(() => ({}))
-      : { message: await res.text().catch(() => '') };
-
-    if (res.status === 401 || body?.loginUrl) {
-      notifyAuthRequired({
-        loginUrl: body?.loginUrl,
-        message: body?.message || 'Sign in to continue.',
-      });
-    }
-
-    throw { status: res.status, ...body };
+    return parseErrorResponse(res);
   }
 
   if (res.status === 204) return undefined as T;
+  // Handle empty body (e.g. DELETE returning 200 with Content-Length: 0)
+  const contentLength = res.headers.get('content-length');
+  if (contentLength === '0' || (!contentType && contentLength === '0')) return undefined as T;
   if (isJsonContentType(contentType)) {
     return res.json();
+  }
+  // No Content-Type but body might be empty — try to read and return if empty
+  if (!contentType) {
+    const text = await res.text();
+    if (!text.trim()) return undefined as T;
+    try { return JSON.parse(text); } catch { /* fall through */ }
   }
 
   if (res.redirected) {
@@ -99,6 +135,48 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   };
 }
 
+async function requestText(path: string, opts?: RequestInit): Promise<string> {
+  const headers = createRequestHeaders(opts);
+  const res = await fetch(`${BASE}${path}`, {
+    ...opts,
+    headers,
+  });
+
+  const contentType = res.headers.get('content-type');
+  if (!res.ok) {
+    return parseErrorResponse(res);
+  }
+
+  if (res.redirected || isHtmlContentType(contentType)) {
+    notifyAuthRequired({
+      loginUrl: res.redirected ? res.url : null,
+      message: 'API returned HTML instead of the requested file. Sign-in may be required.',
+    });
+    throw {
+      status: res.redirected ? 401 : res.status,
+      message: 'API returned HTML instead of the requested file. Sign-in may be required.',
+    };
+  }
+
+  return res.text();
+}
+
+export function isChronoStorageServiceError(error: any) {
+  return Boolean(
+    error?.code === CHRONO_STORAGE_SERVICE_ERROR_CODE ||
+    error?.dependency === CHRONO_STORAGE_SERVICE_DEPENDENCY ||
+    (typeof error?.message === 'string' && error.message.includes('chrono-storage-service'))
+  );
+}
+
+export function getChronoStorageServiceErrorMessage(error: any) {
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  return DEFAULT_CHRONO_STORAGE_SERVICE_MESSAGE;
+}
+
 async function streamSse(
   path: string,
   body: unknown,
@@ -110,6 +188,7 @@ async function streamSse(
     headers: {
       Accept: 'text/event-stream',
       'Content-Type': 'application/json',
+      ...getAuthHeaders(),
     },
     body: JSON.stringify(body),
     signal,
@@ -266,7 +345,19 @@ export const settings = {
   testRuntime: (data: any) => request<any>('/settings/runtime/test', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-/* ─── Executions ─── */
+/* ─── User Config (per-user, chrono-storage backed) ─── */
+export const userConfig = {
+  get:    ()          => request<any>('/user-config'),
+  save:   (data: any) => request<any>('/user-config', { method: 'PUT', body: JSON.stringify(data) }),
+  models: ()          => request<{
+    providers?: { provider_slug: string; provider_name: string; status: string; proxy_url: string; source?: string }[];
+    gateway_url?: string;
+    supported_models?: string[];
+    models_by_provider?: Record<string, string[]>;
+  }>('/user-config/models'),
+};
+
+/* ─── Executions (runtime) ─── */
 export const executions = {
   list:  ()              => request<any[]>('/executions'),
   get:   (id: string)    => request<any>(`/executions/${id}`),
@@ -383,6 +474,321 @@ export const auth = {
   getSession: () => request<any>('/auth/me'),
 };
 
+/* ─── Scope / Runtime APIs (remote runtime) ─── */
+export const scope = {
+  /** GET /api/scopes/{scopeId}/binding — read current default scope binding */
+  getBinding: (scopeId: string) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`),
+
+  /** PUT /api/scopes/{scopeId}/binding — bind workflow as a scope service */
+  bindWorkflow: (scopeId: string, workflowYamls: string[], displayName?: string, serviceId?: string) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'workflow',
+        ...(displayName ? { displayName } : {}),
+        ...(serviceId ? { serviceId } : {}),
+        workflowYamls,
+      }),
+    }),
+
+  /** PUT /api/scopes/{scopeId}/binding — bind a static GAgent as a scope service */
+  bindGAgent: (
+    scopeId: string,
+    actorTypeName: string,
+    displayName?: string,
+    serviceId?: string,
+  ) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'gagent',
+        ...(displayName ? { displayName } : {}),
+        ...(serviceId ? { serviceId } : {}),
+        gagent: {
+          actorTypeName,
+          endpoints: [
+            { endpointId: 'chat', displayName: 'Chat', kind: 'chat', requestTypeUrl: '', responseTypeUrl: '', description: '' },
+          ],
+        },
+      }),
+    }),
+
+  /** PUT /api/scopes/{scopeId}/binding — bind a script as a scope service */
+  bindScript: (
+    scopeId: string,
+    scriptId: string,
+    displayName?: string,
+    serviceId?: string,
+    scriptRevision?: string,
+  ) =>
+    request<any>(`/scopes/${enc(scopeId)}/binding`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        implementationKind: 'script',
+        ...(displayName ? { displayName } : {}),
+        ...(serviceId ? { serviceId } : {}),
+        script: {
+          scriptId,
+          ...(scriptRevision ? { scriptRevision } : {}),
+        },
+      }),
+    }),
+
+  /** POST /api/scopes/{scopeId}/workflow/draft-run — draft run with inline bundle, SSE */
+  streamDraftRun: (
+    scopeId: string,
+    prompt: string,
+    workflowYamls?: string[],
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) => {
+    const body: any = { prompt };
+    if (workflowYamls?.length) body.workflowYamls = workflowYamls;
+    return streamSse(`/scopes/${enc(scopeId)}/workflow/draft-run`, body, onFrame ?? (() => {}), signal);
+  },
+
+  /** POST /api/scopes/{scopeId}/invoke/chat:stream — scope-level default chat, SSE */
+  streamDefaultChat: (
+    scopeId: string,
+    prompt: string,
+    actorId?: string,
+    sessionId?: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+    headers?: Record<string, string>,
+  ) => {
+    const body: any = { prompt };
+    if (actorId) body.actorId = actorId;
+    if (sessionId) body.sessionId = sessionId;
+    if (headers && Object.keys(headers).length > 0) body.headers = headers;
+    return streamSse(
+      `/scopes/${enc(scopeId)}/invoke/chat:stream`,
+      body, onFrame ?? (() => {}), signal,
+    );
+  },
+
+  /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream — service invoke, SSE */
+  streamInvoke: (
+    scopeId: string,
+    serviceId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+    endpointId: string = 'chat',
+    headers?: Record<string, string>,
+    actorId?: string,
+  ) => {
+    const body: any = { prompt };
+    if (headers && Object.keys(headers).length > 0) body.headers = headers;
+    if (actorId) body.actorId = actorId;
+    return streamSse(
+      `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/${enc(endpointId)}:stream`,
+      body, onFrame ?? (() => {}), signal,
+    );
+  },
+
+  /** GET /api/services?tenantId=... — list services in scope */
+  listServices: (scopeId: string, take = 20) =>
+    request<any[]>(`/services?tenantId=${enc(scopeId)}&appId=default&namespace=default&take=${take}`),
+
+  /** POST /api/scopes/{scopeId}/services/{serviceId}/runs/{runId}:resume — resume a suspended workflow run (human_input) */
+  resumeRun: (
+    scopeId: string,
+    serviceId: string,
+    runId: string,
+    data: { stepId: string; userInput?: string; approved?: boolean; actorId?: string },
+  ) =>
+    request<any>(`/scopes/${enc(scopeId)}/services/${enc(serviceId)}/runs/${enc(runId)}:resume`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  /** GET /api/actors/{actorId} — actor snapshot for run logs */
+  getActorSnapshot: (actorId: string) =>
+    request<any>(`/actors/${enc(actorId)}`),
+
+  /** GET /api/actors/{actorId}/timeline — run logs timeline */
+  getActorTimeline: (actorId: string, take = 50) =>
+    request<any>(`/actors/${enc(actorId)}/timeline?take=${take}`),
+};
+
+// Keep legacy alias for backward compat in App.tsx
+export const runtime = scope;
+
+/* ─── NyxID Chat APIs (runtime) ─── */
+export const nyxidChat = {
+  createConversation: (scopeId: string) =>
+    request<{ actorId: string; createdAt: string }>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`, { method: 'POST' }),
+
+  listConversations: (scopeId: string) =>
+    request<Array<{ actorId: string; createdAt: string }>>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations`),
+
+  streamMessage: (
+    scopeId: string,
+    actorId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}:stream`,
+      { prompt },
+      onFrame ?? (() => {}),
+      signal,
+    ),
+
+  deleteConversation: (scopeId: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}`, { method: 'DELETE' }),
+
+  /** Send tool approval decision and stream the continuation response. */
+  approveToolCall: (
+    scopeId: string,
+    actorId: string,
+    requestId: string,
+    approved: boolean,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+    sessionId?: string,
+    reason?: string,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/nyxid-chat/conversations/${enc(actorId)}:approve`,
+      { requestId, approved, reason: reason ?? '', sessionId: sessionId ?? '' },
+      onFrame ?? (() => {}),
+      signal,
+    ),
+};
+
+/* ─── Chat History APIs (local, chrono-storage backed) ─── */
+export const chatHistory = {
+  getIndex: (scopeId: string) =>
+    request<{ conversations: Array<{ id: string; title: string; serviceId: string; serviceKind: string; createdAt: string; updatedAt: string; messageCount: number; llmRoute?: string; llmModel?: string }> }>(
+      `/scopes/${enc(scopeId)}/chat-history`,
+    ),
+
+  getConversation: (scopeId: string, convId: string) =>
+    request<Array<{ id: string; role: string; content: string; timestamp: number; status: string; error?: string; thinking?: string }>>(
+      `/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`,
+    ),
+
+  saveConversation: (scopeId: string, convId: string, meta: any, messages: any[]) =>
+    request<void>(`/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ meta, messages }),
+    }),
+
+  deleteConversation: (scopeId: string, convId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`, {
+      method: 'DELETE',
+    }),
+};
+
+/* ─── GAgent APIs (runtime) ─── */
+export const gagent = {
+  /** GET /api/scopes/gagent-types — list available GAgent types */
+  listTypes: () =>
+    request<Array<{ typeName: string; fullName: string; assemblyName: string }>>('/scopes/gagent-types'),
+
+  /** GET /api/scopes/{scopeId}/gagent-actors — list persisted actor entries */
+  listActors: (scopeId: string) =>
+    request<Array<{ gAgentType: string; actorIds: string[] }>>(`/scopes/${enc(scopeId)}/gagent-actors`),
+
+  /** POST /api/scopes/{scopeId}/gagent-actors — persist a new actor ID entry */
+  addActor: (scopeId: string, gagentType: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/gagent-actors`, {
+      method: 'POST',
+      body: JSON.stringify({ gagentType, actorId }),
+    }),
+
+  /** DELETE /api/scopes/{scopeId}/gagent-actors/{actorId} — remove an actor entry */
+  removeActor: (scopeId: string, gagentType: string, actorId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/gagent-actors/${enc(actorId)}?gagentType=${enc(gagentType)}`, {
+      method: 'DELETE',
+    }),
+
+  /** POST /api/scopes/{scopeId}/gagent/draft-run — draft-run a GAgent (SSE) */
+  streamDraftRun: (
+    scopeId: string,
+    actorTypeName: string,
+    prompt: string,
+    preferredActorId?: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+  ) =>
+    streamSse(
+      `/scopes/${enc(scopeId)}/gagent/draft-run`,
+      { actorTypeName, prompt, preferredActorId: preferredActorId || null },
+      onFrame ?? (() => {}),
+      signal,
+    ),
+};
+
+function enc(value: string) {
+  return encodeURIComponent(value.trim());
+}
+
+/* ─── Ornn Skills Platform ─── */
+export type OrnnSkillSummary = {
+  guid?: string;
+  name?: string;
+  description?: string;
+  isPrivate?: boolean;
+  metadata?: { category?: string; tag?: string[] };
+};
+
+export type OrnnSearchResult = {
+  total: number;
+  totalPages: number;
+  page: number;
+  pageSize: number;
+  items: OrnnSkillSummary[];
+};
+
+export const ornn = {
+  /** Search skills on the Ornn platform directly (bearer token auth). */
+  searchSkills: async (
+    ornnBaseUrl: string,
+    query = '',
+    scope = 'mixed',
+    page = 1,
+    pageSize = 50,
+  ): Promise<OrnnSearchResult> => {
+    const url = `${ornnBaseUrl.replace(/\/+$/, '')}/api/web/skill-search?query=${encodeURIComponent(query)}&mode=keyword&scope=${encodeURIComponent(scope)}&page=${page}&pageSize=${pageSize}`;
+    const res = await fetch(url, { headers: { ...getAuthHeaders() } });
+    if (!res.ok) throw { status: res.status, message: `Ornn search failed: ${res.statusText}` };
+    const json = await res.json();
+    return json?.data || { total: 0, totalPages: 0, page: 1, pageSize, items: [] };
+  },
+
+  /** Check Ornn health / connectivity. */
+  checkHealth: async (ornnBaseUrl: string): Promise<boolean> => {
+    try {
+      const url = `${ornnBaseUrl.replace(/\/+$/, '')}/api/web/skill-search?query=&scope=public&page=1&pageSize=1`;
+      const res = await fetch(url, { headers: { ...getAuthHeaders() }, signal: AbortSignal.timeout(5000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};
+
+/* ─── Explorer (manifest-based chrono-storage) ─── */
+const encodeExplorerKey = (key: string) => key.split('/').map(segment => encodeURIComponent(segment)).join('/');
+
+export const explorer = {
+  getManifest: () => request<{ version: number; files: Array<{ key: string; type: string; name?: string; updatedAt?: string }> }>('/explorer/manifest'),
+  getFile: (key: string) => requestText(`/explorer/files/${encodeExplorerKey(key)}`),
+  putFile: (key: string, content: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain' },
+    body: content,
+  }),
+  deleteFile: (key: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
+    method: 'DELETE',
+  }),
+};
+
 export const app = {
   getContext: () => request<any>('/app/context'),
   validateDraftScript: (data: any, signal?: AbortSignal) => request<any>('/app/scripts/validate', { method: 'POST', body: JSON.stringify(data), signal }),
@@ -393,7 +799,7 @@ export const app = {
   getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
   getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
   saveScript: (data: any) => request<any>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
-  runDraftScript: (data: any) => request<any>('/app/scripts/draft-run', { method: 'POST', body: JSON.stringify(data) }),
+  runDraftScript: (scopeId: string, data: any) => request<any>(`/scopes/${enc(scopeId)}/scripts/draft-run`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
 export const scripts = {

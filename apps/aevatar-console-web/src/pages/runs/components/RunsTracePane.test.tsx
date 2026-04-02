@@ -1,0 +1,34 @@
+import { render } from "@testing-library/react";
+import React from "react";
+import RunsTracePane from "./RunsTracePane";
+
+describe("RunsTracePane", () => {
+  it("keeps the tab viewport stretchable so inner panes can scroll", () => {
+    const { container } = render(
+      <RunsTracePane
+        consoleView="timeline"
+        eventConsoleView={<div>events</div>}
+        eventCount={3}
+        hasPendingInteraction={false}
+        messageConsoleView={<div>messages</div>}
+        messageCount={2}
+        onConsoleViewChange={() => undefined}
+        timelineView={<div>timeline</div>}
+      />
+    );
+
+    expect(container.querySelector(".runs-trace-tabs")).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+    });
+    const contentNode = container.querySelector(
+      ".runs-trace-tabs .ant-tabs-content-holder"
+    );
+    expect(contentNode).not.toBeNull();
+    expect(contentNode).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+      overflow: "hidden",
+    });
+  });
+});

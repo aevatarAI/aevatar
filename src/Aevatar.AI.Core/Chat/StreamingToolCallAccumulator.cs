@@ -7,8 +7,22 @@ internal sealed class StreamingToolCallAccumulator
 {
     private readonly Dictionary<string, ToolCallAggregate> _aggregates = new(StringComparer.Ordinal);
     private readonly List<string> _order = [];
+    private readonly HashSet<string> _completedKeys = new(StringComparer.Ordinal);
+    private readonly Action<ToolCall>? _onToolCompleted;
     private int _anonymousCounter;
     private string? _activeAnonymousKey;
+
+    public StreamingToolCallAccumulator() { }
+
+    /// <summary>
+    /// Creates an accumulator that invokes <paramref name="onToolCompleted"/> each time
+    /// a new tool_use block transitions from the active accumulation slot to a finalized state
+    /// (i.e., when the next tool_use block begins or the stream ends).
+    /// </summary>
+    public StreamingToolCallAccumulator(Action<ToolCall> onToolCompleted)
+    {
+        _onToolCompleted = onToolCompleted;
+    }
 
     public ToolCall TrackDelta(ToolCall delta)
     {
@@ -33,6 +47,9 @@ internal sealed class StreamingToolCallAccumulator
 
     public IReadOnlyList<ToolCall> BuildToolCalls()
     {
+        // Flush any remaining active tool before building the final list
+        FlushActiveTool();
+
         var result = new List<ToolCall>(_order.Count);
         foreach (var key in _order)
         {
@@ -48,6 +65,36 @@ internal sealed class StreamingToolCallAccumulator
         }
 
         return result;
+    }
+
+    /// <summary>Flush the currently active tool (if any) by notifying the callback.</summary>
+    private void FlushActiveTool()
+    {
+        if (_onToolCompleted == null)
+            return;
+
+        // Find the last key that hasn't been notified yet
+        for (var i = 0; i < _order.Count; i++)
+        {
+            var key = _order[i];
+            if (_completedKeys.Contains(key))
+                continue;
+
+            if (!_aggregates.TryGetValue(key, out var aggregate))
+                continue;
+
+            // Only notify if the tool has a name (fully formed)
+            if (string.IsNullOrWhiteSpace(aggregate.Name))
+                continue;
+
+            _completedKeys.Add(key);
+            _onToolCompleted(new ToolCall
+            {
+                Id = aggregate.Id,
+                Name = aggregate.Name,
+                ArgumentsJson = aggregate.Arguments.ToString(),
+            });
+        }
     }
 
     private ToolCallAggregate ResolveAggregate(ToolCall delta)
@@ -70,6 +117,8 @@ internal sealed class StreamingToolCallAccumulator
         _activeAnonymousKey = null;
         if (!_aggregates.TryGetValue(knownKey, out var aggregate))
         {
+            // A new tool is starting — flush previously completed tools
+            FlushActiveTool();
             aggregate = new ToolCallAggregate(id);
             _aggregates[knownKey] = aggregate;
             _order.Add(knownKey);
@@ -86,6 +135,8 @@ internal sealed class StreamingToolCallAccumulator
             return activeAggregate;
         }
 
+        // A new anonymous tool is starting — flush previously completed tools
+        FlushActiveTool();
         _anonymousCounter++;
         var anonymousKey = $"anon:{_anonymousCounter}";
         var anonymousId = $"stream-tool-call-{_anonymousCounter}";

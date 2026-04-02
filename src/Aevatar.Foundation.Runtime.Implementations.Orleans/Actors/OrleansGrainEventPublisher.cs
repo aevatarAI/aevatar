@@ -63,6 +63,8 @@ internal sealed class OrleansGrainEventPublisher : IEventPublisher, ICommittedSt
                 var parentId = _getParentId();
                 if (!string.IsNullOrWhiteSpace(parentId))
                     await DispatchAsync(parentId, envelope, ct);
+                else
+                    await _streams.GetStream(_actorId).ProduceAsync(envelope, ct);
                 break;
             }
             case TopologyAudience.ParentAndChildren:

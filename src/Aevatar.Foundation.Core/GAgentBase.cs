@@ -12,8 +12,10 @@ using System.Diagnostics;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Helpers;
 using Aevatar.Foundation.Abstractions.Hooks;
+using Aevatar.Foundation.Abstractions.ExternalLinks;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.Foundation.Core.ExternalLinks;
 using Aevatar.Foundation.Core.Pipeline;
 using Google.Protobuf;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +34,7 @@ public abstract class GAgentBase : IAgent
     private volatile IEventModule<IEventHandlerContext>[] _modules = [];
     private volatile IGAgentExecutionHook[] _hooks = [];
     private EventEnvelope? _activeInboundEnvelope;
+    private ExternalLinkManager? _externalLinkManager;
 
     // Identity
 
@@ -70,17 +73,26 @@ public abstract class GAgentBase : IAgent
         return Task.FromResult<IReadOnlyList<Type>>(types);
     }
 
+    /// <summary>
+    /// Outbound port for sending messages through external links.
+    /// Only available if this agent implements <see cref="IExternalLinkAware"/>.
+    /// </summary>
+    protected IExternalLinkPort? ExternalLinkPort => _externalLinkManager;
+
     /// <summary>Activates agent and loads hooks.</summary>
     public virtual async Task ActivateAsync(CancellationToken ct = default)
     {
         using var guard = StateGuard.BeginWriteScope();
         ct.ThrowIfCancellationRequested();
         LoadHooksFromDI();
+        await StartExternalLinksAsync(ct);
     }
 
     /// <summary>Deactivates agent.</summary>
-    public virtual Task DeactivateAsync(CancellationToken ct = default) =>
-        Task.CompletedTask;
+    public virtual async Task DeactivateAsync(CancellationToken ct = default)
+    {
+        await StopExternalLinksAsync();
+    }
 
     // Unified event dispatch (with dual hook channels)
 
@@ -337,6 +349,36 @@ public abstract class GAgentBase : IAgent
             Services,
             Logger,
             envelope);
+
+    // ── External Links ────────────────────────────────────────
+
+    private async Task StartExternalLinksAsync(CancellationToken ct)
+    {
+        if (this is not IExternalLinkAware aware) return;
+
+        var descriptors = aware.GetLinkDescriptors();
+        if (descriptors.Count == 0) return;
+
+        var dispatchPort = Services.GetService<IActorDispatchPort>();
+        if (dispatchPort == null)
+        {
+            Logger.LogWarning("IActorDispatchPort not available, external links disabled for {AgentId}", Id);
+            return;
+        }
+
+        var factories = Services.GetServices<IExternalLinkTransportFactory>();
+        _externalLinkManager = new ExternalLinkManager(Id, dispatchPort, factories, Logger);
+        await _externalLinkManager.StartAsync(descriptors, ct);
+    }
+
+    private async Task StopExternalLinksAsync()
+    {
+        if (_externalLinkManager != null)
+        {
+            await _externalLinkManager.DisposeAsync();
+            _externalLinkManager = null;
+        }
+    }
 
     // Null implementations
 

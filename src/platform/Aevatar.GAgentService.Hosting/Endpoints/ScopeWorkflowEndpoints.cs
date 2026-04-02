@@ -1,29 +1,25 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
-using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
-using System.Security.Claims;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
 public static class ScopeWorkflowEndpoints
 {
-    private static readonly string[] ScopeClaimTypes =
-    [
-        WorkflowRunCommandMetadataKeys.ScopeId,
-        "scope_id",
-    ];
-
     public static IEndpointRouteBuilder MapScopeWorkflowCapabilityEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/scopes").WithTags("ScopeWorkflows");
+        var group = app.MapGroup("/api/scopes").WithTags("ScopeWorkflows").RequireAuthorization();
         group.MapPut("/{scopeId}/workflows/{workflowId}", HandleUpsertWorkflowAsync)
             .Produces<ScopeWorkflowUpsertResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
@@ -32,18 +28,6 @@ public static class ScopeWorkflowEndpoints
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/workflows/{workflowId}", HandleGetWorkflowDetailAsync)
             .Produces<ScopeWorkflowDetail>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/{scopeId}/workflows/{workflowId}/runs:stream", HandleRunWorkflowByIdStreamAsync)
-            .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/{scopeId}/workflow-runs:stream", HandleRunWorkflowStreamAsync)
-            .Produces(StatusCodes.Status200OK, contentType: "text/event-stream")
-            .Produces(StatusCodes.Status400BadRequest)
-            .Produces(StatusCodes.Status404NotFound);
-        group.MapPost("/{scopeId}/workflow-runs/stop", HandleStopWorkflowRunAsync)
-            .Produces(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest)
             .Produces(StatusCodes.Status404NotFound);
         return app;
@@ -56,10 +40,58 @@ public static class ScopeWorkflowEndpoints
         UpsertScopeWorkflowHttpRequest request,
         [FromServices] IScopeWorkflowCommandPort workflowCommandPort,
         CancellationToken ct)
+        => await HandleUpsertWorkflowAsyncCore(http, scopeId, workflowId, request, workflowCommandPort, ct);
+
+    internal static async Task<IResult> HandleListWorkflowsAsync(
+        HttpContext http,
+        string scopeId,
+        bool includeSource,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
+        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        CancellationToken ct)
+        => await HandleListWorkflowsAsyncCore(http, scopeId, includeSource, workflowQueryPort, workflowActorBindingReader, artifactStore, ct);
+
+    internal static async Task<IResult> HandleGetWorkflowDetailAsync(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
+        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        CancellationToken ct)
+        => await HandleGetWorkflowDetailAsyncCore(http, scopeId, workflowId, workflowQueryPort, workflowActorBindingReader, artifactStore, ct);
+
+    internal static async Task HandleRunWorkflowByIdStreamAsync(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        RunScopeWorkflowByIdStreamHttpRequest request,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        CancellationToken ct)
+        => await HandleRunWorkflowByIdStreamAsyncCore(http, scopeId, workflowId, request, workflowQueryPort, chatRunService, ct);
+
+    internal static async Task HandleRunWorkflowStreamAsync(
+        HttpContext http,
+        string scopeId,
+        RunScopeWorkflowStreamHttpRequest request,
+        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
+        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        CancellationToken ct)
+        => await HandleRunWorkflowStreamAsyncCore(http, scopeId, request, workflowQueryPort, chatRunService, ct);
+
+    private static async Task<IResult> HandleUpsertWorkflowAsyncCore(
+        HttpContext http,
+        string scopeId,
+        string workflowId,
+        UpsertScopeWorkflowHttpRequest request,
+        IScopeWorkflowCommandPort workflowCommandPort,
+        CancellationToken ct)
     {
         try
         {
-            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var result = await workflowCommandPort.UpsertAsync(new ScopeWorkflowUpsertRequest(
@@ -82,18 +114,18 @@ public static class ScopeWorkflowEndpoints
         }
     }
 
-    internal static async Task<IResult> HandleListWorkflowsAsync(
+    private static async Task<IResult> HandleListWorkflowsAsyncCore(
         HttpContext http,
         string scopeId,
         bool includeSource,
-        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        IScopeWorkflowQueryPort workflowQueryPort,
+        IWorkflowActorBindingReader workflowActorBindingReader,
+        IServiceRevisionArtifactStore? artifactStore,
         CancellationToken ct)
     {
         try
         {
-            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var workflows = await workflowQueryPort.ListAsync(scopeId, ct);
@@ -102,7 +134,7 @@ public static class ScopeWorkflowEndpoints
 
             var details = new List<ScopeWorkflowDetail>(workflows.Count);
             foreach (var workflow in workflows)
-                details.Add(await BuildWorkflowDetailAsync(scopeId, workflow, workflowActorBindingReader, artifactStore, ct));
+                details.Add(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, artifactStore, ct));
 
             return Results.Ok(details);
         }
@@ -116,18 +148,18 @@ public static class ScopeWorkflowEndpoints
         }
     }
 
-    internal static async Task<IResult> HandleGetWorkflowDetailAsync(
+    private static async Task<IResult> HandleGetWorkflowDetailAsyncCore(
         HttpContext http,
         string scopeId,
         string workflowId,
-        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] IServiceRevisionArtifactStore? artifactStore,
+        IScopeWorkflowQueryPort workflowQueryPort,
+        IWorkflowActorBindingReader workflowActorBindingReader,
+        IServiceRevisionArtifactStore? artifactStore,
         CancellationToken ct)
     {
         try
         {
-            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
+            if (ScopeEndpointAccess.TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
                 return denied;
 
             var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
@@ -136,11 +168,11 @@ public static class ScopeWorkflowEndpoints
                 return Results.NotFound(new
                 {
                     code = "USER_WORKFLOW_NOT_FOUND",
-                    message = $"Workflow '{workflowId}' was not found for scope '{scopeId}'.",
+                    message = BuildWorkflowNotFoundMessage(scopeId, workflowId),
                 });
             }
 
-            return Results.Json(await BuildWorkflowDetailAsync(scopeId, workflow, workflowActorBindingReader, artifactStore, ct));
+            return Results.Json(await BuildWorkflowDetailAsync(workflow, workflowActorBindingReader, artifactStore, ct));
         }
         catch (InvalidOperationException ex)
         {
@@ -152,18 +184,18 @@ public static class ScopeWorkflowEndpoints
         }
     }
 
-    internal static async Task HandleRunWorkflowByIdStreamAsync(
+    private static async Task HandleRunWorkflowByIdStreamAsyncCore(
         HttpContext http,
         string scopeId,
         string workflowId,
         RunScopeWorkflowByIdStreamHttpRequest request,
-        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IScopeWorkflowQueryPort workflowQueryPort,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
         try
         {
-            if (await TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             var workflow = await workflowQueryPort.GetByWorkflowIdAsync(scopeId, workflowId, ct);
@@ -173,7 +205,7 @@ public static class ScopeWorkflowEndpoints
                     http,
                     StatusCodes.Status404NotFound,
                     "USER_WORKFLOW_NOT_FOUND",
-                    $"Workflow '{workflowId}' was not found for scope '{scopeId}'.",
+                    BuildWorkflowNotFoundMessage(scopeId, workflowId),
                     ct);
                 return;
             }
@@ -200,17 +232,17 @@ public static class ScopeWorkflowEndpoints
         }
     }
 
-    internal static async Task HandleRunWorkflowStreamAsync(
+    private static async Task HandleRunWorkflowStreamAsyncCore(
         HttpContext http,
         string scopeId,
         RunScopeWorkflowStreamHttpRequest request,
-        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        IScopeWorkflowQueryPort workflowQueryPort,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
         try
         {
-            if (await TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
+            if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
             var workflow = await workflowQueryPort.GetByActorIdAsync(scopeId, request.ActorId, ct);
@@ -220,7 +252,7 @@ public static class ScopeWorkflowEndpoints
                     http,
                     StatusCodes.Status404NotFound,
                     "USER_WORKFLOW_NOT_FOUND",
-                    "Workflow actor was not found for the specified scope.",
+                    BuildWorkflowActorNotFoundMessage(scopeId),
                     ct);
                 return;
             }
@@ -244,75 +276,6 @@ public static class ScopeWorkflowEndpoints
                 "INVALID_USER_WORKFLOW_REQUEST",
                 ex.Message,
                 ct);
-        }
-    }
-
-    internal static async Task<IResult> HandleStopWorkflowRunAsync(
-        HttpContext http,
-        string scopeId,
-        StopScopeWorkflowRunHttpRequest request,
-        [FromServices] IScopeWorkflowQueryPort workflowQueryPort,
-        [FromServices] IWorkflowActorBindingReader workflowActorBindingReader,
-        [FromServices] ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError> stopService,
-        CancellationToken ct)
-    {
-        try
-        {
-            if (TryCreateScopeAccessDeniedResult(http, scopeId, out var denied))
-                return denied;
-
-            var actorId = NormalizeRequired(request.ActorId, nameof(request.ActorId));
-            _ = NormalizeRequired(request.RunId, nameof(request.RunId));
-
-            var binding = await workflowActorBindingReader.GetAsync(actorId, ct);
-            if (binding?.ActorKind != WorkflowActorKind.Run ||
-                string.IsNullOrWhiteSpace(binding.EffectiveDefinitionActorId))
-            {
-                return Results.NotFound(new
-                {
-                    code = "USER_WORKFLOW_NOT_FOUND",
-                    message = "Workflow run actor was not found for the specified scope.",
-                });
-            }
-
-            if (!string.IsNullOrWhiteSpace(binding.ScopeId) &&
-                !string.Equals(binding.ScopeId, scopeId, StringComparison.Ordinal))
-            {
-                return Results.NotFound(new
-                {
-                    code = "USER_WORKFLOW_NOT_FOUND",
-                    message = "Workflow run actor was not found for the specified scope.",
-                });
-            }
-
-            var workflow = await workflowQueryPort.GetByActorIdAsync(scopeId, binding.EffectiveDefinitionActorId, ct);
-            if (workflow == null)
-            {
-                return Results.NotFound(new
-                {
-                    code = "USER_WORKFLOW_NOT_FOUND",
-                    message = "Workflow run actor was not found for the specified scope.",
-                });
-            }
-
-            return await WorkflowCapabilityEndpoints.HandleStop(
-                new WorkflowStopInput
-                {
-                    ActorId = actorId,
-                    RunId = request.RunId,
-                    CommandId = request.CommandId,
-                    Reason = request.Reason,
-                },
-                stopService,
-                ct);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return Results.BadRequest(new
-            {
-                code = "INVALID_USER_WORKFLOW_REQUEST",
-                message = ex.Message,
-            });
         }
     }
 
@@ -348,7 +311,7 @@ public static class ScopeWorkflowEndpoints
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
-                    Metadata = BuildScopedHeaders(scopeId, headers),
+                    Metadata = await BuildScopedHeadersAsync(scopeId, headers, http, ct),
                 },
                 chatRunService,
                 ct);
@@ -361,22 +324,19 @@ public static class ScopeWorkflowEndpoints
             workflow,
             prompt,
             sessionId,
-            BuildScopedHeaders(scopeId, headers),
+            await BuildScopedHeadersAsync(scopeId, headers, http, ct),
             chatRunService,
             ct);
     }
 
-    private static async Task HandleAguiStreamAsync(
+    internal static async Task HandleAguiStreamAsync(
         HttpContext http,
-        string scopeId,
-        ScopeWorkflowSummary workflow,
-        string prompt,
-        string? sessionId,
-        IReadOnlyDictionary<string, string>? headers,
+        WorkflowChatRunRequest request,
         ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
         CancellationToken ct)
     {
-        prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
+        ArgumentNullException.ThrowIfNull(http);
+        ArgumentNullException.ThrowIfNull(request);
 
         var started = false;
 
@@ -399,14 +359,7 @@ public static class ScopeWorkflowEndpoints
         try
         {
             var result = await chatRunService.ExecuteAsync(
-                new WorkflowChatRunRequest(
-                    prompt,
-                    workflow.WorkflowName,
-                    workflow.ActorId,
-                    sessionId,
-                    WorkflowYamls: null,
-                    Metadata: BuildScopedHeaders(scopeId, headers),
-                    ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
+                request,
                 async (frame, token) =>
                 {
                     if (!ScopeWorkflowAguiEventMapper.TryMap(frame, out var aguiEvent) || aguiEvent == null)
@@ -451,8 +404,32 @@ public static class ScopeWorkflowEndpoints
         }
     }
 
-    private static async Task<ScopeWorkflowDetail> BuildWorkflowDetailAsync(
+    private static async Task HandleAguiStreamAsync(
+        HttpContext http,
         string scopeId,
+        ScopeWorkflowSummary workflow,
+        string prompt,
+        string? sessionId,
+        IReadOnlyDictionary<string, string>? headers,
+        ICommandInteractionService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowRunEventEnvelope, WorkflowProjectionCompletionStatus> chatRunService,
+        CancellationToken ct)
+    {
+        prompt = string.IsNullOrWhiteSpace(prompt) ? string.Empty : prompt.Trim();
+        await HandleAguiStreamAsync(
+            http,
+            new WorkflowChatRunRequest(
+                prompt,
+                workflow.WorkflowName,
+                workflow.ActorId,
+                sessionId,
+                WorkflowYamls: null,
+                Metadata: await BuildScopedHeadersAsync(scopeId, headers, http, ct),
+                ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
+            chatRunService,
+            ct);
+    }
+
+    private static async Task<ScopeWorkflowDetail> BuildWorkflowDetailAsync(
         ScopeWorkflowSummary workflow,
         IWorkflowActorBindingReader workflowActorBindingReader,
         IServiceRevisionArtifactStore? artifactStore,
@@ -470,11 +447,10 @@ public static class ScopeWorkflowEndpoints
             artifact = await artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
         }
 
-        return BuildWorkflowDetailPayload(scopeId, workflow, binding, artifact);
+        return BuildWorkflowDetailPayload(workflow, binding, artifact);
     }
 
     private static ScopeWorkflowDetail BuildWorkflowDetailPayload(
-        string scopeId,
         ScopeWorkflowSummary workflow,
         WorkflowActorBinding? binding,
         PreparedServiceRevisionArtifact? artifact)
@@ -483,7 +459,7 @@ public static class ScopeWorkflowEndpoints
         var hasBindingSource = binding?.HasDefinitionPayload == true;
         return new ScopeWorkflowDetail(
             true,
-            scopeId,
+            workflow.ScopeId,
             workflow,
             !hasBindingSource && workflowPlan == null
                 ? null
@@ -499,7 +475,15 @@ public static class ScopeWorkflowEndpoints
                         : workflowPlan!.InlineWorkflowYamls));
     }
 
-    private static bool TryParseEventFormat(
+    private static string BuildWorkflowNotFoundMessage(
+        string scopeId,
+        string workflowId) =>
+        $"Workflow '{workflowId}' was not found for scope '{scopeId}'.";
+
+    private static string BuildWorkflowActorNotFoundMessage(string scopeId) =>
+        $"Workflow actor was not found for scope '{scopeId}'.";
+
+    internal static bool TryParseEventFormat(
         string? rawValue,
         out ScopeWorkflowStreamEventFormat eventFormat)
     {
@@ -525,19 +509,49 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static Dictionary<string, string> BuildScopedHeaders(
+    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
         string scopeId,
-        IReadOnlyDictionary<string, string>? headers)
+        IReadOnlyDictionary<string, string>? headers,
+        HttpContext? http = null,
+        CancellationToken cancellationToken = default)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             : new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
+        if (http != null)
+        {
+            var auth = http.Request.Headers.Authorization.FirstOrDefault();
+            if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                var bearerToken = auth["Bearer ".Length..].Trim();
+                scopedHeaders["nyxid.access_token"] = bearerToken;
+                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+            }
+
+            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            if (userConfigStore != null)
+            {
+                try
+                {
+                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
+                }
+                catch
+                {
+                    // Best-effort; fall back to provider default if config unavailable.
+                }
+            }
+        }
+
         return scopedHeaders;
     }
 
-    private static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
+    internal static (int StatusCode, string Code, string Message) MapRunStartError(WorkflowChatRunStartError error)
     {
         return error switch
         {
@@ -553,78 +567,6 @@ public static class ScopeWorkflowEndpoints
             WorkflowChatRunStartError.ConflictingScopeId => (StatusCodes.Status400BadRequest, "CONFLICTING_SCOPE_ID", "Conflicting scope_id values were provided."),
             _ => (StatusCodes.Status400BadRequest, "RUN_START_FAILED", "Failed to resolve actor."),
         };
-    }
-
-    private static bool TryCreateScopeAccessDeniedResult(
-        HttpContext http,
-        string scopeId,
-        out IResult denied)
-    {
-        if (!TryGetAuthenticatedScopeGuardFailure(http, scopeId, out var message))
-        {
-            denied = Results.Empty;
-            return false;
-        }
-
-        denied = Results.Json(
-            new
-            {
-                code = "SCOPE_ACCESS_DENIED",
-                message,
-            },
-            statusCode: StatusCodes.Status403Forbidden);
-        return true;
-    }
-
-    private static async Task<bool> TryWriteScopeAccessDeniedAsync(
-        HttpContext http,
-        string scopeId,
-        CancellationToken ct)
-    {
-        if (!TryGetAuthenticatedScopeGuardFailure(http, scopeId, out var message))
-            return false;
-
-        await WriteJsonErrorResponseAsync(
-            http,
-            StatusCodes.Status403Forbidden,
-            "SCOPE_ACCESS_DENIED",
-            message,
-            ct);
-        return true;
-    }
-
-    private static bool TryGetAuthenticatedScopeGuardFailure(
-        HttpContext http,
-        string requestedScopeId,
-        out string message)
-    {
-        ArgumentNullException.ThrowIfNull(http);
-
-        message = string.Empty;
-        if (http.User?.Identity?.IsAuthenticated != true)
-            return false;
-
-        var normalizedRequestedScopeId = NormalizeRequired(requestedScopeId, nameof(requestedScopeId));
-        var claimedScopeIds = http.User.Claims
-            .Where(static claim => ScopeClaimTypes.Contains(claim.Type, StringComparer.OrdinalIgnoreCase))
-            .Select(static claim => claim.Value?.Trim())
-            .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-        if (claimedScopeIds.Count == 0)
-            return false;
-
-        if (claimedScopeIds.Count > 1)
-        {
-            message = "Authenticated scope is ambiguous.";
-            return true;
-        }
-
-        if (string.Equals(claimedScopeIds[0], normalizedRequestedScopeId, StringComparison.Ordinal))
-            return false;
-
-        message = "Authenticated scope does not match requested scope.";
-        return true;
     }
 
     private static async Task WriteJsonErrorResponseAsync(
@@ -668,13 +610,7 @@ public static class ScopeWorkflowEndpoints
         Dictionary<string, string>? Headers = null,
         string? EventFormat = null);
 
-    public sealed record StopScopeWorkflowRunHttpRequest(
-        string ActorId,
-        string RunId,
-        string? CommandId = null,
-        string? Reason = null);
-
-    private enum ScopeWorkflowStreamEventFormat
+    internal enum ScopeWorkflowStreamEventFormat
     {
         Workflow = 0,
         Agui = 1,

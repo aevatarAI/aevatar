@@ -27,6 +27,12 @@ public interface IConnector
 /// </summary>
 public sealed class ConnectorRequest
 {
+    /// <summary>Generic HTTP authorization metadata key consumed by HTTP connectors.</summary>
+    public const string HttpAuthorizationMetadataKey = "connector.http.authorization";
+
+    /// <summary>Execution metadata propagated from workflow/runtime context.</summary>
+    public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
+
     /// <summary>Workflow run id.</summary>
     public string RunId { get; init; } = "";
 

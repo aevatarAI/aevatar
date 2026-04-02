@@ -67,6 +67,14 @@ public sealed class WorkflowExecutionQueryApplicationService : IWorkflowExecutio
         return await _currentStateQueryPort.GetActorSnapshotAsync(actorId, ct);
     }
 
+    public async Task<WorkflowRunReport?> GetActorReportAsync(string actorId, CancellationToken ct = default)
+    {
+        if (!_artifactQueryPort.EnableActorQueryEndpoints)
+            return null;
+
+        return await _artifactQueryPort.GetActorReportAsync(actorId, ct);
+    }
+
     public async Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,

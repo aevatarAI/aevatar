@@ -3,11 +3,22 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
+using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
+using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.Scripting;
+using Aevatar.AI.ToolProviders.ServiceInvoke;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Binding;
+using Aevatar.AI.ToolProviders.Workflow;
+using Aevatar.AI.ToolProviders.Workflow.Ports;
+using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,12 +37,25 @@ public sealed class AevatarAIFeatureOptions
     public bool FailoverPreferDeepSeekAsFallbackDefault { get; set; } = true;
     public bool EnableMCPTools { get; set; }
     public bool EnableSkills { get; set; }
+    public bool EnableOrnnSkills { get; set; }
+    public string? OrnnBaseUrl { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
+    public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
     public string DefaultProvider { get; set; } = "openai";
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
+    public bool EnableServiceInvokeTools { get; set; }
+    public string? ServiceInvokeTenantId { get; set; }
+    public string? ServiceInvokeAppId { get; set; }
+    public string? ServiceInvokeNamespace { get; set; }
+    public bool EnableWebTools { get; set; }
+    public string? WebSearchNyxIdSlug { get; set; }
+    public string? WebSearchApiBaseUrl { get; set; }
+    public bool EnableWorkflowTools { get; set; }
+    public bool EnableScriptingTools { get; set; }
+    public bool EnableBindingTools { get; set; }
 }
 
 public static class ServiceCollectionExtensions
@@ -48,6 +72,12 @@ public static class ServiceCollectionExtensions
         configure?.Invoke(options);
 
         services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
+        services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
+            new LocalWorkflowDefinitionCommandAdapter(
+                sp.GetRequiredService<IWorkflowYamlValidator>(),
+                workflowsDirectory: null,
+                sp.GetService<ILogger<LocalWorkflowDefinitionCommandAdapter>>()));
         RegisterMeaiProviders(services, configuration, options);
 
         if (options.EnableMCPTools)
@@ -58,6 +88,24 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableSkills)
             RegisterSkills(services, options);
+
+        if (options.EnableOrnnSkills)
+            RegisterOrnnSkills(services, options);
+
+        if (options.EnableServiceInvokeTools)
+            RegisterServiceInvokeTools(services, options);
+
+        if (options.EnableWebTools)
+            RegisterWebTools(services, options);
+
+        if (options.EnableWorkflowTools)
+            RegisterWorkflowTools(services);
+
+        if (options.EnableScriptingTools)
+            RegisterScriptingTools(services);
+
+        if (options.EnableBindingTools)
+            RegisterBindingTools(services);
 
         return services;
     }
@@ -95,7 +143,7 @@ public static class ServiceCollectionExtensions
         Func<IAevatarSecretsStore> secretsStoreAccessor)
     {
         var secrets = secretsStoreAccessor();
-        var configuredProviders = ReadConfiguredProviders(secrets, options);
+        var configuredProviders = ReadConfiguredProviders(secrets, configuration, options);
         if (configuredProviders.Count == 0)
         {
             var fallbackRegistration = ResolveFallbackRegistration(options);
@@ -115,11 +163,51 @@ public static class ServiceCollectionExtensions
             ?? options.DefaultProvider;
         var defaultName = ResolveDefaultProviderName(configuredProviders, preferredDefault);
 
-        var meaiFactory = BuildMeaiFactory(configuredProviders, defaultName);
+        var nyxIdProviders = configuredProviders
+            .Where(provider => IsNyxIdProviderType(provider.ProviderType))
+            .ToList();
+
+        // Auto-register NyxID provider from appsettings when Aevatar:NyxId is configured
+        if (nyxIdProviders.Count == 0)
+        {
+            var autoRegistered = TryAutoRegisterNyxIdProvider(configuration, options);
+            if (autoRegistered != null)
+            {
+                nyxIdProviders.Add(autoRegistered);
+                configuredProviders.Add(autoRegistered);
+                defaultName = ResolveDefaultProviderName(configuredProviders, preferredDefault);
+            }
+        }
+
+        if (nyxIdProviders.Count == 0)
+            return BuildPrimaryFactory(configuredProviders, defaultName, options);
+
+        var standardProviders = configuredProviders
+            .Where(provider => !IsNyxIdProviderType(provider.ProviderType))
+            .ToList();
+        var nyxIdFactory = BuildNyxIdFactory(nyxIdProviders, defaultName);
+        if (standardProviders.Count == 0)
+            return nyxIdFactory;
+
+        var primaryFactory = BuildPrimaryFactory(standardProviders, defaultName, options);
+        var extraProviders = nyxIdFactory
+            .GetAvailableProviders()
+            .Select(nyxIdFactory.GetProvider)
+            .ToList();
+        return new CompositeLLMProviderFactory(primaryFactory, extraProviders, defaultName);
+    }
+
+    private static ILLMProviderFactory BuildPrimaryFactory(
+        IReadOnlyList<ConfiguredProvider> configuredProviders,
+        string defaultName,
+        AevatarAIFeatureOptions options)
+    {
+        var primaryDefaultName = ResolveDefaultProviderName(configuredProviders, defaultName);
+        var meaiFactory = BuildMeaiFactory(configuredProviders, primaryDefaultName);
         if (!options.EnableMEAIToTornadoFailover)
             return meaiFactory;
 
-        var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, defaultName, options);
+        var tornadoDefaultName = ResolveTornadoDefaultProviderName(configuredProviders, primaryDefaultName, options);
         var tornadoFactory = BuildTornadoFactory(configuredProviders, tornadoDefaultName);
         return new FailoverLLMProviderFactory(
             meaiFactory,
@@ -201,6 +289,45 @@ public static class ServiceCollectionExtensions
         return factory;
     }
 
+    private static NyxIdLLMProviderFactory BuildNyxIdFactory(
+        IEnumerable<ConfiguredProvider> configuredProviders,
+        string defaultName)
+    {
+        var factory = new NyxIdLLMProviderFactory();
+        foreach (var provider in configuredProviders)
+        {
+            if (string.IsNullOrWhiteSpace(provider.Endpoint))
+            {
+                throw new InvalidOperationException(
+                    $"NyxID provider '{provider.Name}' requires a gateway endpoint. " +
+                    $"Configure LLMProviders:Providers:{provider.Name}:Endpoint or set Aevatar:NyxId:Authority.");
+            }
+
+            factory.RegisterGateway(
+                provider.Name,
+                provider.Model,
+                provider.Endpoint,
+                // NyxID gateway token comes exclusively from per-request metadata
+                // (the caller's Bearer token). No local secrets fallback.
+                static () => null);
+        }
+
+        factory.SetDefault(ResolveDefaultProviderName(configuredProviders.ToList(), defaultName));
+        return factory;
+    }
+
+    private static ConfiguredProvider? TryAutoRegisterNyxIdProvider(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var gatewayEndpoint = ResolveNyxIdGatewayEndpoint(configuration, options);
+        if (string.IsNullOrWhiteSpace(gatewayEndpoint))
+            return null;
+
+        var model = configuration["Aevatar:NyxId:DefaultModel"] ?? options.OpenAIModel;
+        return new ConfiguredProvider("nyxid", "nyxid", model, gatewayEndpoint, string.Empty);
+    }
+
     private static Func<IAevatarSecretsStore> CreateSecretsStoreAccessor(AevatarAIFeatureOptions options)
     {
         if (options.SecretsStore != null)
@@ -237,6 +364,7 @@ public static class ServiceCollectionExtensions
 
     private static List<ConfiguredProvider> ReadConfiguredProviders(
         IAevatarSecretsStore secrets,
+        IConfiguration configuration,
         AevatarAIFeatureOptions options)
     {
         const string prefix = "LLMProviders:Providers:";
@@ -264,7 +392,7 @@ public static class ServiceCollectionExtensions
             all.TryGetValue($"LLMProviders:Providers:{name}:Model", out var model);
             all.TryGetValue($"LLMProviders:Providers:{name}:Endpoint", out var endpoint);
 
-            var semantic = ResolveProviderSemantic(providerType, name, options.DefaultProvider, options);
+            var semantic = ResolveProviderSemantic(configuration, providerType, name, options.DefaultProvider, options);
             var resolvedModel = string.IsNullOrWhiteSpace(model)
                 ? semantic.Model
                 : model.Trim();
@@ -289,15 +417,15 @@ public static class ServiceCollectionExtensions
         switch (apiKeySelection.Source)
         {
             case ApiKeySource.DeepSeekEnvironment:
-                semantic = BuildProviderSemantic(ProviderKind.DeepSeek, options);
+                semantic = BuildProviderSemantic(new ConfigurationBuilder().Build(), ProviderKind.DeepSeek, options);
                 providerName = semantic.ProviderType;
                 break;
             case ApiKeySource.OpenAIEnvironment:
-                semantic = BuildProviderSemantic(ProviderKind.OpenAI, options);
+                semantic = BuildProviderSemantic(new ConfigurationBuilder().Build(), ProviderKind.OpenAI, options);
                 providerName = semantic.ProviderType;
                 break;
             default:
-                semantic = ResolveProviderSemantic(null, options.DefaultProvider, null, options);
+                semantic = ResolveProviderSemantic(new ConfigurationBuilder().Build(), null, options.DefaultProvider, null, options);
                 providerName = string.IsNullOrWhiteSpace(options.DefaultProvider)
                     ? semantic.ProviderType
                     : options.DefaultProvider.Trim();
@@ -328,21 +456,22 @@ public static class ServiceCollectionExtensions
     }
 
     private static ProviderSemantic ResolveProviderSemantic(
+        IConfiguration configuration,
         string? providerTypeHint,
         string? providerNameHint,
         string? fallbackHint,
         AevatarAIFeatureOptions options)
     {
         if (TryResolveProviderKind(providerTypeHint, out var providerKind))
-            return BuildProviderSemantic(providerKind, options);
+            return BuildProviderSemantic(configuration, providerKind, options);
 
         if (TryResolveProviderKind(providerNameHint, out providerKind))
-            return BuildProviderSemantic(providerKind, options);
+            return BuildProviderSemantic(configuration, providerKind, options);
 
         if (TryResolveProviderKind(fallbackHint, out providerKind))
-            return BuildProviderSemantic(providerKind, options);
+            return BuildProviderSemantic(configuration, providerKind, options);
 
-        return BuildProviderSemantic(ProviderKind.OpenAI, options);
+        return BuildProviderSemantic(configuration, ProviderKind.OpenAI, options);
     }
 
     private static bool TryResolveProviderKind(string? candidate, out ProviderKind providerKind)
@@ -360,19 +489,42 @@ public static class ServiceCollectionExtensions
                 providerKind = ProviderKind.OpenAI;
                 return true;
             }
+
+            if (candidate.Contains("nyxid", StringComparison.OrdinalIgnoreCase))
+            {
+                providerKind = ProviderKind.NyxId;
+                return true;
+            }
         }
 
         providerKind = default;
         return false;
     }
 
-    private static ProviderSemantic BuildProviderSemantic(ProviderKind providerKind, AevatarAIFeatureOptions options)
+    private static ProviderSemantic BuildProviderSemantic(
+        IConfiguration configuration,
+        ProviderKind providerKind,
+        AevatarAIFeatureOptions options)
     {
         return providerKind switch
         {
             ProviderKind.DeepSeek => new ProviderSemantic("deepseek", options.DeepSeekModel, "https://api.deepseek.com/v1"),
+            ProviderKind.NyxId => new ProviderSemantic("nyxid", options.OpenAIModel, ResolveNyxIdGatewayEndpoint(configuration, options)),
             _ => new ProviderSemantic("openai", options.OpenAIModel, null),
         };
+    }
+
+    private static string? ResolveNyxIdGatewayEndpoint(IConfiguration configuration, AevatarAIFeatureOptions options)
+    {
+        if (options.NyxIdLlmEndpoint != null)
+        {
+            var authority = configuration["Cli:App:NyxId:Authority"]
+                ?? configuration["Aevatar:NyxId:Authority"]
+                ?? configuration["Aevatar:Authentication:Authority"];
+            return NyxIdLlmEndpointResolver.ResolveEndpoint(authority, options.NyxIdLlmEndpoint);
+        }
+
+        return NyxIdLlmEndpointResolver.ResolveEndpoint(configuration);
     }
 
     private sealed record FallbackRegistration(
@@ -402,6 +554,7 @@ public static class ServiceCollectionExtensions
     {
         OpenAI,
         DeepSeek,
+        NyxId,
     }
 
     private sealed record ConfiguredProvider(
@@ -410,6 +563,9 @@ public static class ServiceCollectionExtensions
         string Model,
         string? Endpoint,
         string ApiKey);
+
+    private static bool IsNyxIdProviderType(string providerType) =>
+        providerType.Contains("nyxid", StringComparison.OrdinalIgnoreCase);
 
     private static void RegisterMCPTools(IServiceCollection services)
     {
@@ -446,5 +602,48 @@ public static class ServiceCollectionExtensions
             foreach (var directory in options.SkillDirectories)
                 skillOptions.ScanDirectory(directory);
         });
+    }
+
+    private static void RegisterServiceInvokeTools(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        services.AddServiceInvokeTools(o =>
+        {
+            o.TenantId = options.ServiceInvokeTenantId;
+            o.AppId = options.ServiceInvokeAppId;
+            o.Namespace = options.ServiceInvokeNamespace;
+            o.EnableDynamicScopeResolution = true;
+        });
+    }
+
+    private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
+            return;
+
+        services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
+    }
+
+    private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        services.AddWebTools(o =>
+        {
+            o.NyxIdSearchSlug = options.WebSearchNyxIdSlug;
+            o.SearchApiBaseUrl = options.WebSearchApiBaseUrl;
+        });
+    }
+
+    private static void RegisterWorkflowTools(IServiceCollection services)
+    {
+        services.AddWorkflowTools();
+    }
+
+    private static void RegisterScriptingTools(IServiceCollection services)
+    {
+        services.AddScriptingTools();
+    }
+
+    private static void RegisterBindingTools(IServiceCollection services)
+    {
+        services.AddBindingTools();
     }
 }

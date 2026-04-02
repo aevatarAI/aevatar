@@ -34,7 +34,7 @@ public sealed class AIAgentConfig
     public int? MaxTokens { get; set; }
 
     /// <summary>单轮 Chat 最大 Tool Calling 轮数。</summary>
-    public int MaxToolRounds { get; set; } = 10;
+    public int MaxToolRounds { get; set; } = 40;
 
     /// <summary>历史消息上限。</summary>
     public int MaxHistoryMessages { get; set; } = 100;
@@ -42,6 +42,14 @@ public sealed class AIAgentConfig
     /// <summary>流式输出缓冲区容量（用于背压控制）。</summary>
     public int StreamBufferCapacity { get; set; } = 256;
 
+    /// <summary>Prompt token 预算上限。0 = 禁用上下文压缩（默认）。</summary>
+    public int MaxPromptTokenBudget { get; set; } = 0;
+
+    /// <summary>触发压缩的阈值比例（0.5~0.99）。当 LastPromptTokens > Budget * Threshold 时触发。</summary>
+    public double CompressionThreshold { get; set; } = 0.85;
+
+    /// <summary>是否启用 LLM 摘要压缩（Level 3）。默认关闭。</summary>
+    public bool EnableSummarization { get; set; }
 }
 
 /// <summary>AI GAgent 基类。组合 ChatRuntime、ToolManager、ChatHistory、HookPipeline、Middleware。</summary>
@@ -55,6 +63,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
     private readonly IReadOnlyList<IAgentToolSource> _toolSources;
+    private readonly IToolApprovalHandler? _approvalHandler;
 
     // ─── 组合的组件（各做一件事） ───
     /// <summary>工具管理器。</summary>
@@ -75,7 +84,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        IToolApprovalHandler? approvalHandler = null)
     {
         _llmProviderFactory = llmProviderFactory ?? NullLLMProviderFactory.Instance;
         _additionalHooks = (additionalHooks ?? []).ToArray();
@@ -83,6 +93,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         _toolMiddlewares = (toolMiddlewares ?? []).ToArray();
         _llmMiddlewares = (llmMiddlewares ?? []).ToArray();
         _toolSources = (toolSources ?? []).ToArray();
+        _approvalHandler = approvalHandler;
     }
 
     // ─── 初始化 ───
@@ -128,6 +139,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
 
         public bool HasStreamBufferCapacity { get; init; }
         public int? StreamBufferCapacity { get; init; }
+
+        public bool HasMaxPromptTokenBudget { get; init; }
+        public int? MaxPromptTokenBudget { get; init; }
+
+        public bool HasCompressionThreshold { get; init; }
+        public double? CompressionThreshold { get; init; }
+
+        public bool HasEnableSummarization { get; init; }
+        public bool? EnableSummarization { get; init; }
     }
 
     /// <summary>Extracts config overrides from protobuf state.</summary>
@@ -166,6 +186,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         if (overrides.HasStreamBufferCapacity && (overrides.StreamBufferCapacity ?? 0) > 0)
             merged.StreamBufferCapacity = overrides.StreamBufferCapacity!.Value;
 
+        if (overrides.HasMaxPromptTokenBudget)
+            merged.MaxPromptTokenBudget = Math.Max(0, overrides.MaxPromptTokenBudget ?? 0);
+
+        if (overrides.HasCompressionThreshold && overrides.CompressionThreshold.HasValue)
+            merged.CompressionThreshold = overrides.CompressionThreshold.Value;
+
+        if (overrides.HasEnableSummarization && overrides.EnableSummarization.HasValue)
+            merged.EnableSummarization = overrides.EnableSummarization.Value;
+
         NormalizeEffectiveConfig(merged);
         return merged;
     }
@@ -187,14 +216,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatAsync(userMessage, EffectiveConfig.MaxToolRounds, requestId, metadata, ct);
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatAsync(userMessage, maxRounds, requestId, metadata, ct);
     }
 
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, ct);
+        return _chat!.ChatStreamAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
@@ -205,7 +235,24 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, requestId, metadata, ct);
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync(userMessage, maxRounds, requestId, metadata, ct);
+    }
+
+    /// <summary>
+    /// Resolve maxToolRounds: metadata override > EffectiveConfig > int.MaxValue (no limit).
+    /// </summary>
+    private int ResolveMaxToolRounds(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata != null
+            && metadata.TryGetValue(LLMRequestMetadataKeys.MaxToolRoundsOverride, out var overrideValue)
+            && int.TryParse(overrideValue, out var overrideRounds)
+            && overrideRounds > 0)
+        {
+            return overrideRounds;
+        }
+
+        return EffectiveConfig.MaxToolRounds;
     }
 
     /// <summary>注册单个工具。</summary>
@@ -236,8 +283,18 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             _foundationHooksRegistered = true;
         }
 
+        // 构建 Tool Call Middleware 链（审批中间件在最前面，不可绕过）
+        var effectiveToolMiddlewares = new List<IToolCallMiddleware>();
+        if (_approvalHandler != null)
+            effectiveToolMiddlewares.Add(new Middleware.ToolApprovalMiddleware(_approvalHandler, _hooks));
+        effectiveToolMiddlewares.AddRange(_toolMiddlewares);
+
         // 构建 Chat Runtime
-        var toolLoop = new ToolCallLoop(Tools, _hooks, _toolMiddlewares, _llmMiddlewares);
+        var toolLoop = new ToolCallLoop(Tools, _hooks, effectiveToolMiddlewares, _llmMiddlewares, History.Budget);
+        var compressionConfig = new Chat.ContextCompressionConfig(
+            MaxPromptTokenBudget: EffectiveConfig.MaxPromptTokenBudget,
+            CompressionThreshold: EffectiveConfig.CompressionThreshold,
+            EnableSummarization: EffectiveConfig.EnableSummarization);
         _chat = new ChatRuntime(
             providerFactory: GetLLMProvider,
             history: History,
@@ -248,7 +305,8 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
             llmMiddlewares: _llmMiddlewares,
             agentId: Id,
             agentName: GetType().Name,
-            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity);
+            streamBufferCapacity: EffectiveConfig.StreamBufferCapacity,
+            compressionConfig: compressionConfig);
     }
 
     private ILLMProvider GetLLMProvider()
@@ -271,9 +329,15 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         return _llmProviderFactory.GetDefault();
     }
 
+    /// <summary>
+    /// 装饰系统 prompt。子类可覆写以追加动态内容（如技能列表）。
+    /// 默认实现直接返回原始 prompt。
+    /// </summary>
+    protected virtual string DecorateSystemPrompt(string basePrompt) => basePrompt;
+
     private LLMRequest BuildRequest() => new()
     {
-        Messages = History.BuildMessages(EffectiveConfig.SystemPrompt),
+        Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt)),
         RequestId = null,
         Metadata = null,
         Tools = Tools.HasTools ? Tools.GetAll() : null,
@@ -338,6 +402,9 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         MaxToolRounds = source.MaxToolRounds,
         MaxHistoryMessages = source.MaxHistoryMessages,
         StreamBufferCapacity = source.StreamBufferCapacity,
+        MaxPromptTokenBudget = source.MaxPromptTokenBudget,
+        CompressionThreshold = source.CompressionThreshold,
+        EnableSummarization = source.EnableSummarization,
     };
 
     private static void NormalizeEffectiveConfig(AIAgentConfig config)
@@ -346,11 +413,14 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         config.Model = string.IsNullOrWhiteSpace(config.Model) ? null : config.Model.Trim();
         config.SystemPrompt ??= string.Empty;
         if (config.MaxToolRounds <= 0)
-            config.MaxToolRounds = 10;
+            config.MaxToolRounds = 40;
         if (config.MaxHistoryMessages <= 0)
             config.MaxHistoryMessages = 100;
         if (config.StreamBufferCapacity <= 0)
             config.StreamBufferCapacity = 256;
+        if (config.MaxPromptTokenBudget < 0)
+            config.MaxPromptTokenBudget = 0;
+        config.CompressionThreshold = Math.Clamp(config.CompressionThreshold, 0.5, 0.99);
     }
 
     private sealed class NullLLMProviderFactory : ILLMProviderFactory

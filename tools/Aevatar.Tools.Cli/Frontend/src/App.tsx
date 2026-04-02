@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -32,23 +32,22 @@ import {
   Copy,
   Database,
   FileText,
+  FolderOpen,
   FolderPlus,
   GitBranch,
   Globe,
-  LayoutGrid,
+  Loader2,
   LogOut,
   Moon,
   Maximize2,
   Palette,
   Play,
   Plus,
-  Rows3,
   Search,
   Settings,
   Shield,
   Square,
   Sun,
-  Terminal,
   Trash2,
   Upload,
   User,
@@ -58,6 +57,10 @@ import {
 } from 'lucide-react';
 import * as api from './api';
 import ScriptsStudio from './ScriptsStudio';
+import * as nyxid from './auth/nyxid';
+import ScopePage from './runtime/ScopePage';
+import GAgentPage from './runtime/GAgentPage';
+import ConfigExplorerPage from './config-explorer/ConfigExplorerPage';
 import {
   PRIMITIVE_CATEGORIES,
   applyConnectorDefaults,
@@ -67,7 +70,6 @@ import {
   buildWorkflowDocument,
   createDefaultRoles,
   createEdge,
-  createEmptyConnector,
   createEmptyWorkflowMeta,
   createNode,
   createRoleState,
@@ -136,18 +138,16 @@ type DirectorySummary = {
   isBuiltIn: boolean;
 };
 
-type CatalogPage = 'roles' | 'connectors';
-type WorkspacePage = 'workflows' | CatalogPage | 'studio' | 'scripts' | 'settings';
+type WorkspacePage = 'studio' | 'scripts' | 'gagents' | 'explorer' | 'console' | 'settings';
 type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
-type SettingsSection = 'runtime' | 'llm' | 'appearance';
+type SettingsSection = 'runtime' | 'cloud-config' | 'skills' | 'appearance';
 type RoleModalTarget = 'catalog' | 'workflow';
-type WorkflowLayout = 'grid' | 'list';
 type WorkflowStorageMode = 'workspace' | 'scope';
 type ScriptStorageMode = 'draft' | 'scope';
 type AppHostMode = 'embedded' | 'proxy';
 
-const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors', 'settings'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'workflows', 'scripts', 'roles', 'connectors'];
+const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['studio', 'scripts', 'gagents', 'explorer', 'console', 'settings'];
+const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['studio', 'scripts', 'gagents', 'explorer'];
 
 type AppContextState = {
   hostMode: AppHostMode;
@@ -199,8 +199,31 @@ type ProviderDraft = {
   apiKeyConfigured: boolean;
 };
 
+type RuntimeMode = 'remote' | 'local';
+type UserLlmRoute = string;
+
+type UserConfigProviderStatus = {
+  provider_slug: string;
+  provider_name: string;
+  status: string;
+  source?: string;
+};
+
+type UserConfigState = {
+  defaultModel: string;
+  preferredLlmRoute: UserLlmRoute;
+  loading: boolean;
+  providers: UserConfigProviderStatus[];
+  supportedModels: string[];
+  modelsByProvider: Record<string, string[]>;
+  modelsLoading: boolean;
+};
+
 type StudioSettingsState = {
-  runtimeBaseUrl: string;
+  remoteRuntimeUrl: string;
+  localRuntimeUrl: string;
+  runtimeMode: RuntimeMode;
+  ornnBaseUrl: string;
   appearanceTheme: string;
   colorMode: 'light' | 'dark';
   secretsFilePath: string;
@@ -237,10 +260,79 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
   },
 ];
 
-const DEFAULT_RUNTIME_BASE_URL =
-  typeof window === 'undefined' ? 'http://127.0.0.1:5100' : window.location.origin;
+const DEFAULT_REMOTE_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
+const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:5080';
+const DEFAULT_RUNTIME_BASE_URL = DEFAULT_LOCAL_RUNTIME_URL;
+const USER_LLM_ROUTE_GATEWAY = '';
+const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
+const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
 const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
+const APPEARANCE_THEME_STORAGE_KEY = 'aevatar.app.appearance-theme';
+const COLOR_MODE_STORAGE_KEY = 'aevatar.app.color-mode';
+
+function normalizeRuntimeMode(value: unknown): RuntimeMode {
+  return String(value || '').trim().toLowerCase() === 'remote' ? 'remote' : 'local';
+}
+
+function normalizeRuntimeUrl(value: unknown, fallback: string) {
+  const normalized = String(value || '').trim();
+  return (normalized || fallback).replace(/\/+$/, '');
+}
+
+function normalizeUserLlmRoute(value: unknown): UserLlmRoute {
+  const normalized = String(value || '').trim();
+  if (!normalized || /^auto$/i.test(normalized) || /^gateway$/i.test(normalized)) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.includes('://') || normalized.startsWith('//')) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.startsWith('/')) {
+    return normalized;
+  }
+
+  return `/api/v1/proxy/s/${normalized.replace(/^\/+|\/+$/g, '')}`;
+}
+
+function routePathFromProviderSlug(slug: string) {
+  const normalized = String(slug || '').trim();
+  return normalized ? `/api/v1/proxy/s/${normalized}` : USER_LLM_ROUTE_GATEWAY;
+}
+
+function resolveUserRuntimeConfig(userConfigData?: any) {
+  const legacyRuntimeUrl = String(userConfigData?.runtimeBaseUrl || '').trim().replace(/\/+$/, '');
+  const hasExplicitRuntimeConfig = Boolean(
+    userConfigData?.runtimeMode || userConfigData?.localRuntimeBaseUrl || userConfigData?.remoteRuntimeBaseUrl,
+  );
+  if (!hasExplicitRuntimeConfig && legacyRuntimeUrl) {
+    const isLocalRuntime = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(legacyRuntimeUrl);
+    return {
+      runtimeMode: isLocalRuntime ? 'local' as const : 'remote' as const,
+      localRuntimeUrl: isLocalRuntime ? legacyRuntimeUrl : DEFAULT_LOCAL_RUNTIME_URL,
+      remoteRuntimeUrl: isLocalRuntime ? DEFAULT_REMOTE_RUNTIME_URL : legacyRuntimeUrl,
+      activeRuntimeUrl: legacyRuntimeUrl,
+    };
+  }
+
+  const runtimeMode = normalizeRuntimeMode(userConfigData?.runtimeMode);
+  const localRuntimeUrl = normalizeRuntimeUrl(userConfigData?.localRuntimeBaseUrl, DEFAULT_LOCAL_RUNTIME_URL);
+  const remoteRuntimeUrl = normalizeRuntimeUrl(userConfigData?.remoteRuntimeBaseUrl, DEFAULT_REMOTE_RUNTIME_URL);
+  return {
+    runtimeMode,
+    localRuntimeUrl,
+    remoteRuntimeUrl,
+    activeRuntimeUrl: runtimeMode === 'remote' ? remoteRuntimeUrl : localRuntimeUrl,
+  };
+}
+
+function getActiveRuntimeUrl(runtime: Pick<StudioSettingsState, 'runtimeMode' | 'localRuntimeUrl' | 'remoteRuntimeUrl'>) {
+  return runtime.runtimeMode === 'remote'
+    ? normalizeRuntimeUrl(runtime.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL)
+    : normalizeRuntimeUrl(runtime.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL);
+}
 
 function createEmptyAppContext(): AppContextState {
   return {
@@ -295,6 +387,18 @@ function summarizeBootstrapFailures(labels: string[]) {
     ? `, +${labels.length - visibleLabels.length} more`
     : '';
   return `Loaded studio with defaults for ${visibleLabels.join(', ')}${suffix}.`;
+}
+
+function summarizeChronoStorageWarning(failures: Array<{ label: string; error: any }>) {
+  if (failures.length === 0) {
+    return null;
+  }
+
+  const labels = Array.from(new Set(failures.map(item => item.label)));
+  const affectedLabel = labels.length === 1
+    ? labels[0]
+    : `${labels.slice(0, 2).join(', ')}${labels.length > 2 ? `, +${labels.length - 2} more` : ''}`;
+  return `${api.getChronoStorageServiceErrorMessage(failures[0].error)} Affected: ${affectedLabel}.`;
 }
 
 type ExecutionLogsWindowState = {
@@ -356,6 +460,31 @@ function readStoredPreviousWorkspacePage(): NonSettingsWorkspacePage {
     return isNonSettingsWorkspacePage(raw) ? raw : 'studio';
   } catch {
     return 'studio';
+  }
+}
+
+function readStoredAppearanceTheme() {
+  if (typeof window === 'undefined') {
+    return 'blue';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(APPEARANCE_THEME_STORAGE_KEY);
+    return APPEARANCE_OPTIONS.some(option => option.id === raw) ? raw! : 'blue';
+  } catch {
+    return 'blue';
+  }
+}
+
+function readStoredColorMode(): 'light' | 'dark' {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+
+  try {
+    return window.localStorage.getItem(COLOR_MODE_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
   }
 }
 
@@ -604,11 +733,16 @@ function formatExecutionLogsClipboard(trace: ExecutionTrace | null) {
   return trace.logs.map(log => formatExecutionLogClipboard(log)).join('\n\n---\n\n');
 }
 
+const DEFAULT_ORNN_BASE_URL = 'https://ornn.chrono-ai.fun';
+
 function createEmptyStudioSettings(): StudioSettingsState {
   return {
-    runtimeBaseUrl: DEFAULT_RUNTIME_BASE_URL,
-    appearanceTheme: 'blue',
-    colorMode: 'light',
+    remoteRuntimeUrl: DEFAULT_REMOTE_RUNTIME_URL,
+    localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
+    runtimeMode: 'local',
+    ornnBaseUrl: DEFAULT_ORNN_BASE_URL,
+    appearanceTheme: readStoredAppearanceTheme(),
+    colorMode: readStoredColorMode(),
     secretsFilePath: '',
     defaultProviderName: '',
     providerTypes: [],
@@ -616,33 +750,12 @@ function createEmptyStudioSettings(): StudioSettingsState {
   };
 }
 
-function createProviderDraft(
-  providerTypeId: string,
-  providerTypes: ProviderTypeOption[],
-  existingProviders: ProviderDraft[],
-): ProviderDraft {
-  const profile = providerTypes.find(item => item.id === providerTypeId) || providerTypes[0] || {
-    id: providerTypeId || 'openai',
-    displayName: providerTypeId || 'Provider',
-    category: 'configured',
-    description: '',
-    defaultEndpoint: '',
-    defaultModel: '',
-    recommended: false,
-  };
+function getFixedProviderName(providerType: string) {
+  return providerType.trim().toLowerCase() === 'nyxid' ? 'nyxid' : '';
+}
 
-  return {
-    key: `provider_${crypto.randomUUID()}`,
-    providerName: createUniqueProviderName(profile.id, existingProviders),
-    providerType: profile.id,
-    displayName: profile.displayName,
-    category: profile.category,
-    description: profile.description,
-    endpoint: profile.defaultEndpoint,
-    model: profile.defaultModel,
-    apiKey: '',
-    apiKeyConfigured: false,
-  };
+function usesFixedProviderName(providerType: string) {
+  return Boolean(getFixedProviderName(providerType));
 }
 
 function toProviderDraft(item: any, providerTypes: ProviderTypeOption[]): ProviderDraft {
@@ -659,18 +772,6 @@ function toProviderDraft(item: any, providerTypes: ProviderTypeOption[]): Provid
     apiKey: item?.apiKey || '',
     apiKeyConfigured: Boolean(item?.apiKeyConfigured),
   };
-}
-
-function createUniqueProviderName(providerType: string, providers: ProviderDraft[]) {
-  const normalizedBase = (providerType || 'provider').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
-  const used = new Set(providers.map(provider => provider.providerName.trim().toLowerCase()));
-  let index = 1;
-  let candidate = `${normalizedBase}-main`;
-  while (used.has(candidate)) {
-    index += 1;
-    candidate = `${normalizedBase}-${index}`;
-  }
-  return candidate;
 }
 
 function createUniqueRoleId(existingRoles: RoleState[], base = 'role') {
@@ -786,8 +887,18 @@ function App() {
   const [authSession, setAuthSession] = useState<AuthSessionState>(createEmptyAuthSession());
   const [workspacePage, setWorkspacePage] = useState<WorkspacePage>(() => readStoredWorkspacePage());
   const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
+  const [explorerInitialFolder, setExplorerInitialFolder] = useState<string | null>(null);
   const [studioView, setStudioView] = useState<StudioView>('editor');
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
+  const [userConfigState, setUserConfigState] = useState<UserConfigState>({
+    defaultModel: '',
+    preferredLlmRoute: USER_LLM_ROUTE_GATEWAY,
+    loading: false,
+    providers: [],
+    supportedModels: [],
+    modelsByProvider: {},
+    modelsLoading: false,
+  });
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('node');
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [logsCollapsed, setLogsCollapsed] = useState(false);
@@ -801,15 +912,9 @@ function App() {
     directories: [],
   });
   const [workflowList, setWorkflowList] = useState<WorkflowSummary[]>([]);
-  const [workflowSearch, setWorkflowSearch] = useState('');
-  const [workflowLayout, setWorkflowLayout] = useState<WorkflowLayout>('grid');
-  const [newDirectoryPath, setNewDirectoryPath] = useState('');
-  const [newDirectoryLabel, setNewDirectoryLabel] = useState('');
-  const [showDirectoryForm, setShowDirectoryForm] = useState(false);
 
   const [settingsState, setSettingsState] = useState<StudioSettingsState>(createEmptyStudioSettings());
-  const [providerSearch, setProviderSearch] = useState('');
-  const [selectedProviderKey, setSelectedProviderKey] = useState<string | null>(null);
+  const [, setSelectedProviderKey] = useState<string | null>(null);
 
   const [workflowMeta, setWorkflowMeta] = useState<WorkflowMetaState>(createEmptyWorkflowMeta());
   const [roles, setRoles] = useState<RoleState[]>(createDefaultRoles());
@@ -832,41 +937,27 @@ function App() {
   });
 
   const [connectors, setConnectors] = useState<ConnectorState[]>([]);
-  const [connectorsMeta, setConnectorsMeta] = useState({
+  const [, setConnectorsMeta] = useState({
     homeDirectory: '',
     filePath: '',
     fileExists: false,
   });
-  const [connectorDraftMeta, setConnectorDraftMeta] = useState({
-    filePath: '',
-    fileExists: false,
-    updatedAtUtc: '',
-  });
-  const [connectorSearch, setConnectorSearch] = useState('');
-  const [selectedConnectorKey, setSelectedConnectorKey] = useState<string | null>(null);
+  const [, setSelectedConnectorKey] = useState<string | null>(null);
   const [connectorDraft, setConnectorDraft] = useState<ConnectorState | null>(null);
   const [connectorModalOpen, setConnectorModalOpen] = useState(false);
-  const [connectorImportPending, setConnectorImportPending] = useState(false);
 
   const [roleCatalog, setRoleCatalog] = useState<RoleState[]>([]);
-  const [rolesMeta, setRolesMeta] = useState({
+  const [, setRolesMeta] = useState({
     homeDirectory: '',
     filePath: '',
     fileExists: false,
   });
-  const [roleDraftMeta, setRoleDraftMeta] = useState({
-    filePath: '',
-    fileExists: false,
-    updatedAtUtc: '',
-  });
-  const [roleCatalogSearch, setRoleCatalogSearch] = useState('');
   const [workflowRoleSearch, setWorkflowRoleSearch] = useState('');
-  const [selectedCatalogRoleKey, setSelectedCatalogRoleKey] = useState<string | null>(null);
+  const [, setSelectedCatalogRoleKey] = useState<string | null>(null);
   const [expandedWorkflowRoleKey, setExpandedWorkflowRoleKey] = useState<string | null>(null);
   const [roleDraft, setRoleDraft] = useState<RoleState | null>(null);
   const [roleModalTarget, setRoleModalTarget] = useState<RoleModalTarget>('catalog');
   const [roleModalOpen, setRoleModalOpen] = useState(false);
-  const [roleImportPending, setRoleImportPending] = useState(false);
 
   const [executions, setExecutions] = useState<any[]>([]);
   const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
@@ -877,6 +968,14 @@ function App() {
   const [copiedAllExecutionLogs, setCopiedAllExecutionLogs] = useState(false);
   const [executionPrompt, setExecutionPrompt] = useState('');
   const [runModalOpen, setRunModalOpen] = useState(false);
+  const [runScopeId, setRunScopeId] = useState(() => nyxid.loadSession()?.user.sub || '');
+  const [bindServiceId, setBindServiceId] = useState('');
+  const [bindScopeModalOpen, setBindScopeModalOpen] = useState(false);
+  const [bindScopePending, setBindScopePending] = useState(false);
+  const [draftRunEvents, setDraftRunEvents] = useState<any[]>([]);
+  const [draftRunText, setDraftRunText] = useState('');
+  const [draftRunning, setDraftRunning] = useState(false);
+  const draftRunAbortRef = useRef<AbortController | null>(null);
   const [executionActionInput, setExecutionActionInput] = useState('');
   const [executionActionPendingKey, setExecutionActionPendingKey] = useState('');
   const [executionStopPending, setExecutionStopPending] = useState(false);
@@ -886,6 +985,9 @@ function App() {
   const [askAiReasoning, setAskAiReasoning] = useState('');
   const [askAiGeneratedYaml, setAskAiGeneratedYaml] = useState('');
   const [askAiPending, setAskAiPending] = useState(false);
+  const [ornnTestState, setOrnnTestState] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ status: 'idle', message: '' });
+  const [ornnSkillsCache, setOrnnSkillsCache] = useState<api.OrnnSkillSummary[]>([]);
+  const [ornnSkillsLoading, setOrnnSkillsLoading] = useState(false);
   const [runtimeTestState, setRuntimeTestState] = useState<{
     status: 'idle' | 'testing' | 'success' | 'error';
     message: string;
@@ -898,6 +1000,7 @@ function App() {
     text: string;
     type: 'success' | 'error' | 'info';
   } | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const reactFlowInstanceRef = useRef<any>(null);
   const syncSuppressedRef = useRef(true);
@@ -910,23 +1013,12 @@ function App() {
   const executionActionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const executionLogsPopoutMonitorRef = useRef<number | null>(null);
   const executionLogsPopoutWindowRef = useRef<Window | null>(null);
-  const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
-  const roleImportInputRef = useRef<HTMLInputElement | null>(null);
   const saveShortcutHandlerRef = useRef<() => void>(() => {});
 
   const selectedNode = nodes.find(node => node.id === selectedNodeId) || null;
   const workflowAuthoringMetadata = useMemo(
     () => buildWorkflowAuthoringMetadata(appContext.scopeId),
     [appContext.scopeId],
-  );
-  const selectedConnector = connectors.find(connector => connector.key === selectedConnectorKey) || null;
-  const selectedCatalogRole = roleCatalog.find(role => role.key === selectedCatalogRoleKey) || null;
-  const connectorCatalogIsRemote = connectorsMeta.filePath.startsWith('chrono-storage://');
-  const roleCatalogIsRemote = rolesMeta.filePath.startsWith('chrono-storage://');
-  const selectedProvider = settingsState.providers.find(provider => provider.key === selectedProviderKey) || null;
-  const providerTypeMap = useMemo(
-    () => new Map(settingsState.providerTypes.map(item => [item.id, item])),
-    [settingsState.providerTypes],
   );
   const currentWorkflowExecutions = executions.filter(item => {
     const currentName = normalizeWorkflowName(workflowMeta.name);
@@ -1051,6 +1143,29 @@ function App() {
       // Ignore storage errors in restricted browser contexts.
     }
   }, [previousWorkspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(APPEARANCE_THEME_STORAGE_KEY, settingsState.appearanceTheme || 'blue');
+      window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, settingsState.colorMode || 'light');
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [settingsState.appearanceTheme, settingsState.colorMode]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.documentElement.style.colorScheme = settingsState.colorMode;
+    document.body.style.background = settingsState.colorMode === 'dark' ? '#0b1220' : '#f7f6f3';
+    document.body.style.color = settingsState.colorMode === 'dark' ? '#e5e7eb' : '#1f2328';
+  }, [settingsState.colorMode]);
 
   useEffect(() => {
     const workspaceReady = !authSession.loading && (!authSession.enabled || authSession.authenticated);
@@ -1308,22 +1423,68 @@ function App() {
 
   async function bootstrap() {
     try {
-      const session = await api.auth.getSession();
+      // Handle OAuth callback if we're returning from NyxID.
+      if (nyxid.isAuthCallback()) {
+        try {
+          const { session: oauthSession, returnTo } = await nyxid.handleCallback();
+          setAuthSession({
+            loading: false,
+            enabled: true,
+            authenticated: true,
+            providerDisplayName: 'NyxID',
+            loginUrl: '',
+            logoutUrl: '',
+            name: oauthSession.user.name || '',
+            email: oauthSession.user.email || '',
+            picture: oauthSession.user.picture || '',
+            errorMessage: '',
+          });
+          // Update scope ID from NyxID user.
+          if (oauthSession.user.sub) setRunScopeId(oauthSession.user.sub);
+          // Clean up callback URL params.
+          window.history.replaceState({}, '', returnTo || '/');
+        } catch (err: any) {
+          setAuthSession(prev => ({
+            ...prev,
+            loading: false,
+            enabled: true,
+            authenticated: false,
+            errorMessage: err?.message || 'OAuth callback failed.',
+          }));
+          window.history.replaceState({}, '', '/');
+          return;
+        }
+      }
+
+      // Check for existing NyxID session in localStorage.
+      let localSession = nyxid.loadSession();
+      if (localSession && !nyxid.getActiveSession()) {
+        // Token expired but refresh token available.
+        localSession = await nyxid.refreshSession(localSession);
+      }
+
+      // Also check backend auth status (for scope resolution).
+      let backendSession: any = null;
+      try {
+        backendSession = await api.auth.getSession();
+      } catch { /* backend may not have auth endpoint */ }
+
+      const isAuthenticated = Boolean(localSession) || Boolean(backendSession?.authenticated);
       const nextAuthSession: AuthSessionState = {
         loading: false,
-        enabled: session?.enabled !== false,
-        authenticated: Boolean(session?.authenticated),
-        providerDisplayName: session?.providerDisplayName || 'NyxID',
-        loginUrl: session?.loginUrl || '/auth/login',
-        logoutUrl: session?.logoutUrl || '/auth/logout',
-        name: session?.name || '',
-        email: session?.email || '',
-        picture: session?.picture || '',
-        errorMessage: session?.errorMessage || '',
+        enabled: true,
+        authenticated: isAuthenticated,
+        providerDisplayName: 'NyxID',
+        loginUrl: '',
+        logoutUrl: '',
+        name: localSession?.user.name || backendSession?.name || '',
+        email: localSession?.user.email || backendSession?.email || '',
+        picture: localSession?.user.picture || '',
+        errorMessage: '',
       };
       setAuthSession(nextAuthSession);
 
-      if (nextAuthSession.enabled && !nextAuthSession.authenticated) {
+      if (!isAuthenticated) {
         return;
       }
 
@@ -1337,6 +1498,7 @@ function App() {
         roleDraftResult,
         executionListResult,
         settingsResult,
+        userConfigResult,
       ] = await Promise.allSettled([
         api.app.getContext(),
         api.workspace.getSettings(),
@@ -1347,6 +1509,7 @@ function App() {
         api.roles.getDraft(),
         api.executions.list(),
         api.settings.get(),
+        api.userConfig.get(),
       ]);
 
       const bootstrapFailures = [
@@ -1359,6 +1522,7 @@ function App() {
         { label: 'role draft', result: roleDraftResult },
         { label: 'execution list', result: executionListResult },
         { label: 'studio settings', result: settingsResult },
+        { label: 'user config', result: userConfigResult },
       ].flatMap(item =>
         item.result.status === 'rejected'
           ? [{ label: item.label, error: item.result.reason }]
@@ -1366,6 +1530,7 @@ function App() {
 
       const authFailure = bootstrapFailures.find(item => isAuthResponseInvalid(item.error));
       if (authFailure) {
+        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1381,6 +1546,11 @@ function App() {
         console.warn(`[Aevatar App] Failed to load bootstrap resource: ${item.label}`, item.error);
       });
 
+      const chronoStorageFailures = bootstrapFailures.filter(item => api.isChronoStorageServiceError(item.error));
+      const nonChronoStorageFailures = bootstrapFailures.filter(item => !api.isChronoStorageServiceError(item.error));
+      const nextStorageWarning = summarizeChronoStorageWarning(chronoStorageFailures);
+      setStorageWarning(nextStorageWarning);
+
       const context = contextResult.status === 'fulfilled' ? contextResult.value : null;
       const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null;
       const workflows = workflowsResult.status === 'fulfilled' ? workflowsResult.value : [];
@@ -1390,6 +1560,15 @@ function App() {
       const roleDraftResponse = roleDraftResult.status === 'fulfilled' ? roleDraftResult.value : null;
       const executionList = executionListResult.status === 'fulfilled' ? executionListResult.value : [];
       const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
+      const userConfigData = userConfigResult.status === 'fulfilled' ? userConfigResult.value : null;
+
+      const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
+      const nextRuntime = runtimeConfig.activeRuntimeUrl;
+      fetch('/api/_proxy/runtime-url', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtimeBaseUrl: nextRuntime }),
+      }).catch(() => {});
 
       const workflowStorageMode: WorkflowStorageMode = context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace';
       const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
@@ -1401,7 +1580,6 @@ function App() {
             isBuiltIn: true,
           }]
         : Array.isArray(workspace?.directories) ? workspace.directories : [];
-      const nextRuntime = settings?.runtimeBaseUrl || workspace?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL;
 
       setAppContext(resolveAppContextState(context));
       setWorkspaceSettings({
@@ -1410,7 +1588,17 @@ function App() {
       });
       setWorkflowList(Array.isArray(workflows) ? workflows : []);
 
-      hydrateSettings(settings);
+      hydrateSettings(settings, {
+        ...runtimeConfig,
+        defaultModel: userConfigData?.defaultModel || '',
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+      });
+      setUserConfigState(prev => ({
+        ...prev,
+        defaultModel: userConfigData?.defaultModel || '',
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+        loading: false,
+      }));
 
       hydrateConnectorCatalog(connectorCatalog);
       hydrateConnectorDraft(connectorDraftResponse);
@@ -1426,11 +1614,16 @@ function App() {
         directoryId: defaultDirectoryId,
       }));
 
-      if (bootstrapFailures.length > 0) {
-        flash(summarizeBootstrapFailures(bootstrapFailures.map(item => item.label)), 'info');
+      if (nextStorageWarning) {
+        flash(nextStorageWarning, 'error');
+      }
+
+      if (nonChronoStorageFailures.length > 0) {
+        flash(summarizeBootstrapFailures(nonChronoStorageFailures.map(item => item.label)), 'info');
       }
     } catch (error: any) {
       if (isAuthResponseInvalid(error)) {
+        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1442,6 +1635,12 @@ function App() {
         return;
       }
 
+      if (api.isChronoStorageServiceError(error)) {
+        const message = api.getChronoStorageServiceErrorMessage(error);
+        setStorageWarning(message);
+        flash(message, 'error');
+      }
+
       setAuthSession(prev => ({
         ...prev,
         loading: false,
@@ -1451,7 +1650,7 @@ function App() {
     }
   }
 
-  function hydrateSettings(payload: any) {
+  function hydrateSettings(payload: any, userConfigData?: any) {
     const providerTypes = Array.isArray(payload?.providerTypes)
       ? payload.providerTypes.map((item: any) => ({
           id: item.id,
@@ -1468,8 +1667,22 @@ function App() {
       ? payload.providers.map((item: any) => toProviderDraft(item, providerTypes))
       : [];
 
+    // Apply user-config defaultModel to NyxID Gateway provider
+    const remoteDefaultModel = userConfigData?.defaultModel;
+    if (remoteDefaultModel) {
+      const nyxIdProvider = providers.find((p: any) => usesFixedProviderName(p.providerType));
+      if (nyxIdProvider) {
+        nyxIdProvider.model = remoteDefaultModel;
+      }
+    }
+
+    const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
+
     setSettingsState({
-      runtimeBaseUrl: payload?.runtimeBaseUrl || DEFAULT_RUNTIME_BASE_URL,
+      remoteRuntimeUrl: runtimeConfig.remoteRuntimeUrl,
+      localRuntimeUrl: runtimeConfig.localRuntimeUrl,
+      runtimeMode: runtimeConfig.runtimeMode,
+      ornnBaseUrl: payload?.ornnBaseUrl || DEFAULT_ORNN_BASE_URL,
       appearanceTheme: payload?.appearanceTheme || 'blue',
       colorMode: payload?.colorMode === 'dark' ? 'dark' : 'light',
       secretsFilePath: payload?.secretsFilePath || '',
@@ -1477,6 +1690,11 @@ function App() {
       providerTypes,
       providers,
     });
+    setUserConfigState(prev => ({
+      ...prev,
+      defaultModel: String(userConfigData?.defaultModel || '').trim(),
+      preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
+    }));
     setSelectedProviderKey(providers[0]?.key || null);
     setRuntimeTestState({
       status: 'idle',
@@ -1513,20 +1731,10 @@ function App() {
   }
 
   function hydrateConnectorDraft(payload: any) {
-    setConnectorDraftMeta({
-      filePath: payload?.filePath || '',
-      fileExists: Boolean(payload?.fileExists),
-      updatedAtUtc: payload?.updatedAtUtc || '',
-    });
     setConnectorDraft(payload?.draft ? toConnectorState(payload.draft) : null);
   }
 
   function hydrateRoleDraft(payload: any) {
-    setRoleDraftMeta({
-      filePath: payload?.filePath || '',
-      fileExists: Boolean(payload?.fileExists),
-      updatedAtUtc: payload?.updatedAtUtc || '',
-    });
     setRoleDraft(payload?.draft ? toRoleState(payload.draft, 1) : null);
   }
 
@@ -1697,8 +1905,9 @@ function App() {
     setWorkflowMeta(prev => (prev.dirty ? prev : { ...prev, dirty: true }));
   }
 
-  function openWorkflowsPage() {
-    setWorkspacePage('workflows');
+  function openExplorerPage(initialFolder?: string) {
+    setWorkspacePage('explorer');
+    if (initialFolder) setExplorerInitialFolder(initialFolder);
     setRightPanelOpen(false);
     setPaletteOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
@@ -1712,13 +1921,6 @@ function App() {
 
   function openScriptsPage() {
     setWorkspacePage('scripts');
-    setRightPanelOpen(false);
-    setPaletteOpen(false);
-    setCanvasMenu({ open: false, x: 0, y: 0 });
-  }
-
-  function openCatalogPage(page: CatalogPage) {
-    setWorkspacePage(page);
     setRightPanelOpen(false);
     setPaletteOpen(false);
     setCanvasMenu({ open: false, x: 0, y: 0 });
@@ -1749,28 +1951,6 @@ function App() {
     setRightPanelOpen(true);
   }
 
-  function createNewWorkflow(directoryId?: string | null) {
-    syncSuppressedRef.current = true;
-    invalidateYamlSync();
-    setRoles(createDefaultRoles());
-    setNodes([]);
-    setEdges([]);
-    setSelectedNodeId(null);
-    setSelectedExecutionId(null);
-    setExecutionDetail(null);
-    setExecutionTrace(null);
-    setActiveExecutionLogIndex(null);
-    setWorkflowMeta({
-      ...createEmptyWorkflowMeta(),
-      directoryId: directoryId ?? workspaceSettings.directories[0]?.directoryId ?? null,
-      dirty: true,
-    });
-    setWorkspacePage('studio');
-    setStudioView('editor');
-    setRightPanelTab('node');
-    setRightPanelOpen(false);
-    scheduleCanvasOverview();
-  }
 
   function scheduleCanvasOverview() {
     window.requestAnimationFrame(() => {
@@ -1788,48 +1968,6 @@ function App() {
   async function loadWorkflowList() {
     const workflows = await api.workspace.listWorkflows();
     setWorkflowList(Array.isArray(workflows) ? workflows : []);
-  }
-
-  async function loadExecutions(preferredExecutionId?: string | null) {
-    const executionList = await api.executions.list();
-    const nextExecutions = Array.isArray(executionList) ? executionList : [];
-    setExecutions(nextExecutions);
-
-    const preferred = preferredExecutionId
-      ? nextExecutions.find(item => item.executionId === preferredExecutionId)
-      : null;
-    if (preferred?.executionId) {
-      await openExecution(preferred.executionId);
-    }
-  }
-
-  async function loadWorkspaceSettings() {
-    const [context, settings] = await Promise.all([
-      api.app.getContext(),
-      api.workspace.getSettings(),
-    ]);
-    setAppContext({
-      hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
-      scopeId: context?.scopeResolved && context?.scopeId ? context.scopeId : null,
-      scopeResolved: Boolean(context?.scopeResolved && context?.scopeId),
-      scopeSource: context?.scopeSource || '',
-      workflowStorageMode: context?.workflowStorageMode === 'scope' ? 'scope' : 'workspace',
-      scriptStorageMode: context?.scriptStorageMode === 'scope' ? 'scope' : 'draft',
-      scriptsEnabled: Boolean(context?.features?.scripts),
-      scriptContract: {
-        inputType: context?.scriptContract?.inputType || '',
-        readModelFields: Array.isArray(context?.scriptContract?.readModelFields) ? context.scriptContract.readModelFields : [],
-      },
-    });
-    const nextSettings = {
-      runtimeBaseUrl: workspaceSettings.runtimeBaseUrl,
-      directories: Array.isArray(settings?.directories) ? settings.directories : [],
-    };
-    setWorkspaceSettings(nextSettings);
-    setWorkflowMeta(prev => ({
-      ...prev,
-      directoryId: prev.directoryId || nextSettings.directories[0]?.directoryId || null,
-    }));
   }
 
   function hydrateWorkflow(payload: any) {
@@ -2000,7 +2138,7 @@ function App() {
     const directoryId = workflowMeta.directoryId || workspaceSettings.directories[0]?.directoryId;
     if (!directoryId) {
       flash('Add a workflow directory first', 'error');
-      openWorkflowsPage();
+      openExplorerPage('workflows');
       return;
     }
 
@@ -2072,50 +2210,6 @@ function App() {
     }
   }
 
-  function handleImportWorkflow() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.yaml,.yml';
-    input.onchange = async event => {
-      const file = (event.target as HTMLInputElement).files?.[0];
-      if (!file) {
-        return;
-      }
-
-      const yaml = await file.text();
-      try {
-        const parsed = await api.editor.parseYaml(yaml, workflowList.map(item => item.name));
-        if (!parsed?.document) {
-          throw new Error('YAML parse returned an empty document.');
-        }
-
-        const graph = buildGraphFromWorkflow(parsed.document, null, createDefaultRoles());
-        syncSuppressedRef.current = true;
-        invalidateYamlSync();
-        setRoles(graph.roles);
-        setNodes(graph.nodes);
-        setEdges(graph.edges);
-        setSelectedNodeId(graph.nodes[0]?.id || null);
-        setWorkflowMeta({
-          ...createEmptyWorkflowMeta(),
-          directoryId: workflowMeta.directoryId || workspaceSettings.directories[0]?.directoryId || null,
-          name: parsed.document.name || file.name.replace(/\.ya?ml$/i, ''),
-          description: parsed.document.description || '',
-          closedWorldMode: Boolean(parsed.document.configuration?.closedWorldMode),
-          yaml,
-          findings: Array.isArray(parsed.findings) ? parsed.findings : [],
-          dirty: true,
-          lastSavedAt: null,
-        });
-        setWorkspacePage('studio');
-        setStudioView('editor');
-        flash('YAML imported', 'success');
-      } catch (error: any) {
-        flash(error?.message || 'Import failed', 'error');
-      }
-    };
-    input.click();
-  }
 
   async function applyAskAiYaml(yaml: string) {
     const parsed = await api.editor.parseYaml(yaml, workflowList.map(item => item.name));
@@ -2197,6 +2291,35 @@ function App() {
     setRunModalOpen(true);
   }
 
+  function handleBindScope() {
+    setBindScopeModalOpen(true);
+  }
+
+  async function handleConfirmBindScope() {
+    const scopeId = runScopeId.trim() || nyxid.loadSession()?.user.sub || '';
+    if (!scopeId) {
+      flash('Not logged in — scope ID unavailable', 'error');
+      return;
+    }
+    try {
+      setBindScopePending(true);
+      const serialized = await serializeCurrentWorkflow();
+      const yamlContent = serialized?.yaml || workflowMeta.yaml;
+      if (!yamlContent?.trim()) {
+        flash('No workflow YAML to bind', 'error');
+        return;
+      }
+      const sid = bindServiceId.trim() || undefined;
+      const result = await api.scope.bindWorkflow(scopeId, [yamlContent], workflowMeta.name.trim() || undefined, sid);
+      setBindScopeModalOpen(false);
+      flash(`Bound as service "${sid || 'default'}". Revision: ${result?.revisionId || 'latest'}`, 'success');
+    } catch (error: any) {
+      flash(error?.message || 'Bind scope failed', 'error');
+    } finally {
+      setBindScopePending(false);
+    }
+  }
+
   async function handleConfirmRunWorkflow() {
     try {
       if (authSession.enabled && !authSession.authenticated) {
@@ -2215,31 +2338,63 @@ function App() {
         return;
       }
 
-      const shouldRunPublishedWorkflow =
-        appContext.workflowStorageMode === 'scope' &&
-        Boolean(appContext.scopeId) &&
-        Boolean(workflowMeta.workflowId) &&
-        !workflowMeta.dirty;
+      const scopeId = runScopeId.trim() || appContext.scopeId || nyxid.loadSession()?.user.sub || '';
+      if (!scopeId) {
+        setRunModalOpen(false);
+        flash('Not logged in — scope ID unavailable', 'error');
+        return;
+      }
 
-      const detail = await api.executions.start({
-        workflowName: workflowMeta.name.trim() || 'draft',
-        prompt: executionPrompt.trim(),
-        workflowYamls: [serialized?.yaml || workflowMeta.yaml],
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
-        scopeId: shouldRunPublishedWorkflow ? appContext.scopeId : null,
-        workflowId: shouldRunPublishedWorkflow ? workflowMeta.workflowId : null,
-        eventFormat: shouldRunPublishedWorkflow ? 'workflow' : null,
-      });
+      const prompt = executionPrompt.trim();
+      const yamlContent = serialized?.yaml || workflowMeta.yaml;
+
       setRunModalOpen(false);
       setStudioView('execution');
       setLogsCollapsed(false);
       setLogsDetached(false);
-      applyExecutionDetail(detail);
-      void loadExecutions(detail?.executionId || null);
-      flash(shouldRunPublishedWorkflow ? 'Published workflow run started' : 'Execution started', 'success');
+      setDraftRunEvents([]);
+      setDraftRunText('');
+      setDraftRunning(true);
+      setSelectedExecutionId(null);
+      setExecutionDetail(null);
+      setExecutionTrace(null);
+
+      const controller = new AbortController();
+      draftRunAbortRef.current = controller;
+
+      const { normalizeBackendSseFrame } = await import('./runtime/sseUtils');
+
+      const onFrame = (frame: any) => {
+        const evt = normalizeBackendSseFrame(frame);
+        if (!evt) return;
+        setDraftRunEvents(prev => [...prev, evt]);
+        if (evt.type === 'TEXT_MESSAGE_CONTENT') {
+          setDraftRunText(prev => prev + (evt.delta as string || ''));
+        }
+        if (evt.type === 'RUN_ERROR') {
+          flash((evt.message as string) || 'Run error', 'error');
+        }
+      };
+
+      try {
+        await api.scope.streamDraftRun(scopeId, prompt, yamlContent ? [yamlContent] : undefined, onFrame, controller.signal);
+        flash('Draft run completed', 'success');
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          flash(err?.message || 'Draft run failed', 'error');
+        }
+      } finally {
+        setDraftRunning(false);
+        draftRunAbortRef.current = null;
+      }
     } catch (error: any) {
       flash(error?.message || 'Execution failed', 'error');
+      setDraftRunning(false);
     }
+  }
+
+  function handleStopDraftRun() {
+    draftRunAbortRef.current?.abort();
   }
 
   function applyExecutionDetail(detail: any) {
@@ -2328,83 +2483,6 @@ function App() {
     }
   }
 
-  async function handleAddDirectory() {
-    if (appContext.workflowStorageMode === 'scope') {
-      flash('Workflow storage is bound to the current scope.', 'info');
-      return;
-    }
-
-    if (!newDirectoryPath.trim()) {
-      flash('Directory path required', 'error');
-      return;
-    }
-
-    try {
-      await api.workspace.addDirectory({
-        path: newDirectoryPath.trim(),
-        label: newDirectoryLabel.trim() || null,
-      });
-      setNewDirectoryPath('');
-      setNewDirectoryLabel('');
-      setShowDirectoryForm(false);
-      await loadWorkspaceSettings();
-      await loadWorkflowList();
-      flash('Directory added', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to add directory', 'error');
-    }
-  }
-
-  async function handleRemoveDirectory(directoryId: string) {
-    if (appContext.workflowStorageMode === 'scope') {
-      flash('Workflow storage is bound to the current scope.', 'info');
-      return;
-    }
-
-    try {
-      await api.workspace.removeDirectory(directoryId);
-      await loadWorkspaceSettings();
-      await loadWorkflowList();
-      flash('Directory removed', 'info');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to remove directory', 'error');
-    }
-  }
-
-  async function handleSaveConnectors() {
-    try {
-      const response = await api.connectors.saveCatalog({
-        connectors: connectors.map(toConnectorPayload),
-      });
-      hydrateConnectorCatalog(response);
-      flash('Connectors saved', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to save connectors', 'error');
-    }
-  }
-
-  function openConnectorImportPicker() {
-    connectorImportInputRef.current?.click();
-  }
-
-  async function handleConnectorCatalogImport(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) {
-      return;
-    }
-
-    try {
-      setConnectorImportPending(true);
-      const response = await api.connectors.importCatalog(file);
-      hydrateConnectorCatalog(response);
-      flash(`Imported ${response?.importedCount ?? 0} connectors from ${response?.sourceFilePath || file.name}`, 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to import connector catalog', 'error');
-    } finally {
-      setConnectorImportPending(false);
-    }
-  }
 
   async function clearConnectorDraft() {
     await api.connectors.deleteDraft();
@@ -2421,11 +2499,6 @@ function App() {
       draft: toConnectorPayload(nextDraft!),
     });
     hydrateConnectorDraft(response);
-  }
-
-  function openConnectorModal(type: ConnectorState['type'] = 'http') {
-    setConnectorDraft(prev => prev || createEmptyConnector(type, ''));
-    setConnectorModalOpen(true);
   }
 
   async function closeConnectorModal() {
@@ -2458,7 +2531,7 @@ function App() {
 
     setConnectors(prev => [nextConnector, ...prev]);
     setSelectedConnectorKey(nextConnector.key);
-    openCatalogPage('connectors');
+    openExplorerPage();
     setConnectorDraft(null);
     setConnectorModalOpen(false);
 
@@ -2469,53 +2542,6 @@ function App() {
     }
 
     flash(`Connector ${connectorName} added`, 'success');
-  }
-
-  function handleDeleteConnector(connectorKey: string) {
-    setConnectors(prev => {
-      const next = prev.filter(connector => connector.key !== connectorKey);
-      setSelectedConnectorKey(next[0]?.key || null);
-      return next;
-    });
-  }
-
-  function updateConnector(connectorKey: string, updater: (connector: ConnectorState) => ConnectorState) {
-    setConnectors(prev => prev.map(connector => (connector.key === connectorKey ? updater(connector) : connector)));
-  }
-
-  async function handleSaveRoleCatalog() {
-    try {
-      const response = await api.roles.saveCatalog({
-        roles: roleCatalog.map(toRolePayload),
-      });
-      hydrateRoleCatalog(response);
-      flash('Roles saved', 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to save roles', 'error');
-    }
-  }
-
-  function openRoleImportPicker() {
-    roleImportInputRef.current?.click();
-  }
-
-  async function handleRoleCatalogImport(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) {
-      return;
-    }
-
-    try {
-      setRoleImportPending(true);
-      const response = await api.roles.importCatalog(file);
-      hydrateRoleCatalog(response);
-      flash(`Imported ${response?.importedCount ?? 0} roles from ${response?.sourceFilePath || file.name}`, 'success');
-    } catch (error: any) {
-      flash(error?.message || 'Failed to import role catalog', 'error');
-    } finally {
-      setRoleImportPending(false);
-    }
   }
 
   async function clearRoleDraft() {
@@ -2595,7 +2621,7 @@ function App() {
     } else {
       setRoleCatalog(prev => [nextRole, ...prev]);
       setSelectedCatalogRoleKey(nextRole.key);
-      openCatalogPage('roles');
+      openExplorerPage();
     }
 
     setRoleDraft(null);
@@ -2608,16 +2634,6 @@ function App() {
     }
 
     flash(roleModalTarget === 'workflow' ? `Role ${roleId} added to workflow` : `Role ${roleId} added`, 'success');
-  }
-
-  function handleDeleteCatalogRole(roleKey: string) {
-    const nextRoles = roleCatalog.filter(role => role.key !== roleKey);
-    setRoleCatalog(nextRoles);
-    setSelectedCatalogRoleKey(nextRoles[0]?.key || null);
-  }
-
-  function updateCatalogRole(roleKey: string, updater: (role: RoleState) => RoleState) {
-    setRoleCatalog(prev => prev.map(role => (role.key === roleKey ? updater(role) : role)));
   }
 
   function updateWorkflowRole(roleKey: string, updater: (role: RoleState) => RoleState) {
@@ -2694,14 +2710,29 @@ function App() {
 
     setRoleCatalog(nextCatalog);
     setSelectedCatalogRoleKey(existing?.key || draft?.key || null);
-    openCatalogPage('roles');
+    openExplorerPage();
     flash('Role copied to catalog. Save to persist.', 'info');
   }
 
   async function handleSaveSettings() {
     try {
+      const nyxIdProvider = settingsState.providers.find(p => usesFixedProviderName(p.providerType));
+      const runtimeConfig = {
+        runtimeMode: settingsState.runtimeMode,
+        localRuntimeBaseUrl: normalizeRuntimeUrl(settingsState.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
+        remoteRuntimeBaseUrl: normalizeRuntimeUrl(settingsState.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
+      };
+      const activeRuntimeUrl = getActiveRuntimeUrl(settingsState);
+
+      // Save runtime selection and defaultModel to chrono-storage (userConfig)
+      const nyxIdModel = nyxIdProvider?.model.trim() || '';
+      const userConfigSaveAll = api.userConfig.save({
+        defaultModel: nyxIdModel,
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute),
+        ...runtimeConfig,
+      }).catch(() => {});
+
       const response = await api.settings.save({
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
         appearanceTheme: settingsState.appearanceTheme,
         colorMode: settingsState.colorMode,
         defaultProviderName: settingsState.defaultProviderName || null,
@@ -2713,10 +2744,24 @@ function App() {
           apiKey: provider.apiKey,
         })),
       });
-      hydrateSettings(response);
+
+      await userConfigSaveAll;
+
+      // Update the local proxy target so subsequent requests go to the new URL
+      await fetch('/api/_proxy/runtime-url', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runtimeBaseUrl: activeRuntimeUrl }),
+      }).catch(() => {});
+
+      hydrateSettings(response, {
+        defaultModel: nyxIdModel,
+        preferredLlmRoute: userConfigState.preferredLlmRoute,
+        ...runtimeConfig,
+      });
       setWorkspaceSettings(prev => ({
         ...prev,
-        runtimeBaseUrl: response?.runtimeBaseUrl || prev.runtimeBaseUrl,
+        runtimeBaseUrl: activeRuntimeUrl,
       }));
       flash('Settings saved', 'success');
     } catch (error: any) {
@@ -2742,72 +2787,28 @@ function App() {
     }
   }
 
-  async function handleTestRuntime() {
+  async function handleTestRuntime(targetUrl?: string) {
+    const urlToTest = targetUrl ?? getActiveRuntimeUrl(settingsState);
     try {
       setRuntimeTestState({
         status: 'testing',
-        message: 'Testing runtime connectivity...',
+        message: `Testing ${urlToTest} ...`,
       });
 
       const response = await api.settings.testRuntime({
-        runtimeBaseUrl: appContext.hostMode === 'proxy' ? settingsState.runtimeBaseUrl : null,
+        runtimeBaseUrl: urlToTest,
       });
 
       setRuntimeTestState({
         status: response?.reachable ? 'success' : 'error',
-        message: response?.message || (response?.reachable ? 'Connected successfully.' : 'Failed to reach runtime.'),
+        message: response?.message || (response?.reachable ? `Connected successfully (${urlToTest}).` : `Failed to reach ${urlToTest}.`),
       });
     } catch (error: any) {
       setRuntimeTestState({
         status: 'error',
-        message: error?.message || 'Failed to reach runtime.',
+        message: error?.message || `Failed to reach ${urlToTest}.`,
       });
     }
-  }
-
-  function handleCreateProvider(providerTypeId?: string) {
-    const type = providerTypeId || settingsState.providerTypes.find(item => item.recommended)?.id || settingsState.providerTypes[0]?.id || 'openai';
-    const provider = createProviderDraft(type, settingsState.providerTypes, settingsState.providers);
-    setSettingsState(prev => ({
-      ...prev,
-      providers: [provider, ...prev.providers],
-      defaultProviderName: prev.defaultProviderName || provider.providerName,
-    }));
-    setSelectedProviderKey(provider.key);
-    openSettingsPage('llm');
-  }
-
-  function updateProvider(providerKey: string, updater: (provider: ProviderDraft) => ProviderDraft) {
-    setSettingsState(prev => {
-      const nextProviders = prev.providers.map(provider => {
-        if (provider.key !== providerKey) {
-          return provider;
-        }
-
-        return updater(provider);
-      });
-
-      return {
-        ...prev,
-        providers: nextProviders,
-      };
-    });
-  }
-
-  function handleDeleteProvider(providerKey: string) {
-    setSettingsState(prev => {
-      const removing = prev.providers.find(provider => provider.key === providerKey);
-      const nextProviders = prev.providers.filter(provider => provider.key !== providerKey);
-      const nextDefaultProviderName = removing && prev.defaultProviderName === removing.providerName
-        ? nextProviders[0]?.providerName || ''
-        : prev.defaultProviderName;
-      setSelectedProviderKey(nextProviders[0]?.key || null);
-      return {
-        ...prev,
-        providers: nextProviders,
-        defaultProviderName: nextDefaultProviderName,
-      };
-    });
   }
 
   function updateSelectedNode(updater: (node: Node<StudioNodeData>) => Node<StudioNodeData>) {
@@ -2955,19 +2956,6 @@ function App() {
     markDirty();
   }
 
-  const filteredWorkflows = workflowList.filter(workflow => {
-    const query = workflowSearch.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-    return [
-      workflow.name,
-      workflow.description,
-      workflow.fileName,
-      workflow.filePath,
-      workflow.directoryLabel,
-    ].join(' ').toLowerCase().includes(query);
-  });
 
   const filteredPrimitiveCategories = PRIMITIVE_CATEGORIES.map(category => ({
     ...category,
@@ -2991,39 +2979,8 @@ function App() {
     ].join(' ').toLowerCase().includes(query);
   });
 
-  const filteredConnectorList = connectors.filter(connector => {
-    const query = connectorSearch.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-    return [
-      connector.name,
-      connector.type,
-      connector.http.baseUrl,
-      connector.cli.command,
-      connector.mcp.serverName,
-      connector.mcp.command,
-    ].join(' ').toLowerCase().includes(query);
-  });
-
-  const filteredRoleCatalog = roleCatalog.filter(role => matchesRoleQuery(role, roleCatalogSearch));
   const filteredWorkflowCatalogRoles = roleCatalog.filter(role => matchesRoleQuery(role, workflowRoleSearch));
   const filteredWorkflowRoles = roles.filter(role => matchesRoleQuery(role, workflowRoleSearch));
-
-  const filteredProviders = settingsState.providers.filter(provider => {
-    const query = providerSearch.trim().toLowerCase();
-    if (!query) {
-      return true;
-    }
-
-    return [
-      provider.providerName,
-      provider.providerType,
-      provider.displayName,
-      provider.model,
-      provider.endpoint,
-    ].join(' ').toLowerCase().includes(query);
-  });
 
   const selectedNodeOutgoingEdges = selectedNode
     ? edges.filter(edge => edge.source === selectedNode.id)
@@ -3040,18 +2997,9 @@ function App() {
   const executionLogsCollapsed = !isExecutionLogsPopout && (logsCollapsed || logsDetached);
   const executionLogsToggleLabel = logsDetached ? 'Viewing in new window' : executionSummaryLabel;
 
-  const selectedSurfaceStyle = {
-    borderColor: 'var(--accent-border)',
-    background: 'var(--accent-soft-end)',
-  } as const;
   const selectedIconSurfaceStyle = {
     background: 'var(--accent-icon-surface)',
     color: 'var(--accent)',
-  } as const;
-  const accentToggleStyle = {
-    borderColor: 'var(--accent-border)',
-    background: 'var(--accent-soft-end)',
-    color: 'var(--accent-text)',
   } as const;
   const authProviderLabel = authSession.providerDisplayName || 'NyxID';
   const authAccountLabel = authSession.name || authSession.email || authProviderLabel;
@@ -3086,7 +3034,7 @@ function App() {
         <div className="header-auth-meta">{authAccountSecondaryLabel}</div>
       </div>
       <button
-        onClick={() => window.location.assign(authSession.logoutUrl || '/auth/logout')}
+        onClick={() => { nyxid.clearSession(); window.location.reload(); }}
         className="panel-icon-button header-auth-logout"
         title="Sign out from NyxID."
       >
@@ -3101,9 +3049,9 @@ function App() {
           {authGuestStatusMessage}
         </div>
       </div>
-      <a href={authSession.loginUrl || '/auth/login'} className="solid-action header-auth-link !no-underline">
+      <button onClick={() => nyxid.loginWithRedirect(window.location.pathname)} className="solid-action header-auth-link !no-underline">
         <Shield size={14} /> Sign in
-      </a>
+      </button>
     </div>
   );
 
@@ -3206,7 +3154,48 @@ function App() {
 
             <div className="execution-log-stream">
               <div className="execution-log-list">
-                {executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
+                {/* Live draft-run stream output — prioritize over historical logs */}
+                {(draftRunning || draftRunEvents.length > 0) ? (
+                  <>
+                    {draftRunText && (
+                      <div className="execution-log-card tone-success" style={{ marginBottom: 8 }}>
+                        <div className="execution-log-card-head">
+                          <div className="text-[12px] font-semibold text-gray-800">Response</div>
+                        </div>
+                        <pre className="whitespace-pre-wrap text-[13px] text-gray-700 mt-2 leading-6">{draftRunText}</pre>
+                      </div>
+                    )}
+                    {draftRunEvents.map((evt, index) => (
+                      <div
+                        key={`draft-${index}`}
+                        className={`execution-log-card tone-${evt.type === 'RUN_ERROR' ? 'error' : evt.type === 'RUN_FINISHED' ? 'success' : 'info'}`}
+                      >
+                        <div className="execution-log-card-head">
+                          <div className="text-[12px] font-semibold text-gray-800">
+                            {evt.type === 'CUSTOM' ? (evt.name as string || 'CUSTOM') : evt.type}
+                          </div>
+                          <div className="execution-log-card-meta">
+                            <div className="text-[11px] text-gray-400">{evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : ''}</div>
+                          </div>
+                        </div>
+                        {evt.type === 'TEXT_MESSAGE_CONTENT' && evt.delta ? (
+                          <div className="execution-log-card-preview">{evt.delta as string}</div>
+                        ) : evt.type === 'STEP_STARTED' || evt.type === 'STEP_FINISHED' ? (
+                          <div className="text-[11px] text-gray-400 mt-1">Step: {evt.stepName as string}</div>
+                        ) : evt.type === 'RUN_ERROR' ? (
+                          <div className="text-[11px] text-red-600 mt-1">{evt.message as string}</div>
+                        ) : evt.type === 'CUSTOM' && evt.value ? (
+                          <pre className="text-[11px] text-gray-500 mt-1 whitespace-pre-wrap max-h-[120px] overflow-auto">{typeof evt.value === 'string' ? evt.value : JSON.stringify(evt.value, null, 2)}</pre>
+                        ) : null}
+                      </div>
+                    ))}
+                    {draftRunning && !draftRunEvents.length && (
+                      <div className="execution-log-card tone-info">
+                        <div className="text-[12px] text-gray-500">Waiting for events...</div>
+                      </div>
+                    )}
+                  </>
+                ) : executionTrace?.logs?.length ? executionTrace.logs.map((log, index) => (
                   <button
                     key={`${log.timestamp}-${index}`}
                     onClick={() => void handleExecutionLogClick(log, index)}
@@ -3351,467 +3340,15 @@ function App() {
     );
   }
 
-  function renderRolesPage() {
-    return (
-      <>
-        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-          <div>
-            <div className="panel-eyebrow">Catalog</div>
-            <div className="panel-title !mt-0">Roles</div>
-          </div>
-        </header>
 
-        <section className="flex-1 min-h-0 grid grid-cols-[360px_minmax(0,1fr)] bg-[#F2F1EE]">
-          <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
-            <div className="space-y-3">
-              <div className="catalog-sidebar-actions">
-                <input
-                  ref={roleImportInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={event => void handleRoleCatalogImport(event)}
-                />
-                <button
-                  onClick={() => openRoleModal('catalog')}
-                  className="solid-action flex-1 justify-center"
-                >
-                  <Plus size={14} /> Add role
-                </button>
-                <button
-                  onClick={handleSaveRoleCatalog}
-                  className="ghost-action catalog-save-action"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={openRoleImportPicker}
-                  className="ghost-action catalog-save-action"
-                  disabled={roleImportPending}
-                >
-                  <Upload size={14} /> {roleImportPending ? 'Importing...' : 'Import'}
-                </button>
-              </div>
-
-              <div className="search-field">
-                <Search size={14} className="text-gray-400" />
-                <input
-                  className="search-input"
-                  placeholder="Search roles"
-                  value={roleCatalogSearch}
-                  onChange={event => setRoleCatalogSearch(event.target.value)}
-                />
-              </div>
-
-              <div className="text-[11px] text-gray-400 break-all">
-                {roleCatalogIsRemote
-                  ? `${rolesMeta.fileExists ? 'Remote object' : 'Remote object pending'} · ${rolesMeta.filePath}`
-                  : `${rolesMeta.fileExists ? 'File' : 'Will create'} · ${rolesMeta.filePath}`}
-              </div>
-              {roleDraftMeta.filePath ? (
-                <div className="text-[11px] text-gray-400 break-all">
-                  Draft · {roleDraftMeta.filePath}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="space-y-2">
-              {filteredRoleCatalog.length === 0 ? (
-                <div className="empty-card">No roles matched</div>
-              ) : filteredRoleCatalog.map(role => (
-                <button
-                  key={role.key}
-                  onClick={() => setSelectedCatalogRoleKey(role.key)}
-                  className="w-full text-left rounded-[18px] border border-[#EEEAE4] bg-white px-3 py-3 transition-colors hover:bg-[#FAF8F4]"
-                  style={selectedCatalogRoleKey === role.key ? selectedSurfaceStyle : undefined}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[13px] font-semibold text-gray-800 truncate">{role.name || role.id || 'Role'}</div>
-                    <span className="text-[10px] uppercase tracking-wide text-gray-400">{role.id || 'role'}</span>
-                  </div>
-                  <div className="text-[11px] text-gray-400 mt-1 truncate">
-                    {role.provider || 'default'}{role.model ? ` · ${role.model}` : ''}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="min-h-0 overflow-y-auto p-6">
-            {selectedCatalogRole ? (
-              <div className="max-w-[980px] space-y-3 rounded-[28px] border border-[#EEEAE4] bg-white p-5 shadow-[0_22px_54px_rgba(17,24,39,0.06)]">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[18px] font-semibold text-gray-800">{selectedCatalogRole.name || selectedCatalogRole.id || 'Role'}</div>
-                    <div className="text-[12px] text-gray-400 mt-1">{selectedCatalogRole.id || 'role_id'}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => applyCatalogRoleToWorkflow(selectedCatalogRole.key)}
-                      className="ghost-action !px-3"
-                    >
-                      Use in workflow
-                    </button>
-                    <button
-                      onClick={() => handleDeleteCatalogRole(selectedCatalogRole.key)}
-                      title="Delete role."
-                      className="panel-icon-button text-red-500 hover:bg-red-50"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <InputField
-                    label="Role ID"
-                    value={selectedCatalogRole.id}
-                    onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                      ...role,
-                      id: value,
-                    }))}
-                  />
-                  <InputField
-                    label="Role name"
-                    value={selectedCatalogRole.name}
-                    onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                      ...role,
-                      name: value,
-                    }))}
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="field-label">Provider</label>
-                    <select
-                      className="panel-input mt-1"
-                      value={selectedCatalogRole.provider}
-                      onChange={event => {
-                        const selectedProviderName = event.target.value;
-                        const configuredProvider = settingsState.providers.find(provider => provider.providerName === selectedProviderName);
-                        updateCatalogRole(selectedCatalogRole.key, role => ({
-                          ...role,
-                          provider: selectedProviderName,
-                          model: configuredProvider?.model || role.model,
-                        }));
-                      }}
-                    >
-                      <option value="">Default</option>
-                      {settingsState.providers.map(provider => (
-                        <option key={provider.key} value={provider.providerName}>
-                          {provider.providerName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <InputField
-                    label="Model"
-                    value={selectedCatalogRole.model}
-                    onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                      ...role,
-                      model: value,
-                    }))}
-                  />
-                </div>
-
-                <TextAreaField
-                  label="System prompt"
-                  value={selectedCatalogRole.systemPrompt}
-                  rows={8}
-                  onChange={value => updateCatalogRole(selectedCatalogRole.key, role => ({
-                    ...role,
-                    systemPrompt: value,
-                  }))}
-                />
-
-                <div className="space-y-2">
-                  <div className="field-label">Allowed connectors</div>
-                  <div className="flex flex-wrap gap-2">
-                    {connectors.length === 0 ? (
-                      <div className="text-[12px] text-gray-400">No connectors configured</div>
-                    ) : connectors.map(connector => {
-                      const active = splitLines(selectedCatalogRole.connectorsText).includes(connector.name);
-                      return (
-                        <button
-                          key={connector.key}
-                          onClick={() => updateCatalogRole(selectedCatalogRole.key, role => {
-                            const values = new Set(splitLines(role.connectorsText));
-                            if (values.has(connector.name)) {
-                              values.delete(connector.name);
-                            } else {
-                              values.add(connector.name);
-                            }
-
-                            return {
-                              ...role,
-                              connectorsText: Array.from(values).join('\n'),
-                            };
-                          })}
-                          className={`chip-button ${active ? 'chip-button-active' : ''}`}
-                        >
-                          {connector.name}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="max-w-[420px]">
-                <EmptyPanel
-                  icon={<User size={18} className="text-gray-300" />}
-                  title="No role selected"
-                  copy="Create a role or pick one from the catalog."
-                />
-              </div>
-            )}
-          </div>
-        </section>
-      </>
-    );
-  }
-
-  function renderConnectorsPage() {
-    return (
-      <>
-        <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-          <div>
-            <div className="panel-eyebrow">Catalog</div>
-            <div className="panel-title !mt-0">Connectors</div>
-          </div>
-        </header>
-
-        <section className="flex-1 min-h-0 grid grid-cols-[360px_minmax(0,1fr)] bg-[#F2F1EE]">
-          <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
-            <div className="space-y-3">
-              <div className="catalog-sidebar-actions">
-                <input
-                  ref={connectorImportInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  className="hidden"
-                  onChange={event => void handleConnectorCatalogImport(event)}
-                />
-                <button
-                  onClick={() => openConnectorModal('http')}
-                  className="solid-action flex-1 justify-center"
-                >
-                  <Plus size={14} /> Add connector
-                </button>
-                <button
-                  onClick={handleSaveConnectors}
-                  className="ghost-action catalog-save-action"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={openConnectorImportPicker}
-                  className="ghost-action catalog-save-action"
-                  disabled={connectorImportPending}
-                >
-                  <Upload size={14} /> {connectorImportPending ? 'Importing...' : 'Import'}
-                </button>
-              </div>
-
-              <div className="search-field">
-                <Search size={14} className="text-gray-400" />
-                <input
-                  className="search-input"
-                  placeholder="Search connectors"
-                  value={connectorSearch}
-                  onChange={event => setConnectorSearch(event.target.value)}
-                />
-              </div>
-
-              <div className="text-[11px] text-gray-400 break-all">
-                {connectorCatalogIsRemote
-                  ? `${connectorsMeta.fileExists ? 'Remote object' : 'Remote object pending'} · ${connectorsMeta.filePath}`
-                  : `${connectorsMeta.fileExists ? 'File' : 'Will create'} · ${connectorsMeta.filePath}`}
-              </div>
-              {connectorDraftMeta.filePath ? (
-                <div className="text-[11px] text-gray-400 break-all">
-                  Draft · {connectorDraftMeta.filePath}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="space-y-2">
-              {filteredConnectorList.length === 0 ? (
-                <div className="empty-card">No connectors matched</div>
-              ) : filteredConnectorList.map(connector => (
-                <button
-                  key={connector.key}
-                  onClick={() => setSelectedConnectorKey(connector.key)}
-                  className="w-full text-left rounded-[18px] border border-[#EEEAE4] bg-white px-3 py-3 transition-colors hover:bg-[#FAF8F4]"
-                  style={selectedConnectorKey === connector.key ? selectedSurfaceStyle : undefined}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-[13px] font-semibold text-gray-800 truncate">{connector.name || 'New connector'}</div>
-                    <span className="text-[10px] uppercase tracking-wide text-gray-400">{connector.type}</span>
-                  </div>
-                  <div className="text-[11px] text-gray-400 mt-1 truncate">
-                    {connector.type === 'http'
-                      ? connector.http.baseUrl || 'HTTP connector'
-                      : connector.type === 'cli'
-                        ? connector.cli.command || 'CLI connector'
-                        : connector.mcp.serverName || connector.mcp.command || 'MCP connector'}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="min-h-0 overflow-y-auto p-6">
-            {selectedConnector ? (
-              <div className="max-w-[980px] space-y-3 rounded-[28px] border border-[#EEEAE4] bg-white p-5 shadow-[0_22px_54px_rgba(17,24,39,0.06)]">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[18px] font-semibold text-gray-800">{selectedConnector.name || 'Connector'}</div>
-                    <div className="text-[12px] text-gray-400 mt-1">{selectedConnector.type.toUpperCase()}</div>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteConnector(selectedConnector.key)}
-                    title="Delete connector."
-                    className="panel-icon-button text-red-500 hover:bg-red-50"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-
-                <InputField
-                  label="Name"
-                  value={selectedConnector.name}
-                  onChange={value => updateConnector(selectedConnector.key, connector => ({ ...connector, name: value }))}
-                />
-
-                <div>
-                  <label className="field-label">Type</label>
-                  <select
-                    className="panel-input mt-1"
-                    value={selectedConnector.type}
-                    onChange={event => updateConnector(selectedConnector.key, connector => ({ ...connector, type: event.target.value as ConnectorState['type'] }))}
-                  >
-                    <option value="http">HTTP</option>
-                    <option value="cli">CLI</option>
-                    <option value="mcp">MCP</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <InputField
-                    label="Timeout"
-                    value={selectedConnector.timeoutMs}
-                    onChange={value => updateConnector(selectedConnector.key, connector => ({ ...connector, timeoutMs: value }))}
-                  />
-                  <InputField
-                    label="Retry"
-                    value={selectedConnector.retry}
-                    onChange={value => updateConnector(selectedConnector.key, connector => ({ ...connector, retry: value }))}
-                  />
-                </div>
-
-                <label className={`inline-flex items-center gap-2 rounded-[14px] border px-3 py-2 text-[12px] ${selectedConnector.enabled ? 'border-green-200 bg-green-50 text-green-700' : 'border-[#E5E1DA] bg-white text-gray-600'}`}>
-                  <input
-                    type="checkbox"
-                    checked={selectedConnector.enabled}
-                    onChange={event => updateConnector(selectedConnector.key, connector => ({ ...connector, enabled: event.target.checked }))}
-                  />
-                  Enabled
-                </label>
-
-                {selectedConnector.type === 'http' ? (
-                  <div className="space-y-3 rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] p-4">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><Globe size={15} /> HTTP</div>
-                    <InputField
-                      label="Base URL"
-                      value={selectedConnector.http.baseUrl}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        http: { ...connector.http, baseUrl: value },
-                      }))}
-                    />
-                    <TextAreaField
-                      label="Allowed methods"
-                      value={selectedConnector.http.allowedMethods.join('\n')}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        http: { ...connector.http, allowedMethods: splitLines(value).map(item => item.toUpperCase()) },
-                      }))}
-                    />
-                    <TextAreaField
-                      label="Allowed paths"
-                      value={selectedConnector.http.allowedPaths.join('\n')}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        http: { ...connector.http, allowedPaths: splitLines(value) },
-                      }))}
-                    />
-                  </div>
-                ) : null}
-
-                {selectedConnector.type === 'cli' ? (
-                  <div className="space-y-3 rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] p-4">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><Terminal size={15} /> CLI</div>
-                    <InputField
-                      label="Command"
-                      value={selectedConnector.cli.command}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        cli: { ...connector.cli, command: value },
-                      }))}
-                    />
-                    <TextAreaField
-                      label="Fixed arguments"
-                      value={selectedConnector.cli.fixedArguments.join('\n')}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        cli: { ...connector.cli, fixedArguments: splitLines(value) },
-                      }))}
-                    />
-                  </div>
-                ) : null}
-
-                {selectedConnector.type === 'mcp' ? (
-                  <div className="space-y-3 rounded-[18px] border border-[#EAE4DB] bg-[#FAF8F4] p-4">
-                    <div className="flex items-center gap-2 text-[13px] font-semibold text-gray-800"><Wrench size={15} /> MCP</div>
-                    <InputField
-                      label="Server name"
-                      value={selectedConnector.mcp.serverName}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        mcp: { ...connector.mcp, serverName: value },
-                      }))}
-                    />
-                    <InputField
-                      label="Command"
-                      value={selectedConnector.mcp.command}
-                      onChange={value => updateConnector(selectedConnector.key, connector => ({
-                        ...connector,
-                        mcp: { ...connector.mcp, command: value },
-                      }))}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="max-w-[420px]">
-                <EmptyPanel
-                  icon={<ArrowRightLeft size={18} className="text-gray-300" />}
-                  title="No connector selected"
-                  copy="Create a connector or pick one from the catalog."
-                />
-              </div>
-            )}
-          </div>
-        </section>
-      </>
-    );
-  }
 
   if (authSession.loading) {
-    return <AppLoadingScreen />;
+    return (
+      <AppLoadingScreen
+        appearanceTheme={settingsState.appearanceTheme}
+        colorMode={settingsState.colorMode}
+      />
+    );
   }
 
   if (authSession.enabled && !authSession.authenticated) {
@@ -3820,6 +3357,8 @@ function App() {
         providerDisplayName={authSession.providerDisplayName}
         loginUrl={authSession.loginUrl}
         errorMessage={authSession.errorMessage}
+        appearanceTheme={settingsState.appearanceTheme}
+        colorMode={settingsState.colorMode}
       />
     );
   }
@@ -3856,41 +3395,47 @@ function App() {
           <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-[14px] border border-black/10 bg-[#18181B]">
             <AevatarBrandMark size={44} />
           </div>
+
+          {/* ── Service Sources ── */}
+          <div className="w-8 border-t border-[#E6E3DE] my-0.5" />
           <RailButton
             active={workspacePage === 'studio'}
-            label="Studio"
+            label="Workflow Studio"
             icon={<WorkflowIcon size={18} />}
             onClick={openStudioPage}
-          />
-          <RailButton
-            active={workspacePage === 'workflows'}
-            label="Workflows"
-            icon={<FileText size={18} />}
-            onClick={openWorkflowsPage}
           />
           {appContext.scriptsEnabled ? (
             <RailButton
               active={workspacePage === 'scripts'}
-              label="Scripts Studio"
+              label="Script Studio"
               icon={<Code2 size={18} />}
               onClick={openScriptsPage}
             />
           ) : null}
           <RailButton
-            active={workspacePage === 'roles'}
-            label="Roles"
-            icon={<User size={18} />}
-            onClick={() => openCatalogPage('roles')}
+            active={workspacePage === 'gagents'}
+            label="GAgent Types"
+            icon={<Bot size={18} />}
+            onClick={() => setWorkspacePage('gagents')}
           />
+
+          {/* ── Storage ── */}
+          <div className="w-8 border-t border-[#E6E3DE] my-0.5" />
           <RailButton
-            active={workspacePage === 'connectors'}
-            label="Connectors"
-            icon={<ArrowRightLeft size={18} />}
-            onClick={() => openCatalogPage('connectors')}
+            active={workspacePage === 'explorer'}
+            label="Explorer"
+            icon={<FolderPlus size={18} />}
+            onClick={() => openExplorerPage()}
           />
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-3">
+          <RailButton
+            active={workspacePage === 'console'}
+            label="Console"
+            icon={<Globe size={18} />}
+            onClick={() => setWorkspacePage('console')}
+          />
           <RailButton
             active={settingsState.colorMode === 'dark'}
             label={settingsState.colorMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -3907,208 +3452,19 @@ function App() {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col">
-        {workspacePage === 'workflows' ? (
-          <>
-            <header className="workspace-page-header h-[88px] flex-shrink-0 border-b border-[#E6E3DE] bg-white/92 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
+        {storageWarning && workspacePage !== 'explorer' ? (
+          <div className="mx-6 mt-4 rounded-[24px] border border-[#F0D7A5] bg-[#FFF7E8] px-5 py-4 text-[#8A4B12] shadow-[0_14px_32px_rgba(180,125,44,0.12)]">
+            <div className="flex items-start gap-3">
+              <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
               <div>
-                <div className="panel-eyebrow">Workspace</div>
-                <div className="panel-title !mt-0">Workflows</div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#A55A17]">Chrono Storage</div>
+                <div className="mt-1 text-[14px] font-semibold">Some cloud-backed studio features are unavailable</div>
+                <div className="mt-1 text-[13px] leading-6">{storageWarning}</div>
               </div>
-            </header>
-
-            <section className="flex-1 min-h-0 grid grid-cols-[320px_minmax(0,1fr)] bg-[#F2F1EE]">
-              <aside className="border-r border-[#E6E3DE] bg-white/94 min-h-0 overflow-y-auto p-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="section-heading">{appContext.workflowStorageMode === 'scope' ? 'Scope' : 'Directories'}</div>
-                    <div className="text-[12px] text-gray-400 mt-1">
-                      {appContext.workflowStorageMode === 'scope'
-                        ? 'Workflows are loaded from and saved to the current login scope.'
-                        : 'New workflows will be created in the selected directory.'}
-                    </div>
-                  </div>
-                  {appContext.workflowStorageMode !== 'scope' ? (
-                    <button
-                      onClick={() => setShowDirectoryForm(value => !value)}
-                      title={showDirectoryForm ? 'Hide directory form.' : 'Add workflow directory.'}
-                      className="panel-icon-button"
-                    >
-                      <FolderPlus size={14} />
-                    </button>
-                  ) : null}
-                </div>
-
-                {showDirectoryForm && appContext.workflowStorageMode !== 'scope' ? (
-                  <div className="space-y-2 rounded-[22px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-                    <input
-                      className="panel-input"
-                      placeholder="/absolute/path/to/workflows"
-                      value={newDirectoryPath}
-                      onChange={event => setNewDirectoryPath(event.target.value)}
-                    />
-                    <input
-                      className="panel-input"
-                      placeholder="Directory label"
-                      value={newDirectoryLabel}
-                      onChange={event => setNewDirectoryLabel(event.target.value)}
-                    />
-                    <button
-                      onClick={handleAddDirectory}
-                      className="solid-action w-full justify-center"
-                    >
-                      Add directory
-                    </button>
-                  </div>
-                ) : null}
-
-                <div className="space-y-2">
-                  {workspaceSettings.directories.map(directory => (
-                    <div
-                      key={directory.directoryId}
-                      className="rounded-[18px] border border-[#EEEAE4] bg-[#FAF8F4] px-3 py-3"
-                      style={workflowMeta.directoryId === directory.directoryId ? selectedSurfaceStyle : undefined}
-                    >
-                      <div className="flex items-start gap-3">
-                        <button
-                          onClick={() => setWorkflowMeta(prev => ({ ...prev, directoryId: directory.directoryId }))}
-                          className="text-left flex-1 min-w-0"
-                        >
-                          <div className="text-[13px] font-semibold text-gray-800 truncate">{directory.label}</div>
-                          <div className="text-[11px] text-gray-400 truncate mt-1">{directory.path}</div>
-                        </button>
-                        {!directory.isBuiltIn && appContext.workflowStorageMode !== 'scope' ? (
-                          <button
-                            onClick={() => void handleRemoveDirectory(directory.directoryId)}
-                            title="Remove directory."
-                            className="p-2 rounded-full text-gray-400 hover:text-red-500 hover:bg-red-50"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </aside>
-
-              <div className="min-h-0 flex flex-col">
-                <div className="p-5 border-b border-[#E6E3DE] bg-white/70">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="search-field max-w-[420px] flex-1 min-w-[260px]">
-                      <Search size={14} className="text-gray-400" />
-                      <input
-                        className="search-input"
-                        placeholder="Search workflows"
-                        value={workflowSearch}
-                        onChange={event => setWorkflowSearch(event.target.value)}
-                      />
-                    </div>
-
-                    <div className="workflow-toolbar-actions">
-                      <div className="inline-flex items-center gap-2 rounded-[18px] border border-[#E5E1DA] bg-white px-2 py-2 shadow-[0_10px_24px_rgba(31,28,24,0.04)]">
-                        <button
-                          type="button"
-                          onClick={() => setWorkflowLayout('grid')}
-                          data-tooltip="Show workflows in a grid."
-                          className="panel-icon-button"
-                          style={workflowLayout === 'grid' ? selectedIconSurfaceStyle : undefined}
-                        >
-                          <LayoutGrid size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setWorkflowLayout('list')}
-                          data-tooltip="Show workflows in a list."
-                          className="panel-icon-button"
-                          style={workflowLayout === 'list' ? selectedIconSurfaceStyle : undefined}
-                        >
-                          <Rows3 size={15} />
-                        </button>
-                      </div>
-
-                      <button onClick={handleImportWorkflow} className="ghost-action">
-                        <Upload size={14} /> Import
-                      </button>
-                      <button
-                        onClick={() => createNewWorkflow(workspaceSettings.directories[0]?.directoryId || workflowMeta.directoryId)}
-                        className="solid-action"
-                        title="Create workflow"
-                      >
-                        <Plus size={16} /> New workflow
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 min-h-0 overflow-y-auto p-6">
-                  {filteredWorkflows.length === 0 ? (
-                    <div className="max-w-[420px]">
-                      <EmptyPanel
-                        icon={<FileText size={18} className="text-gray-300" />}
-                        title="No workflows"
-                        copy="Create a workflow with the New workflow button above."
-                      />
-                    </div>
-                  ) : (
-                    <div className={workflowLayout === 'grid' ? 'grid gap-4 md:grid-cols-2 xl:grid-cols-3' : 'space-y-3 max-w-[1080px]'}>
-                      {filteredWorkflows.map(workflow => (
-                        <button
-                          key={workflow.workflowId}
-                          onClick={() => void openWorkflow(workflow.workflowId)}
-                          className={`w-full text-left rounded-[24px] border border-[#EEEAE4] bg-white transition-colors hover:bg-[#FAF8F4] ${workflowLayout === 'grid' ? 'px-5 py-5' : 'px-5 py-4'}`}
-                          style={workflow.workflowId === workflowMeta.workflowId ? selectedSurfaceStyle : undefined}
-                        >
-                          <div className={`flex gap-4 ${workflowLayout === 'grid' ? 'items-start' : 'items-center'}`}>
-                            <div
-                              className="w-12 h-12 rounded-[16px] flex items-center justify-center bg-[#F3F0EA] text-gray-400"
-                              style={workflow.workflowId === workflowMeta.workflowId ? selectedIconSurfaceStyle : undefined}
-                            >
-                              <FileText size={18} />
-                            </div>
-
-                            <div className="min-w-0 flex-1">
-                              <div className="text-[15px] font-semibold text-gray-800 truncate">{workflow.name}</div>
-                              {workflowLayout === 'grid' ? (
-                                <>
-                                  <div className="text-[12px] text-gray-400 mt-1 truncate">{workflow.directoryLabel}</div>
-                                  <div className="text-[12px] text-gray-400 truncate">{workflow.stepCount} steps · {formatDateTime(workflow.updatedAtUtc)}</div>
-                                  {workflow.description ? (
-                                    <div className="text-[12px] text-gray-500 mt-3 line-clamp-2">{workflow.description}</div>
-                                  ) : null}
-                                </>
-                              ) : (
-                                <>
-                                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-gray-400">
-                                    <span className="truncate">{workflow.directoryLabel}</span>
-                                    <span>{workflow.stepCount} steps</span>
-                                    <span>{formatDateTime(workflow.updatedAtUtc)}</span>
-                                  </div>
-                                  {workflow.description ? (
-                                    <div className="text-[12px] text-gray-500 mt-2 truncate">{workflow.description}</div>
-                                  ) : null}
-                                </>
-                              )}
-                            </div>
-
-                            {workflowLayout === 'list' ? (
-                              <div className="hidden shrink-0 text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-300 sm:block">
-                                Open
-                              </div>
-                            ) : null}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </section>
-          </>
-        ) : workspacePage === 'roles' ? (
-          renderRolesPage()
-        ) : workspacePage === 'connectors' ? (
-          renderConnectorsPage()
-        ) : workspacePage === 'scripts' ? (
+            </div>
+          </div>
+        ) : null}
+        {workspacePage === 'scripts' ? (
           <ScriptsStudio
             appContext={{
               hostMode: appContext.hostMode,
@@ -4120,6 +3476,19 @@ function App() {
             }}
             onFlash={flash}
           />
+        ) : workspacePage === 'explorer' ? (
+          <ConfigExplorerPage
+            scopeId={appContext.scopeId || nyxid.loadSession()?.user.sub || ''}
+            flash={flash}
+            initialFolder={explorerInitialFolder}
+            onInitialFolderConsumed={() => setExplorerInitialFolder(null)}
+            onOpenWorkflowInStudio={(workflowId: string) => { void openWorkflow(workflowId); }}
+            onOpenScriptInStudio={() => { setWorkspacePage('scripts'); }}
+          />
+        ) : workspacePage === 'gagents' ? (
+          <GAgentPage />
+        ) : workspacePage === 'console' ? (
+          <ScopePage />
         ) : workspacePage === 'settings' ? (
           <section className="flex-1 min-h-0 bg-[#ECEAE6] p-6">
             <div className="h-full min-h-0 overflow-hidden rounded-[38px] border border-[#E6E3DE] bg-white/96 shadow-[0_26px_64px_rgba(17,24,39,0.08)] grid grid-cols-[260px_minmax(0,1fr)]">
@@ -4141,11 +3510,18 @@ function App() {
                     onClick={() => setSettingsSection('runtime')}
                   />
                   <SettingsNavButton
-                    active={settingsSection === 'llm'}
-                    icon={<Bot size={16} />}
+                    active={settingsSection === 'cloud-config'}
+                    icon={<Database size={16} />}
                     title="LLM"
-                    description="Providers from secrets.json"
-                    onClick={() => setSettingsSection('llm')}
+                    description="Per-user settings on NyxID"
+                    onClick={() => setSettingsSection('cloud-config')}
+                  />
+                  <SettingsNavButton
+                    active={settingsSection === 'skills'}
+                    icon={<Wrench size={16} />}
+                    title="Skills"
+                    description="Ornn skill platform"
+                    onClick={() => setSettingsSection('skills')}
                   />
                   <SettingsNavButton
                     active={settingsSection === 'appearance'}
@@ -4166,49 +3542,74 @@ function App() {
                     </div>
 
                     <div className="settings-section-card space-y-5">
-                      {appContext.hostMode === 'embedded' ? (
-                        <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3 text-[13px] text-gray-600">
-                          Embedded mode runs against the in-memory local mainnet hosted by `aevatar app`.
-                        </div>
-                      ) : null}
-
-                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
-                        <div>
-                          <label className="field-label">
-                            {appContext.hostMode === 'embedded' ? 'Local mainnet URL' : 'Runtime base URL'}
-                          </label>
-                          <input
-                            className="panel-input mt-1"
-                            value={settingsState.runtimeBaseUrl}
-                            onChange={event => {
-                              const value = event.target.value;
-                              setSettingsState(prev => ({ ...prev, runtimeBaseUrl: value }));
-                              setRuntimeTestState({
-                                status: 'idle',
-                                message: '',
-                              });
+                      <div>
+                        <label className="field-label">Runtime Target</label>
+                        <div className="mt-2 inline-flex rounded-[14px] bg-[#F2F1EE] p-1">
+                          <button
+                            onClick={() => {
+                              setSettingsState(prev => ({ ...prev, runtimeMode: 'local' }));
+                              setRuntimeTestState({ status: 'idle', message: '' });
                             }}
-                            placeholder={DEFAULT_RUNTIME_BASE_URL}
-                            readOnly={appContext.hostMode === 'embedded'}
-                          />
+                            className={`px-3 py-1.5 rounded-[10px] text-[12px] font-semibold transition-colors ${
+                              settingsState.runtimeMode === 'local'
+                                ? 'bg-white text-gray-800 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                          >
+                            Local
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSettingsState(prev => ({ ...prev, runtimeMode: 'remote' }));
+                              setRuntimeTestState({ status: 'idle', message: '' });
+                            }}
+                            className={`px-3 py-1.5 rounded-[10px] text-[12px] font-semibold transition-colors ${
+                              settingsState.runtimeMode === 'remote'
+                                ? 'bg-white text-gray-800 shadow-sm'
+                                : 'text-gray-500 hover:text-gray-700'
+                            }`}
+                          >
+                            Remote
+                          </button>
                         </div>
+                        <div className="text-[12px] text-gray-400 mt-2">
+                          {settingsState.runtimeMode === 'local'
+                            ? 'Default local runtime is http://127.0.0.1:5080.'
+                            : 'Use a remote runtime when you need a shared or hosted backend.'}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="field-label">
+                          {settingsState.runtimeMode === 'local' ? 'Local Runtime URL' : 'Remote Runtime URL'}
+                        </label>
+                        <input
+                          className="panel-input mt-1"
+                          value={settingsState.runtimeMode === 'local' ? settingsState.localRuntimeUrl : settingsState.remoteRuntimeUrl}
+                          onChange={event => {
+                            const value = event.target.value;
+                            setSettingsState(prev => prev.runtimeMode === 'local'
+                              ? { ...prev, localRuntimeUrl: value }
+                              : { ...prev, remoteRuntimeUrl: value });
+                            setRuntimeTestState({ status: 'idle', message: '' });
+                          }}
+                          placeholder={settingsState.runtimeMode === 'local' ? DEFAULT_LOCAL_RUNTIME_URL : DEFAULT_REMOTE_RUNTIME_URL}
+                        />
+                      </div>
+
+                      <div className="flex gap-3">
                         <button
                           onClick={() => { void handleTestRuntime(); }}
                           className="ghost-action justify-center"
                           disabled={runtimeTestState.status === 'testing'}
                         >
-                          {runtimeTestState.status === 'testing'
-                            ? 'Testing...'
-                            : appContext.hostMode === 'embedded'
-                              ? 'Test local mainnet'
-                              : 'Test connection'}
+                          {runtimeTestState.status === 'testing' ? 'Testing...' : 'Test connection'}
                         </button>
                         <button
                           onClick={handleSaveSettings}
                           className="solid-action justify-center"
-                          disabled={appContext.hostMode === 'embedded'}
                         >
-                          {appContext.hostMode === 'embedded' ? 'Managed locally' : 'Save runtime'}
+                          Save runtime
                         </button>
                       </div>
 
@@ -4221,7 +3622,7 @@ function App() {
                             <SettingsStatusPill status={runtimeTestState.status} />
                           </div>
                           <div className="text-[12px] text-gray-500 mt-2 break-all">
-                            {settingsState.runtimeBaseUrl}
+                            {getActiveRuntimeUrl(settingsState)}
                           </div>
                           <div className="text-[13px] text-gray-600 mt-3">
                             {runtimeTestState.message}
@@ -4230,191 +3631,46 @@ function App() {
                       ) : null}
                     </div>
                   </div>
-                ) : settingsSection === 'llm' ? (
-                  <div className="space-y-8">
+                ) : settingsSection === 'cloud-config' ? (
+                  <CloudConfigSection
+                    userConfigState={userConfigState}
+                    setUserConfigState={setUserConfigState}
+                    runtimeConfig={{
+                      runtimeMode: settingsState.runtimeMode,
+                      localRuntimeUrl: settingsState.localRuntimeUrl,
+                      remoteRuntimeUrl: settingsState.remoteRuntimeUrl,
+                    }}
+                    flash={flash}
+                  />
+                ) : settingsSection === 'skills' ? (
+                  <div className="max-w-[920px] space-y-8">
                     <div className="flex items-start justify-between gap-4">
                       <div>
                         <div className="panel-eyebrow">Settings</div>
-                        <div className="panel-title">LLM</div>
+                        <div className="panel-title">Skills</div>
+                        <div className="text-[13px] text-gray-500 mt-1">Connect to your Ornn skill library. Skills are automatically available to all agents via tool calling.</div>
                       </div>
-                      <button onClick={handleSaveSettings} className="solid-action">
-                        Save providers
-                      </button>
+                      <button onClick={handleSaveSettings} className="solid-action">Save</button>
                     </div>
-
-                    <div className="settings-section-card space-y-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="text-[12px] text-gray-500 break-all">
-                          Secrets · {settingsState.secretsFilePath || '~/.aevatar/secrets.json'}
+                    <div className="settings-section-card space-y-5">
+                      <div className="section-heading">Ornn Platform</div>
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
+                        <div>
+                          <label className="field-label">Ornn Base URL</label>
+                          <input className="panel-input mt-1" value={settingsState.ornnBaseUrl} onChange={e => { setSettingsState(prev => ({ ...prev, ornnBaseUrl: e.target.value })); setOrnnTestState({ status: 'idle', message: '' }); }} placeholder={DEFAULT_ORNN_BASE_URL} />
                         </div>
-                        <button
-                          onClick={() => handleCreateProvider()}
-                          className="solid-action !px-3"
-                        >
-                          <Plus size={14} /> Add provider
-                        </button>
+                        <button onClick={async () => { setOrnnTestState({ status: 'testing', message: '' }); const ok = await api.ornn.checkHealth(settingsState.ornnBaseUrl || DEFAULT_ORNN_BASE_URL); setOrnnTestState(ok ? { status: 'success', message: 'Connected to Ornn.' } : { status: 'error', message: 'Cannot reach Ornn.' }); }} className="ghost-action justify-center" disabled={ornnTestState.status === 'testing'}>{ornnTestState.status === 'testing' ? 'Testing...' : 'Test connection'}</button>
+                        <a href={settingsState.ornnBaseUrl || DEFAULT_ORNN_BASE_URL} target="_blank" rel="noopener noreferrer" className="solid-action justify-center !no-underline">Open Ornn Platform</a>
                       </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="search-field flex-1 min-w-[260px]">
-                          <Search size={14} className="text-gray-400" />
-                          <input
-                            className="search-input"
-                            placeholder="Search providers"
-                            value={providerSearch}
-                            onChange={event => setProviderSearch(event.target.value)}
-                          />
-                        </div>
-                        {settingsState.providerTypes.filter(type => type.recommended).slice(0, 4).map(type => (
-                          <button
-                            key={type.id}
-                            onClick={() => handleCreateProvider(type.id)}
-                            className="chip-button"
-                          >
-                            {type.displayName}
-                          </button>
-                        ))}
+                      {ornnTestState.status !== 'idle' ? (<div className="settings-status-card"><div className="flex items-center justify-between gap-3"><div className="text-[13px] font-semibold text-gray-800">{ornnTestState.status === 'success' ? 'Connected' : ornnTestState.status === 'testing' ? 'Testing...' : 'Failed'}</div><SettingsStatusPill status={ornnTestState.status} /></div><div className="text-[13px] text-gray-600 mt-2">{ornnTestState.message}</div></div>) : null}
+                      <div className="rounded-[20px] border border-[#EEEAE4] bg-[#FAF8F4] px-4 py-3 text-[13px] text-gray-600">Agents automatically get <strong>ornn_search_skills</strong> and <strong>ornn_use_skill</strong> tools. To manage skills, use the Ornn platform.</div>
+                    </div>
+                    <div className="settings-section-card space-y-5">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="section-heading">Your Skills</div>
+                        <button onClick={async () => { setOrnnSkillsLoading(true); try { const r = await api.ornn.searchSkills(settingsState.ornnBaseUrl || DEFAULT_ORNN_BASE_URL, '', 'mixed', 1, 100); setOrnnSkillsCache(r.items); } catch { flash('Failed to load skills.', 'error'); } finally { setOrnnSkillsLoading(false); } }} className="ghost-action text-[12px]" disabled={ornnSkillsLoading}>{ornnSkillsLoading ? 'Loading...' : 'Refresh'}</button>
                       </div>
-
-                      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-                        <div className="space-y-2 rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-4">
-                          {filteredProviders.length === 0 ? (
-                            <div className="empty-card">No providers matched</div>
-                          ) : filteredProviders.map(provider => (
-                            <button
-                              key={provider.key}
-                              onClick={() => setSelectedProviderKey(provider.key)}
-                              className="w-full text-left rounded-[18px] border border-[#EEEAE4] bg-white px-3 py-3 transition-colors hover:bg-[#FAF8F4]"
-                              style={selectedProviderKey === provider.key ? selectedSurfaceStyle : undefined}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-[13px] font-semibold text-gray-800 truncate">{provider.providerName}</div>
-                                <span
-                                  className="text-[10px] uppercase tracking-wide text-gray-400"
-                                  style={settingsState.defaultProviderName === provider.providerName ? { color: 'var(--accent-text)' } : undefined}
-                                >
-                                  {settingsState.defaultProviderName === provider.providerName ? 'default' : provider.providerType}
-                                </span>
-                              </div>
-                              <div className="text-[11px] text-gray-400 mt-1 truncate">{provider.model || provider.displayName}</div>
-                            </button>
-                          ))}
-                        </div>
-
-                        {selectedProvider ? (
-                          <div className="space-y-3 rounded-[24px] border border-[#EEEAE4] bg-[#FAF8F4] p-5">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-[15px] font-semibold text-gray-800">{selectedProvider.providerName || 'Provider'}</div>
-                                <div className="text-[11px] text-gray-400">{selectedProvider.displayName}</div>
-                              </div>
-                              <button
-                                onClick={() => handleDeleteProvider(selectedProvider.key)}
-                                className="panel-icon-button text-red-500 hover:bg-red-50"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-
-                            <InputField
-                              label="Instance name"
-                              value={selectedProvider.providerName}
-                              onChange={value => {
-                                const previousName = selectedProvider.providerName;
-                                updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  providerName: value,
-                                }));
-                                setSettingsState(prev => ({
-                                  ...prev,
-                                  defaultProviderName: prev.defaultProviderName === previousName ? value : prev.defaultProviderName,
-                                }));
-                              }}
-                            />
-
-                            <div>
-                              <label className="field-label">Provider type</label>
-                              <select
-                                className="panel-input mt-1"
-                                value={selectedProvider.providerType}
-                                onChange={event => {
-                                  const nextType = event.target.value;
-                                  updateProvider(selectedProvider.key, provider => {
-                                    const previousType = providerTypeMap.get(provider.providerType);
-                                    const nextProfile = providerTypeMap.get(nextType);
-                                    const shouldReplaceEndpoint = !provider.endpoint || provider.endpoint === (previousType?.defaultEndpoint || '');
-                                    const shouldReplaceModel = !provider.model || provider.model === (previousType?.defaultModel || '');
-                                    return {
-                                      ...provider,
-                                      providerType: nextType,
-                                      displayName: nextProfile?.displayName || nextType,
-                                      category: nextProfile?.category || 'configured',
-                                      description: nextProfile?.description || '',
-                                      endpoint: shouldReplaceEndpoint ? (nextProfile?.defaultEndpoint || '') : provider.endpoint,
-                                      model: shouldReplaceModel ? (nextProfile?.defaultModel || '') : provider.model,
-                                    };
-                                  });
-                                }}
-                              >
-                                {settingsState.providerTypes.map(type => (
-                                  <option key={type.id} value={type.id}>{type.displayName}</option>
-                                ))}
-                              </select>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-2">
-                              <InputField
-                                label="Model"
-                                value={selectedProvider.model}
-                                onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  model: value,
-                                }))}
-                              />
-                              <InputField
-                                label="Endpoint"
-                                value={selectedProvider.endpoint}
-                                onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                  ...provider,
-                                  endpoint: value,
-                                }))}
-                              />
-                            </div>
-
-                            <TextAreaField
-                              label="API key"
-                              value={selectedProvider.apiKey}
-                              rows={4}
-                              onChange={value => updateProvider(selectedProvider.key, provider => ({
-                                ...provider,
-                                apiKey: value,
-                                apiKeyConfigured: Boolean(value.trim()),
-                              }))}
-                            />
-
-                            <label
-                              className="inline-flex items-center gap-2 rounded-[14px] border border-[#E5E1DA] bg-white px-3 py-2 text-[12px] text-gray-600"
-                              style={settingsState.defaultProviderName === selectedProvider.providerName ? accentToggleStyle : undefined}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={settingsState.defaultProviderName === selectedProvider.providerName}
-                                onChange={event => setSettingsState(prev => ({
-                                  ...prev,
-                                  defaultProviderName: event.target.checked ? selectedProvider.providerName : '',
-                                }))}
-                              />
-                              Use as default
-                            </label>
-                          </div>
-                        ) : (
-                          <EmptyPanel
-                            icon={<Bot size={18} className="text-gray-300" />}
-                            title="No provider selected"
-                            copy="Add a provider or choose one from the list."
-                          />
-                        )}
-                      </div>
+                      {ornnSkillsCache.length === 0 ? (<div className="text-[13px] text-gray-400">{ornnSkillsLoading ? 'Loading...' : 'Click Refresh to load skills from Ornn.'}</div>) : (<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{ornnSkillsCache.map(s => (<div key={s.guid || s.name} className="rounded-[14px] border border-[#EAE4DB] bg-white p-3 space-y-1"><div className="flex items-center justify-between gap-2"><div className="text-[13px] font-semibold text-gray-800 truncate">{s.name}</div><span className="text-[10px] uppercase tracking-wide text-gray-400">{s.isPrivate ? 'private' : 'public'}</span></div><div className="text-[12px] text-gray-500 line-clamp-2">{s.description}</div></div>))}</div>)}
                     </div>
                   </div>
                 ) : (
@@ -4546,6 +3802,14 @@ function App() {
 
               <div className="studio-header-actions">
                 <button
+                  onClick={() => openExplorerPage('workflows')}
+                  data-tooltip="Browse Workflows"
+                  aria-label="Browse Workflows"
+                  className="panel-icon-button header-toolbar-action"
+                >
+                  <FolderOpen size={15} />
+                </button>
+                <button
                   onClick={handleSaveWorkflow}
                   data-tooltip="Save"
                   aria-label="Save"
@@ -4563,15 +3827,23 @@ function App() {
                 </button>
                 <button
                   onClick={handleRunWorkflow}
-                  data-tooltip="Run"
-                  aria-label="Run"
+                  data-tooltip="Draft Run"
+                  aria-label="Draft Run"
                   className="panel-icon-button header-toolbar-action header-run-action"
                 >
                   <Play size={15} />
                 </button>
-                {studioView === 'execution' && executionCanStop ? (
+                <button
+                  onClick={handleBindScope}
+                  data-tooltip="Bind Scope"
+                  aria-label="Bind Scope"
+                  className="panel-icon-button header-toolbar-action"
+                >
+                  <Globe size={15} />
+                </button>
+                {studioView === 'execution' && (executionCanStop || draftRunning) ? (
                   <button
-                    onClick={() => void handleStopExecution()}
+                    onClick={() => draftRunning ? handleStopDraftRun() : void handleStopExecution()}
                     data-tooltip="Stop"
                     aria-label="Stop"
                     disabled={executionStopPending}
@@ -5047,7 +4319,7 @@ function App() {
                             </div>
                             <button
                               onClick={() => {
-                                openCatalogPage('connectors');
+                                openExplorerPage();
                               }}
                               className="accent-inline-link text-[11px] font-medium"
                             >
@@ -5253,7 +4525,7 @@ function App() {
                         </div>
                         <button
                           onClick={() => {
-                            openCatalogPage('roles');
+                            openExplorerPage();
                           }}
                           className="accent-inline-link text-[11px] font-medium"
                         >
@@ -5480,7 +4752,7 @@ function App() {
 
       <ModalShell
         open={runModalOpen}
-        title="Run"
+        title="Draft Run"
         onClose={() => setRunModalOpen(false)}
         actions={(
           <>
@@ -5493,7 +4765,8 @@ function App() {
       >
         <div className="space-y-3">
           <div className="text-[12px] text-gray-500">
-            Optional input will be passed into the workflow as `$input`.
+            Sends the current workflow YAML as an inline bundle to <code>/api/scopes/{'{scopeId}'}/workflow/draft-run</code>.
+            {runScopeId ? <span> Scope: <strong>{runScopeId}</strong></span> : <span className="text-amber-600"> Not logged in — scope unavailable.</span>}
           </div>
           <textarea
             rows={6}
@@ -5502,6 +4775,42 @@ function App() {
             placeholder="What should this run do?"
             onChange={event => setExecutionPrompt(event.target.value)}
           />
+        </div>
+      </ModalShell>
+
+      <ModalShell
+        open={bindScopeModalOpen}
+        title="Bind Scope"
+        onClose={() => setBindScopeModalOpen(false)}
+        actions={(
+          <>
+            <button onClick={() => setBindScopeModalOpen(false)} className="ghost-action">Cancel</button>
+            <button onClick={() => { void handleConfirmBindScope(); }} disabled={bindScopePending} className="solid-action">
+              <Globe size={14} /> {bindScopePending ? 'Binding...' : 'Bind'}
+            </button>
+          </>
+        )}
+      >
+        <div className="space-y-3">
+          <div className="text-[12px] text-gray-500">
+            Binds the current workflow as a scope service. After binding, invoke it from <strong>Console</strong> by selecting the service.
+          </div>
+          <div className="space-y-2">
+            <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Service ID</label>
+            <input
+              className="w-full rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              placeholder="default"
+              value={bindServiceId}
+              onChange={e => setBindServiceId(e.target.value)}
+            />
+            <div className="text-[10px] text-gray-400">
+              Invoke path: <code className="text-gray-500">/services/{bindServiceId.trim() || 'default'}/invoke/chat:stream</code>
+            </div>
+          </div>
+          <div className="rounded-lg border border-[#E6E3DE] bg-[#F7F5F2] px-4 py-3 text-[13px] space-y-0.5">
+            <div><span className="text-gray-400">Scope:</span> <strong>{runScopeId || '(not logged in)'}</strong></div>
+            <div><span className="text-gray-400">Workflow:</span> <strong>{workflowMeta.name || 'draft'}</strong></div>
+          </div>
         </div>
       </ModalShell>
 
@@ -5720,9 +5029,289 @@ function App() {
   );
 }
 
-function AppLoadingScreen() {
+function CloudConfigSection(props: {
+  userConfigState: UserConfigState;
+  setUserConfigState: React.Dispatch<React.SetStateAction<UserConfigState>>;
+  runtimeConfig: Pick<StudioSettingsState, 'runtimeMode' | 'localRuntimeUrl' | 'remoteRuntimeUrl'>;
+  flash: (msg: string, type: 'success' | 'error') => void;
+}) {
+  const { userConfigState, setUserConfigState, runtimeConfig, flash } = props;
+  const [filterText, setFilterText] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setUserConfigState(prev => ({ ...prev, modelsLoading: true }));
+      try {
+        const result = await api.userConfig.models();
+        if (!cancelled) {
+          setUserConfigState(prev => ({
+            ...prev,
+            providers: result?.providers ?? [],
+            supportedModels: result?.supported_models ?? [],
+            modelsByProvider: result?.models_by_provider ?? {},
+            modelsLoading: false,
+          }));
+        }
+      } catch {
+        if (!cancelled) setUserConfigState(prev => ({ ...prev, providers: [], supportedModels: [], modelsByProvider: {}, modelsLoading: false }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && e.target instanceof Node && !containerRef.current.contains(e.target)) setDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const readyProviders = useMemo(
+    () => userConfigState.providers.filter(p => p.status === 'ready'),
+    [userConfigState.providers],
+  );
+
+  const gatewayProviders = useMemo(
+    () => readyProviders.filter(p => (p.source || USER_CONFIG_PROVIDER_SOURCE_GATEWAY) === USER_CONFIG_PROVIDER_SOURCE_GATEWAY),
+    [readyProviders],
+  );
+
+  const serviceProviders = useMemo(
+    () => userConfigState.providers.filter(p => p.source === USER_CONFIG_PROVIDER_SOURCE_SERVICE),
+    [userConfigState.providers],
+  );
+
+  const preferredRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
+  const effectiveRoute = preferredRoute;
+
+  const routeOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string; note?: string }> = [
+      {
+        value: USER_LLM_ROUTE_GATEWAY,
+        label: 'NyxID Gateway',
+      },
+    ];
+
+    const seen = new Set(options.map(option => option.value));
+    for (const provider of serviceProviders) {
+      const slug = provider.provider_slug;
+      const route = routePathFromProviderSlug(slug);
+      if (!slug || seen.has(route)) continue;
+      seen.add(route);
+      options.push({
+        value: route,
+        label: provider.provider_name || slug,
+        note: provider.status === 'ready' ? 'Ready' : 'Unavailable',
+      });
+    }
+
+    if (!seen.has(preferredRoute) && preferredRoute !== USER_LLM_ROUTE_GATEWAY) {
+      options.push({
+        value: preferredRoute,
+        label: preferredRoute,
+        note: 'Unavailable',
+      });
+    }
+
+    return options;
+  }, [preferredRoute, serviceProviders]);
+
+  const groupedModels = useMemo(() => {
+    const query = filterText.trim().toLowerCase();
+    const providerOrder = effectiveRoute === USER_LLM_ROUTE_GATEWAY
+      ? gatewayProviders
+      : userConfigState.providers.filter(provider => routePathFromProviderSlug(provider.provider_slug) === effectiveRoute);
+
+    return providerOrder
+      .map(provider => ({
+        label: provider.provider_name || provider.provider_slug,
+        models: (userConfigState.modelsByProvider[provider.provider_slug] || [])
+          .filter(model => !query || model.toLowerCase().includes(query)),
+      }))
+      .filter(group => group.models.length > 0);
+  }, [effectiveRoute, filterText, gatewayProviders, userConfigState.modelsByProvider, userConfigState.providers]);
+
+  const hasData = groupedModels.length > 0;
+  const effectiveRouteLabel = routeOptions.find(option => option.value === effectiveRoute)?.label
+    || (effectiveRoute === USER_LLM_ROUTE_GATEWAY ? 'NyxID Gateway' : effectiveRoute);
+
   return (
-    <div className="min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8">
+    <div className="max-w-[920px] space-y-8">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="panel-eyebrow">Settings</div>
+          <div className="panel-title">LLM</div>
+          <div className="text-[12px] text-gray-400 mt-1">Per-user configuration stored on NyxID. Changes sync across all your devices.</div>
+        </div>
+        <button
+          onClick={async () => {
+            try {
+              setUserConfigState(prev => ({ ...prev, loading: true }));
+              await api.userConfig.save({
+                defaultModel: userConfigState.defaultModel.trim(),
+                preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute),
+                runtimeMode: runtimeConfig.runtimeMode,
+                localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
+                remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
+              });
+              flash('LLM config saved', 'success');
+            } catch (error: any) {
+              flash(error?.message || 'Failed to save LLM config', 'error');
+            } finally {
+              setUserConfigState(prev => ({ ...prev, loading: false }));
+            }
+          }}
+          disabled={userConfigState.loading}
+          className="solid-action"
+        >
+          {userConfigState.loading ? 'Saving...' : 'Save config'}
+        </button>
+      </div>
+
+      <div className="settings-section-card space-y-4">
+        <div className="section-heading">Preferred route</div>
+        <div>
+          <label className="field-label">LLM route</label>
+          <select
+            className="panel-input mt-1"
+            value={preferredRoute}
+            onChange={event => {
+              const nextRoute = normalizeUserLlmRoute(event.target.value);
+              setUserConfigState(prev => ({ ...prev, preferredLlmRoute: nextRoute }));
+            }}
+          >
+            {routeOptions.map(option => (
+              <option key={option.value} value={option.value}>
+                {option.note ? `${option.label} - ${option.note}` : option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="text-[11px] text-gray-400 leading-relaxed">
+          {preferredRoute === USER_LLM_ROUTE_GATEWAY
+            ? 'All Aevatar chat requests will go through NyxID Gateway.'
+            : `${effectiveRouteLabel} will be used for Aevatar chat requests via ${preferredRoute}. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
+        </div>
+      </div>
+
+      {/* Providers status */}
+      {(userConfigState.modelsLoading || readyProviders.length > 0) && (
+        <div className="settings-section-card space-y-3">
+          <div className="section-heading">Connected providers</div>
+          {userConfigState.modelsLoading ? (
+            <div className="flex items-center gap-2 py-2 text-[12px] text-gray-400">
+              <Loader2 size={16} className="animate-spin" />
+              <span>Loading providers...</span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {userConfigState.providers.map(p => (
+                <span
+                  key={p.provider_slug}
+                  className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium ${
+                    p.status === 'ready'
+                      ? 'bg-green-50 text-green-700'
+                      : p.status === 'expired'
+                      ? 'bg-amber-50 text-amber-700'
+                      : 'bg-gray-100 text-gray-400'
+                  }`}
+                >
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                    p.status === 'ready' ? 'bg-green-500' : p.status === 'expired' ? 'bg-amber-500' : 'bg-gray-300'
+                  }`} />
+                  {p.provider_name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Model selection */}
+      <div className="settings-section-card space-y-4">
+        <div className="section-heading">Default model</div>
+        <div ref={containerRef} className="relative">
+          <label className="field-label">Model</label>
+          {hasData ? (
+            <div className="relative mt-1">
+              <input
+                ref={inputRef}
+                className="panel-input pr-8"
+                value={dropdownOpen ? filterText : userConfigState.defaultModel}
+                placeholder={userConfigState.modelsLoading ? 'Loading...' : 'Select a model...'}
+                onChange={e => { setFilterText(e.target.value); if (!dropdownOpen) setDropdownOpen(true); }}
+                onFocus={() => { setFilterText(''); setDropdownOpen(true); }}
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                onClick={() => { setDropdownOpen(!dropdownOpen); if (!dropdownOpen) { setFilterText(''); inputRef.current?.focus(); } }}
+                tabIndex={-1}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              {dropdownOpen && (
+                <div className="absolute z-50 mt-1 w-full max-h-[280px] overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                  {userConfigState.modelsLoading ? (
+                    <div className="px-3 py-2 text-[12px] text-gray-400">Loading...</div>
+                  ) : groupedModels.length === 0 ? (
+                    <div className="px-3 py-2 text-[12px] text-gray-400">No matching models</div>
+                  ) : (
+                    groupedModels.map(group => (
+                      <div key={group.label}>
+                        <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">{group.label}</div>
+                        {group.models.map(model => (
+                          <button
+                            key={model}
+                            type="button"
+                            className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-gray-50 ${model === userConfigState.defaultModel ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700'}`}
+                            onClick={() => {
+                              setUserConfigState(prev => ({ ...prev, defaultModel: model }));
+                              setDropdownOpen(false);
+                              setFilterText('');
+                            }}
+                          >
+                            {model}
+                          </button>
+                        ))}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <input
+              className="panel-input mt-1"
+              value={userConfigState.defaultModel}
+              placeholder={userConfigState.modelsLoading ? 'Loading...' : 'Enter model name...'}
+              onChange={e => setUserConfigState(prev => ({ ...prev, defaultModel: e.target.value }))}
+            />
+          )}
+        </div>
+        <div className="text-[11px] text-gray-400 leading-relaxed">
+          The default model applied to {effectiveRouteLabel}. Select from supported models, or type a model name manually.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AppLoadingScreen(props: {
+  appearanceTheme: string;
+  colorMode: 'light' | 'dark';
+}) {
+  return (
+    <div
+      className="studio-shell min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8"
+      data-appearance={props.appearanceTheme || 'blue'}
+      data-color-mode={props.colorMode || 'light'}
+    >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[960px] items-center justify-center">
         <div className="w-full max-w-[460px] rounded-[32px] border border-[#E6E3DE] bg-white/96 p-8 shadow-[0_28px_70px_rgba(15,23,42,0.08)]">
           <div className="panel-eyebrow">Aevatar App</div>
@@ -5743,12 +5332,14 @@ function AppAuthenticationGate(props: {
   providerDisplayName: string;
   loginUrl: string;
   errorMessage: string;
+  appearanceTheme: string;
+  colorMode: 'light' | 'dark';
 }) {
   return (
     <div
       className="studio-shell min-h-screen bg-[#F2F1EE] px-6 py-8 text-gray-800"
-      data-appearance="blue"
-      data-color-mode="light"
+      data-appearance={props.appearanceTheme || 'blue'}
+      data-color-mode={props.colorMode || 'light'}
     >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1040px] items-center justify-center">
         <div className="grid w-full max-w-[920px] gap-6 rounded-[36px] border border-[#E6E3DE] bg-white/96 p-6 shadow-[0_30px_72px_rgba(15,23,42,0.08)] md:grid-cols-[minmax(0,1.1fr)_320px] md:p-8">
@@ -5789,13 +5380,13 @@ function AppAuthenticationGate(props: {
             </div>
 
             <div className="mt-6 space-y-3">
-              <a
-                href={props.loginUrl || '/auth/login'}
+              <button
+                onClick={() => nyxid.loginWithRedirect('/')}
                 className="solid-action w-full justify-center !no-underline"
                 title={`Sign in with ${props.providerDisplayName || 'NyxID'}.`}
               >
                 <Shield size={14} /> Sign in
-              </a>
+              </button>
               <div className="text-[12px] leading-5 text-gray-400">
                 After sign-in completes, the app will return to Studio automatically.
               </div>
@@ -5956,12 +5547,13 @@ function DrawerIconButton(props: { active: boolean; label: string; icon: ReactNo
   );
 }
 
-function InputField(props: { label: string; value: string; onChange: (value: string) => void }) {
+function InputField(props: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
   return (
     <div>
       <label className="field-label">{props.label}</label>
       <input
         className="panel-input mt-1"
+        disabled={props.disabled}
         value={props.value}
         onChange={event => props.onChange(event.target.value)}
       />

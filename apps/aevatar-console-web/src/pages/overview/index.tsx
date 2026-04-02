@@ -1,696 +1,494 @@
 import {
-  PageContainer,
-  ProCard,
-  ProDescriptions,
-  ProList,
-} from "@ant-design/pro-components";
-import type { ProDescriptionsItemProps } from "@ant-design/pro-components";
+  ApartmentOutlined,
+  ControlOutlined,
+  DeploymentUnitOutlined,
+  EyeOutlined,
+  ThunderboltOutlined,
+} from "@ant-design/icons";
+import { ProCard } from "@ant-design/pro-components";
+import { Alert, Button, Empty, Space, Typography } from "antd";
+import React, { useMemo, useState } from "react";
+import { history } from "@/shared/navigation/history";
 import {
-  Alert,
-  Button,
-  Col,
-  Row,
-  Space,
-  Statistic,
-  Tag,
-  Typography,
-} from "antd";
-import React, { useMemo } from "react";
-import { history } from "@umijs/max";
-import { formatDateTime } from "@/shared/datetime/dateTime";
+  buildRuntimeExplorerHref,
+  buildRuntimePrimitivesHref,
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import { buildStudioWorkflowWorkspaceRoute } from "@/shared/studio/navigation";
 import {
-  cardStackStyle,
-  fillCardStyle,
-  moduleCardProps,
-  scrollPanelStyle,
-  stretchColumnStyle,
-} from "@/shared/ui/proComponents";
-import type {
-  ConsoleProfileItem,
-  ObservabilityOverviewItem,
-} from "./useOverviewData";
+  AevatarContextDrawer,
+  AevatarInspectorEmpty,
+  AevatarPageShell,
+  AevatarPanel,
+  AevatarStatusTag,
+  AevatarWorkbenchLayout,
+} from "@/shared/ui/aevatarPageShells";
+import {
+  buildAevatarMetricCardStyle,
+  resolveAevatarMetricVisual,
+  type AevatarThemeSurfaceToken,
+} from "@/shared/ui/aevatarWorkbench";
+import { theme } from "antd";
 import { useOverviewData } from "./useOverviewData";
 
-type CapabilitySurfaceItem = {
-  id: string;
-  title: string;
-  summary: string;
+type OverviewFocus =
+  | "human-workflows"
+  | "live-actors"
+  | "connectors"
+  | "primitives"
+  | "catalog"
+  | null;
+
+type CommandTile = {
   description: string;
-  actionLabel: string;
-  onOpen: () => void;
-};
-
-type QuickActionItem = {
-  id: string;
+  icon: React.ReactNode;
+  id: Exclude<OverviewFocus, null>;
   label: string;
-  onOpen?: () => void;
-  href?: string;
-  target?: string;
-  rel?: string;
-  primary?: boolean;
+  tone?: "default" | "error" | "info" | "success" | "warning";
+  value: string;
 };
 
-const capabilitySurfacesCardStyle = {
-  ...fillCardStyle,
-  height: 640,
-};
-
-const capabilitySurfacesScrollStyle = {
-  ...scrollPanelStyle,
-  maxHeight: 552,
-};
-
-const profileColumns: ProDescriptionsItemProps<ConsoleProfileItem>[] = [
+const quickStartSteps = [
   {
-    title: "Preferred workflow",
-    dataIndex: "preferredWorkflow",
-    render: (_, row) => <Tag color="processing">{row.preferredWorkflow}</Tag>,
+    description:
+      "Start from the project workspace so every later action stays tied to a project scope instead of raw platform pages.",
+    label: "Open Projects",
+    onClick: () => history.push("/scopes/overview"),
+    secondary: {
+      label: "Open workflow workspace",
+      onClick: () => history.push(buildStudioWorkflowWorkspaceRoute()),
+    },
+    step: "01",
+    title: "Anchor work to a project",
   },
   {
-    title: "Observability",
-    dataIndex: "observability",
+    description:
+      "Draft or revise a capability in Studio, then move it into an active binding when it is ready to serve.",
+    label: "Open workflow workspace",
+    onClick: () => history.push(buildStudioWorkflowWorkspaceRoute()),
+    secondary: {
+      label: "Open Assets",
+      onClick: () => history.push("/scopes/assets"),
+    },
+    step: "02",
+    title: "Promote a capability",
   },
-];
+  {
+    description:
+      "Open Runs first to attach to a real execution. Mission Control only becomes useful after a live run context exists.",
+    label: "Open Runs",
+    onClick: () => history.push(buildRuntimeRunsHref()),
+    secondary: {
+      label: "Open Invoke Lab",
+      onClick: () => history.push("/scopes/invoke"),
+    },
+    step: "03",
+    title: "Operate the runtime",
+  },
+] as const;
 
 const OverviewPage: React.FC = () => {
+  const { token } = theme.useToken();
   const {
     agentsQuery,
     capabilitiesQuery,
-    configuredObservabilityCount,
-    grafanaBaseUrl,
     humanFocusedWorkflows,
     liveActors,
-    observabilityTargets,
-    preferences,
-    profileData,
     visibleCatalogItems,
     workflowsQuery,
     capabilityConnectorSummary,
     capabilityPrimitiveCategorySummary,
     capabilityWorkflowSourceSummary,
   } = useOverviewData();
-  const capabilitySurfaceItems = useMemo<CapabilitySurfaceItem[]>(
+  const [focus, setFocus] = useState<OverviewFocus>(null);
+
+  const tiles = useMemo<CommandTile[]>(
     () => [
       {
-        id: "surface-runtime-workflows",
-        title: "Runtime workflows",
-        summary: `${visibleCatalogItems.length} library entries`,
-        description:
-          "Browse runtime workflow definitions, inspect coverage, and launch runs from the runtime-facing workflow library.",
-        actionLabel: "Open workflows",
-        onOpen: () => history.push("/workflows"),
+        description: "Workflows that already expose approval, input, or wait-signal paths.",
+        icon: <ControlOutlined />,
+        id: "human-workflows",
+        label: "Human Loop",
+        tone: "warning",
+        value: String(humanFocusedWorkflows.length),
       },
       {
-        id: "surface-runtime-state",
-        title: "Runtime state",
-        summary: `${agentsQuery.data?.length ?? 0} live actors`,
-        description:
-          "Inspect active runs, runtime actors, and execution-side state directly from the runtime-facing surfaces.",
-        actionLabel: "Open runs",
-        onOpen: () => history.push("/runs"),
+        description: "Live or recently observed actors that can be reopened in runtime explorer.",
+        icon: <EyeOutlined />,
+        id: "live-actors",
+        label: "Live Actors",
+        tone: "info",
+        value: String(liveActors.length),
       },
       {
-        id: "surface-primitives",
-        title: "Primitive browser",
-        summary: `${
-          capabilitiesQuery.data?.primitives.length ?? 0
-        } capabilities`,
-        description:
-          "Inspect primitive categories, parameters, aliases, and the workflows that currently use them.",
-        actionLabel: "Open primitives",
-        onOpen: () => history.push("/primitives"),
+        description: "Connector readiness across the runtime capability surface.",
+        icon: <DeploymentUnitOutlined />,
+        id: "connectors",
+        label: "Connectors",
+        tone: "success",
+        value: capabilityConnectorSummary,
       },
       {
-        id: "surface-scopes",
-        title: "Scope assets",
-        summary: "Published workflows and scripts",
-        description:
-          "Inspect scope-owned workflow and script assets directly from GAgentService.",
-        actionLabel: "Open scopes",
-        onOpen: () => history.push("/scopes"),
+        description: "Top primitive categories visible in the current capability catalog.",
+        icon: <ThunderboltOutlined />,
+        id: "primitives",
+        label: "Primitive Surface",
+        tone: "info",
+        value: capabilityPrimitiveCategorySummary.join(" · ") || "No primitives",
       },
       {
-        id: "surface-services",
-        title: "Service runtime",
-        summary: "Lifecycle, deployments, and traffic",
-        description:
-          "Inspect service catalog snapshots, revisions, serving targets, rollouts, and traffic.",
-        actionLabel: "Open services",
-        onOpen: () => history.push("/services"),
-      },
-      {
-        id: "surface-governance",
-        title: "Governance",
-        summary: "Bindings, policies, and endpoint exposure",
-        description:
-          "Inspect service governance state and activation capability views.",
-        actionLabel: "Open governance",
-        onOpen: () => history.push("/governance"),
-      },
-      {
-        id: "surface-observability",
-        title: "Observability",
-        summary: `${configuredObservabilityCount}/${observabilityTargets.length} targets configured`,
-        description:
-          "Drive Grafana, Jaeger, Loki, and other external tools with the current runtime context.",
-        actionLabel: "Open observability",
-        onOpen: () =>
-          history.push(
-            `/observability?workflow=${encodeURIComponent(
-              preferences.preferredWorkflow
-            )}`
-          ),
+        description: "Visible catalog items that can move from design to runtime.",
+        icon: <ApartmentOutlined />,
+        id: "catalog",
+        label: "Catalog",
+        tone: "default",
+        value: `${visibleCatalogItems.length} visible`,
       },
     ],
     [
-      agentsQuery.data?.length,
-      configuredObservabilityCount,
-      observabilityTargets.length,
-      preferences.preferredWorkflow,
-      capabilitiesQuery.data?.primitives.length,
+      capabilityConnectorSummary,
+      capabilityPrimitiveCategorySummary,
+      humanFocusedWorkflows.length,
+      liveActors.length,
       visibleCatalogItems.length,
-    ]
-  );
-  const platformQuickActions = useMemo<QuickActionItem[]>(
-    () => [
-      {
-        id: "quick-start-preferred",
-        label: "Start preferred workflow",
-        primary: true,
-        onOpen: () =>
-          history.push(
-            `/runs?workflow=${encodeURIComponent(
-              preferences.preferredWorkflow
-            )}`
-          ),
-      },
-      {
-        id: "quick-workflows",
-        label: "Open workflow library",
-        onOpen: () => history.push("/workflows"),
-      },
-      {
-        id: "quick-runs",
-        label: "Open runs",
-        onOpen: () => history.push("/runs"),
-      },
-      {
-        id: "quick-actors",
-        label: "Open runtime explorer",
-        onOpen: () => history.push("/actors"),
-      },
-      {
-        id: "quick-scopes",
-        label: "Open scopes",
-        onOpen: () => history.push("/scopes"),
-      },
-      {
-        id: "quick-services",
-        label: "Open services",
-        onOpen: () => history.push("/services"),
-      },
-      {
-        id: "quick-governance",
-        label: "Open governance",
-        onOpen: () => history.push("/governance"),
-      },
-      {
-        id: "quick-primitives",
-        label: "Open primitives",
-        onOpen: () => history.push("/primitives"),
-      },
     ],
-    [preferences.preferredWorkflow]
   );
-  const localQuickActions = useMemo<QuickActionItem[]>(
-    () =>
-      [
-        {
-          id: "quick-runtime-settings",
-          label: "Open runtime settings",
-          onOpen: () => history.push("/settings/runtime"),
-        },
-        {
-          id: "quick-console-settings",
-          label: "Open console settings",
-          onOpen: () => history.push("/settings/console"),
-        },
-        {
-          id: "quick-observability",
-          label: "Open observability",
-          onOpen: () =>
-            history.push(
-              `/observability?workflow=${encodeURIComponent(
-                preferences.preferredWorkflow
-              )}`
-            ),
-        },
-        grafanaBaseUrl
-          ? {
-              id: "quick-grafana-explore",
-              label: "Open Grafana Explore",
-              href: `${grafanaBaseUrl}/explore`,
-              target: "_blank",
-              rel: "noreferrer",
-            }
-          : null,
-      ].filter(Boolean) as QuickActionItem[],
-    [grafanaBaseUrl, preferences.preferredWorkflow]
-  );
+
+  const focusTitle =
+    focus === "human-workflows"
+      ? "Human-loop workflows"
+      : focus === "live-actors"
+        ? "Live actor shortcuts"
+        : focus === "connectors"
+          ? "Connector readiness"
+          : focus === "primitives"
+            ? "Primitive surface"
+            : focus === "catalog"
+              ? "Workflow catalog"
+              : "Overview";
 
   return (
-    <PageContainer
+    <AevatarPageShell
+      layoutMode="document"
       title="Overview"
-      content="Overview of runtime workflows, scope assets, services, governance, actors, and observability."
+      titleHelp="A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
     >
-      <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic
-              title="Registered workflows"
-              value={workflowsQuery.data?.length ?? 0}
-            />
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic
-              title="Live actors"
-              value={agentsQuery.data?.length ?? 0}
-            />
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic
-              title="Runtime primitives"
-              value={capabilitiesQuery.data?.primitives.length ?? 0}
-            />
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Statistic
-              title="Library workflows"
-              value={visibleCatalogItems.length}
-            />
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Space direction="vertical" size={8}>
-              <Typography.Text strong>Preferred workflow</Typography.Text>
-              <Tag color="processing">{preferences.preferredWorkflow}</Tag>
-            </Space>
-          </ProCard>
-        </Col>
-        <Col xs={24} lg={8} style={stretchColumnStyle}>
-          <ProCard {...moduleCardProps} style={fillCardStyle}>
-            <Space direction="vertical" size={8}>
-              <Typography.Text strong>Observability</Typography.Text>
-              {grafanaBaseUrl ? (
-                <Button
-                  type="link"
-                  href={grafanaBaseUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ paddingInline: 0 }}
-                >
-                  Open Grafana
-                </Button>
-              ) : (
-                <Tag>Not configured</Tag>
-              )}
-            </Space>
-          </ProCard>
-        </Col>
-      </Row>
-
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
-        <Col xs={24} xl={16} style={stretchColumnStyle}>
-          <ProCard
-            title="Quick actions"
-            {...moduleCardProps}
-            style={fillCardStyle}
-          >
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <div>
-                <Typography.Text strong>Platform entry points</Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  style={{ display: "block", marginTop: 4 }}
-                >
-                  Open runtime, scope, service, governance, and capability
-                  surfaces.
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {platformQuickActions.map((item) => (
-                      <Button
-                        key={item.id}
-                        type={item.primary ? "primary" : "default"}
-                        onClick={item.onOpen}
-                      >
-                        {item.label}
+      <AevatarWorkbenchLayout
+        layoutMode="document"
+        rail={
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <AevatarPanel
+              layoutMode="document"
+              title="Command Path"
+              titleHelp="The console now teaches one consistent path: project, publish, observe, govern."
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {quickStartSteps.map((step) => (
+                  <div
+                    key={step.step}
+                    style={{
+                      border: "1px solid var(--ant-color-border-secondary)",
+                      borderRadius: 12,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <Typography.Text type="secondary">{step.step}</Typography.Text>
+                    <Typography.Text strong>{step.title}</Typography.Text>
+                    <Typography.Text type="secondary">
+                      {step.description}
+                    </Typography.Text>
+                    <Space wrap>
+                      <Button onClick={step.onClick} type="primary">
+                        {step.label}
                       </Button>
-                    ))}
-                  </Space>
-                </div>
-              </div>
-
-              <div>
-                <Typography.Text strong>Local console tools</Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  style={{ display: "block", marginTop: 4 }}
-                >
-                  Jump into browser-level preferences, local runtime
-                  configuration, and external observability tools.
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {localQuickActions.map((item) => (
-                      <Button
-                        key={item.id}
-                        href={item.href}
-                        onClick={item.onOpen}
-                        target={item.target}
-                        rel={item.rel}
-                      >
-                        {item.label}
+                      <Button onClick={step.secondary.onClick}>
+                        {step.secondary.label}
                       </Button>
-                    ))}
-                  </Space>
-                </div>
-              </div>
-
-              <div>
-                <Typography.Text strong>
-                  Human-in-the-loop workflows
-                </Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {humanFocusedWorkflows.length > 0 ? (
-                      humanFocusedWorkflows.map((item) => (
-                        <Button
-                          key={item.name}
-                          type="dashed"
-                          onClick={() =>
-                            history.push(
-                              `/runs?workflow=${encodeURIComponent(item.name)}`
-                            )
-                          }
-                        >
-                          {item.name}
-                        </Button>
-                      ))
-                    ) : (
-                      <Typography.Text type="secondary">
-                        No human-interaction workflows were discovered in the
-                        catalog.
-                      </Typography.Text>
-                    )}
-                  </Space>
-                </div>
-              </div>
-            </Space>
-          </ProCard>
-        </Col>
-
-        <Col xs={24} xl={8} style={stretchColumnStyle}>
-          <ProCard
-            title="Console profile"
-            {...moduleCardProps}
-            style={fillCardStyle}
-          >
-            <Space direction="vertical" style={{ width: "100%" }} size={16}>
-              <ProDescriptions<ConsoleProfileItem>
-                column={1}
-                dataSource={profileData}
-                columns={profileColumns}
-              />
-
-              <div>
-                <Typography.Text strong>Live actor shortcuts</Typography.Text>
-                <div style={{ marginTop: 12 }}>
-                  <Space wrap size={[8, 8]}>
-                    {liveActors.length > 0 ? (
-                      liveActors.map((agent) => (
-                        <Button
-                          key={agent.id}
-                          onClick={() =>
-                            history.push(
-                              `/actors?actorId=${encodeURIComponent(agent.id)}`
-                            )
-                          }
-                        >
-                          {agent.id}
-                        </Button>
-                      ))
-                    ) : (
-                      <Typography.Text type="secondary">
-                        No live actors were returned by the backend.
-                      </Typography.Text>
-                    )}
-                  </Space>
-                </div>
-              </div>
-            </Space>
-          </ProCard>
-        </Col>
-      </Row>
-
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
-        <Col xs={24} xl={14} style={stretchColumnStyle}>
-          <ProCard
-            title="Capability surfaces"
-            {...moduleCardProps}
-            style={capabilitySurfacesCardStyle}
-          >
-            <div style={capabilitySurfacesScrollStyle}>
-              <Row gutter={[16, 16]}>
-                {capabilitySurfaceItems.map((item) => (
-                  <Col key={item.id} xs={24} md={12} style={stretchColumnStyle}>
-                    <ProCard style={fillCardStyle}>
-                      <div style={cardStackStyle}>
-                        <Space direction="vertical" size={4}>
-                          <Typography.Text strong>{item.title}</Typography.Text>
-                          <Tag color="processing">{item.summary}</Tag>
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {item.description}
-                        </Typography.Text>
-                        <Button type="primary" onClick={item.onOpen}>
-                          {item.actionLabel}
-                        </Button>
-                      </div>
-                    </ProCard>
-                  </Col>
-                ))}
-              </Row>
-            </div>
-          </ProCard>
-        </Col>
-        <Col xs={24} xl={10} style={stretchColumnStyle}>
-          <ProCard
-            title="Capability digest"
-            {...moduleCardProps}
-            style={fillCardStyle}
-          >
-            {capabilitiesQuery.isError ? (
-              <Alert
-                showIcon
-                type="error"
-                title="Failed to load capability digest"
-                description={String(capabilitiesQuery.error)}
-              />
-            ) : (
-              <div style={cardStackStyle}>
-                <Space wrap size={[8, 8]}>
-                  <Tag color="processing">
-                    {capabilitiesQuery.data?.schemaVersion ?? "capabilities.v1"}
-                  </Tag>
-                  <Tag>
-                    Updated{" "}
-                    {capabilitiesQuery.data?.generatedAtUtc
-                      ? formatDateTime(capabilitiesQuery.data.generatedAtUtc)
-                      : "n/a"}
-                  </Tag>
-                  <Tag>
-                    {capabilitiesQuery.data?.primitives.length ?? 0} primitives
-                  </Tag>
-                  <Tag>
-                    {capabilitiesQuery.data?.connectors.length ?? 0} connectors
-                  </Tag>
-                  <Tag>
-                    {capabilitiesQuery.data?.workflows.length ?? 0} workflows
-                  </Tag>
-                </Space>
-                <Row gutter={[12, 12]}>
-                  <Col xs={24} sm={8}>
-                    <ProCard size="small">
-                      <Statistic
-                        title="Primitives"
-                        value={capabilitiesQuery.data?.primitives.length ?? 0}
-                      />
-                    </ProCard>
-                  </Col>
-                  <Col xs={24} sm={8}>
-                    <ProCard size="small">
-                      <Statistic
-                        title="Connectors"
-                        value={capabilitiesQuery.data?.connectors.length ?? 0}
-                      />
-                    </ProCard>
-                  </Col>
-                  <Col xs={24} sm={8}>
-                    <ProCard size="small">
-                      <Statistic
-                        title="Workflows"
-                        value={capabilitiesQuery.data?.workflows.length ?? 0}
-                      />
-                    </ProCard>
-                  </Col>
-                </Row>
-
-                <div>
-                  <Typography.Text strong>Primitive categories</Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", marginTop: 8 }}
-                  >
-                    {capabilityPrimitiveCategorySummary.length > 0
-                      ? capabilityPrimitiveCategorySummary.join(" · ")
-                      : "No primitive categories were returned by the runtime capability digest."}
-                  </Typography.Text>
-                </div>
-
-                <div>
-                  <Typography.Text strong>
-                    Connector availability
-                  </Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", marginTop: 8 }}
-                  >
-                    {capabilityConnectorSummary}
-                  </Typography.Text>
-                </div>
-
-                <div>
-                  <Typography.Text strong>Workflow source mix</Typography.Text>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ display: "block", marginTop: 8 }}
-                  >
-                    {capabilityWorkflowSourceSummary.length > 0
-                      ? capabilityWorkflowSourceSummary.join(" · ")
-                      : "No capability workflows were exposed by the backend."}
-                  </Typography.Text>
-                </div>
-
-                <Typography.Text type="secondary">
-                  Overview keeps this as a digest. Use Primitives, Workflows,
-                  and Runtime Settings for full details.
-                </Typography.Text>
-
-                <Space wrap>
-                  <Button onClick={() => history.push("/primitives")}>
-                    Open primitive browser
-                  </Button>
-                  <Button onClick={() => history.push("/workflows")}>
-                    Open workflow library
-                  </Button>
-                  <Button onClick={() => history.push("/settings/runtime")}>
-                    Open runtime settings
-                  </Button>
-                </Space>
-              </div>
-            )}
-          </ProCard>
-        </Col>
-      </Row>
-
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
-        <Col xs={24} style={stretchColumnStyle}>
-          <ProCard
-            title="Observability targets"
-            {...moduleCardProps}
-            style={fillCardStyle}
-          >
-            <ProList<ObservabilityOverviewItem>
-              rowKey="id"
-              search={false}
-              split
-              dataSource={observabilityTargets}
-              locale={{
-                emptyText: (
-                  <Typography.Text type="secondary">
-                    No observability targets configured.
-                  </Typography.Text>
-                ),
-              }}
-              metas={{
-                title: {
-                  dataIndex: "label",
-                  render: (_, record) => (
-                    <Space wrap size={[8, 8]}>
-                      <Typography.Text strong>{record.label}</Typography.Text>
-                      <Tag
-                        color={
-                          record.status === "configured" ? "success" : "default"
-                        }
-                      >
-                        {record.status}
-                      </Tag>
                     </Space>
-                  ),
-                },
-                description: {
-                  dataIndex: "description",
-                },
-                subTitle: {
-                  render: (_, record) =>
-                    record.homeUrl ? (
-                      <Tag>{record.homeUrl}</Tag>
-                    ) : (
-                      <Tag>No URL configured</Tag>
-                    ),
-                },
-                actions: {
-                  render: (_, record) => [
-                    <Button
-                      key={`${record.id}-observability`}
-                      type="link"
-                      onClick={() =>
-                        history.push(
-                          `/observability?workflow=${encodeURIComponent(
-                            preferences.preferredWorkflow
-                          )}`
-                        )
-                      }
+                  </div>
+                ))}
+              </div>
+            </AevatarPanel>
+
+            <AevatarPanel layoutMode="document" title="Operator Shortcuts">
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                <Button onClick={() => history.push("/scopes/assets")}>
+                  Open assets
+                </Button>
+                <Button onClick={() => history.push("/deployments")}>
+                  Open deployments
+                </Button>
+                <Button onClick={() => history.push("/governance")}>
+                  Open governance
+                </Button>
+              </Space>
+            </AevatarPanel>
+          </div>
+        }
+        stage={
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {workflowsQuery.error || agentsQuery.error || capabilitiesQuery.error ? (
+              <Alert
+                title="Some overview feeds failed to load. The dashboard will continue with partial data."
+                showIcon
+                type="warning"
+              />
+            ) : null}
+
+            <ProCard
+              bodyStyle={{ padding: 0 }}
+              ghost
+              title={false}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gap: 16,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                }}
+              >
+                {tiles.map((tile) => {
+                  const visual = resolveAevatarMetricVisual(
+                    token as AevatarThemeSurfaceToken,
+                    tile.tone || "default",
+                  );
+
+                  return (
+                    <button
+                      key={tile.id}
+                      onClick={() => setFocus(tile.id)}
+                      style={{
+                        ...buildAevatarMetricCardStyle(
+                          token as AevatarThemeSurfaceToken,
+                          tile.tone || "default",
+                        ),
+                        WebkitAppearance: "none",
+                        alignItems: "flex-start",
+                        appearance: "none",
+                        borderRadius: 12,
+                        cursor: "pointer",
+                        font: "inherit",
+                        textAlign: "left",
+                      }}
+                      type="button"
                     >
-                      Open hub
-                    </Button>,
-                    <Button
-                      key={`${record.id}-external`}
-                      type="link"
-                      disabled={record.status !== "configured"}
-                      href={record.homeUrl || undefined}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open
-                    </Button>,
-                  ],
-                },
-              }}
-            />
-          </ProCard>
-        </Col>
-      </Row>
-    </PageContainer>
+                      <Space size={10}>
+                        <span style={{ color: visual.iconColor, display: "inline-flex" }}>
+                          {tile.icon}
+                        </span>
+                        <Typography.Text strong style={{ color: visual.valueColor }}>
+                          {tile.label}
+                        </Typography.Text>
+                      </Space>
+                      <Typography.Text
+                        style={{ color: visual.valueColor, fontSize: 18, fontWeight: 700 }}
+                      >
+                        {tile.value}
+                      </Typography.Text>
+                      <Typography.Text style={{ color: visual.secondaryColor }}>
+                        {tile.description}
+                      </Typography.Text>
+                    </button>
+                  );
+                })}
+              </div>
+            </ProCard>
+
+            <AevatarPanel
+              title="State Board"
+              titleHelp="A ghost-board view keeps the command center visually fused to the global shell instead of feeling like a separate application."
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gap: 16,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                }}
+              >
+                <GhostBoardCard
+                  description={capabilityWorkflowSourceSummary.join(" · ") || "No workflow sources loaded yet."}
+                  onOpen={() => setFocus("catalog")}
+                  title="Workflow sources"
+                />
+                <GhostBoardCard
+                  description={
+                    humanFocusedWorkflows
+                      .map((item) => item.name)
+                      .slice(0, 3)
+                      .join(" · ") || "No human-loop workflows discovered."
+                  }
+                  onOpen={() => setFocus("human-workflows")}
+                  title="Human-loop focus"
+                />
+                <GhostBoardCard
+                  description={
+                    liveActors.map((item) => item.id).slice(0, 3).join(" · ") ||
+                    "No live actors returned by the backend."
+                  }
+                  onOpen={() => setFocus("live-actors")}
+                  title="Runtime attention"
+                />
+              </div>
+            </AevatarPanel>
+          </div>
+        }
+      />
+
+      <AevatarContextDrawer
+        onClose={() => setFocus(null)}
+        open={Boolean(focus)}
+        subtitle="Focused command-center detail"
+        title={focusTitle}
+      >
+        {!focus ? (
+          <AevatarInspectorEmpty description="Choose a command-center surface to inspect details without losing the main dashboard." />
+        ) : focus === "human-workflows" ? (
+          <FocusList
+            emptyText="No human-loop workflows were discovered in the runtime catalog."
+            items={humanFocusedWorkflows.map((item) => ({
+              action: () =>
+                history.push(
+                  buildRuntimeRunsHref({
+                    workflow: item.name,
+                  }),
+                ),
+              actionLabel: "Open runs",
+              description: item.description || "Workflow ready for human approval or signal choreography.",
+              label: item.name,
+              status: item.requiresLlmProvider ? "active" : "draft",
+            }))}
+          />
+        ) : focus === "live-actors" ? (
+          <FocusList
+            emptyText="No live actors are currently available."
+            items={liveActors.map((item) => ({
+              action: () =>
+                history.push(
+                  buildRuntimeExplorerHref({
+                    actorId: item.id,
+                  }),
+                ),
+              actionLabel: "Open explorer",
+              description: item.description || item.type,
+              label: item.id,
+              status: "live",
+            }))}
+          />
+        ) : focus === "connectors" ? (
+          <FocusList
+            emptyText="No connector information is currently available."
+            items={(capabilitiesQuery.data?.connectors ?? []).map((item) => ({
+              action: () => history.push(buildRuntimePrimitivesHref()),
+              actionLabel: "Open primitives",
+              description: `${item.type} · ${item.allowedOperations.join(", ") || "No operations declared"}`,
+              label: item.name,
+              status: item.enabled ? "ready" : "disabled",
+            }))}
+          />
+        ) : focus === "primitives" ? (
+          <FocusList
+            emptyText="No primitives are currently available."
+            items={(capabilitiesQuery.data?.primitives ?? []).map((item) => ({
+              action: () =>
+                history.push(
+                  buildRuntimePrimitivesHref({
+                    primitive: item.name,
+                  }),
+                ),
+              actionLabel: "Inspect primitive",
+              description: item.description || item.category,
+              label: item.name,
+              status: item.closedWorldBlocked ? "blocked" : "ready",
+            }))}
+          />
+        ) : (
+          <FocusList
+            emptyText="No catalog items are currently visible."
+            items={visibleCatalogItems.map((item) => ({
+              action: () =>
+                history.push(
+                  buildRuntimeWorkflowsHref({
+                    workflow: item.name,
+                  }),
+                ),
+              actionLabel: "Open workflow",
+              description: item.description || item.groupLabel,
+              label: item.name,
+              status: item.requiresLlmProvider ? "active" : "draft",
+            }))}
+          />
+        )}
+      </AevatarContextDrawer>
+    </AevatarPageShell>
   );
 };
+
+const GhostBoardCard: React.FC<{
+  description: string;
+  onOpen: () => void;
+  title: string;
+}> = ({ description, onOpen, title }) => (
+  <ProCard
+    bodyStyle={{ padding: 16 }}
+    ghost
+    style={{
+      background: "rgba(255, 255, 255, 0.5)",
+      border: "1px solid var(--ant-color-border-secondary)",
+      borderRadius: 12,
+    }}
+  >
+    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+      <Typography.Text strong>{title}</Typography.Text>
+      <Typography.Text type="secondary">{description}</Typography.Text>
+      <Button onClick={onOpen}>Inspect</Button>
+    </Space>
+  </ProCard>
+);
+
+const FocusList: React.FC<{
+  emptyText: string;
+  items: Array<{
+    action: () => void;
+    actionLabel: string;
+    description: string;
+    label: string;
+    status: string;
+  }>;
+}> = ({ emptyText, items }) =>
+  items.length === 0 ? (
+    <Empty description={emptyText} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+  ) : (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {items.map((item) => (
+        <div
+          key={item.label}
+          style={{
+            border: "1px solid var(--ant-color-border-secondary)",
+            borderRadius: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            padding: 12,
+          }}
+        >
+          <Space wrap size={[8, 8]}>
+            <Typography.Text strong>{item.label}</Typography.Text>
+            <AevatarStatusTag
+              domain={
+                item.status === "live" ? "observation" : "governance"
+              }
+              status={item.status}
+            />
+          </Space>
+          <Typography.Text type="secondary">{item.description}</Typography.Text>
+          <Button onClick={item.action}>{item.actionLabel}</Button>
+        </div>
+      ))}
+    </div>
+  );
 
 export default OverviewPage;

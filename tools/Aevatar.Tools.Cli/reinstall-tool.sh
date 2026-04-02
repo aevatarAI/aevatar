@@ -12,7 +12,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PROJECT_PATH="${REPO_ROOT}/tools/Aevatar.Tools.Cli/Aevatar.Tools.Cli.csproj"
 PACKAGE_SOURCE_DIR="${REPO_ROOT}/tools/Aevatar.Tools.Cli/bin/${CONFIGURATION}"
-APP_RESTART_NEEDED=0
 
 echo "==> Tool package: ${TOOL_PACKAGE_ID}"
 echo "==> Build configuration: ${CONFIGURATION}"
@@ -21,7 +20,9 @@ echo "==> App port watch: ${APP_PORT}"
 
 list_listening_pids() {
   local port="$1"
-  lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | sort -u
+  # Use -iTCP:port without -sTCP:LISTEN first, then fall back;
+  # macOS lsof sometimes misses dual-stack listeners with the filter.
+  (lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null; lsof -tiTCP:"${port}" 2>/dev/null) | sort -un
 }
 
 port_has_listener() {
@@ -89,16 +90,36 @@ if [[ ! -f "${PROJECT_PATH}" ]]; then
   exit 1
 fi
 
-if [[ "${RESTART_ON_PORT_CONFLICT}" == "1" ]]; then
-  if kill_processes_on_port "${APP_PORT}"; then
-    APP_RESTART_NEEDED=1
-    echo "==> Port ${APP_PORT} has been released. App will be restarted after reinstall."
-  else
-    echo "==> Port ${APP_PORT} is free."
-  fi
-else
-  echo "==> Port conflict handling disabled by AEVATAR_REINSTALL_RESTART_ON_PORT_CONFLICT=${RESTART_ON_PORT_CONFLICT}."
+# --- Cleanup: kill previous aevatar app processes and port occupants ---
+echo "==> Cleaning up previous aevatar processes..."
+
+# Kill any process listening on APP_PORT
+if kill_processes_on_port "${APP_PORT}"; then
+  echo "==> Port ${APP_PORT} has been released."
 fi
+
+# Kill remaining aevatar app processes (by command name) not caught by port check
+# Use simple pattern — macOS pgrep doesn't reliably support POSIX character classes
+AEVATAR_PIDS="$(pgrep -f "${TOOL_PACKAGE_ID} app" 2>/dev/null || true)"
+if [[ -n "${AEVATAR_PIDS}" ]]; then
+  echo "==> Found lingering aevatar app process(es): $(echo "${AEVATAR_PIDS}" | tr '\n' ' ')"
+  while IFS= read -r pid; do
+    [[ -z "${pid}" ]] && continue
+    kill "${pid}" 2>/dev/null || true
+  done <<< "${AEVATAR_PIDS}"
+  sleep 1
+  # Force kill if still alive
+  for pid in ${AEVATAR_PIDS}; do
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+  done
+  echo "==> Lingering aevatar app processes cleaned up."
+else
+  echo "==> No lingering aevatar app processes found."
+fi
+
+echo "==> Port ${APP_PORT} is ready for a fresh app launch."
 
 if dotnet tool list --global | awk -v tool="${TOOL_PACKAGE_ID}" '
   NR > 2 && $1 == tool { found = 1 }
@@ -108,6 +129,14 @@ if dotnet tool list --global | awk -v tool="${TOOL_PACKAGE_ID}" '
   dotnet tool uninstall --global "${TOOL_PACKAGE_ID}"
 else
   echo "==> Global tool ${TOOL_PACKAGE_ID} is not installed. Skipping uninstall."
+fi
+
+FRONTEND_DIR="${REPO_ROOT}/tools/Aevatar.Tools.Cli/Frontend"
+if [[ -f "${FRONTEND_DIR}/package.json" ]]; then
+  echo "==> Building frontend..."
+  (cd "${FRONTEND_DIR}" && npm ci --ignore-scripts 2>/dev/null || npm install && npx vite build --config vite.config.ts)
+else
+  echo "==> Frontend directory not found, skipping frontend build."
 fi
 
 echo "==> Packing tool..."
@@ -133,16 +162,41 @@ EOF
 
 dotnet tool install --global --configfile "${TMP_NUGET_CONFIG}" --no-cache "${TOOL_PACKAGE_ID}"
 
-if [[ "${APP_RESTART_NEEDED}" -eq 1 ]]; then
-  echo "==> Restarting ${TOOL_PACKAGE_ID} app on port ${APP_PORT}..."
-  nohup "${TOOL_PACKAGE_ID}" app --no-browser --port "${APP_PORT}" > "${APP_LOG_FILE}" 2>&1 &
-  APP_PID=$!
-  sleep 1
-  if ! kill -0 "${APP_PID}" 2>/dev/null; then
-    echo "Failed to restart ${TOOL_PACKAGE_ID} app. Check logs: ${APP_LOG_FILE}" >&2
+# Verify tool is actually on PATH
+TOOL_PATH="$(command -v "${TOOL_PACKAGE_ID}" 2>/dev/null || true)"
+if [[ -z "${TOOL_PATH}" ]]; then
+  echo "==> WARNING: '${TOOL_PACKAGE_ID}' not found on PATH after install." >&2
+  echo "==> Trying ~/.dotnet/tools/${TOOL_PACKAGE_ID} directly..." >&2
+  TOOL_PATH="${HOME}/.dotnet/tools/${TOOL_PACKAGE_ID}"
+  if [[ ! -x "${TOOL_PATH}" ]]; then
+    echo "Tool binary not found at ${TOOL_PATH}. Install may have failed." >&2
     exit 1
   fi
-  echo "==> Restarted ${TOOL_PACKAGE_ID} app (pid=${APP_PID}). Logs: ${APP_LOG_FILE}"
+fi
+echo "==> Tool verified at: ${TOOL_PATH}"
+
+RESTART_APP="${AEVATAR_REINSTALL_RESTART_APP:-1}"
+if [[ "${RESTART_APP}" == "1" ]]; then
+  echo "==> Starting ${TOOL_PACKAGE_ID} app on port ${APP_PORT}..."
+  nohup "${TOOL_PATH}" app --no-browser --port "${APP_PORT}" > "${APP_LOG_FILE}" 2>&1 &
+  APP_PID=$!
+  # Wait up to 5 seconds for the app to bind the port
+  i=0
+  while [[ "${i}" -lt 20 ]]; do
+    if port_has_listener "${APP_PORT}"; then
+      break
+    fi
+    sleep 0.25
+    i=$((i + 1))
+  done
+  if ! kill -0 "${APP_PID}" 2>/dev/null; then
+    echo "Failed to start ${TOOL_PACKAGE_ID} app. Check logs: ${APP_LOG_FILE}" >&2
+    tail -20 "${APP_LOG_FILE}" >&2 || true
+    exit 1
+  fi
+  echo "==> Started ${TOOL_PACKAGE_ID} app (pid=${APP_PID}). Logs: ${APP_LOG_FILE}"
+else
+  echo "==> Auto-start skipped. Start manually: ${TOOL_PACKAGE_ID} app --port ${APP_PORT}"
 fi
 
 echo "==> Done. You can run:"

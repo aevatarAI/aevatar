@@ -6,15 +6,24 @@ namespace Aevatar.Tools.Cli.Tests;
 public class AppCommandTests
 {
     [Fact]
-    public void Create_ShouldExposeRestartSubcommandWithPortAndApiOptions()
+    public void Create_ShouldExposeUrlPortAndNoBrowserOptions()
     {
         var appCommand = AppCommand.Create();
 
-        appCommand.Subcommands.Should().ContainSingle(command => command.Name == "restart");
-        var restart = appCommand.Subcommands.Single(command => command.Name == "restart");
+        appCommand.Options.Should().Contain(option => option.Aliases.Contains("--url"));
+        appCommand.Options.Should().Contain(option => option.Aliases.Contains("--port"));
+        appCommand.Options.Should().Contain(option => option.Aliases.Contains("--no-browser"));
+    }
 
-        restart.Options.Should().Contain(option => option.Aliases.Contains("--port"));
-        restart.Options.Should().Contain(option => option.Aliases.Contains("--no-browser"));
-        restart.Options.Should().Contain(option => option.Aliases.Contains("--api-base"));
+    [Fact]
+    public void Create_ShouldRegisterRuntimeSubcommands()
+    {
+        var appCommand = AppCommand.Create();
+
+        appCommand.Subcommands.Should().Contain(cmd => cmd.Name == "draft-run");
+        appCommand.Subcommands.Should().Contain(cmd => cmd.Name == "services");
+        appCommand.Subcommands.Should().Contain(cmd => cmd.Name == "bindings");
+        appCommand.Subcommands.Should().Contain(cmd => cmd.Name == "invoke");
+        appCommand.Subcommands.Should().Contain(cmd => cmd.Name == "logs");
     }
 }

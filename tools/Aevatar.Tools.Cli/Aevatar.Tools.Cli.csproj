@@ -7,57 +7,30 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>aevatar</ToolCommandName>
     <PackageId>aevatar</PackageId>
-    <Version>1.0.3</Version>
+    <Version>1.0.5</Version>
     <Authors>Aevatar</Authors>
-    <Description>Unified Aevatar CLI with config and app playground commands.</Description>
-    <PackageTags>aevatar;cli;workflow;playground;config</PackageTags>
+    <Description>Aevatar CLI — config management and app launcher.</Description>
+    <PackageTags>aevatar;cli;config</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Aevatar.Bootstrap\Aevatar.Bootstrap.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Bootstrap.Extensions.AI\Aevatar.Bootstrap.Extensions.AI.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
-    <ProjectReference Include="..\..\src\platform\Aevatar.GAgentService.Hosting\Aevatar.GAgentService.Hosting.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Scripting.Abstractions\Aevatar.Scripting.Abstractions.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Scripting.Core\Aevatar.Scripting.Core.csproj" />
-    <ProjectReference Include="..\..\src\Aevatar.Scripting.Infrastructure\Aevatar.Scripting.Infrastructure.csproj" />
+    <!-- aevatar chat command needs Workflow SDK to run workflows locally -->
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
-    <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Infrastructure\Aevatar.Workflow.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\workflow\Aevatar.Workflow.Sdk\Aevatar.Workflow.Sdk.csproj" />
-    <ProjectReference Include="..\..\src\workflow\extensions\Aevatar.Workflow.Extensions.Hosting\Aevatar.Workflow.Extensions.Hosting.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
-    <PackageReference Include="YamlDotNet" />
-    <PackageReference Include="Grpc.Tools">
-      <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-    </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="Hosting/Protos/app_script_protocol.proto"
-              GrpcServices="None"
-              AdditionalImportDirs="..\..\src\Aevatar.Scripting.Abstractions\Protos" />
-
     <None Include="README.md" Pack="true" PackagePath="\" />
-
-    <Content Update="wwwroot/playground/**">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-
-    <Content Include="workflows/**">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
 
     <Compile Include="..\Aevatar.Tools.Config\ConfigToolHost.cs" Link="SharedConfig/ConfigToolHost.cs" />
     <Compile Include="..\Aevatar.Tools.Config\LLMContracts.cs" Link="SharedConfig/LLMContracts.cs" />
@@ -73,5 +46,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+
+    <!-- SDK auto-includes wwwroot/ as Content; we just need CopyToOutputDirectory -->
+    <Content Update="wwwroot\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+
   </ItemGroup>
 </Project>

@@ -1,5 +1,7 @@
 // Resolve provider instance name to endpoint/model/apiKey (API key never exposed in public DTO).
 
+using System.Text.Json;
+using Aevatar.Configuration;
 using Aevatar.Tools.Config;
 
 static class LLMProviderResolver
@@ -46,6 +48,15 @@ static class LLMProviderResolver
             endpointSource = "secret";
             endpoint = endpointFromSecrets.Trim();
         }
+        else if (string.Equals(providerType, "nyxid", StringComparison.OrdinalIgnoreCase))
+        {
+            var nyxIdEndpoint = TryResolveNyxIdGatewayEndpointFromConfigJson();
+            if (!string.IsNullOrWhiteSpace(nyxIdEndpoint))
+            {
+                endpointSource = "config";
+                endpoint = nyxIdEndpoint;
+            }
+        }
         else if (!string.IsNullOrWhiteSpace(profile.DefaultEndpoint))
         {
             endpointSource = "default";
@@ -90,5 +101,78 @@ static class LLMProviderResolver
             ApiKeyConfigured: apiKeyConfigured,
             ApiKey: apiKey ?? string.Empty,
             Public: pub);
+    }
+
+    private static string? TryResolveNyxIdGatewayEndpointFromConfigJson()
+    {
+        try
+        {
+            if (!File.Exists(AevatarPaths.ConfigJson))
+                return null;
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(AevatarPaths.ConfigJson));
+            if (TryGetString(doc.RootElement, out var configuredEndpoint, "Aevatar", "NyxId", "GatewayEndpoint") &&
+                !string.IsNullOrWhiteSpace(configuredEndpoint))
+                return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+
+            if (TryGetString(doc.RootElement, out configuredEndpoint, "Cli", "App", "NyxId", "GatewayEndpoint") &&
+                !string.IsNullOrWhiteSpace(configuredEndpoint))
+                return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+
+            if (!TryGetString(doc.RootElement, out var authority, "Cli", "App", "NyxId", "Authority") &&
+                !TryGetString(doc.RootElement, out authority, "Aevatar", "NyxId", "Authority"))
+                return null;
+
+            return NormalizeNyxIdGatewayEndpoint(authority);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? NormalizeNyxIdGatewayEndpoint(string? value)
+    {
+        var trimmed = value?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed) || !Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return null;
+
+        var absolute = uri.ToString().TrimEnd('/');
+        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
+            return absolute;
+
+        return $"{absolute}/api/v1/llm/gateway/v1";
+    }
+
+    private static bool TryGetString(JsonElement element, out string value, params string[] path)
+    {
+        value = string.Empty;
+        var current = element;
+        foreach (var segment in path)
+        {
+            if (current.ValueKind != JsonValueKind.Object || !TryGetProperty(current, segment, out current))
+                return false;
+        }
+
+        if (current.ValueKind != JsonValueKind.String)
+            return false;
+
+        value = current.GetString() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 }

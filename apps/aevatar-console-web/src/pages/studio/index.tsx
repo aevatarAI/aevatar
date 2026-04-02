@@ -1,24 +1,27 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { history } from '@umijs/max';
+import { history } from '@/shared/navigation/history';
+import {
+  buildRuntimeRunsHref,
+  buildRuntimeWorkflowsHref,
+} from '@/shared/navigation/runtimeRoutes';
 import type { Node } from '@xyflow/react';
 import {
   Button,
+  Modal,
   Space,
 } from 'antd';
 import React, {
+  useCallback,
   useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import {
-  CONSOLE_PREFERENCES_UPDATED_EVENT,
-  loadConsolePreferences,
-  type StudioAppearanceTheme,
-  type StudioColorMode,
-} from '@/shared/preferences/consolePreferences';
+import { ensureActiveAuthSession } from '@/shared/auth/client';
+import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { sanitizeReturnTo } from '@/shared/auth/session';
 import {
   clearPlaygroundPromptHistory,
   loadPlaygroundPromptHistory,
@@ -26,6 +29,14 @@ import {
   type PlaygroundPromptHistoryEntry,
 } from '@/shared/playground/promptHistory';
 import { loadPlaygroundDraft } from '@/shared/playground/playgroundDraft';
+import {
+  saveEndpointInvocationDraftPayload,
+  saveScopeDraftRunPayload,
+} from '@/shared/runs/draftRunSession';
+import {
+  getStringValueTypeUrl,
+  isAutoEncodableTextPayloadTypeUrl,
+} from '@/shared/runs/protobufPayload';
 import {
   applyRoleInspectorDraft,
   applyStepInspectorDraft,
@@ -53,7 +64,15 @@ import {
   type StudioWorkflowLayoutDocument,
 } from '@/shared/studio/graph';
 import { studioApi } from '@/shared/studio/api';
-import type { StudioTab } from '@/shared/studio/navigation';
+import {
+  buildStudioRoute,
+  type StudioTab,
+} from '@/shared/studio/navigation';
+import type {
+  WorkflowCatalogDefinition,
+} from '@/shared/models/runtime/catalog';
+import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
+import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
 import type {
   StudioConnectorDefinition,
   StudioExecutionDetail,
@@ -61,17 +80,21 @@ import type {
   StudioProviderSettings,
   StudioProviderType,
   StudioRoleDefinition,
+  StudioScopeGAgentEndpointInput,
   StudioRuntimeTestResult,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowDirectory,
   StudioWorkspaceSettings,
 } from '@/shared/studio/models';
+import { embeddedPanelStyle } from '@/shared/ui/proComponents';
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioInspectorPane from './components/StudioInspectorPane';
 import StudioShell, {
+  type StudioShellNavItem,
   type StudioWorkspacePage,
 } from './components/StudioShell';
+import ScriptsWorkbenchPage from '@/modules/studio/scripts/ScriptsWorkbenchPage';
 import {
   type StudioCatalogDraftMeta,
   type StudioConnectorCatalogItem,
@@ -84,13 +107,13 @@ import {
   type StudioRoleDraftItem,
   StudioRolesPage,
   StudioSettingsPage,
-  type StudioWorkflowLayout,
   StudioWorkflowsPage,
   StudioWorkspaceAlerts,
 } from './components/StudioWorkbenchSections';
 
 type StudioRouteState = {
   workflowId: string;
+  scriptId: string;
   templateWorkflow: string;
   tab: StudioTab;
   draftMode: '' | 'new';
@@ -138,12 +161,22 @@ type StudioSettingsDraft = {
   readonly providers: StudioProviderSettings[];
 };
 
+type StudioAppearanceTheme = 'blue' | 'coral' | 'forest';
+type StudioColorMode = 'light' | 'dark';
+
 type StudioAppearancePreferences = {
   readonly appearanceTheme: StudioAppearanceTheme;
   readonly colorMode: StudioColorMode;
 };
 
+const defaultStudioAppearance: StudioAppearancePreferences = {
+  appearanceTheme: 'blue',
+  colorMode: 'light',
+};
+
 let studioLocalKeyCounter = 0;
+const STUDIO_AUTO_RELOGIN_ATTEMPT_KEY =
+  'aevatar-console:studio:auto-relogin:';
 
 function hasValidationError(findings: StudioValidationFinding[]): boolean {
   return findings.some((item) =>
@@ -155,9 +188,111 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
 }
 
+function describeScopeBindingTarget(result: {
+  readonly displayName?: string;
+  readonly serviceId?: string;
+  readonly targetKind?: string;
+  readonly targetName?: string;
+}): string {
+  const targetName =
+    trimOptional(result.targetName) ||
+    trimOptional(result.displayName) ||
+    trimOptional(result.serviceId);
+
+  if (!targetName) {
+    return 'the default binding';
+  }
+
+  switch (trimOptional(result.targetKind).toLowerCase()) {
+    case 'workflow':
+      return `workflow ${targetName}`;
+    case 'script':
+      return `script ${targetName}`;
+    case 'gagent':
+      return `GAgent ${targetName}`;
+    default:
+      return targetName;
+  }
+}
+
+function hasWorkflowGraphContent(
+  document: StudioWorkflowDocument | null | undefined,
+): boolean {
+  const roleCount = Array.isArray(document?.roles) ? document.roles.length : 0;
+  const stepCount = Array.isArray(document?.steps) ? document.steps.length : 0;
+  return roleCount > 0 || stepCount > 0;
+}
+
+function buildTemplateWorkflowDocument(
+  definition: WorkflowCatalogDefinition | null | undefined,
+): StudioWorkflowDocument | null {
+  if (!definition) {
+    return null;
+  }
+
+  return {
+    name: trimOptional(definition.name) || undefined,
+    description: trimOptional(definition.description) || undefined,
+    roles: definition.roles.map((role) => ({
+      id: trimOptional(role.id) || undefined,
+      name: trimOptional(role.name) || undefined,
+      systemPrompt: trimOptional(role.systemPrompt) || undefined,
+      provider: trimOptional(role.provider) || undefined,
+      model: trimOptional(role.model) || undefined,
+      connectors: role.connectors.filter((connector) => connector.trim().length > 0),
+    })),
+    steps: definition.steps.map((step) => ({
+      id: trimOptional(step.id) || undefined,
+      type: trimOptional(step.type) || undefined,
+      targetRole: trimOptional(step.targetRole) || undefined,
+      parameters: step.parameters,
+      next: trimOptional(step.next) || null,
+      branches: step.branches,
+    })),
+  };
+}
+
+function readWorkflowCallTargets(
+  document: StudioWorkflowDocument | null | undefined,
+): string[] {
+  const steps = Array.isArray(document?.steps) ? document.steps : [];
+  const seen = new Set<string>();
+  const targets: string[] = [];
+
+  for (const step of steps) {
+    const normalizedType = trimOptional(
+      typeof step?.type === 'string'
+        ? step.type
+        : typeof step?.originalType === 'string'
+          ? step.originalType
+          : '',
+    );
+    if (normalizedType !== 'workflow_call') {
+      continue;
+    }
+
+    const parameters =
+      step?.parameters && typeof step.parameters === 'object'
+        ? (step.parameters as Record<string, unknown>)
+        : null;
+    const target = trimOptional(
+      typeof parameters?.workflow === 'string' ? parameters.workflow : '',
+    );
+    if (!target || seen.has(target)) {
+      continue;
+    }
+
+    seen.add(target);
+    targets.push(target);
+  }
+
+  return targets;
+}
+
 function parseStudioTab(value: string | null): StudioTab {
   switch (value) {
     case 'studio':
+    case 'scripts':
     case 'executions':
     case 'roles':
     case 'connectors':
@@ -194,6 +329,69 @@ function createStudioLocalKey(prefix: string): string {
 
   studioLocalKeyCounter += 1;
   return `${prefix}_${Date.now().toString(36)}_${studioLocalKeyCounter.toString(36)}`;
+}
+
+function buildStudioLoginRoute(returnTo: string): string {
+  const params = new URLSearchParams({
+    redirect: sanitizeReturnTo(returnTo),
+  });
+  return `/login?${params.toString()}`;
+}
+
+function getCurrentStudioReturnTo(): string {
+  if (typeof window === 'undefined') {
+    return '/studio';
+  }
+
+  return sanitizeReturnTo(
+    `${window.location.pathname}${window.location.search}${window.location.hash}`,
+  );
+}
+
+function getStudioAutoReloginStorageKey(returnTo: string): string {
+  return `${STUDIO_AUTO_RELOGIN_ATTEMPT_KEY}${returnTo}`;
+}
+
+function hasStudioAutoReloginAttempt(returnTo: string): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    return (
+      window.sessionStorage.getItem(getStudioAutoReloginStorageKey(returnTo)) ===
+      '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function markStudioAutoReloginAttempt(returnTo: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(
+      getStudioAutoReloginStorageKey(returnTo),
+      '1',
+    );
+  } catch {
+    // Ignore sessionStorage failures and continue with best-effort auth recovery.
+  }
+}
+
+function clearStudioAutoReloginAttempt(returnTo: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(getStudioAutoReloginStorageKey(returnTo));
+  } catch {
+    // Ignore sessionStorage failures and continue with best-effort auth recovery.
+  }
 }
 
 function splitCatalogLines(value: string): string[] {
@@ -387,55 +585,6 @@ function createUniqueConnectorName(
   return candidate;
 }
 
-function normalizeConnector(
-  connector: StudioConnectorCatalogItem | StudioConnectorDraftItem,
-  key = 'key' in connector ? connector.key : createStudioLocalKey('connector'),
-): StudioConnectorCatalogItem {
-  const type = (connector.type || 'http') as StudioConnectorType;
-  const defaults = createEmptyConnectorDraft(type, connector.name || '');
-
-  return {
-    key,
-    name: connector.name || defaults.name,
-    type,
-    enabled: connector.enabled !== false,
-    timeoutMs: String(connector.timeoutMs || defaults.timeoutMs),
-    retry: String(connector.retry || defaults.retry),
-    http: {
-      baseUrl: connector.http?.baseUrl ?? defaults.http.baseUrl,
-      allowedMethods: [...(connector.http?.allowedMethods ?? defaults.http.allowedMethods)],
-      allowedPaths: [...(connector.http?.allowedPaths ?? defaults.http.allowedPaths)],
-      allowedInputKeys: [
-        ...(connector.http?.allowedInputKeys ?? defaults.http.allowedInputKeys),
-      ],
-      defaultHeaders: { ...(connector.http?.defaultHeaders ?? defaults.http.defaultHeaders) },
-    },
-    cli: {
-      command: connector.cli?.command ?? defaults.cli.command,
-      fixedArguments: [...(connector.cli?.fixedArguments ?? defaults.cli.fixedArguments)],
-      allowedOperations: [
-        ...(connector.cli?.allowedOperations ?? defaults.cli.allowedOperations),
-      ],
-      allowedInputKeys: [
-        ...(connector.cli?.allowedInputKeys ?? defaults.cli.allowedInputKeys),
-      ],
-      workingDirectory: connector.cli?.workingDirectory ?? defaults.cli.workingDirectory,
-      environment: { ...(connector.cli?.environment ?? defaults.cli.environment) },
-    },
-    mcp: {
-      serverName: connector.mcp?.serverName ?? defaults.mcp.serverName,
-      command: connector.mcp?.command ?? defaults.mcp.command,
-      arguments: [...(connector.mcp?.arguments ?? defaults.mcp.arguments)],
-      environment: { ...(connector.mcp?.environment ?? defaults.mcp.environment) },
-      defaultTool: connector.mcp?.defaultTool ?? defaults.mcp.defaultTool,
-      allowedTools: [...(connector.mcp?.allowedTools ?? defaults.mcp.allowedTools)],
-      allowedInputKeys: [
-        ...(connector.mcp?.allowedInputKeys ?? defaults.mcp.allowedInputKeys),
-      ],
-    },
-  };
-}
-
 function hasConnectorDraftContent(
   connector: StudioConnectorDraftItem | null | undefined,
 ): boolean {
@@ -593,18 +742,13 @@ function createSettingsDraft(
 
 function normalizeSettingsDraftForHostMode(
   settings: StudioSettingsDraft | null | undefined,
-  hostMode: 'embedded' | 'proxy',
+  _hostMode: 'embedded' | 'proxy',
 ): StudioSettingsDraft | null {
   if (!settings) {
     return null;
   }
 
-  return hostMode === 'proxy'
-    ? settings
-    : {
-        ...settings,
-        runtimeBaseUrl: '',
-      };
+  return settings;
 }
 
 function createProviderDraft(
@@ -647,14 +791,6 @@ function createProviderDraft(
   };
 }
 
-function readStudioAppearancePreferences(): StudioAppearancePreferences {
-  const preferences = loadConsolePreferences();
-  return {
-    appearanceTheme: preferences.studioAppearanceTheme,
-    colorMode: preferences.studioColorMode,
-  };
-}
-
 function isExecutionStopAllowed(status: string | undefined): boolean {
   const normalized = status?.trim().toLowerCase() ?? '';
   return !['completed', 'failed', 'stopped', 'cancelled'].includes(normalized);
@@ -669,6 +805,7 @@ function readInitialStudioRouteState(): StudioRouteState {
   if (typeof window === 'undefined') {
     return {
       workflowId: '',
+      scriptId: '',
       templateWorkflow: '',
       tab: 'workflows',
       draftMode: '',
@@ -682,6 +819,7 @@ function readInitialStudioRouteState(): StudioRouteState {
   const params = new URLSearchParams(window.location.search);
   return {
     workflowId: trimOptional(params.get('workflow')),
+    scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
     tab: parseStudioTab(params.get('tab')),
     draftMode: parseDraftMode(params.get('draft')),
@@ -694,6 +832,8 @@ function readInitialStudioRouteState(): StudioRouteState {
 
 function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage {
   switch (state.tab) {
+    case 'scripts':
+      return 'scripts';
     case 'roles':
     case 'connectors':
     case 'settings':
@@ -702,9 +842,14 @@ function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage 
     case 'executions':
       return 'studio';
     default:
+      if (state.scriptId) {
+        return 'scripts';
+      }
+
       return state.workflowId ||
         state.templateWorkflow ||
         state.draftMode === 'new' ||
+        state.executionId ||
         state.prompt
         ? 'studio'
         : 'workflows';
@@ -762,6 +907,7 @@ function readValidationSummary(
 
 const StudioPage: React.FC = () => {
   const initialState = useMemo(() => readInitialStudioRouteState(), []);
+  const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
     readInitialWorkspacePage(initialState),
@@ -770,13 +916,12 @@ const StudioPage: React.FC = () => {
     readInitialStudioView(initialState),
   );
   const [workflowSearch, setWorkflowSearch] = useState('');
-  const [workflowLayout, setWorkflowLayout] =
-    useState<StudioWorkflowLayout>('grid');
   const [showWorkflowDirectoryForm, setShowWorkflowDirectoryForm] =
     useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
     initialState.workflowId,
   );
+  const [selectedScriptId, setSelectedScriptId] = useState(initialState.scriptId);
   const [selectedExecutionId, setSelectedExecutionId] = useState(
     initialState.executionId,
   );
@@ -800,6 +945,12 @@ const StudioPage: React.FC = () => {
   const [runPrompt, setRunPrompt] = useState(initialState.prompt);
   const [runPending, setRunPending] = useState(false);
   const [runNotice, setRunNotice] = useState<DraftRunNotice | null>(null);
+  const [publishPending, setPublishPending] = useState(false);
+  const [publishNotice, setPublishNotice] = useState<StudioNotice | null>(null);
+  const [bindingActivationRevisionId, setBindingActivationRevisionId] =
+    useState('');
+  const [bindingRetirementRevisionId, setBindingRetirementRevisionId] =
+    useState('');
   const [workflowImportPending, setWorkflowImportPending] = useState(false);
   const [workflowImportNotice, setWorkflowImportNotice] =
     useState<StudioNotice | null>(null);
@@ -848,8 +999,6 @@ const StudioPage: React.FC = () => {
   const [selectedProviderName, setSelectedProviderName] = useState('');
   const [settingsPending, setSettingsPending] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<StudioNotice | null>(null);
-  const [studioAppearance, setStudioAppearance] =
-    useState<StudioAppearancePreferences>(() => readStudioAppearancePreferences());
   const [runtimeTestPending, setRuntimeTestPending] = useState(false);
   const [runtimeTestResult, setRuntimeTestResult] =
     useState<StudioRuntimeTestResult | null>(null);
@@ -859,16 +1008,21 @@ const StudioPage: React.FC = () => {
   const [promptHistory, setPromptHistory] = useState<
     PlaygroundPromptHistoryEntry[]
   >(() => loadPlaygroundPromptHistory());
+  const [scriptsHasUnsavedChanges, setScriptsHasUnsavedChanges] = useState(false);
+  const [pendingWorkspacePage, setPendingWorkspacePage] =
+    useState<StudioWorkspacePage | null>(null);
   const legacyPlaygroundDraft = useMemo(() => loadPlaygroundDraft(), []);
   const workflowImportInputRef = useRef<HTMLInputElement | null>(null);
   const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
   const roleImportInputRef = useRef<HTMLInputElement | null>(null);
   const executionLogsWindowRef = useRef<Window | null>(null);
   const [logsDetached, setLogsDetached] = useState(false);
+  const [authRecoveryPending, setAuthRecoveryPending] = useState(false);
   const authSessionQuery = useQuery({
     queryKey: ['studio-auth-session'],
     queryFn: () => studioApi.getAuthSession(),
   });
+  const refetchAuthSession = authSessionQuery.refetch;
   const studioHostAccessResolved =
     !authSessionQuery.isLoading && !authSessionQuery.isError;
   const studioHostAuthenticated =
@@ -876,12 +1030,78 @@ const StudioPage: React.FC = () => {
     Boolean(authSessionQuery.data?.authenticated);
   const studioHostReady =
     studioHostAccessResolved && studioHostAuthenticated;
+  const studioAppearance = defaultStudioAppearance;
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (authSessionQuery.isLoading || authSessionQuery.isError) {
+      return;
+    }
+
+    const returnTo = getCurrentStudioReturnTo();
+    if (!authSessionQuery.data?.enabled || authSessionQuery.data.authenticated) {
+      clearStudioAutoReloginAttempt(returnTo);
+      setAuthRecoveryPending(false);
+      return;
+    }
+
+    if (!nyxIdConfig.enabled || hasStudioAutoReloginAttempt(returnTo)) {
+      setAuthRecoveryPending(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAuthRecoveryPending(true);
+
+    void (async () => {
+      await ensureActiveAuthSession(nyxIdConfig);
+      if (cancelled) {
+        return;
+      }
+
+      const refreshedAuth = await refetchAuthSession();
+      if (cancelled) {
+        return;
+      }
+
+      if (
+        refreshedAuth.data?.enabled === false ||
+        Boolean(refreshedAuth.data?.authenticated)
+      ) {
+        clearStudioAutoReloginAttempt(returnTo);
+        setAuthRecoveryPending(false);
+        return;
+      }
+
+      markStudioAutoReloginAttempt(returnTo);
+      setAuthRecoveryPending(false);
+      history.replace(buildStudioLoginRoute(returnTo));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authSessionQuery.data?.authenticated,
+    authSessionQuery.data?.enabled,
+    authSessionQuery.isError,
+    authSessionQuery.isLoading,
+    nyxIdConfig,
+    refetchAuthSession,
+  ]);
 
   const appContextQuery = useQuery({
     queryKey: ['studio-app-context'],
     enabled: studioHostReady,
     queryFn: () => studioApi.getAppContext(),
   });
+  const resolvedStudioScopeId =
+    trimOptional(appContextQuery.data?.scopeId) ||
+    trimOptional(authSessionQuery.data?.scopeId) ||
+    '';
   const workspaceSettingsQuery = useQuery({
     queryKey: ['studio-workspace-settings'],
     enabled: studioHostReady,
@@ -932,6 +1152,23 @@ const StudioPage: React.FC = () => {
     enabled: studioHostReady && Boolean(selectedExecutionId),
     queryFn: () => studioApi.getExecution(selectedExecutionId),
   });
+  const scopeBindingQuery = useQuery({
+    queryKey: ['studio-scope-binding', resolvedStudioScopeId],
+    enabled: studioHostReady && Boolean(resolvedStudioScopeId),
+    queryFn: () => studioApi.getScopeBinding(resolvedStudioScopeId),
+  });
+  const gAgentTypesQuery = useQuery({
+    queryKey: ['studio-runtime-gagent-types'],
+    enabled: studioHostReady,
+    retry: false,
+    queryFn: () => runtimeGAgentApi.listTypes(),
+  });
+  const runtimePrimitivesQuery = useQuery({
+    queryKey: ['studio-runtime-primitives'],
+    enabled: studioHostReady,
+    retry: false,
+    queryFn: () => runtimeQueryApi.listPrimitives(),
+  });
   const matchingWorkspaceWorkflow = useMemo(
     () =>
       (workflowsQuery.data ?? []).find((item) => item.name === templateWorkflow) ??
@@ -953,6 +1190,26 @@ const StudioPage: React.FC = () => {
     () => (workflowsQuery.data ?? []).map((item) => item.name),
     [workflowsQuery.data],
   );
+  const availableStepTypes = useMemo(() => {
+    const stepTypes = new Set<string>();
+    for (const primitive of runtimePrimitivesQuery.data ?? []) {
+      const primitiveName = primitive.name.trim();
+      if (primitiveName) {
+        stepTypes.add(primitiveName);
+      }
+
+      for (const alias of primitive.aliases) {
+        const normalizedAlias = alias.trim();
+        if (normalizedAlias) {
+          stepTypes.add(normalizedAlias);
+        }
+      }
+    }
+
+    return Array.from(stepTypes).sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }, [runtimePrimitivesQuery.data]);
   const deferredDraftYaml = useDeferredValue(draftYaml);
   const defaultDirectoryId = useMemo(
     () => readDefaultDirectoryId(workspaceSettingsQuery.data?.directories),
@@ -1011,39 +1268,21 @@ const StudioPage: React.FC = () => {
   const sourceWorkflowLayout = activeWorkflowFile?.layout ?? null;
 
   const parseYamlQuery = useQuery({
-    queryKey: ['studio-parse-yaml', deferredDraftYaml, workflowNames.join('|')],
+    queryKey: [
+      'studio-parse-yaml',
+      deferredDraftYaml,
+      workflowNames.join('|'),
+      availableStepTypes.join('|'),
+    ],
     enabled: studioHostReady && Boolean(deferredDraftYaml.trim()),
     retry: false,
     queryFn: () =>
       studioApi.parseYaml({
         yaml: deferredDraftYaml,
         availableWorkflowNames: workflowNames,
+        availableStepTypes,
       }),
   });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return undefined;
-    }
-
-    const syncStudioAppearance = () => {
-      setStudioAppearance(readStudioAppearancePreferences());
-    };
-
-    window.addEventListener(
-      CONSOLE_PREFERENCES_UPDATED_EVENT,
-      syncStudioAppearance,
-    );
-    window.addEventListener('storage', syncStudioAppearance);
-
-    return () => {
-      window.removeEventListener(
-        CONSOLE_PREFERENCES_UPDATED_EVENT,
-        syncStudioAppearance,
-      );
-      window.removeEventListener('storage', syncStudioAppearance);
-    };
-  }, []);
 
   useEffect(() => {
     if (
@@ -1146,27 +1385,69 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    if (!activeSourceReady || draftSourceKey === activeWorkflowSourceKey) {
+    if (!activeSourceReady) {
+      return;
+    }
+    if (draftSourceKey === activeWorkflowSourceKey && draftYaml.trim()) {
       return;
     }
 
-    setDraftSourceKey(activeWorkflowSourceKey);
-    setDraftYaml(sourceYaml);
-    setDraftWorkflowName(sourceWorkflowName);
-    setDraftFileName(sourceFileName);
-    setDraftDirectoryId(sourceDirectoryId);
-    setDraftWorkflowLayout(sourceWorkflowLayout);
-    setSaveNotice(null);
+    let disposed = false;
+    const hydrateDraftFromSource = async () => {
+      let nextYaml = sourceYaml;
+
+      if (!nextYaml.trim() && activeWorkflowFile?.document) {
+        try {
+          const serialized = await studioApi.serializeYaml({
+            document: activeWorkflowFile.document,
+            availableWorkflowNames: workflowNames,
+            availableStepTypes,
+          });
+          nextYaml = serialized?.yaml || '';
+        } catch {
+          // Keep the final fallback below when Studio cannot serialize the loaded document.
+        }
+      }
+
+      if (!nextYaml.trim() && selectedWorkflowId) {
+        nextYaml = buildBlankDraftYaml(
+          sourceWorkflowName || activeWorkflowFile?.name || 'draft',
+        );
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      setDraftSourceKey(activeWorkflowSourceKey);
+      setDraftYaml(nextYaml);
+      setDraftWorkflowName(sourceWorkflowName);
+      setDraftFileName(sourceFileName);
+      setDraftDirectoryId(sourceDirectoryId);
+      setDraftWorkflowLayout(sourceWorkflowLayout);
+      setSaveNotice(null);
+    };
+
+    void hydrateDraftFromSource();
+
+    return () => {
+      disposed = true;
+    };
   }, [
+    activeWorkflowFile?.document,
     activeSourceReady,
     activeWorkflowSourceKey,
+    availableStepTypes,
     defaultDirectoryId,
     draftSourceKey,
+    draftYaml,
+    selectedWorkflowId,
     sourceDirectoryId,
     sourceFileName,
     sourceWorkflowLayout,
     sourceWorkflowName,
     sourceYaml,
+    workflowNames,
   ]);
 
   useEffect(() => {
@@ -1174,72 +1455,40 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const url = new URL(window.location.href);
-    if (selectedWorkflowId) {
-      url.searchParams.set('workflow', selectedWorkflowId);
-    } else {
-      url.searchParams.delete('workflow');
-    }
+    const tab: StudioTab =
+      workspacePage === 'studio'
+        ? studioView === 'execution'
+          ? 'executions'
+          : 'studio'
+        : workspacePage;
 
-    if (!selectedWorkflowId && templateWorkflow) {
-      url.searchParams.set('template', templateWorkflow);
-    } else {
-      url.searchParams.delete('template');
-    }
-
-    if (!selectedWorkflowId && !templateWorkflow && draftMode === 'new') {
-      url.searchParams.set('draft', 'new');
-    } else {
-      url.searchParams.delete('draft');
-    }
-
-    if (
-      !selectedWorkflowId &&
-      !templateWorkflow &&
-      draftMode === 'new' &&
-      legacySource === 'playground'
-    ) {
-      url.searchParams.set('legacy', 'playground');
-    } else {
-      url.searchParams.delete('legacy');
-    }
-
-    if (workspacePage === 'roles') {
-      url.searchParams.set('tab', 'roles');
-    } else if (workspacePage === 'connectors') {
-      url.searchParams.set('tab', 'connectors');
-    } else if (workspacePage === 'settings') {
-      url.searchParams.set('tab', 'settings');
-    } else if (workspacePage === 'workflows') {
-      url.searchParams.set('tab', 'workflows');
-    } else if (studioView === 'execution') {
-      url.searchParams.set('tab', 'executions');
-    } else {
-      url.searchParams.set('tab', 'studio');
-    }
-
-    if (selectedExecutionId) {
-      url.searchParams.set('execution', selectedExecutionId);
-    } else {
-      url.searchParams.delete('execution');
-    }
-
-    if (logsPopoutMode === 'popout') {
-      url.searchParams.set('logs', 'popout');
-    } else {
-      url.searchParams.delete('logs');
-    }
-
-    window.history.replaceState(
-      null,
-      '',
-      `${url.pathname}${url.search}`,
-    );
+    window.history.replaceState(null, '', buildStudioRoute({
+      workflowId: selectedWorkflowId || undefined,
+      scriptId: selectedScriptId || undefined,
+      template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
+      tab,
+      draftMode:
+        !selectedWorkflowId &&
+        !templateWorkflow &&
+        draftMode === 'new'
+          ? 'new'
+          : undefined,
+      legacySource:
+        !selectedWorkflowId &&
+        !templateWorkflow &&
+        draftMode === 'new' &&
+        legacySource === 'playground'
+          ? 'playground'
+          : undefined,
+      executionId: selectedExecutionId || undefined,
+      logsMode: logsPopoutMode === 'popout' ? 'popout' : undefined,
+    }));
   }, [
     draftMode,
     legacySource,
     logsPopoutMode,
     selectedExecutionId,
+    selectedScriptId,
     selectedWorkflowId,
     studioView,
     templateWorkflow,
@@ -1258,8 +1507,36 @@ const StudioPage: React.FC = () => {
     activeWorkflowFile?.document?.description ||
     activeTemplate?.catalog.description ||
     '';
-  const activeWorkflowDocument =
-    parseYamlQuery.data?.document || activeWorkflowFile?.document || null;
+  const parsedWorkflowDocument = parseYamlQuery.data?.document ?? null;
+  const templateWorkflowDocument = useMemo(
+    () => buildTemplateWorkflowDocument(activeTemplate?.definition),
+    [activeTemplate?.definition],
+  );
+  const useTemplateWorkflowFallback =
+    Boolean(templateWorkflow) &&
+    trimOptional(draftYaml) === trimOptional(sourceYaml) &&
+    !hasWorkflowGraphContent(parsedWorkflowDocument) &&
+    hasWorkflowGraphContent(templateWorkflowDocument);
+  const activeWorkflowDocument = useMemo(() => {
+    if (useTemplateWorkflowFallback) {
+      return templateWorkflowDocument;
+    }
+
+    if (parsedWorkflowDocument) {
+      return parsedWorkflowDocument;
+    }
+
+    if (activeWorkflowFile?.document) {
+      return activeWorkflowFile.document;
+    }
+
+    return templateWorkflowDocument;
+  }, [
+    activeWorkflowFile?.document,
+    parsedWorkflowDocument,
+    templateWorkflowDocument,
+    useTemplateWorkflowFallback,
+  ]);
   const activeWorkflowFindings = parseYamlQuery.data?.findings ?? [];
   const workflowGraph = useMemo(
     () => buildStudioGraphElements(activeWorkflowDocument, draftWorkflowLayout),
@@ -1282,13 +1559,104 @@ const StudioPage: React.FC = () => {
     Boolean(draftWorkflowName.trim()) &&
     Boolean(draftDirectoryId) &&
     !savePending;
-  const canRunWorkflow =
+  const canOpenRunWorkflow =
     Boolean(draftYaml.trim()) &&
     Boolean(activeWorkflowName.trim()) &&
-    Boolean(runPrompt.trim()) &&
+    Boolean(resolvedStudioScopeId) &&
     !runPending &&
     !parseYamlQuery.isLoading &&
     !hasValidationError(activeWorkflowFindings);
+  const canRunWorkflow =
+    canOpenRunWorkflow && Boolean(runPrompt.trim());
+  const canPublishWorkflow =
+    Boolean(draftYaml.trim()) &&
+    Boolean(activeWorkflowName.trim()) &&
+    Boolean(resolvedStudioScopeId) &&
+    !publishPending &&
+    !parseYamlQuery.isLoading &&
+    !hasValidationError(activeWorkflowFindings);
+  const buildWorkflowYamlBundle = useCallback(async (): Promise<string[]> => {
+    const rootYaml = draftYaml.trim();
+    if (!rootYaml) {
+      throw new Error('Workflow YAML is required.');
+    }
+
+    const workspaceWorkflows = workflowsQuery.data ?? [];
+    const availableWorkflowNames = workspaceWorkflows.map((item) => item.name);
+    const workflowIdsByName = new Map(
+      workspaceWorkflows.map((item) => [item.name, item.workflowId]),
+    );
+    const bundle: string[] = [];
+    const seen = new Set<string>();
+    const queue: Array<{
+      workflowName: string;
+      yaml: string;
+      document: StudioWorkflowDocument | null | undefined;
+    }> = [
+      {
+        workflowName: activeWorkflowName.trim() || draftWorkflowName.trim(),
+        yaml: rootYaml,
+        document: activeWorkflowDocument,
+      },
+    ];
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+
+      const normalizedWorkflowName = trimOptional(current.workflowName);
+      if (normalizedWorkflowName && seen.has(normalizedWorkflowName)) {
+        continue;
+      }
+
+      if (normalizedWorkflowName) {
+        seen.add(normalizedWorkflowName);
+      }
+      bundle.push(current.yaml);
+
+      for (const targetWorkflow of readWorkflowCallTargets(current.document)) {
+        if (seen.has(targetWorkflow)) {
+          continue;
+        }
+
+        const workflowId = workflowIdsByName.get(targetWorkflow);
+        if (!workflowId) {
+          throw new Error(
+            `workflow_call references '${targetWorkflow}', but Studio could not resolve it from the workspace.`,
+          );
+        }
+
+        const workflowFile = await studioApi.getWorkflow(workflowId);
+        const childDocument =
+          workflowFile.document ??
+          (
+            await studioApi.parseYaml({
+              yaml: workflowFile.yaml,
+              availableWorkflowNames,
+              availableStepTypes,
+            })
+          ).document ??
+          null;
+
+        queue.push({
+          workflowName: trimOptional(workflowFile.name) || targetWorkflow,
+          yaml: workflowFile.yaml,
+          document: childDocument,
+        });
+      }
+    }
+
+    return bundle;
+  }, [
+    activeWorkflowDocument,
+    activeWorkflowName,
+    availableStepTypes,
+    draftWorkflowName,
+    draftYaml,
+    workflowsQuery.data,
+  ]);
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
     [promptHistory],
@@ -1551,6 +1919,7 @@ const StudioPage: React.FC = () => {
   };
 
   const resetDraftFromSource = () => {
+    setDraftSourceKey(activeWorkflowSourceKey);
     setDraftYaml(sourceYaml);
     setDraftWorkflowName(sourceWorkflowName);
     setDraftFileName(sourceFileName);
@@ -1559,6 +1928,66 @@ const StudioPage: React.FC = () => {
     setSaveNotice(null);
     void parseYamlQuery.refetch();
   };
+
+  const ensureActiveWorkflowDraftLoaded = useCallback(() => {
+    if (activeWorkflowSourceKey && activeSourceReady) {
+      if (
+        draftSourceKey !== activeWorkflowSourceKey ||
+        !draftYaml.trim() ||
+        !draftWorkflowName.trim()
+      ) {
+        setDraftSourceKey(activeWorkflowSourceKey);
+        setDraftYaml(sourceYaml);
+        setDraftWorkflowName(sourceWorkflowName);
+        setDraftFileName(sourceFileName);
+        setDraftDirectoryId(sourceDirectoryId);
+        setDraftWorkflowLayout(sourceWorkflowLayout);
+        setSaveNotice(null);
+      }
+      return;
+    }
+
+    const fallbackWorkflowId =
+      selectedWorkflowId || workflowsQuery.data?.[0]?.workflowId || '';
+    if (fallbackWorkflowId) {
+      setSelectedWorkflowId(fallbackWorkflowId);
+      setTemplateWorkflow('');
+      setDraftMode('');
+      setLegacySource('');
+      return;
+    }
+
+    setSelectedWorkflowId('');
+    setTemplateWorkflow('');
+    setDraftMode('new');
+    setLegacySource('');
+    setDraftDirectoryId((current) => current || defaultDirectoryId);
+    setDraftWorkflowLayout(null);
+  }, [
+    activeSourceReady,
+    activeWorkflowSourceKey,
+    defaultDirectoryId,
+    draftSourceKey,
+    draftWorkflowName,
+    draftYaml,
+    selectedWorkflowId,
+    sourceDirectoryId,
+    sourceFileName,
+    sourceWorkflowLayout,
+    sourceWorkflowName,
+    sourceYaml,
+    workflowsQuery.data,
+  ]);
+
+  const handleSwitchStudioView = useCallback(
+    (view: StudioViewMode) => {
+      if (view === 'editor') {
+        ensureActiveWorkflowDraftLoaded();
+      }
+      setStudioView(view);
+    },
+    [ensureActiveWorkflowDraftLoaded],
+  );
 
   const handleSaveDraft = async () => {
     const directoryId = draftDirectoryId || defaultDirectoryId;
@@ -1665,10 +2094,11 @@ const StudioPage: React.FC = () => {
   const handleStartExecution = async () => {
     const workflowName = activeWorkflowName.trim();
     const prompt = runPrompt.trim();
+    const scopeId = resolvedStudioScopeId;
     if (!workflowName) {
       setRunNotice({
         type: 'error',
-        message: 'Workflow name is required before starting a Studio execution.',
+        message: 'Workflow name is required before starting a draft run.',
       });
       return;
     }
@@ -1676,7 +2106,7 @@ const StudioPage: React.FC = () => {
     if (!draftYaml.trim()) {
       setRunNotice({
         type: 'error',
-        message: 'Workflow YAML is required before starting a Studio execution.',
+        message: 'Workflow YAML is required before starting a draft run.',
       });
       return;
     }
@@ -1684,7 +2114,7 @@ const StudioPage: React.FC = () => {
     if (!prompt) {
       setRunNotice({
         type: 'error',
-        message: 'Execution prompt is required before starting a Studio execution.',
+        message: 'Execution prompt is required before starting a draft run.',
       });
       return;
     }
@@ -1692,7 +2122,15 @@ const StudioPage: React.FC = () => {
     if (hasValidationError(activeWorkflowFindings)) {
       setRunNotice({
         type: 'error',
-        message: 'Resolve Studio YAML validation errors before starting a Studio execution.',
+        message: 'Resolve Studio YAML validation errors before starting a draft run.',
+      });
+      return;
+    }
+
+    if (!scopeId) {
+      setRunNotice({
+        type: 'error',
+        message: 'Resolve the current scope before starting a draft run.',
       });
       return;
     }
@@ -1701,54 +2139,357 @@ const StudioPage: React.FC = () => {
     setRunNotice(null);
 
     try {
-      const execution = await studioApi.startExecution({
-        workflowName,
-        prompt,
-        workflowYamls: [draftYaml],
-        runtimeBaseUrl: workspaceSettingsQuery.data?.runtimeBaseUrl,
+      const workflowYamls = await buildWorkflowYamlBundle();
+      const draftKey = saveScopeDraftRunPayload({
+        bundleName: workflowName,
+        bundleYamls: workflowYamls,
       });
-
-      queryClient.setQueryData(
-        ['studio-execution', execution.executionId],
-        execution,
-      );
-      queryClient.setQueryData(
-        ['studio-executions'],
-        (current: StudioExecutionSummary[] | undefined) => {
-          const next = [
-            toExecutionSummary(execution),
-            ...(current ?? []).filter(
-              (item) => item.executionId !== execution.executionId,
-            ),
-          ];
-
-          return next;
-        },
-      );
-
-      setSelectedExecutionId(execution.executionId);
-      setWorkspacePage('studio');
-      setStudioView('execution');
       setPromptHistory(
         savePlaygroundPromptHistoryEntry({
           prompt,
           workflowName,
         }),
       );
-      setRunNotice({
-        type: 'success',
-        message: `Started Studio execution for ${execution.workflowName}.`,
-      });
+      history.push(
+        buildRuntimeRunsHref({
+          scopeId,
+          route: workflowName,
+          prompt,
+          draftKey,
+        }),
+      );
     } catch (error) {
       setRunNotice({
         type: 'error',
         message:
           error instanceof Error
             ? error.message
-            : 'Failed to start Studio execution.',
+            : 'Failed to open the draft run console.',
       });
     } finally {
       setRunPending(false);
+    }
+  };
+
+  const handlePublishWorkflow = async () => {
+    const workflowName = activeWorkflowName.trim();
+    const scopeId = resolvedStudioScopeId;
+    if (!workflowName) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Workflow name is required before binding the current scope.',
+      });
+      return;
+    }
+
+    if (!draftYaml.trim()) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Workflow YAML is required before binding the current scope.',
+      });
+      return;
+    }
+
+    if (hasValidationError(activeWorkflowFindings)) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve Studio YAML validation errors before binding the current scope.',
+      });
+      return;
+    }
+
+    if (!scopeId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope before binding the current workflow.',
+      });
+      return;
+    }
+
+    setPublishPending(true);
+    setPublishNotice(null);
+
+    try {
+      const workflowYamls = await buildWorkflowYamlBundle();
+      const result = await studioApi.bindScopeWorkflow({
+        scopeId,
+        displayName: workflowName,
+        workflowYamls,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+      setPublishNotice({
+        type: 'success',
+        message: `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} on revision ${result.revisionId}.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to bind the current workflow to the scope.',
+      });
+    } finally {
+      setPublishPending(false);
+    }
+  };
+
+  const handleBindGAgent = async (input: {
+    displayName?: string;
+    actorTypeName: string;
+    endpoints?: Array<{
+      endpointId: string;
+      displayName?: string;
+      kind?: 'command' | 'chat';
+      requestTypeUrl?: string;
+      responseTypeUrl?: string;
+      description?: string;
+    }>;
+    openRunsEndpointId?: string;
+    endpointId?: string;
+    endpointDisplayName?: string;
+    requestTypeUrl?: string;
+    responseTypeUrl?: string;
+    description?: string;
+    prompt?: string;
+    payloadBase64?: string;
+  }, options?: {
+    openRuns?: boolean;
+  }) => {
+    const scopeId = resolvedStudioScopeId;
+    const actorTypeName = input.actorTypeName.trim();
+    const normalizedEndpoints: StudioScopeGAgentEndpointInput[] = (
+      input.endpoints?.length
+        ? input.endpoints
+        : input.endpointId?.trim()
+        ? [
+            {
+              endpointId: input.endpointId,
+              displayName: input.endpointDisplayName,
+              kind: 'command',
+              requestTypeUrl: input.requestTypeUrl,
+              responseTypeUrl: input.responseTypeUrl,
+              description: input.description,
+            },
+          ]
+        : []
+    )
+      .map((endpoint) => {
+        const endpointId = trimOptional(endpoint.endpointId);
+        const kind: StudioScopeGAgentEndpointInput['kind'] =
+          endpoint.kind === 'chat' ? 'chat' : 'command';
+        const requestTypeUrl = trimOptional(endpoint.requestTypeUrl);
+        const responseTypeUrl = trimOptional(endpoint.responseTypeUrl);
+        const description = trimOptional(endpoint.description);
+        return {
+          endpointId,
+          displayName:
+            trimOptional(endpoint.displayName) || endpointId || undefined,
+          kind,
+          requestTypeUrl:
+            requestTypeUrl || (kind === 'command' ? getStringValueTypeUrl() : undefined),
+          responseTypeUrl: responseTypeUrl || undefined,
+          description: description || undefined,
+        };
+      })
+      .filter((endpoint) => endpoint.endpointId.length > 0);
+    const launchEndpoint =
+      normalizedEndpoints.find(
+        (endpoint) =>
+          endpoint.endpointId === trimOptional(input.openRunsEndpointId),
+      ) ||
+      normalizedEndpoints[0] ||
+      null;
+    const launchPayloadTypeUrl =
+      trimOptional(launchEndpoint?.requestTypeUrl) || getStringValueTypeUrl();
+
+    if (!scopeId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope before binding a GAgent service.',
+      });
+      return;
+    }
+
+    if (!actorTypeName) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Actor type name is required before binding a GAgent service.',
+      });
+      return;
+    }
+
+    if (normalizedEndpoints.length === 0) {
+      setPublishNotice({
+        type: 'error',
+        message: 'At least one endpoint is required before binding a GAgent service.',
+      });
+      return;
+    }
+
+    if (
+      options?.openRuns &&
+      launchEndpoint?.kind !== 'chat' &&
+      !isAutoEncodableTextPayloadTypeUrl(launchPayloadTypeUrl) &&
+      !input.payloadBase64?.trim()
+    ) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Custom request payload types require payload base64 before opening Runs.',
+      });
+      return;
+    }
+
+    setPublishPending(true);
+    setPublishNotice(null);
+
+    try {
+      const result = await studioApi.bindScopeGAgent({
+        scopeId,
+        displayName:
+          input.displayName?.trim() ||
+          launchEndpoint?.displayName?.trim() ||
+          launchEndpoint?.endpointId ||
+          actorTypeName,
+        actorTypeName,
+        endpoints: normalizedEndpoints,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+
+      if (options?.openRuns) {
+        const launchEndpointKind =
+          launchEndpoint?.kind === 'chat' ? 'chat' : 'command';
+        if (launchEndpoint?.kind === 'chat') {
+          history.push(
+            buildRuntimeRunsHref({
+              scopeId,
+              endpointId: launchEndpoint.endpointId,
+              endpointKind: launchEndpointKind,
+              prompt: input.prompt?.trim() || undefined,
+            }),
+          );
+        } else if (launchEndpoint) {
+          const draftKey = saveEndpointInvocationDraftPayload({
+            endpointId: launchEndpoint.endpointId,
+            endpointKind: launchEndpointKind,
+            prompt: input.prompt?.trim() || '',
+            payloadTypeUrl: launchPayloadTypeUrl,
+            payloadBase64: input.payloadBase64?.trim() || undefined,
+          });
+          if (!draftKey) {
+            throw new Error('Failed to prepare the GAgent run draft.');
+          }
+
+          history.push(
+            buildRuntimeRunsHref({
+              scopeId,
+              endpointId: launchEndpoint.endpointId,
+              endpointKind: launchEndpointKind,
+              prompt: input.prompt?.trim() || undefined,
+              draftKey,
+            }),
+          );
+        }
+      }
+
+      setPublishNotice({
+        type: 'success',
+        message: options?.openRuns
+          ? `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} and opened Runs for endpoint ${launchEndpoint?.endpointId || normalizedEndpoints[0]?.endpointId || 'run'}.`
+          : `Updated scope ${result.scopeId} to serve ${describeScopeBindingTarget(result)} on revision ${result.revisionId}.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to bind the current scope to the GAgent service.',
+      });
+    } finally {
+      setPublishPending(false);
+    }
+  };
+
+  const handleActivateBindingRevision = async (revisionId: string) => {
+    const scopeId = resolvedStudioScopeId;
+    const normalizedRevisionId = revisionId.trim();
+    if (!scopeId || !normalizedRevisionId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope and revision before activating a binding.',
+      });
+      return;
+    }
+
+    setBindingActivationRevisionId(normalizedRevisionId);
+    setPublishNotice(null);
+
+    try {
+      const result = await studioApi.activateScopeBindingRevision({
+        scopeId,
+        revisionId: normalizedRevisionId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+      setPublishNotice({
+        type: 'success',
+        message: `Scope ${result.scopeId} is now serving revision ${result.revisionId}.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to activate the selected binding revision.',
+      });
+    } finally {
+      setBindingActivationRevisionId('');
+    }
+  };
+
+  const handleRetireBindingRevision = async (revisionId: string) => {
+    const scopeId = resolvedStudioScopeId;
+    const normalizedRevisionId = revisionId.trim();
+    if (!scopeId || !normalizedRevisionId) {
+      setPublishNotice({
+        type: 'error',
+        message: 'Resolve the current scope and revision before retiring a binding.',
+      });
+      return;
+    }
+
+    setBindingRetirementRevisionId(normalizedRevisionId);
+    setPublishNotice(null);
+
+    try {
+      const result = await studioApi.retireScopeBindingRevision({
+        scopeId,
+        revisionId: normalizedRevisionId,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ['studio-scope-binding', scopeId],
+      });
+      setPublishNotice({
+        type: 'success',
+        message: `Scope ${result.scopeId} accepted revision ${result.revisionId} for retirement.`,
+      });
+    } catch (error) {
+      setPublishNotice({
+        type: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'Failed to retire the selected binding revision.',
+      });
+    } finally {
+      setBindingRetirementRevisionId('');
     }
   };
 
@@ -1856,6 +2597,7 @@ const StudioPage: React.FC = () => {
     const parsed = await studioApi.parseYaml({
       yaml,
       availableWorkflowNames: workflowNames,
+      availableStepTypes,
     });
 
     setSelectedWorkflowId('');
@@ -2454,8 +3196,7 @@ const StudioPage: React.FC = () => {
     setSettingsNotice(null);
     try {
       const response = await studioApi.saveSettings({
-        runtimeBaseUrl:
-          studioHostMode === 'proxy' ? settingsDraft.runtimeBaseUrl : undefined,
+        runtimeBaseUrl: settingsDraft.runtimeBaseUrl,
         defaultProviderName: settingsDraft.defaultProviderName,
         providers: settingsDraft.providers.map((provider) => ({
           providerName: provider.providerName,
@@ -2512,11 +3253,9 @@ const StudioPage: React.FC = () => {
     setRuntimeTestResult(null);
     try {
       const response =
-        studioHostMode === 'proxy'
-          ? await studioApi.testRuntimeConnection({
+        await studioApi.testRuntimeConnection({
               runtimeBaseUrl: settingsDraft.runtimeBaseUrl,
-            })
-          : await studioApi.testRuntimeConnection({});
+            });
       setRuntimeTestResult(response);
     } catch (error) {
       setSettingsNotice({
@@ -2610,6 +3349,7 @@ const StudioPage: React.FC = () => {
     const serialized = await studioApi.serializeYaml({
       document: nextPayload.document,
       availableWorkflowNames: workflowNames,
+      availableStepTypes,
     });
 
     setDraftYaml(serialized.yaml);
@@ -3251,42 +3991,70 @@ const StudioPage: React.FC = () => {
     }
   };
 
-  const navItems = [
+  const navItems: StudioShellNavItem[] = [
     {
-      key: 'workflows' as const,
+      key: 'workflows',
       label: 'Workflows',
       description: 'Browse workspace workflows and start new drafts.',
       count: workflowsQuery.data?.length ?? 0,
     },
     {
-      key: 'studio' as const,
+      key: 'studio',
       label: 'Studio',
       description: 'Edit the active draft and inspect execution runs.',
       count: executionsQuery.data?.length ?? 0,
     },
     {
-      key: 'roles' as const,
+      key: 'roles',
       label: 'Roles',
       description: 'Edit, import, and save workflow role definitions.',
       count: rolesQuery.data?.roles.length ?? 0,
     },
     {
-      key: 'connectors' as const,
+      key: 'connectors',
       label: 'Connectors',
       description: 'Edit, import, and save Studio connectors.',
       count: connectorsQuery.data?.connectors.length ?? 0,
     },
     {
-      key: 'settings' as const,
-      label: 'Config',
-      description: 'Manage runtime, workflow sources, and provider config.',
+      key: 'settings',
+      label: 'Workspace settings',
+      description: 'Manage AI providers and review runtime and workflow setup.',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
   ];
+  if (appContextQuery.data?.features.scripts) {
+    navItems.splice(2, 0, {
+      key: 'scripts',
+      label: 'Scripts',
+      description: 'Author, validate, run, and promote scope-aware scripts.',
+    });
+  }
+
+  const applyWorkspacePageSelection = React.useCallback(
+    (page: StudioWorkspacePage) => {
+      if (page === 'studio') {
+        ensureActiveWorkflowDraftLoaded();
+      }
+      setWorkspacePage(page);
+      if (page === 'studio' && studioView !== 'execution') {
+        setStudioView('editor');
+      }
+      if (page === 'scripts') {
+        setSelectedWorkflowId('');
+        setTemplateWorkflow('');
+        setDraftMode('');
+        setLegacySource('');
+      }
+    },
+    [ensureActiveWorkflowDraftLoaded, studioView],
+  );
 
   const pageTitle =
     workspacePage === 'workflows'
       ? 'Workflows'
+      : workspacePage === 'scripts'
+        ? 'Scripts Studio'
       : workspacePage === 'studio'
         ? studioView === 'execution'
           ? 'Studio execution view'
@@ -3295,23 +4063,29 @@ const StudioPage: React.FC = () => {
           ? 'Role catalog'
           : workspacePage === 'connectors'
             ? 'Connector catalog'
-            : 'Config';
+            : 'Workspace settings';
 
   const pageToolbar =
     workspacePage === 'studio' ? (
       <Space wrap size={[8, 8]}>
         <Button
           type={studioView === 'editor' ? 'primary' : 'default'}
-          onClick={() => setStudioView('editor')}
+          onClick={() => handleSwitchStudioView('editor')}
         >
           Edit
         </Button>
         <Button
           type={studioView === 'execution' ? 'primary' : 'default'}
-          onClick={() => setStudioView('execution')}
+          onClick={() => handleSwitchStudioView('execution')}
         >
           Runs
         </Button>
+        <Button onClick={() => setWorkspacePage('workflows')}>
+          Workflow library
+        </Button>
+      </Space>
+    ) : workspacePage === 'scripts' ? (
+      <Space wrap size={[8, 8]}>
         <Button onClick={() => setWorkspacePage('workflows')}>
           Workflow library
         </Button>
@@ -3320,7 +4094,7 @@ const StudioPage: React.FC = () => {
 
   const workspaceAlerts = (
     <StudioWorkspaceAlerts
-      authSession={authSessionQuery.data}
+      authSession={authRecoveryPending ? null : authSessionQuery.data}
       templateWorkflow={templateWorkflow}
       draftMode={draftMode}
       legacySource={legacySource}
@@ -3382,45 +4156,55 @@ const StudioPage: React.FC = () => {
 
   const currentPageContent =
     workspacePage === 'workflows' ? (
-      <StudioWorkflowsPage
-        workflows={workflowsQuery}
-        workspaceSettings={workspaceSettingsQuery}
-        workflowStorageMode={
-          appContextQuery.data?.workflowStorageMode || 'workspace'
-        }
-        selectedWorkflowId={selectedWorkflowId}
-        selectedDirectoryId={draftDirectoryId || defaultDirectoryId}
-        templateWorkflow={templateWorkflow}
-        draftMode={draftMode}
-        activeWorkflowName={activeWorkflowName}
-        activeWorkflowDescription={activeWorkflowDescription}
-        activeWorkflowSourceKey={activeWorkflowSourceKey}
-        workflowSearch={workflowSearch}
-        workflowLayout={workflowLayout}
-        showDirectoryForm={showWorkflowDirectoryForm}
-        directoryPath={directoryPath}
-        directoryLabel={directoryLabel}
-        workflowImportPending={workflowImportPending}
-        workflowImportInputRef={workflowImportInputRef}
-        onOpenWorkflow={openWorkspaceWorkflow}
-        onStartBlankDraft={startBlankDraft}
-        onOpenCurrentDraft={() => {
-          setWorkspacePage('studio');
-          setStudioView('editor');
+      <div
+        data-testid="studio-workflows-viewport"
+        style={{
+          display: 'flex',
+          flex: 1,
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
-        onSelectDirectoryId={setDraftDirectoryId}
-        onSetWorkflowSearch={setWorkflowSearch}
-        onSetWorkflowLayout={setWorkflowLayout}
-        onToggleDirectoryForm={() =>
-          setShowWorkflowDirectoryForm((current) => !current)
-        }
-        onSetDirectoryPath={setDirectoryPath}
-        onSetDirectoryLabel={setDirectoryLabel}
-        onAddDirectory={() => void handleAddDirectory()}
-        onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
-        onWorkflowImportClick={() => workflowImportInputRef.current?.click()}
-        onWorkflowImportChange={handleWorkflowImport}
-      />
+      >
+        <StudioWorkflowsPage
+          workflows={workflowsQuery}
+          workspaceSettings={workspaceSettingsQuery}
+          workflowStorageMode={
+            appContextQuery.data?.workflowStorageMode || 'workspace'
+          }
+          selectedWorkflowId={selectedWorkflowId}
+          selectedDirectoryId={draftDirectoryId || defaultDirectoryId}
+          templateWorkflow={templateWorkflow}
+          draftMode={draftMode}
+          activeWorkflowName={activeWorkflowName}
+          activeWorkflowDescription={activeWorkflowDescription}
+          activeWorkflowSourceKey={activeWorkflowSourceKey}
+          workflowSearch={workflowSearch}
+          showDirectoryForm={showWorkflowDirectoryForm}
+          directoryPath={directoryPath}
+          directoryLabel={directoryLabel}
+          workflowImportPending={workflowImportPending}
+          workflowImportInputRef={workflowImportInputRef}
+          onOpenWorkflow={openWorkspaceWorkflow}
+          onStartBlankDraft={startBlankDraft}
+          onOpenCurrentDraft={() => {
+            ensureActiveWorkflowDraftLoaded();
+            setWorkspacePage('studio');
+            setStudioView('editor');
+          }}
+          onSelectDirectoryId={setDraftDirectoryId}
+          onSetWorkflowSearch={setWorkflowSearch}
+          onToggleDirectoryForm={() =>
+            setShowWorkflowDirectoryForm((current) => !current)
+          }
+          onSetDirectoryPath={setDirectoryPath}
+          onSetDirectoryLabel={setDirectoryLabel}
+          onAddDirectory={() => void handleAddDirectory()}
+          onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
+          onWorkflowImportClick={() => workflowImportInputRef.current?.click()}
+          onWorkflowImportChange={handleWorkflowImport}
+        />
+      </div>
     ) : workspacePage === 'studio' ? (
       studioView === 'execution' ? (
         <StudioExecutionPage
@@ -3434,6 +4218,7 @@ const StudioPage: React.FC = () => {
           savePending={savePending}
           canSaveWorkflow={canSaveWorkflow}
           runPending={runPending}
+          canOpenRunWorkflow={canOpenRunWorkflow}
           canRunWorkflow={canRunWorkflow}
           executionCanStop={executionCanStop}
           executionStopPending={executionStopPending}
@@ -3441,7 +4226,7 @@ const StudioPage: React.FC = () => {
           executionNotice={executionNotice}
           logsPopoutMode={logsPopoutMode === 'popout'}
           logsDetached={logsDetached}
-          onSwitchStudioView={setStudioView}
+          onSwitchStudioView={handleSwitchStudioView}
           onOpenExecution={openExecution}
           onSaveDraft={() => void handleSaveDraft()}
           onExportDraft={() => void handleExportDraft()}
@@ -3494,9 +4279,22 @@ const StudioPage: React.FC = () => {
           recentPromptHistory={recentPromptHistory}
           promptHistoryCount={promptHistory.length}
           runPending={runPending}
+          canOpenRunWorkflow={canOpenRunWorkflow}
           canRunWorkflow={canRunWorkflow}
           runNotice={runNotice}
-          onSwitchStudioView={setStudioView}
+          resolvedScopeId={resolvedStudioScopeId || undefined}
+          publishPending={publishPending}
+          canPublishWorkflow={canPublishWorkflow}
+          publishNotice={publishNotice}
+          scopeBinding={scopeBindingQuery.data}
+          scopeBindingLoading={scopeBindingQuery.isLoading}
+          scopeBindingError={scopeBindingQuery.isError ? scopeBindingQuery.error : null}
+          gAgentTypes={gAgentTypesQuery.data ?? []}
+          gAgentTypesLoading={gAgentTypesQuery.isLoading}
+          gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
+          bindingActivationRevisionId={bindingActivationRevisionId}
+          bindingRetirementRevisionId={bindingRetirementRevisionId}
+          onSwitchStudioView={handleSwitchStudioView}
           onExportDraft={() => void handleExportDraft()}
           onSelectGraphNode={(nodeId) => {
             setSelectedGraphNodeId(nodeId);
@@ -3549,14 +4347,50 @@ const StudioPage: React.FC = () => {
           onWorkflowImportChange={handleWorkflowImport}
           onResetDraft={resetDraftFromSource}
           onSaveDraft={() => void handleSaveDraft()}
+          onPublishWorkflow={() => void handlePublishWorkflow()}
+          onBindGAgent={(input, options) =>
+            handleBindGAgent(input, options)
+          }
+          onActivateBindingRevision={(revisionId) =>
+            void handleActivateBindingRevision(revisionId)
+          }
+          onRetireBindingRevision={(revisionId) =>
+            void handleRetireBindingRevision(revisionId)
+          }
           onInspectPublishedWorkflow={() =>
             history.push(
-              `/workflows?workflow=${encodeURIComponent(templateWorkflow)}`,
+              buildRuntimeWorkflowsHref({
+                workflow: templateWorkflow,
+              }),
             )
           }
-          onRunInConsole={() =>
-            history.push(`/runs?workflow=${encodeURIComponent(templateWorkflow)}`)
-          }
+          onRunInConsole={async () => {
+            const workflowName = (activeWorkflowName || templateWorkflow || '').trim();
+            const scopeId = resolvedStudioScopeId;
+            try {
+              const workflowYamls = await buildWorkflowYamlBundle();
+              const draftKey = saveScopeDraftRunPayload({
+                bundleName: workflowName,
+                bundleYamls: workflowYamls,
+              });
+              history.push(
+                buildRuntimeRunsHref({
+                  scopeId: scopeId || undefined,
+                  route: workflowName || undefined,
+                  prompt: runPrompt || undefined,
+                  draftKey,
+                }),
+              );
+            } catch {
+              history.push(
+                buildRuntimeRunsHref({
+                  scopeId: scopeId || undefined,
+                  route: workflowName || undefined,
+                  prompt: runPrompt || undefined,
+                }),
+              );
+            }
+          }}
           onAskAiPromptChange={(value) => {
             setAskAiPrompt(value);
             setAskAiNotice(null);
@@ -3567,11 +4401,56 @@ const StudioPage: React.FC = () => {
           onReusePrompt={applyRunPrompt}
           onOpenWorkflowFromHistory={openWorkflowFromHistory}
           onStartExecution={() => void handleStartExecution()}
+          onOpenProjectOverview={() => {
+            history.push(
+              resolvedStudioScopeId
+                ? `/scopes/overview?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
+                : '/scopes/overview',
+            );
+          }}
+          onOpenProjectInvoke={() => {
+            history.push(
+              resolvedStudioScopeId
+                ? `/scopes/invoke?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
+                : '/scopes/invoke',
+            );
+          }}
           onOpenExecutions={() => {
             setWorkspacePage('studio');
             setStudioView('execution');
           }}
         />
+      )
+    ) : workspacePage === 'scripts' ? (
+      appContextQuery.data?.features.scripts ? (
+        <ScriptsWorkbenchPage
+          appContext={appContextQuery.data}
+          initialScriptId={selectedScriptId}
+          onUnsavedChangesChange={setScriptsHasUnsavedChanges}
+          onSelectScriptId={setSelectedScriptId}
+        />
+      ) : (
+        <div
+          style={{
+            ...embeddedPanelStyle,
+            background: 'rgba(255, 251, 230, 0.96)',
+            borderColor: 'rgba(250, 173, 20, 0.28)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <strong>Scripts Studio is unavailable in the current host.</strong>
+            <span style={{ color: 'var(--ant-color-text-secondary)' }}>
+              The current Studio host does not expose the Scripts capability for
+              this session.
+            </span>
+          </div>
+        </div>
       )
     ) : workspacePage === 'roles' ? (
       <StudioRolesPage
@@ -3647,76 +4526,90 @@ const StudioPage: React.FC = () => {
         onUpdateConnectorCatalog={updateConnectorCatalogDraft}
       />
     ) : (
-      <StudioSettingsPage
-        workspaceSettings={workspaceSettingsQuery}
-        settings={settingsQuery}
-        settingsDraft={settingsDraft}
-        selectedProvider={selectedProvider}
-        hostMode={studioHostMode}
-        workflowStorageMode={
-          appContextQuery.data?.workflowStorageMode ?? 'workspace'
-        }
-        settingsDirty={settingsDirty}
-        settingsPending={settingsPending}
-        runtimeTestPending={runtimeTestPending}
-        settingsNotice={settingsNotice}
-        runtimeTestResult={runtimeTestResult}
-        directoryPath={directoryPath}
-        directoryLabel={directoryLabel}
-        onSaveSettings={() => void handleSaveSettings()}
-        onTestRuntime={() => void handleTestRuntime()}
-        onSetSettingsDraft={setSettingsDraft}
-        onAddProvider={() => {
-          if (!settingsDraft) {
-            return;
-          }
-
-          const nextProvider = createProviderDraft(
-            settingsDraft.providerTypes,
-            settingsDraft.providers,
-          );
-          setSettingsDraft({
-            ...settingsDraft,
-            providers: [nextProvider, ...settingsDraft.providers],
-            defaultProviderName:
-              settingsDraft.defaultProviderName || nextProvider.providerName,
-          });
-          setSelectedProviderName(nextProvider.providerName);
+      <div
+        style={{
+          display: 'flex',
+          flex: 1,
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
         }}
-        onSelectProviderName={setSelectedProviderName}
-        onDeleteSelectedProvider={() => {
-          if (!settingsDraft || !selectedProvider) {
-            return;
+      >
+        <StudioSettingsPage
+          workspaceSettings={workspaceSettingsQuery}
+          settings={settingsQuery}
+          settingsDraft={settingsDraft}
+          selectedProvider={selectedProvider}
+          hostMode={studioHostMode}
+          workflowStorageMode={
+            appContextQuery.data?.workflowStorageMode ?? 'workspace'
           }
+          settingsDirty={settingsDirty}
+          settingsPending={settingsPending}
+          runtimeTestPending={runtimeTestPending}
+          settingsNotice={settingsNotice}
+          runtimeTestResult={runtimeTestResult}
+          directoryPath={directoryPath}
+          directoryLabel={directoryLabel}
+          onSaveSettings={() => void handleSaveSettings()}
+          onTestRuntime={() => void handleTestRuntime()}
+          onSetSettingsDraft={setSettingsDraft}
+          onAddProvider={() => {
+            if (!settingsDraft) {
+              return;
+            }
 
-          const nextProviders = settingsDraft.providers.filter(
-            (provider) => provider.providerName !== selectedProvider.providerName,
-          );
-          setSettingsDraft({
-            ...settingsDraft,
-            providers: nextProviders,
-            defaultProviderName:
-              settingsDraft.defaultProviderName === selectedProvider.providerName
-                ? nextProviders[0]?.providerName || ''
-                : settingsDraft.defaultProviderName,
-          });
-          setSelectedProviderName(nextProviders[0]?.providerName || '');
-        }}
-        onSetDefaultProvider={() => {
-          if (!settingsDraft || !selectedProvider) {
-            return;
+            const nextProvider = createProviderDraft(
+              settingsDraft.providerTypes,
+              settingsDraft.providers,
+            );
+            setSettingsDraft({
+              ...settingsDraft,
+              providers: [nextProvider, ...settingsDraft.providers],
+              defaultProviderName:
+                settingsDraft.defaultProviderName || nextProvider.providerName,
+            });
+            setSelectedProviderName(nextProvider.providerName);
+          }}
+          onSelectProviderName={setSelectedProviderName}
+          onDeleteSelectedProvider={() => {
+            if (!settingsDraft || !selectedProvider) {
+              return;
+            }
+
+            const nextProviders = settingsDraft.providers.filter(
+              (provider) =>
+                provider.providerName !== selectedProvider.providerName,
+            );
+            setSettingsDraft({
+              ...settingsDraft,
+              providers: nextProviders,
+              defaultProviderName:
+                settingsDraft.defaultProviderName ===
+                selectedProvider.providerName
+                  ? nextProviders[0]?.providerName || ''
+                  : settingsDraft.defaultProviderName,
+            });
+            setSelectedProviderName(nextProviders[0]?.providerName || '');
+          }}
+          onSetDefaultProvider={() => {
+            if (!settingsDraft || !selectedProvider) {
+              return;
+            }
+
+            setSettingsDraft({
+              ...settingsDraft,
+              defaultProviderName: selectedProvider.providerName,
+            });
+          }}
+          onSetDirectoryPath={setDirectoryPath}
+          onSetDirectoryLabel={setDirectoryLabel}
+          onAddDirectory={() => void handleAddDirectory()}
+          onRemoveDirectory={(directoryId) =>
+            void handleRemoveDirectory(directoryId)
           }
-
-          setSettingsDraft({
-            ...settingsDraft,
-            defaultProviderName: selectedProvider.providerName,
-          });
-        }}
-        onSetDirectoryPath={setDirectoryPath}
-        onSetDirectoryLabel={setDirectoryLabel}
-        onAddDirectory={() => void handleAddDirectory()}
-        onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
-      />
+        />
+      </div>
     );
 
   const pageContainerTitle =
@@ -3727,7 +4620,7 @@ const StudioPage: React.FC = () => {
       <StudioBootstrapGate
         appContextLoading={appContextQuery.isLoading}
         appContextError={appContextQuery.isError ? appContextQuery.error : null}
-        authLoading={authSessionQuery.isLoading}
+        authLoading={authSessionQuery.isLoading || authRecoveryPending}
         authError={authSessionQuery.isError ? authSessionQuery.error : null}
         workspaceLoading={workspaceSettingsQuery.isLoading}
         workspaceError={
@@ -3741,23 +4634,49 @@ const StudioPage: React.FC = () => {
             alerts={workspaceAlerts}
             currentPage={workspacePage}
             navItems={navItems}
-            onSelectPage={(page) => {
-              setWorkspacePage(page);
-              if (page === 'studio' && studioView !== 'execution') {
-                setStudioView('editor');
+            onSelectPage={(page: StudioWorkspacePage) => {
+              if (
+                workspacePage === 'scripts' &&
+                page !== 'scripts' &&
+                scriptsHasUnsavedChanges
+              ) {
+                setPendingWorkspacePage(page);
+                return;
               }
+
+              applyWorkspacePageSelection(page);
             }}
             pageTitle={pageTitle}
             pageToolbar={pageToolbar}
             showPageHeader={
               workspacePage !== 'roles' &&
               workspacePage !== 'connectors' &&
-              workspacePage !== 'studio'
+              workspacePage !== 'studio' &&
+              workspacePage !== 'scripts'
             }
           >
             {currentPageContent}
           </StudioShell>
         )}
+        <Modal
+          open={Boolean(pendingWorkspacePage)}
+          title="Leave Scripts Studio?"
+          okText="Leave page"
+          cancelText="Continue editing"
+          onOk={() => {
+            if (pendingWorkspacePage) {
+              applyWorkspacePageSelection(pendingWorkspacePage);
+            }
+            setPendingWorkspacePage(null);
+          }}
+          onCancel={() => setPendingWorkspacePage(null)}
+        >
+          <div style={{ color: '#4b5563', lineHeight: 1.7 }}>
+            The current script changes have not been saved to Scope yet. Your
+            local draft will still be kept in this browser, but these changes
+            will not be visible in Scope until you save them.
+          </div>
+        </Modal>
       </StudioBootstrapGate>
     </PageContainer>
   );

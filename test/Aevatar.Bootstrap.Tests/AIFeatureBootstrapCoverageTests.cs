@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.Agents;
@@ -35,8 +36,9 @@ public class AIFeatureBootstrapCoverageTests
         {
             ["LLMProviders:Providers:deepseek:ApiKey"] = "deepseek-key",
         });
+        var configuration = new ConfigurationBuilder().Build();
 
-        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, options);
+        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, configuration, options);
 
         configuredProviders.Should().ContainSingle();
         var provider = configuredProviders[0];
@@ -44,6 +46,35 @@ public class AIFeatureBootstrapCoverageTests
         ReadConfiguredProviderString(provider, "ProviderType").Should().Be("deepseek");
         ReadConfiguredProviderString(provider, "Model").Should().Be("deepseek-default");
         ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://api.deepseek.com/v1");
+    }
+
+    [Fact]
+    public void ReadConfiguredProviders_WhenNyxIdAuthorityConfigured_ShouldResolveGatewayEndpoint()
+    {
+        var options = new AevatarAIFeatureOptions
+        {
+            OpenAIModel = "gpt-4o-mini",
+            DefaultProvider = "nyxid",
+        };
+        var secretsStore = new InMemorySecretsStore(new Dictionary<string, string>
+        {
+            ["LLMProviders:Providers:nyxid:ApiKey"] = "nyx-token",
+            ["LLMProviders:Providers:nyxid:ProviderType"] = "nyxid",
+            ["LLMProviders:Providers:nyxid:Model"] = "claude-sonnet-4-5-20250929",
+        });
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+            })
+            .Build();
+
+        var configuredProviders = InvokeReadConfiguredProviders(secretsStore, configuration, options);
+
+        configuredProviders.Should().ContainSingle();
+        var provider = configuredProviders[0];
+        ReadConfiguredProviderString(provider, "ProviderType").Should().Be("nyxid");
+        ReadConfiguredProviderString(provider, "Endpoint").Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
     }
 
     [Fact]
@@ -240,6 +271,37 @@ public class AIFeatureBootstrapCoverageTests
     }
 
     [Fact]
+    public void AddAevatarAIFeatures_WhenOnlyNyxIdProviderConfigured_ShouldRegisterNyxIdDefaultProvider()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+            })
+            .Build();
+
+        services.AddAevatarAIFeatures(config, options =>
+        {
+            options.EnableMEAIProviders = true;
+            options.EnableMEAIToTornadoFailover = false;
+            options.SecretsStore = new InMemorySecretsStore(new Dictionary<string, string>
+            {
+                ["LLMProviders:Providers:nyxid:ApiKey"] = "nyx-token",
+                ["LLMProviders:Providers:nyxid:ProviderType"] = "nyxid",
+                ["LLMProviders:Providers:nyxid:Model"] = "claude-sonnet-4-5-20250929",
+                ["LLMProviders:Default"] = "nyxid",
+            });
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var llmFactory = provider.GetRequiredService<ILLMProviderFactory>();
+
+        llmFactory.GetAvailableProviders().Should().ContainSingle().Which.Should().Be("nyxid");
+        llmFactory.GetDefault().Name.Should().Be("nyxid");
+    }
+
+    [Fact]
     public async Task AddAevatarAIFeatures_WhenMCPEnabledAndConfigured_ShouldRegisterMCPToolSourceAndConnectorBuilder()
     {
         var tempHome = Path.Combine(Path.GetTempPath(), $"ai-feature-mcp-{Guid.NewGuid():N}");
@@ -328,8 +390,43 @@ public class AIFeatureBootstrapCoverageTests
         connector.Name.Should().Be("mcp-b");
     }
 
+    [Fact]
+    public void MCPConnectorBuilder_ShouldSupportRemoteUrlConfiguration()
+    {
+        var builder = new MCPConnectorBuilder();
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "nyxid_mcp",
+            Type = "mcp",
+            TimeoutMs = 15000,
+            MCP = new MCPConnectorConfig
+            {
+                ServerName = "nyxid",
+                Url = "https://nyxid.example.com/mcp",
+                AdditionalHeaders = new Dictionary<string, string> { ["x-tenant"] = "demo" },
+                DefaultTool = "chrono-graph__query",
+                AllowedTools = ["chrono-graph__query"],
+            },
+        };
+
+        var ok = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+
+        ok.Should().BeTrue();
+        connector.Should().NotBeNull();
+        connector!.Type.Should().Be("mcp");
+        connector.Name.Should().Be("nyxid_mcp");
+
+        var serverConfigField = connector.GetType().GetField("_serverConfig", BindingFlags.Instance | BindingFlags.NonPublic);
+        serverConfigField.Should().NotBeNull();
+        var serverConfig = serverConfigField!.GetValue(connector).Should().BeOfType<MCPServerConfig>().Subject;
+        serverConfig.Url.Should().Be("https://nyxid.example.com/mcp");
+        serverConfig.HttpClient.Should().NotBeNull();
+        serverConfig.HttpClient!.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
+    }
+
     private static IReadOnlyList<object> InvokeReadConfiguredProviders(
         IAevatarSecretsStore secretsStore,
+        IConfiguration configuration,
         AevatarAIFeatureOptions options)
     {
         var method = typeof(global::Aevatar.Bootstrap.Extensions.AI.ServiceCollectionExtensions).GetMethod(
@@ -337,7 +434,7 @@ public class AIFeatureBootstrapCoverageTests
             BindingFlags.NonPublic | BindingFlags.Static);
         method.Should().NotBeNull();
 
-        var result = method!.Invoke(null, [secretsStore, options]);
+        var result = method!.Invoke(null, [secretsStore, configuration, options]);
         result.Should().NotBeNull();
         return ((IEnumerable)result!).Cast<object>().ToList();
     }

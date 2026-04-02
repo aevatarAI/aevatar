@@ -4,16 +4,22 @@ import {
   ProConfigProvider,
 } from "@ant-design/pro-components";
 import {
+  AppstoreOutlined,
+  DashboardOutlined,
   DownOutlined,
   LogoutOutlined,
+  MessageOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Avatar, ConfigProvider, Dropdown, Space, Typography } from "antd";
+import { Avatar, Badge, ConfigProvider, Dropdown, Typography } from "antd";
 import enUS from "antd/locale/en_US";
 import React from "react";
-import { history } from "@umijs/max";
+import MainLayout from "@/layouts/MainLayout";
+import { history } from "./shared/navigation/history";
+import { CONSOLE_HOME_ROUTE } from "@/shared/navigation/consoleHome";
 import BrandLogo from "@/components/BrandLogo";
 import defaultSettings from "../config/defaultSettings";
 import { errorConfig } from "./requestErrorConfig";
@@ -29,10 +35,16 @@ import {
   loadStoredAuthSession,
   sanitizeReturnTo,
 } from "./shared/auth/session";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
+import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
+import { readMissionControlRouteContext } from "@/pages/MissionControl/services/api";
+import { loadRecentRuns } from "@/shared/runs/recentRuns";
 import { queryClient } from "./shared/query/queryClient";
+import { aevatarThemeConfig } from "@/shared/ui/aevatarWorkbench";
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
-const DEFAULT_PROTECTED_ROUTE = "/overview";
+const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
 const STUDIO_HOST_ROUTES = new Set(["/studio"]);
 
 function isStudioHostRoute(pathname: string): boolean {
@@ -72,9 +84,530 @@ type LayoutRuntimeProps = {
   initialState?: RuntimeInitialState;
 };
 
+type LiveOpsAttentionSnapshot = {
+  hasPendingAttention: boolean;
+  pendingCount: number;
+};
+
+type LiveOpsAttentionCandidate = {
+  actorId?: string;
+  runId?: string;
+  scopeId?: string;
+  serviceId?: string;
+};
+
+type NavigationMenuItem = {
+  children?: NavigationMenuItem[];
+  icon?: React.ReactNode;
+  menuBadgeKey?: string;
+  menuGroupKey?: string;
+  name?: React.ReactNode;
+  path?: string;
+  key?: React.Key;
+  [key: string]: unknown;
+};
+
+type NavigationGroup = {
+  flattenSingleItem?: boolean;
+  icon: React.ReactNode;
+  key: string;
+  label: string;
+};
+
 type AuthSessionBootstrapProps = {
   pathname: string;
   children: React.ReactNode;
+};
+
+const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
+const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
+const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
+const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
+  {
+    icon: <AppstoreOutlined />,
+    key: "build",
+    label: "Build / Studio",
+  },
+  {
+    flattenSingleItem: true,
+    icon: <MessageOutlined />,
+    key: "chat",
+    label: "Chat",
+  },
+  {
+    icon: <DashboardOutlined />,
+    key: "live",
+    label: "Live Ops",
+  },
+  {
+    icon: <SafetyCertificateOutlined />,
+    key: "governance",
+    label: "Governance",
+  },
+  {
+    icon: <SettingOutlined />,
+    key: "settings",
+    label: "Settings",
+  },
+] as const;
+const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
+  hasPendingAttention: false,
+  pendingCount: 0,
+};
+const liveOpsAttentionListeners = new Set<() => void>();
+let liveOpsAttentionSnapshot = LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT;
+
+function trimOptional(value?: string | null): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function subscribeLiveOpsAttention(listener: () => void): () => void {
+  liveOpsAttentionListeners.add(listener);
+  return () => {
+    liveOpsAttentionListeners.delete(listener);
+  };
+}
+
+function getLiveOpsAttentionSnapshot(): LiveOpsAttentionSnapshot {
+  return liveOpsAttentionSnapshot;
+}
+
+function setLiveOpsAttentionSnapshot(next: LiveOpsAttentionSnapshot): void {
+  if (
+    liveOpsAttentionSnapshot.pendingCount === next.pendingCount &&
+    liveOpsAttentionSnapshot.hasPendingAttention === next.hasPendingAttention
+  ) {
+    return;
+  }
+
+  liveOpsAttentionSnapshot = next;
+  liveOpsAttentionListeners.forEach((listener) => listener());
+}
+
+function buildLiveOpsAttentionCandidateKey(
+  candidate: LiveOpsAttentionCandidate
+): string {
+  const actorId = trimOptional(candidate.actorId);
+  if (actorId) {
+    return `actor:${actorId}`;
+  }
+
+  return [
+    "run",
+    trimOptional(candidate.scopeId) || "",
+    trimOptional(candidate.serviceId) || "",
+    trimOptional(candidate.runId) || "",
+  ].join(":");
+}
+
+function collectLiveOpsAttentionCandidates(
+  pathname: string,
+  search: string
+): LiveOpsAttentionCandidate[] {
+  const nowMs = Date.now();
+  const deduped = new Map<string, LiveOpsAttentionCandidate>();
+
+  for (const entry of loadRecentRuns()) {
+    const recordedAtMs = Date.parse(entry.recordedAt);
+    if (
+      Number.isFinite(recordedAtMs) &&
+      nowMs - recordedAtMs > LIVE_OPS_ATTENTION_MAX_AGE_MS
+    ) {
+      continue;
+    }
+
+    if (entry.status === "finished" || entry.status === "error") {
+      continue;
+    }
+
+    const candidate: LiveOpsAttentionCandidate = {
+      actorId: trimOptional(entry.actorId),
+      runId: trimOptional(entry.runId),
+      scopeId: trimOptional(entry.scopeId),
+      serviceId: trimOptional(entry.serviceOverrideId),
+    };
+    const key = buildLiveOpsAttentionCandidateKey(candidate);
+    if (!deduped.has(key)) {
+      deduped.set(key, candidate);
+    }
+
+    if (deduped.size >= LIVE_OPS_ATTENTION_MAX_CANDIDATES) {
+      break;
+    }
+  }
+
+  if (pathname === "/runtime/mission-control") {
+    const context = readMissionControlRouteContext(search);
+    const candidate: LiveOpsAttentionCandidate = {
+      actorId: trimOptional(context.actorId),
+      runId: trimOptional(context.runId),
+      scopeId: trimOptional(context.scopeId),
+      serviceId: trimOptional(context.serviceId),
+    };
+    const key = buildLiveOpsAttentionCandidateKey(candidate);
+    if (
+      (candidate.actorId || (candidate.scopeId && candidate.runId)) &&
+      !deduped.has(key)
+    ) {
+      deduped.set(key, candidate);
+    }
+  }
+
+  return Array.from(deduped.values()).slice(0, LIVE_OPS_ATTENTION_MAX_CANDIDATES);
+}
+
+async function resolveLiveOpsAttentionActorId(
+  candidate: LiveOpsAttentionCandidate
+): Promise<string | undefined> {
+  const actorId = trimOptional(candidate.actorId);
+  if (actorId) {
+    return actorId;
+  }
+
+  const scopeId = trimOptional(candidate.scopeId);
+  const runId = trimOptional(candidate.runId);
+  if (!scopeId || !runId) {
+    return undefined;
+  }
+
+  try {
+    const summary = await runtimeRunsApi.getRunSummary(scopeId, runId, {
+      serviceId: trimOptional(candidate.serviceId),
+    });
+    return trimOptional(summary.actorId);
+  } catch {
+    return undefined;
+  }
+}
+
+async function runNeedsLiveOpsAttention(
+  candidate: LiveOpsAttentionCandidate
+): Promise<boolean> {
+  const actorId = await resolveLiveOpsAttentionActorId(candidate);
+  if (!actorId) {
+    return false;
+  }
+
+  try {
+    const fetchedAtMs = Date.now();
+    const [graph, timeline] = await Promise.all([
+      runtimeActorsApi.getActorGraphEnriched(actorId, {
+        depth: 4,
+        direction: "Both",
+        take: 120,
+      }),
+      runtimeActorsApi.getActorTimeline(actorId, {
+        take: 120,
+      }),
+    ]);
+
+    const snapshot = buildMissionSnapshotFromRuntime({
+      connectionStatus: "degraded",
+      nowMs: fetchedAtMs,
+      recentEvents: [],
+      routeContext: {
+        actorId,
+        runId: trimOptional(candidate.runId),
+        scopeId: trimOptional(candidate.scopeId),
+        serviceId: trimOptional(candidate.serviceId),
+      },
+      resources: {
+        artifacts: {
+          fetchedAtMs,
+          graph,
+          timeline,
+        },
+        session: {
+          runId: trimOptional(candidate.runId),
+          status: "running",
+        },
+      },
+    });
+
+    return (
+      snapshot.intervention?.required === true &&
+      (snapshot.intervention.kind === "human_approval" ||
+        snapshot.intervention.kind === "human_input")
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function loadLiveOpsAttentionSnapshot(
+  pathname: string,
+  search: string
+): Promise<LiveOpsAttentionSnapshot> {
+  const candidates = collectLiveOpsAttentionCandidates(pathname, search);
+  if (candidates.length === 0) {
+    return LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT;
+  }
+
+  const results = await Promise.allSettled(
+    candidates.map((candidate) => runNeedsLiveOpsAttention(candidate))
+  );
+  const pendingCount = results.reduce((count, result) => {
+    if (result.status === "fulfilled" && result.value) {
+      return count + 1;
+    }
+
+    return count;
+  }, 0);
+
+  return {
+    hasPendingAttention: pendingCount > 0,
+    pendingCount,
+  };
+}
+
+const NavigationMenuLabel: React.FC<{
+  badgeKey?: string;
+  label: React.ReactNode;
+  showLiveOpsDot?: boolean;
+}> = React.memo(({ badgeKey, label, showLiveOpsDot = false }) => {
+  const snapshot = React.useSyncExternalStore(
+    subscribeLiveOpsAttention,
+    getLiveOpsAttentionSnapshot,
+    getLiveOpsAttentionSnapshot
+  );
+  const showCountBadge =
+    badgeKey === LIVE_OPS_ATTENTION_BADGE_KEY && snapshot.pendingCount > 0;
+
+  return (
+    <span
+      style={{
+        alignItems: "center",
+        display: "inline-flex",
+        gap: 8,
+        justifyContent: "space-between",
+        minWidth: 0,
+        width: "100%",
+      }}
+    >
+      <span
+        style={{
+          alignItems: "center",
+          display: "inline-flex",
+          gap: 8,
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </span>
+        {showLiveOpsDot && snapshot.hasPendingAttention ? (
+          <span
+            aria-hidden="true"
+            style={{
+              background: "#ef4444",
+              borderRadius: 999,
+              display: "inline-block",
+              flex: "0 0 auto",
+              height: 8,
+              width: 8,
+            }}
+          />
+        ) : null}
+      </span>
+      {showCountBadge ? (
+        <Badge
+          count={snapshot.pendingCount}
+          overflowCount={9}
+          size="small"
+          style={{
+            backgroundColor: "#ef4444",
+            boxShadow: "none",
+          }}
+        />
+      ) : null}
+    </span>
+  );
+});
+
+NavigationMenuLabel.displayName = "NavigationMenuLabel";
+
+const LiveOpsGroupIcon: React.FC<{
+  icon: React.ReactNode;
+}> = React.memo(({ icon }) => {
+  const snapshot = React.useSyncExternalStore(
+    subscribeLiveOpsAttention,
+    getLiveOpsAttentionSnapshot,
+    getLiveOpsAttentionSnapshot
+  );
+
+  if (!snapshot.hasPendingAttention || !React.isValidElement(icon)) {
+    return <>{icon}</>;
+  }
+
+  return (
+    <Badge color="#ef4444" dot offset={[-2, 2]}>
+      {icon}
+    </Badge>
+  );
+});
+
+LiveOpsGroupIcon.displayName = "LiveOpsGroupIcon";
+
+function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuItem[] {
+  const grouped = new Map<string, NavigationMenuItem[]>();
+  const ungrouped: NavigationMenuItem[] = [];
+
+  for (const item of items) {
+    const groupKey =
+      typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
+    if (!groupKey) {
+      ungrouped.push(item);
+      continue;
+    }
+
+    const existing = grouped.get(groupKey);
+    if (existing) {
+      existing.push(item);
+      continue;
+    }
+
+    grouped.set(groupKey, [item]);
+  }
+
+  const menuGroups = NAVIGATION_GROUP_ORDER.flatMap((group) => {
+    const children = grouped.get(group.key);
+    if (!children || children.length === 0) {
+      return [];
+    }
+
+    if (group.flattenSingleItem && children.length === 1) {
+      return [
+        {
+          ...children[0],
+          icon: children[0].icon ?? group.icon,
+          menuGroupKey: group.key,
+        },
+      ];
+    }
+
+    return [
+      {
+        children,
+        icon: group.icon,
+        key: `menu-group:${group.key}`,
+        menuGroupKey: group.key,
+        name: group.label,
+      },
+    ];
+  });
+
+  return [...menuGroups, ...ungrouped];
+}
+
+function decorateNavigationMenuItems(
+  items: NavigationMenuItem[],
+  groupItems = true
+): NavigationMenuItem[] {
+  const sourceItems = groupItems ? groupNavigationMenuItems(items) : items;
+
+  return sourceItems.map((item) => {
+    const path = typeof item.path === "string" ? item.path : undefined;
+    const badgeKey =
+      typeof item.menuBadgeKey === "string" ? item.menuBadgeKey : undefined;
+    const groupKey =
+      typeof item.menuGroupKey === "string" ? item.menuGroupKey : undefined;
+    const children = Array.isArray(item.children)
+      ? decorateNavigationMenuItems(item.children, false)
+      : undefined;
+    const isLiveOpsGroup =
+      groupKey === "live" && Array.isArray(children) && children.length > 0;
+    const hasRenderableIcon = React.isValidElement(item.icon);
+    const name =
+      badgeKey || isLiveOpsGroup
+        ? React.createElement(NavigationMenuLabel, {
+            badgeKey,
+            label: item.name,
+            showLiveOpsDot: isLiveOpsGroup && !hasRenderableIcon,
+          })
+        : item.name;
+    const icon =
+      isLiveOpsGroup && hasRenderableIcon
+        ? React.createElement(LiveOpsGroupIcon, {
+            icon: item.icon,
+          })
+        : item.icon;
+
+    return {
+      ...item,
+      children,
+      icon,
+      name,
+    };
+  });
+}
+
+const LiveOpsAttentionBridge: React.FC<{
+  enabled: boolean;
+  pathname: string;
+  search: string;
+}> = ({ enabled, pathname, search }) => {
+  React.useEffect(() => {
+    if (!enabled) {
+      setLiveOpsAttentionSnapshot(LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT);
+      return undefined;
+    }
+
+    let cancelled = false;
+    let refreshing = false;
+
+    const refresh = async () => {
+      if (refreshing || cancelled) {
+        return;
+      }
+
+      refreshing = true;
+      try {
+        const snapshot = await loadLiveOpsAttentionSnapshot(pathname, search);
+        if (!cancelled) {
+          setLiveOpsAttentionSnapshot(snapshot);
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    };
+
+    const refreshOnFocus = () => {
+      void refresh();
+    };
+
+    void refresh();
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, LIVE_OPS_ATTENTION_REFRESH_MS);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshOnFocus);
+    window.addEventListener("storage", refreshOnFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshOnFocus);
+      window.removeEventListener("storage", refreshOnFocus);
+    };
+  }, [enabled, pathname, search]);
+
+  return null;
 };
 
 const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
@@ -143,6 +676,8 @@ export const layout = ({
         history.replace(DEFAULT_PROTECTED_ROUTE);
       }
     },
+    postMenuData: (menuData: NavigationMenuItem[]) =>
+      decorateNavigationMenuItems(menuData),
     actionsRender: () => {
       const session = loadRestorableAuthSession();
       if (!session) {
@@ -186,8 +721,8 @@ export const layout = ({
           <span
             style={{
               alignItems: "center",
-              background: "rgba(0, 0, 0, 0.03)",
-              border: "1px solid rgba(5, 5, 5, 0.06)",
+              background: "var(--ant-color-fill-tertiary)",
+              border: "1px solid var(--ant-color-border-secondary)",
               borderRadius: 999,
               cursor: "pointer",
               display: "inline-flex",
@@ -206,6 +741,7 @@ export const layout = ({
             <Typography.Text
               style={{
                 flex: 1,
+                color: "var(--ant-color-text)",
                 lineHeight: "20px",
                 marginBottom: 0,
                 maxWidth: 160,
@@ -213,13 +749,12 @@ export const layout = ({
                 whiteSpace: "nowrap",
               }}
               ellipsis={{ tooltip: displayName }}
-              type="secondary"
             >
               {displayName}
             </Typography.Text>
             <DownOutlined
               style={{
-                color: "rgba(0, 0, 0, 0.45)",
+                color: "var(--ant-color-text-tertiary)",
                 fontSize: 11,
               }}
             />
@@ -231,6 +766,7 @@ export const layout = ({
       initialState ? (
         (() => {
           const pathname = window.location.pathname;
+          const search = window.location.search;
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
           const liveSession = loadStoredAuthSession();
@@ -254,10 +790,15 @@ export const layout = ({
             );
 
           return (
-            <ConfigProvider locale={enUS}>
+            <ConfigProvider locale={enUS} theme={aevatarThemeConfig}>
               <ProConfigProvider intl={enUSIntl}>
                 <QueryClientProvider client={queryClient}>
-                  {content}
+                  <LiveOpsAttentionBridge
+                    enabled={!isPublicRoute && !isStudioRoute}
+                    pathname={pathname}
+                    search={search}
+                  />
+                  {isPublicRoute ? content : <MainLayout>{content}</MainLayout>}
                 </QueryClientProvider>
               </ProConfigProvider>
             </ConfigProvider>
@@ -267,6 +808,15 @@ export const layout = ({
         <PageLoading fullscreen />
       ),
     ...initialState?.settings,
+    contentStyle: {
+      background: "transparent",
+      display: "flex",
+      flexDirection: "column",
+      height: "calc(100vh - 56px)",
+      minHeight: 0,
+      overflow: "hidden",
+      padding: 0,
+    },
     logo: <BrandLogo />,
   };
 };

@@ -7,6 +7,7 @@
   "scripts": {
     "analyze": "cross-env ANALYZE=1 max build",
     "build": "max build",
+    "build:web": "npm run build",
     "dev": "npm run start:dev",
     "jest": "jest",
     "lint": "npm run biome:lint && npm run tsc",
@@ -26,12 +27,14 @@
     "@aevatar-react-sdk/types": "0.5.0",
     "@ant-design/icons": "^6.1.0",
     "@ant-design/pro-components": "3.1.2-0",
+    "@monaco-editor/react": "^4.7.0",
     "@tanstack/react-query": "^5.90.21",
     "@xyflow/react": "^12.10.1",
     "antd": "^6.2.2",
     "antd-style": "^4.1.0",
     "clsx": "^2.1.1",
     "dayjs": "^1.11.19",
+    "monaco-editor": "^0.55.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

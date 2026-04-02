@@ -79,6 +79,37 @@ public class WorkflowLoopModuleExpressionEvaluationTests
         secondReq.Parameters["value"].Should().Be("prev=out1, input=out1");
     }
 
+    [Fact]
+    public async Task DispatchStep_WhenLlmCallOmitsRole_ShouldAssignImplicitAssistantTarget()
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "llm",
+                    Type = "llm_call",
+                },
+            ],
+        };
+
+        var ctx = new CapturingContext();
+        var module = new WorkflowExecutionKernel(workflow, (IWorkflowExecutionStateHost)ctx.Agent);
+
+        await module.HandleAsync(Wrap(new StartWorkflowEvent
+        {
+            WorkflowName = "wf",
+            RunId = "run-implicit-assistant",
+            Input = "hello",
+        }), ctx, CancellationToken.None);
+
+        var request = ctx.Published.Single(x => x.Event is StepRequestEvent).Event.Should().BeOfType<StepRequestEvent>().Subject;
+        request.TargetRole.Should().Be("assistant");
+    }
+
     private static EventEnvelope Wrap(IMessage evt) => new()
     {
         Id = Guid.NewGuid().ToString("N"),

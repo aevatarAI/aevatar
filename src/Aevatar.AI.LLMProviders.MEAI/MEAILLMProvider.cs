@@ -69,9 +69,13 @@ public sealed class MEAILLMProvider : ILLMProvider
 
         _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
         var emittedStreamChunk = false;
+        string? lastFinishReason = null;
 
         await foreach (var update in _client.GetStreamingResponseAsync(messages, options, ct))
         {
+            if (update.FinishReason != null)
+                lastFinishReason = update.FinishReason.Value.ToString();
+
             var emittedTextFromContents = false;
             if (update.Contents is { Count: > 0 })
             {
@@ -147,12 +151,13 @@ public sealed class MEAILLMProvider : ILLMProvider
             {
                 IsLast = true,
                 Usage = fallback.Usage,
+                FinishReason = fallback.FinishReason,
             };
             yield break;
         }
 
         // 最后一个 chunk 标记结束
-        yield return new LLMStreamChunk { IsLast = true };
+        yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
     }
 
     // ─── 转换：Aevatar → MEAI ───
@@ -320,16 +325,13 @@ public sealed class MEAILLMProvider : ILLMProvider
             hasOptions = true;
         }
 
-        // 注册 Tools
+        // 注册 Tools — 使用工具自身的 ParametersSchema，让 LLM 看到真实参数结构
         if (request.Tools is { Count: > 0 })
         {
             options.Tools = [];
             foreach (var tool in request.Tools)
             {
-                options.Tools.Add(AIFunctionFactory.Create(
-                    (string input) => tool.ExecuteAsync(input),
-                    tool.Name,
-                    tool.Description));
+                options.Tools.Add(new AgentToolAIFunction(tool));
             }
             hasOptions = true;
         }

@@ -4,12 +4,25 @@ import type {
   StudioConnectorCatalog,
   StudioConnectorCatalogImportResult,
   StudioConnectorDraftResponse,
+  StudioScopeBindingActivationResult,
+  StudioScopeBindingImplementationKind,
+  StudioScopeBindingRetirementResult,
+  StudioScopeBindingRevision,
+  StudioScopeBindingTargetKind,
+  StudioScopeGAgentBindingInput,
+  StudioScopeBindingStatus,
   StudioExecutionDetail,
   StudioExecutionSummary,
   StudioParseYamlResult,
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
   StudioRoleDraftResponse,
+  StudioScopeScriptBindingActivationResult,
+  StudioScopeScriptBindingInput,
+  StudioScopeBindingResult,
+  StudioScopeGAgentBindingResult,
+  StudioScopeScriptBindingResult,
+  StudioScopeScriptBindingStatus,
   StudioRuntimeTestResult,
   StudioSaveSettingsInput,
   StudioSaveWorkflowInput,
@@ -21,8 +34,20 @@ import type {
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
 } from "./models";
+import { normalizeStudioScopeBindingImplementationKind } from "./models";
 import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
+import {
+  expectArray,
+  expectRecord,
+  normalizeEnumValue,
+  readBoolean,
+  readNullableString,
+  readNumber,
+  readString,
+} from "@/shared/api/http/decoders";
+import { readResponseError } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
+import { authFetch } from "@/shared/auth/fetch";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
@@ -33,9 +58,11 @@ async function studioHostFetch(
   input: string,
   init?: RequestInit
 ): Promise<Response> {
-  return fetch(input, {
+  const headers = new Headers(init?.headers);
+  return authFetch(input, {
     credentials: "same-origin",
     ...init,
+    headers,
   });
 }
 
@@ -55,28 +82,10 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   ) as T;
 }
 
-async function readError(response: Response): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return `HTTP ${response.status}`;
-  }
-
-  try {
-    const payload = JSON.parse(text) as {
-      message?: string;
-      error?: string;
-      code?: string;
-    };
-    return payload.message || payload.error || payload.code || text;
-  } catch {
-    return text;
-  }
-}
-
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -93,7 +102,7 @@ async function requestDecodedJson<T>(
 ): Promise<T> {
   const response = await studioHostFetch(input, init);
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -119,7 +128,7 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (response.status === 204) {
@@ -149,7 +158,7 @@ async function streamSse(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await readError(response));
+    throw new Error(await readResponseError(response));
   }
 
   if (!response.body) {
@@ -244,9 +253,386 @@ function normalizeAssistantFrame(
   return null;
 }
 
+function decodeStudioScopeBindingRevision(
+  value: unknown,
+  label = "StudioScopeBindingRevision"
+): StudioScopeBindingRevision {
+  const record = expectRecord(value, label);
+  const implementationKind = readScopeBindingImplementationKind(record, [
+    "implementationKind",
+    "ImplementationKind",
+  ]);
+  return {
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      `${label}.revisionId`
+    ),
+    implementationKind,
+    status: readString(record, ["status", "Status"], `${label}.status`),
+    artifactHash: readString(
+      record,
+      ["artifactHash", "ArtifactHash"],
+      `${label}.artifactHash`
+    ),
+    failureReason: readString(
+      record,
+      ["failureReason", "FailureReason"],
+      `${label}.failureReason`
+    ),
+    isDefaultServing: readBoolean(
+      record,
+      ["isDefaultServing", "IsDefaultServing"],
+      `${label}.isDefaultServing`
+    ),
+    isActiveServing: readBoolean(
+      record,
+      ["isActiveServing", "IsActiveServing"],
+      `${label}.isActiveServing`
+    ),
+    isServingTarget: readBoolean(
+      record,
+      ["isServingTarget", "IsServingTarget"],
+      `${label}.isServingTarget`
+    ),
+    allocationWeight: readNumber(
+      record,
+      ["allocationWeight", "AllocationWeight"],
+      `${label}.allocationWeight`
+    ),
+    servingState: readString(
+      record,
+      ["servingState", "ServingState"],
+      `${label}.servingState`
+    ),
+    deploymentId: readString(
+      record,
+      ["deploymentId", "DeploymentId"],
+      `${label}.deploymentId`
+    ),
+    primaryActorId: readString(
+      record,
+      ["primaryActorId", "PrimaryActorId"],
+      `${label}.primaryActorId`
+    ),
+    createdAt: readNullableString(
+      record,
+      ["createdAt", "CreatedAt"],
+      `${label}.createdAt`
+    ),
+    preparedAt: readNullableString(
+      record,
+      ["preparedAt", "PreparedAt"],
+      `${label}.preparedAt`
+    ),
+    publishedAt: readNullableString(
+      record,
+      ["publishedAt", "PublishedAt"],
+      `${label}.publishedAt`
+    ),
+    retiredAt: readNullableString(
+      record,
+      ["retiredAt", "RetiredAt"],
+      `${label}.retiredAt`
+    ),
+    workflowName:
+      readOptionalString(record, ["workflowName", "WorkflowName"]) || "",
+    workflowDefinitionActorId:
+      readOptionalString(record, [
+        "workflowDefinitionActorId",
+        "WorkflowDefinitionActorId",
+      ]) || "",
+    inlineWorkflowCount:
+      record.inlineWorkflowCount === undefined &&
+      record.InlineWorkflowCount === undefined
+        ? 0
+        : readNumber(
+            record,
+            ["inlineWorkflowCount", "InlineWorkflowCount"],
+            `${label}.inlineWorkflowCount`
+          ),
+    scriptId:
+      readOptionalString(record, ["scriptId", "ScriptId"]) || "",
+    scriptRevision:
+      readOptionalString(record, ["scriptRevision", "ScriptRevision"]) || "",
+    scriptDefinitionActorId:
+      readOptionalString(record, [
+        "scriptDefinitionActorId",
+        "ScriptDefinitionActorId",
+      ]) || "",
+    scriptSourceHash:
+      readOptionalString(record, ["scriptSourceHash", "ScriptSourceHash"]) || "",
+    staticActorTypeName:
+      readOptionalString(record, [
+        "staticActorTypeName",
+        "StaticActorTypeName",
+      ]) || "",
+  };
+}
+
+function readOptionalString(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const rawValue = record[key];
+    if (typeof rawValue !== "string") {
+      continue;
+    }
+
+    const normalized = rawValue.trim();
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+}
+
+function readOptionalScalar(
+  record: Record<string, unknown>,
+  keys: string[]
+): string | number | undefined {
+  for (const key of keys) {
+    const rawValue = record[key];
+    if (
+      typeof rawValue === "string" ||
+      (typeof rawValue === "number" && !Number.isNaN(rawValue))
+    ) {
+      return rawValue;
+    }
+  }
+
+  return undefined;
+}
+
+function readScopeBindingImplementationKind(
+  record: Record<string, unknown>,
+  keys: string[],
+  fallback?: string | number
+): StudioScopeBindingImplementationKind {
+  const rawValue = readOptionalScalar(record, keys) ?? fallback;
+  if (rawValue === undefined) {
+    return "unknown";
+  }
+
+  return normalizeStudioScopeBindingImplementationKind(
+    normalizeEnumValue(rawValue, "implementationKind", {
+      "0": "unknown",
+      "1": "workflow",
+      "2": "script",
+      "3": "gagent",
+      workflow: "workflow",
+      scripting: "script",
+      script: "script",
+      gagent: "gagent",
+      unspecified: "unknown",
+    })
+  );
+}
+
+function decodeStudioScopeBindingResult(
+  value: unknown
+): StudioScopeBindingResult {
+  const record = expectRecord(value, "StudioScopeBindingResult");
+  const displayName =
+    readOptionalString(record, ["displayName", "DisplayName"]) || "";
+  const serviceId = readOptionalString(record, ["serviceId", "ServiceId"]);
+  const workflowRecord =
+    record.workflow && typeof record.workflow === "object"
+      ? expectRecord(record.workflow, "StudioScopeBindingResult.workflow")
+      : null;
+  const scriptRecord =
+    record.script && typeof record.script === "object"
+      ? expectRecord(record.script, "StudioScopeBindingResult.script")
+      : null;
+  const gAgentRecord =
+    (record.gAgent ?? record.gagent) &&
+    typeof (record.gAgent ?? record.gagent) === "object"
+      ? expectRecord(
+          record.gAgent ?? record.gagent,
+          "StudioScopeBindingResult.gAgent"
+        )
+      : null;
+
+  const workflowName =
+    workflowRecord == null
+      ? readOptionalString(record, ["workflowName", "WorkflowName"])
+      : readOptionalString(workflowRecord, ["workflowName", "WorkflowName"]) ||
+        readOptionalString(record, ["workflowName", "WorkflowName"]);
+  const definitionActorIdPrefix =
+    workflowRecord == null
+      ? readOptionalString(record, [
+          "definitionActorIdPrefix",
+          "DefinitionActorIdPrefix",
+        ])
+      : readOptionalString(workflowRecord, [
+          "definitionActorIdPrefix",
+          "DefinitionActorIdPrefix",
+        ]) ||
+        readOptionalString(record, [
+          "definitionActorIdPrefix",
+          "DefinitionActorIdPrefix",
+        ]);
+  const implementationKind = readScopeBindingImplementationKind(
+    record,
+    ["implementationKind", "ImplementationKind"],
+    scriptRecord
+      ? "script"
+      : gAgentRecord
+        ? "gagent"
+        : workflowRecord || workflowName
+          ? "workflow"
+          : "unknown"
+  );
+  const targetKind: StudioScopeBindingTargetKind = implementationKind;
+  const targetName =
+    (targetKind === "workflow"
+      ? workflowName
+      : targetKind === "script"
+        ? readOptionalString(scriptRecord ?? {}, ["scriptId", "ScriptId"])
+        : targetKind === "gagent"
+          ? readOptionalString(gAgentRecord ?? {}, [
+              "actorTypeName",
+              "ActorTypeName",
+            ])
+          : undefined) ||
+    displayName ||
+    serviceId ||
+    readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioScopeBindingResult.revisionId"
+    );
+
+  return {
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioScopeBindingResult.scopeId"
+    ),
+    serviceId,
+    displayName,
+    revisionId: readString(
+      record,
+      ["revisionId", "RevisionId"],
+      "StudioScopeBindingResult.revisionId"
+    ),
+    implementationKind,
+    targetKind,
+    targetName,
+    workflowName,
+    definitionActorIdPrefix,
+    expectedActorId: readOptionalString(record, [
+      "expectedActorId",
+      "ExpectedActorId",
+    ]),
+    workflow:
+      targetKind === "workflow" && (workflowName || definitionActorIdPrefix)
+        ? {
+            workflowName: workflowName || displayName || targetName,
+            definitionActorIdPrefix: definitionActorIdPrefix || "",
+          }
+        : null,
+    script: scriptRecord
+      ? {
+          scriptId:
+            readOptionalString(scriptRecord, ["scriptId", "ScriptId"]) || "",
+          scriptRevision:
+            readOptionalString(scriptRecord, [
+              "scriptRevision",
+              "ScriptRevision",
+            ]) || "",
+          definitionActorId:
+            readOptionalString(scriptRecord, [
+              "definitionActorId",
+              "DefinitionActorId",
+            ]) || "",
+        }
+      : null,
+    gAgent: gAgentRecord
+      ? {
+          actorTypeName:
+            readOptionalString(gAgentRecord, [
+              "actorTypeName",
+              "ActorTypeName",
+            ]) || "",
+        }
+      : null,
+  };
+}
+
+function decodeStudioScopeBindingStatus(
+  value: unknown
+): StudioScopeBindingStatus {
+  const record = expectRecord(value, "StudioScopeBindingStatus");
+  return {
+    available: readBoolean(
+      record,
+      ["available", "Available"],
+      "StudioScopeBindingStatus.available"
+    ),
+    scopeId: readString(
+      record,
+      ["scopeId", "ScopeId"],
+      "StudioScopeBindingStatus.scopeId"
+    ),
+    serviceId: readString(
+      record,
+      ["serviceId", "ServiceId"],
+      "StudioScopeBindingStatus.serviceId"
+    ),
+    displayName: readString(
+      record,
+      ["displayName", "DisplayName"],
+      "StudioScopeBindingStatus.displayName"
+    ),
+    serviceKey: readString(
+      record,
+      ["serviceKey", "ServiceKey"],
+      "StudioScopeBindingStatus.serviceKey"
+    ),
+    defaultServingRevisionId: readString(
+      record,
+      ["defaultServingRevisionId", "DefaultServingRevisionId"],
+      "StudioScopeBindingStatus.defaultServingRevisionId"
+    ),
+    activeServingRevisionId: readString(
+      record,
+      ["activeServingRevisionId", "ActiveServingRevisionId"],
+      "StudioScopeBindingStatus.activeServingRevisionId"
+    ),
+    deploymentId: readString(
+      record,
+      ["deploymentId", "DeploymentId"],
+      "StudioScopeBindingStatus.deploymentId"
+    ),
+    deploymentStatus: readString(
+      record,
+      ["deploymentStatus", "DeploymentStatus"],
+      "StudioScopeBindingStatus.deploymentStatus"
+    ),
+    primaryActorId: readString(
+      record,
+      ["primaryActorId", "PrimaryActorId"],
+      "StudioScopeBindingStatus.primaryActorId"
+    ),
+    updatedAt: readNullableString(
+      record,
+      ["updatedAt", "UpdatedAt"],
+      "StudioScopeBindingStatus.updatedAt"
+    ),
+    revisions: expectArray(
+      record.revisions ?? record.Revisions,
+      "StudioScopeBindingStatus.revisions",
+      decodeStudioScopeBindingRevision
+    ),
+  };
+}
+
 export const studioApi = {
   getAppContext(): Promise<StudioAppContext> {
-    return requestJson("/api/app/context");
+    return requestJson("/api/studio/context");
   },
 
   getAuthSession(): Promise<StudioAuthSession> {
@@ -296,6 +682,7 @@ export const studioApi = {
   parseYaml(input: {
     yaml: string;
     availableWorkflowNames?: string[];
+    availableStepTypes?: string[];
   }): Promise<StudioParseYamlResult> {
     return requestJson("/api/editor/parse-yaml", {
       method: "POST",
@@ -303,6 +690,7 @@ export const studioApi = {
       body: JSON.stringify({
         yaml: input.yaml,
         availableWorkflowNames: input.availableWorkflowNames,
+        availableStepTypes: input.availableStepTypes,
       }),
     });
   },
@@ -310,6 +698,7 @@ export const studioApi = {
   serializeYaml(input: {
     document: StudioWorkflowDocument;
     availableWorkflowNames?: string[];
+    availableStepTypes?: string[];
   }): Promise<StudioSerializeYamlResult> {
     return requestJson("/api/editor/serialize-yaml", {
       method: "POST",
@@ -317,6 +706,7 @@ export const studioApi = {
       body: JSON.stringify({
         document: input.document,
         availableWorkflowNames: input.availableWorkflowNames,
+        availableStepTypes: input.availableStepTypes,
       }),
     });
   },
@@ -347,6 +737,161 @@ export const studioApi = {
         })
       ),
     });
+  },
+
+  bindScopeWorkflow(input: {
+    scopeId: string;
+    displayName?: string | null;
+    workflowYamls: string[];
+    revisionId?: string | null;
+  }): Promise<StudioScopeBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "workflow",
+            displayName: trimOptional(input.displayName),
+            workflowYamls:
+              input.workflowYamls.length > 0 ? input.workflowYamls : undefined,
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindScopeScript(
+    input: StudioScopeScriptBindingInput
+  ): Promise<StudioScopeScriptBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "script",
+            displayName: trimOptional(input.displayName),
+            script: compactObject({
+              scriptId: input.scriptId.trim(),
+              scriptRevision: input.scriptRevision.trim(),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  bindScopeGAgent(
+    input: StudioScopeGAgentBindingInput
+  ): Promise<StudioScopeGAgentBindingResult> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(input.scopeId.trim())}/binding`,
+      decodeStudioScopeBindingResult,
+      {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify(
+          compactObject({
+            implementationKind: "gagent",
+            serviceId: trimOptional(input.serviceId),
+            displayName: trimOptional(input.displayName),
+            gagent: compactObject({
+              actorTypeName: input.actorTypeName.trim(),
+              endpoints: input.endpoints.map((endpoint) =>
+                compactObject({
+                  endpointId: endpoint.endpointId.trim(),
+                  displayName:
+                    trimOptional(endpoint.displayName) ||
+                    endpoint.endpointId.trim(),
+                  kind: trimOptional(endpoint.kind)?.toLowerCase() || "command",
+                  requestTypeUrl: trimOptional(endpoint.requestTypeUrl),
+                  responseTypeUrl: trimOptional(endpoint.responseTypeUrl),
+                  description: trimOptional(endpoint.description),
+                })
+              ),
+            }),
+            revisionId: trimOptional(input.revisionId),
+          })
+        ),
+      }
+    );
+  },
+
+  getScopeBinding(scopeId: string): Promise<StudioScopeBindingStatus> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
+      decodeStudioScopeBindingStatus
+    );
+  },
+
+  getScopeScriptBinding(
+    scopeId: string
+  ): Promise<StudioScopeScriptBindingStatus> {
+    return requestDecodedJson(
+      `/api/scopes/${encodeURIComponent(scopeId.trim())}/binding`,
+      decodeStudioScopeBindingStatus
+    );
+  },
+
+  activateScopeBindingRevision(input: {
+    scopeId: string;
+    revisionId: string;
+  }): Promise<StudioScopeBindingActivationResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        input.scopeId.trim()
+      )}/binding/revisions/${encodeURIComponent(
+        input.revisionId.trim()
+      )}:activate`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      }
+    );
+  },
+
+  activateScopeScriptBindingRevision(input: {
+    scopeId: string;
+    revisionId: string;
+  }): Promise<StudioScopeScriptBindingActivationResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        input.scopeId.trim()
+      )}/binding/revisions/${encodeURIComponent(
+        input.revisionId.trim()
+      )}:activate`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      }
+    );
+  },
+
+  retireScopeBindingRevision(input: {
+    scopeId: string;
+    revisionId: string;
+  }): Promise<StudioScopeBindingRetirementResult> {
+    return requestJson(
+      `/api/scopes/${encodeURIComponent(
+        input.scopeId.trim()
+      )}/binding/revisions/${encodeURIComponent(
+        input.revisionId.trim()
+      )}:retire`,
+      {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({}),
+      }
+    );
   },
 
   stopExecution(
@@ -568,7 +1113,7 @@ export const studioApi = {
     let reasoningText = "";
 
     await streamSse(
-      "/api/app/workflow-generator",
+      "/api/workflows/generator",
       {
         prompt: input.prompt.trim(),
         currentYaml: input.currentYaml,

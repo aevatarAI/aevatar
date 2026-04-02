@@ -257,6 +257,120 @@ public class ConnectorConfigTests
         }
     }
 
+    [Fact]
+    public void LoadConnectors_ShouldSupportDirectRootShape_EnvironmentExpansion_AndNyxidFields()
+    {
+        const string proxyBaseUrl = "https://nyxid.example.com";
+        const string authTokenUrl = "https://auth.example.com/oauth/token";
+        const string serviceAccountClientId = "svc-client";
+        const string serviceAccountClientSecret = "svc-secret";
+        const string mcpUrl = "https://nyxid.example.com/mcp";
+        const string validatorBaseUrl = "https://validator.example.com";
+
+        var previousValues = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["NYXID_PROXY_BASE_URL"] = Environment.GetEnvironmentVariable("NYXID_PROXY_BASE_URL"),
+            ["NYXID_AUTH_TOKEN_URL"] = Environment.GetEnvironmentVariable("NYXID_AUTH_TOKEN_URL"),
+            ["NYXID_SA_CLIENT_ID"] = Environment.GetEnvironmentVariable("NYXID_SA_CLIENT_ID"),
+            ["NYXID_SA_CLIENT_SECRET"] = Environment.GetEnvironmentVariable("NYXID_SA_CLIENT_SECRET"),
+            ["NYXID_MCP_URL"] = Environment.GetEnvironmentVariable("NYXID_MCP_URL"),
+            ["FORMAT_VALIDATOR_BASE_URL"] = Environment.GetEnvironmentVariable("FORMAT_VALIDATOR_BASE_URL"),
+        };
+
+        Environment.SetEnvironmentVariable("NYXID_PROXY_BASE_URL", proxyBaseUrl);
+        Environment.SetEnvironmentVariable("NYXID_AUTH_TOKEN_URL", authTokenUrl);
+        Environment.SetEnvironmentVariable("NYXID_SA_CLIENT_ID", serviceAccountClientId);
+        Environment.SetEnvironmentVariable("NYXID_SA_CLIENT_SECRET", serviceAccountClientSecret);
+        Environment.SetEnvironmentVariable("NYXID_MCP_URL", mcpUrl);
+        Environment.SetEnvironmentVariable("FORMAT_VALIDATOR_BASE_URL", validatorBaseUrl);
+
+        var path = WriteTempJson("""
+            {
+              "chrono_graph": {
+                "type": "http",
+                "enabled": true,
+                "http": {
+                  "baseUrl": "${NYXID_PROXY_BASE_URL}",
+                  "allowedMethods": ["GET", "POST"],
+                  "allowedPaths": ["/api/v1/proxy/s/chrono-graph/*"],
+                  "defaultHeaders": {
+                    "Content-Type": "application/json"
+                  },
+                  "auth": {
+                    "type": "client_credentials",
+                    "tokenUrl": "${NYXID_AUTH_TOKEN_URL}",
+                    "clientId": "${NYXID_SA_CLIENT_ID}",
+                    "clientSecret": "${NYXID_SA_CLIENT_SECRET}",
+                    "scope": "proxy:*"
+                  }
+                }
+              },
+              "nyxid_mcp": {
+                "type": "mcp",
+                "enabled": true,
+                "mcp": {
+                  "serverName": "nyxid",
+                  "url": "${NYXID_MCP_URL}",
+                  "auth": {
+                    "type": "client_credentials",
+                    "tokenUrl": "${NYXID_AUTH_TOKEN_URL}",
+                    "clientId": "${NYXID_SA_CLIENT_ID}",
+                    "clientSecret": "${NYXID_SA_CLIENT_SECRET}",
+                    "scope": "proxy:*"
+                  },
+                  "allowedTools": [
+                    "chrono-graph__get_snapshot",
+                    "chrono-graph__create_nodes"
+                  ]
+                }
+              },
+              "format_validator": {
+                "type": "http",
+                "enabled": true,
+                "http": {
+                  "baseUrl": "${FORMAT_VALIDATOR_BASE_URL}",
+                  "allowedMethods": ["POST"],
+                  "allowedPaths": ["/validate/*"]
+                }
+              }
+            }
+            """);
+
+        try
+        {
+            var connectors = AevatarConnectorConfig.LoadConnectors(path);
+            connectors.Should().HaveCount(3);
+
+            var chronoGraph = connectors.Single(x => x.Name == "chrono_graph");
+            chronoGraph.Http.BaseUrl.Should().Be(proxyBaseUrl);
+            chronoGraph.Http.AllowedPaths.Should().ContainSingle().Which.Should().Be("/api/v1/proxy/s/chrono-graph/*");
+            chronoGraph.Http.Auth.Type.Should().Be("client_credentials");
+            chronoGraph.Http.Auth.TokenUrl.Should().Be(authTokenUrl);
+            chronoGraph.Http.Auth.ClientId.Should().Be(serviceAccountClientId);
+            chronoGraph.Http.Auth.ClientSecret.Should().Be(serviceAccountClientSecret);
+            chronoGraph.Http.Auth.Scope.Should().Be("proxy:*");
+
+            var nyxidMcp = connectors.Single(x => x.Name == "nyxid_mcp");
+            nyxidMcp.MCP.ServerName.Should().Be("nyxid");
+            nyxidMcp.MCP.Url.Should().Be(mcpUrl);
+            nyxidMcp.MCP.Command.Should().BeEmpty();
+            nyxidMcp.MCP.AllowedTools.Should().Equal("chrono-graph__get_snapshot", "chrono-graph__create_nodes");
+            nyxidMcp.MCP.Auth.Type.Should().Be("client_credentials");
+            nyxidMcp.MCP.Auth.TokenUrl.Should().Be(authTokenUrl);
+
+            var formatValidator = connectors.Single(x => x.Name == "format_validator");
+            formatValidator.Http.BaseUrl.Should().Be(validatorBaseUrl);
+            formatValidator.Http.AllowedPaths.Should().ContainSingle().Which.Should().Be("/validate/*");
+        }
+        finally
+        {
+            foreach (var (key, value) in previousValues)
+                Environment.SetEnvironmentVariable(key, value);
+
+            File.Delete(path);
+        }
+    }
+
     private static string WriteTempJson(string json)
     {
         var file = Path.Combine(Path.GetTempPath(), "aevatar-connectors-" + Guid.NewGuid().ToString("N") + ".json");

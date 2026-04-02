@@ -40,7 +40,9 @@ public static class ServiceCollectionExtensions
         var options = new SkillsOptions();
         configure(options);
         services.TryAddSingleton(options);
+        services.TryAddSingleton<SkillFrontmatterParser>();
         services.TryAddSingleton<SkillDiscovery>();
+        services.TryAddSingleton<SkillRegistry>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, SkillsAgentToolSource>());
         return services;

@@ -1,5 +1,6 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
+import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import PrimitivesPage from "./index";
 
@@ -30,19 +31,58 @@ jest.mock("@/shared/api/runtimeQueryApi", () => ({
 describe("PrimitivesPage", () => {
   it("keeps primitive examples inside runtime and scope surfaces", async () => {
     const { container } = renderWithQueryClient(
-      React.createElement(PrimitivesPage)
+      React.createElement(PrimitivesPage),
     );
 
-    expect(container.textContent).toContain("Runtime Primitives");
-    expect(container.textContent).toContain(
-      "Browse the backend-authored runtime primitive view, including normalized parameters and example workflow references."
-    );
+    expect(container.textContent).toContain("Primitive Library");
     expect(
-      await screen.findByRole("button", { name: "Inspect runtime" })
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Scope assets" })).toBeTruthy();
+      screen.queryByText(
+        "Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector.",
+      ),
+    ).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
+    expect(container.textContent).toContain("Runtime Primitives");
+    expect(container.textContent).toContain("Filter Library");
     expect(container.textContent).not.toContain("Legacy draft");
     expect(container.textContent).not.toContain("Studio");
+
+    await waitFor(() => {
+      expect(runtimeQueryApi.listPrimitives).toHaveBeenCalled();
+    });
+  });
+
+  it("stretches the category filter selector to the panel width", async () => {
+    const { container } = renderWithQueryClient(
+      React.createElement(PrimitivesPage),
+    );
+
+    expect(await screen.findByText("Library Digest")).toBeTruthy();
+    expect(container.querySelector(".ant-select")).toHaveStyle({ width: "100%" });
+  });
+
+  it("renders primitive cards as full-width summaries with in-card actions", async () => {
+    renderWithQueryClient(React.createElement(PrimitivesPage));
+
+    expect(await screen.findByText("Ready")).toBeTruthy();
+    expect(screen.getByText("Category")).toBeTruthy();
+    expect(screen.getByText("Parameters")).toBeTruthy();
+    expect(screen.getByText("Examples")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Example workflow" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Inspect primitive human_input" }),
+    ).toHaveStyle({
+      width: "100%",
+    });
+  });
+
+  it("opens the primitive inspector when the catalog card is clicked", async () => {
+    renderWithQueryClient(React.createElement(PrimitivesPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Inspect primitive human_input" }),
+    );
+
+    expect(await screen.findByText("Primitive contract")).toBeTruthy();
   });
 });

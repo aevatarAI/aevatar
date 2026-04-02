@@ -106,6 +106,31 @@ public class WorkflowValidatorCoverageTests
     }
 
     [Fact]
+    public void Validate_WhenRoleIdMissing_ShouldReportError()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles =
+            [
+                new RoleDefinition { Id = "", Name = "RoleWithoutId" },
+            ],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "step-1",
+                    Type = "llm_call",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+
+        errors.Should().Contain(e => e.Contains("缺少 id 的角色"));
+    }
+
+    [Fact]
     public void Validate_WhenWhileMissingTermination_ShouldReportError()
     {
         var wf = new WorkflowDefinition
@@ -421,6 +446,27 @@ public class WorkflowValidatorCoverageTests
         var errors = WorkflowValidator.Validate(wf);
         errors.Should().Contain(e => e.Contains("s-empty") && e.Contains("agent_type"));
         errors.Should().Contain(e => e.Contains("s-invalid") && e.Contains("格式非法"));
+    }
+
+    [Fact]
+    public void Validate_WhenLlmCallMissingTargetRoleAndAgentType_ShouldAllowImplicitAssistantRole()
+    {
+        var wf = new WorkflowDefinition
+        {
+            Name = "wf",
+            Roles = [],
+            Steps =
+            [
+                new StepDefinition
+                {
+                    Id = "s-llm",
+                    Type = "llm_call",
+                },
+            ],
+        };
+
+        var errors = WorkflowValidator.Validate(wf);
+        errors.Should().BeEmpty();
     }
 
     [Fact]

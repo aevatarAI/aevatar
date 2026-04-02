@@ -40,7 +40,7 @@ public sealed class WorkflowStepTargetAgentResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_WhenAgentTypeMissing_ShouldFallbackToRoleThenSelf()
+    public async Task ResolveAsync_WhenAgentTypeMissing_ShouldFallbackToRoleImplicitAssistantThenSelf()
     {
         var runtime = new RecordingActorRuntime();
         var resolver = new WorkflowStepTargetAgentResolver(runtime);
@@ -55,9 +55,19 @@ public sealed class WorkflowStepTargetAgentResolverTests
         roleResult.UseSelf.Should().BeFalse();
         roleResult.ActorId.Should().Be("workflow:root:assistant");
 
-        var selfRequest = new StepRequestEvent
+        var implicitLlmRequest = new StepRequestEvent
         {
             StepId = "step-2",
+            StepType = "llm_call",
+        };
+        var implicitLlmResult = await resolver.ResolveAsync(implicitLlmRequest, ctx, CancellationToken.None);
+        implicitLlmResult.UseSelf.Should().BeFalse();
+        implicitLlmResult.ActorId.Should().Be("workflow:root:assistant");
+
+        var selfRequest = new StepRequestEvent
+        {
+            StepId = "step-3",
+            StepType = "transform",
         };
         var selfResult = await resolver.ResolveAsync(selfRequest, ctx, CancellationToken.None);
         selfResult.UseSelf.Should().BeTrue();

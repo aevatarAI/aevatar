@@ -119,6 +119,9 @@ export type RoleState = {
   provider: string;
   model: string;
   connectorsText: string;
+  /** Ornn skills mode: 'all' = use all user skills (default), 'selected' = only named skills. */
+  ornnSkillsMode: 'all' | 'selected';
+  ornnSelectedSkills: string[];
 };
 
 export type StudioNodeData = {
@@ -257,6 +260,8 @@ export function createRoleState(index = 1, overrides: Partial<RoleState> = {}): 
     provider: overrides.provider ?? '',
     model: overrides.model ?? '',
     connectorsText: overrides.connectorsText ?? '',
+    ornnSkillsMode: overrides.ornnSkillsMode ?? 'all',
+    ornnSelectedSkills: overrides.ornnSelectedSkills ?? [],
   };
 }
 
@@ -272,6 +277,8 @@ export function toRoleState(raw: any, index = 1): RoleState {
     provider: raw?.provider || '',
     model: raw?.model || '',
     connectorsText: Array.isArray(raw?.connectors) ? raw.connectors.join('\n') : (raw?.connectorsText || ''),
+    ornnSkillsMode: raw?.ornnSkillsMode || 'all',
+    ornnSelectedSkills: Array.isArray(raw?.ornnSelectedSkills) ? raw.ornnSelectedSkills : [],
   });
 }
 
@@ -283,6 +290,8 @@ export function toRolePayload(role: RoleState) {
     provider: role.provider.trim(),
     model: role.model.trim(),
     connectors: splitLines(role.connectorsText),
+    ornnSkillsMode: role.ornnSkillsMode,
+    ornnSelectedSkills: role.ornnSelectedSkills,
   };
 }
 

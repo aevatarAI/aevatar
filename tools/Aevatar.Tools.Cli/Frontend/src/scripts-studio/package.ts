@@ -127,7 +127,36 @@ export function coerceScriptPackage(payload: unknown) {
   }
 
   try {
-    return deserializePersistedSource(JSON.stringify(payload));
+    const raw = payload as PersistedPackageShape;
+    const csharpSources = Array.isArray(raw.csharpSources)
+      ? raw.csharpSources
+      : Array.isArray(raw.cSharpSources)
+        ? raw.cSharpSources
+        : Array.isArray(raw.CsharpSources)
+          ? raw.CsharpSources
+          : [];
+    const protoFiles = Array.isArray(raw.protoFiles)
+      ? raw.protoFiles
+      : Array.isArray(raw.ProtoFiles)
+        ? raw.ProtoFiles
+        : [];
+
+    if (csharpSources.length === 0 && protoFiles.length === 0) {
+      return null;
+    }
+
+    return createScriptPackage(
+      csharpSources.map(file => ({
+        path: String(file?.path || file?.Path || 'Behavior.cs'),
+        content: String(file?.content || file?.Content || ''),
+      })),
+      protoFiles.map(file => ({
+        path: String(file?.path || file?.Path || 'schema.proto'),
+        content: String(file?.content || file?.Content || ''),
+      })),
+      raw.entryBehaviorTypeName || raw.EntryBehaviorTypeName || '',
+      raw.entrySourcePath || raw.EntrySourcePath || '',
+    );
   } catch {
     return null;
   }

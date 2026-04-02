@@ -1,13 +1,26 @@
 import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, Select, Space } from 'antd';
-import React from 'react';
+import { Button, Input, Select, Space, Typography } from 'antd';
+import React, { useEffect, useMemo } from 'react';
 import { moduleCardProps } from '@/shared/ui/proComponents';
-import type { GovernanceDraft } from './governanceQuery';
+import {
+  applyGovernanceServiceSelection,
+  findGovernanceServiceOption,
+  type GovernanceDraft,
+  type GovernanceServiceOption,
+} from './governanceQuery';
+
+export type GovernanceRevisionOption = {
+  label: string;
+  value: string;
+};
 
 type GovernanceQueryCardProps = {
   draft: GovernanceDraft;
-  serviceOptions: Array<{ label: string; value: string }>;
+  serviceOptions: GovernanceServiceOption[];
+  serviceSearchEnabled?: boolean;
   includeRevision?: boolean;
+  revisionOptions?: GovernanceRevisionOption[];
+  revisionOptionsLoading?: boolean;
   loadLabel?: string;
   onChange: (draft: GovernanceDraft) => void;
   onLoad: () => void;
@@ -17,34 +30,54 @@ type GovernanceQueryCardProps = {
 const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
   draft,
   serviceOptions,
+  serviceSearchEnabled = true,
   includeRevision = false,
+  revisionOptions = [],
+  revisionOptionsLoading = false,
   loadLabel = 'Load governance',
   onChange,
   onLoad,
   onReset,
 }) => {
+  const selectedServiceOption = useMemo(
+    () => findGovernanceServiceOption(serviceOptions, draft),
+    [draft, serviceOptions],
+  );
+
+  useEffect(() => {
+    if (!selectedServiceOption) {
+      return;
+    }
+
+    const hasIncompleteIdentity =
+      !draft.tenantId.trim() || !draft.namespace.trim();
+    if (!hasIncompleteIdentity) {
+      return;
+    }
+
+    const nextDraft = applyGovernanceServiceSelection(draft, selectedServiceOption);
+    if (
+      nextDraft.tenantId === draft.tenantId &&
+      nextDraft.namespace === draft.namespace &&
+      nextDraft.serviceId === draft.serviceId
+    ) {
+      return;
+    }
+
+    onChange(nextDraft);
+  }, [draft, onChange, selectedServiceOption]);
+
   return (
     <ProCard {...moduleCardProps}>
       <Space wrap>
         <Input
-          placeholder="tenantId"
-          style={{ width: 180 }}
+          placeholder="tenantId (scopeId)"
+          style={{ width: 200 }}
           value={draft.tenantId}
           onChange={(event) =>
             onChange({
               ...draft,
               tenantId: event.target.value,
-            })
-          }
-        />
-        <Input
-          placeholder="appId"
-          style={{ width: 180 }}
-          value={draft.appId}
-          onChange={(event) =>
-            onChange({
-              ...draft,
-              appId: event.target.value,
             })
           }
         />
@@ -61,33 +94,78 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
         />
         <Select
           allowClear
-          placeholder="serviceId"
+          placeholder={
+            serviceSearchEnabled
+              ? 'Search service'
+              : 'Enter tenantId and namespace first'
+          }
           showSearch
           style={{ minWidth: 260 }}
           options={serviceOptions}
-          value={draft.serviceId || undefined}
-          onChange={(value) =>
-            onChange({
-              ...draft,
-              serviceId: value ?? '',
-            })
-          }
-          onSearch={(value) =>
-            onChange({
-              ...draft,
-              serviceId: value,
-            })
-          }
+          disabled={!serviceSearchEnabled}
+          value={selectedServiceOption?.value}
+          filterOption={(input, option) => {
+            const normalizedInput = input.trim().toLowerCase();
+            if (!normalizedInput) {
+              return true;
+            }
+
+            const candidate = [
+              option?.label,
+              option?.serviceId,
+              option?.tenantId,
+              option?.namespace,
+            ]
+              .map((value) => String(value ?? '').toLowerCase())
+              .join(' ');
+
+            return candidate.includes(normalizedInput);
+          }}
+          onChange={(_, option) => {
+            const selectedOption = Array.isArray(option) ? option[0] : option;
+            const nextDraft = selectedOption
+              ? applyGovernanceServiceSelection(draft, selectedOption)
+              : { ...draft, appId: '', serviceId: '', revisionId: '' };
+            const selectionChanged =
+              nextDraft.tenantId !== draft.tenantId ||
+              nextDraft.appId !== draft.appId ||
+              nextDraft.namespace !== draft.namespace ||
+              nextDraft.serviceId !== draft.serviceId;
+
+            onChange(
+              includeRevision && selectionChanged
+                ? { ...nextDraft, revisionId: '' }
+                : nextDraft,
+            );
+          }}
         />
         {includeRevision ? (
-          <Input
-            placeholder="revisionId"
-            style={{ minWidth: 220 }}
+          <Select
+            allowClear
+            placeholder={
+              !draft.serviceId.trim()
+                ? 'Select service first'
+                : revisionOptionsLoading
+                  ? 'Loading revisions'
+                  : revisionOptions.length > 0
+                    ? 'Select revision'
+                    : 'No revisions found'
+            }
+            showSearch
+            style={{ minWidth: 240 }}
+            options={revisionOptions}
+            loading={revisionOptionsLoading}
+            disabled={
+              !draft.serviceId.trim() ||
+              revisionOptionsLoading ||
+              revisionOptions.length === 0
+            }
             value={draft.revisionId}
-            onChange={(event) =>
+            optionFilterProp="label"
+            onChange={(value) =>
               onChange({
                 ...draft,
-                revisionId: event.target.value,
+                revisionId: String(value ?? ''),
               })
             }
           />
@@ -97,6 +175,14 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
         </Button>
         {onReset ? <Button onClick={onReset}>Reset</Button> : null}
       </Space>
+      <Typography.Text
+        type="secondary"
+        style={{ display: 'block', marginTop: 12 }}
+      >
+        {serviceSearchEnabled
+          ? 'Select a service to hydrate the identity fields for this Governance view.'
+          : 'This Governance view needs tenantId and namespace first. Most user flows should stay on Project pages or open this page from Services.'}
+      </Typography.Text>
     </ProCard>
   );
 };

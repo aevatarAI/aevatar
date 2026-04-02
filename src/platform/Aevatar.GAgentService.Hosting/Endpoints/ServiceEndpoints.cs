@@ -19,6 +19,7 @@ public static partial class ServiceEndpoints
         group.MapPost("/{serviceId}/revisions", HandleCreateRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:prepare", HandlePrepareRevisionAsync);
         group.MapPost("/{serviceId}/revisions/{revisionId}:publish", HandlePublishRevisionAsync);
+        group.MapPost("/{serviceId}/revisions/{revisionId}:retire", HandleRetireRevisionAsync);
         group.MapPost("/{serviceId}:default-serving", HandleSetDefaultServingRevisionAsync);
         group.MapPost("/{serviceId}:activate", HandleActivateAsync);
         group.MapGet(string.Empty, HandleListServicesAsync);
@@ -27,8 +28,10 @@ public static partial class ServiceEndpoints
         group.MapPost("/{serviceId}/invoke/{endpointId}", HandleInvokeAsync);
         group.MapGAgentServiceServingEndpoints();
         group.MapGAgentServiceGovernanceEndpoints();
+        app.MapScopeServiceEndpoints();
         app.MapScopeWorkflowCapabilityEndpoints();
         app.MapScopeScriptCapabilityEndpoints();
+        app.MapScopeGAgentCapabilityEndpoints();
         return app;
     }
 
@@ -130,6 +133,21 @@ public static partial class ServiceEndpoints
         CancellationToken ct)
     {
         var receipt = await commandPort.PublishRevisionAsync(new PublishServiceRevisionCommand
+        {
+            Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
+            RevisionId = revisionId,
+        }, ct);
+        return Results.Accepted($"/api/services/{serviceId}/revisions/{revisionId}", receipt);
+    }
+
+    private static async Task<IResult> HandleRetireRevisionAsync(
+        string serviceId,
+        string revisionId,
+        ServiceIdentityHttpRequest request,
+        [FromServices] IServiceCommandPort commandPort,
+        CancellationToken ct)
+    {
+        var receipt = await commandPort.RetireRevisionAsync(new RetireServiceRevisionCommand
         {
             Identity = ToIdentity(request.TenantId, request.AppId, request.Namespace, serviceId),
             RevisionId = revisionId,

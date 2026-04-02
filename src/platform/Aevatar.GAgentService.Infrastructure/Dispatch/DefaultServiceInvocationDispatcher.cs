@@ -67,6 +67,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
             plan.Revision,
             plan.DefinitionActorId,
             request.Payload?.TypeUrl ?? string.Empty,
+            request.Identity?.TenantId,
             ct);
         return CreateReceipt(target, target.Service.PrimaryActorId, commandId, ResolveCorrelationId(request, commandId));
     }

@@ -1,3 +1,4 @@
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import {
   buildAuthInitialState,
   loadRestorableAuthSession,
@@ -104,8 +105,8 @@ describe('auth session storage', () => {
 
   it('accepts only safe in-app redirect targets', () => {
     expect(sanitizeReturnTo('/runs?tab=active')).toBe('/runs?tab=active');
-    expect(sanitizeReturnTo('https://example.com')).toBe('/overview');
-    expect(sanitizeReturnTo('/login?redirect=/overview')).toBe('/overview');
-    expect(sanitizeReturnTo('//evil.example.com')).toBe('/overview');
+    expect(sanitizeReturnTo('https://example.com')).toBe(CONSOLE_HOME_ROUTE);
+    expect(sanitizeReturnTo('/login?redirect=/overview')).toBe(CONSOLE_HOME_ROUTE);
+    expect(sanitizeReturnTo('//evil.example.com')).toBe(CONSOLE_HOME_ROUTE);
   });
 });

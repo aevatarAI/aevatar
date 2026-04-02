@@ -54,8 +54,53 @@ public sealed class ServiceRevisionCatalogQueryReader : IServiceRevisionCatalogQ
                     x.CreatedAt,
                     x.PreparedAt,
                     x.PublishedAt,
-                    x.RetiredAt))
+                    x.RetiredAt,
+                    BuildImplementationSnapshot(x)))
                 .ToList(),
-            readModel.UpdatedAt);
+            readModel.UpdatedAt,
+            readModel.StateVersion,
+            readModel.LastEventId);
+    }
+
+    private static ServiceRevisionImplementationSnapshot? BuildImplementationSnapshot(
+        ServiceRevisionEntryReadModel revision)
+    {
+        var staticSnapshot =
+            !string.IsNullOrWhiteSpace(revision.StaticActorTypeName) ||
+            !string.IsNullOrWhiteSpace(revision.StaticPreferredActorId)
+                ? new ServiceRevisionStaticSnapshot(
+                    revision.StaticActorTypeName ?? string.Empty,
+                    revision.StaticPreferredActorId ?? string.Empty)
+                : null;
+
+        var scriptingSnapshot =
+            !string.IsNullOrWhiteSpace(revision.ScriptingScriptId) ||
+            !string.IsNullOrWhiteSpace(revision.ScriptingRevision) ||
+            !string.IsNullOrWhiteSpace(revision.ScriptingDefinitionActorId) ||
+            !string.IsNullOrWhiteSpace(revision.ScriptingSourceHash)
+                ? new ServiceRevisionScriptingSnapshot(
+                    revision.ScriptingScriptId ?? string.Empty,
+                    revision.ScriptingRevision ?? string.Empty,
+                    revision.ScriptingDefinitionActorId ?? string.Empty,
+                    revision.ScriptingSourceHash ?? string.Empty)
+                : null;
+
+        var workflowSnapshot =
+            !string.IsNullOrWhiteSpace(revision.WorkflowName) ||
+            !string.IsNullOrWhiteSpace(revision.WorkflowDefinitionActorId) ||
+            revision.WorkflowInlineWorkflowCount > 0
+                ? new ServiceRevisionWorkflowSnapshot(
+                    revision.WorkflowName ?? string.Empty,
+                    revision.WorkflowDefinitionActorId ?? string.Empty,
+                    revision.WorkflowInlineWorkflowCount)
+                : null;
+
+        if (staticSnapshot == null && scriptingSnapshot == null && workflowSnapshot == null)
+            return null;
+
+        return new ServiceRevisionImplementationSnapshot(
+            staticSnapshot,
+            scriptingSnapshot,
+            workflowSnapshot);
     }
 }

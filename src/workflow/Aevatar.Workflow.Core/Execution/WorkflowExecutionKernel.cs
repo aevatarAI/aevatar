@@ -240,6 +240,26 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             return;
         }
 
+        // Idempotent execution: reject stale completions with mismatched execution_id
+        if (!string.IsNullOrEmpty(evt.ExecutionId) &&
+            state.ExecutionIdsByStepId.TryGetValue(evt.StepId, out var expectedExecutionId) &&
+            !string.Equals(evt.ExecutionId, expectedExecutionId, StringComparison.Ordinal))
+        {
+            ctx.Logger.LogWarning(
+                "workflow_loop: reject stale execution_id run={RunId} step={StepId} expected={Expected} received={Received}",
+                runId, evt.StepId, expectedExecutionId, evt.ExecutionId);
+            await ctx.PublishAsync(new StaleStepCompletionRejectedEvent
+            {
+                StepId = evt.StepId,
+                RunId = runId,
+                ExpectedExecutionId = expectedExecutionId,
+                ReceivedExecutionId = evt.ExecutionId,
+            }, TopologyAudience.Self, ct);
+            return;
+        }
+
+        state.ExecutionIdsByStepId.Remove(evt.StepId);
+
         await CancelTimeoutAsync(state, evt.StepId, ctx, ct);
         if (!evt.Success && state.RetryBackoffsByStepId.ContainsKey(evt.StepId))
         {
@@ -713,6 +733,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             ? BuildStepTimeoutCallbackId(state.RunId, step.Id, ResolveInboundEnvelopeId(ctx))
             : string.Empty;
 
+        // Idempotent execution: generate unique execution_id per dispatch
+        var executionId = Guid.NewGuid().ToString("N");
+        request.ExecutionId = executionId;
+        state.ExecutionIdsByStepId[step.Id] = executionId;
+
         state.CurrentStepId = step.Id;
         state.CurrentStepInput = input;
         state.CurrentStepDispatchPending = true;
@@ -928,12 +953,13 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
         IWorkflowExecutionContext ctx)
     {
         var canonicalStepType = WorkflowPrimitiveCatalog.ToCanonicalType(step.Type);
+        var effectiveTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(_workflow, step);
         var inputPreview = input.Length > 200 ? input[..200] + "..." : input;
         ctx.Logger.LogInformation(
             "workflow_loop: dispatch step={StepId} type={Type} role={Role} input=({Len} chars) {Preview}",
             step.Id,
             canonicalStepType,
-            step.TargetRole ?? "(none)",
+            string.IsNullOrWhiteSpace(effectiveTargetRole) ? "(none)" : effectiveTargetRole,
             input.Length,
             inputPreview);
 
@@ -943,7 +969,7 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             StepType = canonicalStepType,
             RunId = state.RunId,
             Input = input,
-            TargetRole = step.TargetRole ?? string.Empty,
+            TargetRole = effectiveTargetRole,
         };
 
         state.Variables["input"] = input;
@@ -967,10 +993,10 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
                 request.Parameters[$"branch.{branchKey}"] = branchValue;
         }
 
-        if (!string.IsNullOrWhiteSpace(step.TargetRole) && _workflow != null)
+        if (!string.IsNullOrWhiteSpace(effectiveTargetRole) && _workflow != null)
         {
             var role = _workflow.Roles.FirstOrDefault(
-                x => string.Equals(x.Id, step.TargetRole, StringComparison.OrdinalIgnoreCase));
+                x => string.Equals(x.Id, effectiveTargetRole, StringComparison.OrdinalIgnoreCase));
             if (role is { Connectors.Count: > 0 })
                 request.Parameters["allowed_connectors"] = string.Join(",", role.Connectors);
         }
@@ -1001,6 +1027,11 @@ internal sealed class WorkflowExecutionKernel : IEventModule<IEventHandlerContex
             state.CurrentStepId);
 
         var request = BuildStepRequest(step, state.CurrentStepInput, state, ctx);
+
+        // Restore the saved execution_id so stale-completion protection works after resume
+        if (state.ExecutionIdsByStepId.TryGetValue(step.Id, out var savedExecutionId))
+            request.ExecutionId = savedExecutionId;
+
         RuntimeCallbackLease? timeoutLease = null;
         var createdTimeoutLease = false;
         try

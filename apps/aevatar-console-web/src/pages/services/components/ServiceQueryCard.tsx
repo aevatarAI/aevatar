@@ -1,5 +1,5 @@
 import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, InputNumber, Space } from 'antd';
+import { Button, Input, InputNumber, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ServiceQueryDraft } from './serviceQuery';
@@ -19,12 +19,14 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
   onReset,
   loadLabel = 'Load services',
 }) => {
+  const { token } = theme.useToken();
+
   return (
     <ProCard {...moduleCardProps}>
       <Space wrap>
         <Input
-          placeholder="tenantId"
-          style={{ width: 180 }}
+          placeholder="tenantId (scopeId)"
+          style={{ width: 200 }}
           value={draft.tenantId}
           onChange={(event) =>
             onChange({
@@ -35,7 +37,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         />
         <Input
           placeholder="appId"
-          style={{ width: 180 }}
+          style={{ width: 160 }}
           value={draft.appId}
           onChange={(event) =>
             onChange({
@@ -71,6 +73,12 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         </Button>
         {onReset ? <Button onClick={onReset}>Reset</Button> : null}
       </Space>
+      <Typography.Text
+        style={{ color: token.colorTextSecondary, display: 'block', marginTop: 12 }}
+      >
+        Raw platform catalog only. End-user workflow assets should be opened
+        from Projects.
+      </Typography.Text>
     </ProCard>
   );
 };

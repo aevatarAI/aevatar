@@ -5,6 +5,9 @@ using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.GAgentService.Governance.Abstractions;
+using Aevatar.GAgentService.Governance.Abstractions.Ports;
+using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.Workflow.Abstractions;
@@ -73,6 +76,48 @@ public sealed class ScopeWorkflowEndpointsTests
         var body = await ReadBodyAsync(http.Response);
         http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
         body.Should().Contain("SCOPE_ACCESS_DENIED");
+        interactionService.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HandleRunWorkflowStreamAsync_ShouldReturnForbidden_WhenAuthenticationIsMissing()
+    {
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        var interactionService = new FakeCommandInteractionService();
+        var http = CreateAnonymousHttpContext();
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
+            http,
+            "user-1",
+            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("definition-actor-1", "hello"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        var body = await ReadBodyAsync(http.Response);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status403Forbidden);
+        body.Should().Contain("SCOPE_ACCESS_DENIED");
+        body.Should().Contain("Authentication is required.");
         interactionService.LastRequest.Should().BeNull();
     }
 
@@ -425,29 +470,95 @@ public sealed class ScopeWorkflowEndpointsTests
     }
 
     [Fact]
-    public async Task HandleStopWorkflowRunAsync_ShouldReturnNotFound_WhenRunDoesNotBelongToScope()
+    public async Task HandleRunWorkflowStreamAsync_ShouldSucceed_WhenScopeClaimMatchesPath()
     {
-        var http = CreateHttpContext();
-        var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
+        var queryPort = new FakeServiceLifecycleQueryPort
+        {
+            ListServicesResult =
+            [
+                new ServiceCatalogSnapshot(
+                    "tenant-a:workflow-app:user:token:approval",
+                    "tenant-a",
+                    "workflow-app",
+                    "user:user-1-token",
+                    "approval",
+                    "Approval",
+                    "rev-1",
+                    "rev-1",
+                    "dep-1",
+                    "definition-actor-1",
+                    "active",
+                    [],
+                    [],
+                    DateTimeOffset.UtcNow),
+            ],
+        };
+        var interactionService = new FakeCommandInteractionService
+        {
+            ResultFactory = async (request, emitAsync, onAcceptedAsync, ct) =>
+            {
+                var receipt = new WorkflowChatRunAcceptedReceipt("definition-actor-1", "approval", "cmd-1", "corr-1");
+                if (onAcceptedAsync != null)
+                    await onAcceptedAsync(receipt, ct);
+                await emitAsync(new WorkflowRunEventEnvelope
+                {
+                    TextMessageContent = new WorkflowTextMessageContentEventPayload
+                    {
+                        MessageId = "msg-1",
+                        Delta = "hi",
+                    },
+                }, ct);
+                return CommandInteractionResult<WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError, WorkflowProjectionCompletionStatus>
+                    .Success(receipt, new CommandInteractionFinalizeResult<WorkflowProjectionCompletionStatus>(WorkflowProjectionCompletionStatus.Completed, true));
+            },
+        };
+        var http = CreateAuthenticatedHttpContext("user-1");
+
+        await ScopeWorkflowEndpoints.HandleRunWorkflowStreamAsync(
             http,
             "user-1",
-            new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest("run-actor-1", "run-1"),
+            new ScopeWorkflowEndpoints.RunScopeWorkflowStreamHttpRequest("definition-actor-1", "hello"),
+            BuildQueryPort(queryPort: queryPort),
+            interactionService,
+            CancellationToken.None);
+
+        http.Response.StatusCode.Should().NotBe(StatusCodes.Status403Forbidden);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+    }
+
+    [Fact]
+    public async Task HandleListWorkflowsAsync_ShouldReturnEmptyArray_WhenNoWorkflows()
+    {
+        var http = CreateHttpContext();
+
+        var result = await ScopeWorkflowEndpoints.HandleListWorkflowsAsync(
+            http,
+            "user-1",
+            includeSource: false,
             BuildQueryPort(),
-            new FakeWorkflowActorBindingReader
-            {
-                Bindings =
-                {
-                    ["run-actor-1"] = new WorkflowActorBinding(
-                        WorkflowActorKind.Run,
-                        "run-actor-1",
-                        "definition-actor-404",
-                        "run-1",
-                        "approval",
-                        "yaml",
-                        new Dictionary<string, string>()),
-                },
-            },
-            new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>(),
+            new FakeWorkflowActorBindingReader(),
+            artifactStore: null,
+            CancellationToken.None);
+
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Be("[]");
+    }
+
+    [Fact]
+    public async Task HandleGetWorkflowDetailAsync_ShouldReturnNotFound_WhenWorkflowDoesNotExist()
+    {
+        var http = CreateHttpContext();
+
+        var result = await ScopeWorkflowEndpoints.HandleGetWorkflowDetailAsync(
+            http,
+            "user-1",
+            "nonexistent-workflow",
+            BuildQueryPort(),
+            new FakeWorkflowActorBindingReader(),
+            artifactStore: null,
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
@@ -455,10 +566,11 @@ public sealed class ScopeWorkflowEndpointsTests
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
         body.Should().Contain("USER_WORKFLOW_NOT_FOUND");
+        body.Should().Contain("nonexistent-workflow");
     }
 
     [Fact]
-    public async Task HandleStopWorkflowRunAsync_ShouldDispatchStop_WhenRunBelongsToScope()
+    public async Task HandleUpsertWorkflowAsync_ShouldReturnOk_WhenCommandSucceeds()
     {
         var http = CreateHttpContext();
         var snapshot = new ServiceCatalogSnapshot(
@@ -480,48 +592,19 @@ public sealed class ScopeWorkflowEndpointsTests
         {
             ListServicesResult = [snapshot],
         };
-        var stopService = new RecordingDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>
-        {
-            Result = CommandDispatchResult<WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>.Success(
-                new WorkflowRunControlAcceptedReceipt("run-actor-1", "run-1", "stop-cmd-1", "corr-1")),
-        };
+        queryPort.GetServiceResults.Enqueue(snapshot);
 
-        var result = await ScopeWorkflowEndpoints.HandleStopWorkflowRunAsync(
+        var result = await ScopeWorkflowEndpoints.HandleUpsertWorkflowAsync(
             http,
             "user-1",
-            new ScopeWorkflowEndpoints.StopScopeWorkflowRunHttpRequest(
-                "run-actor-1",
-                "run-1",
-                "stop-cmd-1",
-                "user requested stop"),
-            BuildQueryPort(queryPort: queryPort),
-            new FakeWorkflowActorBindingReader
-            {
-                Bindings =
-                {
-                    ["run-actor-1"] = new WorkflowActorBinding(
-                        WorkflowActorKind.Run,
-                        "run-actor-1",
-                        "definition-actor-1",
-                        "run-1",
-                        "approval",
-                        "yaml",
-                        new Dictionary<string, string>()),
-                },
-            },
-            stopService,
+            "approval",
+            new ScopeWorkflowEndpoints.UpsertScopeWorkflowHttpRequest("name: approval\nsteps: []\n"),
+            BuildCommandPort(queryPort: queryPort),
             CancellationToken.None);
 
         await result.ExecuteAsync(http);
-        var body = await ReadBodyAsync(http.Response);
 
         http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        stopService.Commands.Should().ContainSingle();
-        stopService.Commands.Single().ActorId.Should().Be("run-actor-1");
-        stopService.Commands.Single().RunId.Should().Be("run-1");
-        stopService.Commands.Single().CommandId.Should().Be("stop-cmd-1");
-        stopService.Commands.Single().Reason.Should().Be("user requested stop");
-        body.Should().Contain("user requested stop");
     }
 
     private static IScopeWorkflowCommandPort BuildCommandPort(
@@ -534,13 +617,14 @@ public sealed class ScopeWorkflowEndpointsTests
         return new ScopeWorkflowCommandApplicationService(
             commandPort ?? new FakeServiceCommandPort(),
             resolvedQueryPort,
+            new NoOpServiceGovernanceCommandPort(),
+            new NoOpServiceGovernanceQueryPort(),
             queryService,
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
-                TenantId = "tenant-a",
-                AppId = "workflow-app",
-                NamespacePrefix = "user:",
-                DefinitionActorIdPrefix = "user-workflow",
+                ServiceAppId = "default",
+                ServiceNamespace = "default",
+                DefinitionActorIdPrefix = "scope-workflow",
             }));
     }
 
@@ -558,14 +642,13 @@ public sealed class ScopeWorkflowEndpointsTests
             bindingReader ?? new FakeWorkflowActorBindingReader(),
             Options.Create(new ScopeWorkflowCapabilityOptions
             {
-                TenantId = "tenant-a",
-                AppId = "workflow-app",
-                NamespacePrefix = "user:",
-                DefinitionActorIdPrefix = "user-workflow",
+                ServiceAppId = "default",
+                ServiceNamespace = "default",
+                DefinitionActorIdPrefix = "scope-workflow",
             }));
     }
 
-    private static DefaultHttpContext CreateHttpContext()
+    private static DefaultHttpContext CreateHttpContext(string scopeId = "user-1")
     {
         var http = new DefaultHttpContext
         {
@@ -575,16 +658,25 @@ public sealed class ScopeWorkflowEndpointsTests
                 .BuildServiceProvider(),
         };
         http.Response.Body = new MemoryStream();
-        return http;
-    }
-
-    private static DefaultHttpContext CreateAuthenticatedHttpContext(string scopeId)
-    {
-        var http = CreateHttpContext();
         http.User = new ClaimsPrincipal(
             new ClaimsIdentity(
                 [new Claim("scope_id", scopeId)],
                 authenticationType: "test"));
+        return http;
+    }
+
+    private static DefaultHttpContext CreateAuthenticatedHttpContext(string scopeId) => CreateHttpContext(scopeId);
+
+    private static DefaultHttpContext CreateAnonymousHttpContext()
+    {
+        var http = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddOptions()
+                .BuildServiceProvider(),
+        };
+        http.Response.Body = new MemoryStream();
         return http;
     }
 
@@ -651,6 +743,7 @@ public sealed class ScopeWorkflowEndpointsTests
         public Task<ServiceCommandAcceptedReceipt> CreateRevisionAsync(CreateServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> PrepareRevisionAsync(PrepareServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> PublishRevisionAsync(PublishServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
+        public Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(RetireServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(SetDefaultServingRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> ActivateServiceRevisionAsync(ActivateServiceRevisionCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
         public Task<ServiceCommandAcceptedReceipt> DeactivateServiceDeploymentAsync(DeactivateServiceDeploymentCommand command, CancellationToken ct = default) => Task.FromResult(Accepted());
@@ -666,21 +759,22 @@ public sealed class ScopeWorkflowEndpointsTests
 
     private sealed class FakeServiceLifecycleQueryPort : IServiceLifecycleQueryPort
     {
+        public sealed record ListRequest(string TenantId, string AppId, string Namespace, int Take);
+
         public readonly Queue<ServiceCatalogSnapshot?> GetServiceResults = new();
         public IReadOnlyList<ServiceCatalogSnapshot> ListServicesResult { get; set; } = [];
+        public ServiceIdentity? LastGetIdentity { get; private set; }
+        public ListRequest? LastListRequest { get; private set; }
 
         public Task<ServiceCatalogSnapshot?> GetServiceAsync(ServiceIdentity identity, CancellationToken ct = default)
         {
-            _ = identity;
+            LastGetIdentity = identity;
             return Task.FromResult(GetServiceResults.Count > 0 ? GetServiceResults.Dequeue() : null);
         }
 
         public Task<IReadOnlyList<ServiceCatalogSnapshot>> ListServicesAsync(string tenantId, string appId, string @namespace, int take = 200, CancellationToken ct = default)
         {
-            _ = tenantId;
-            _ = appId;
-            _ = @namespace;
-            _ = take;
+            LastListRequest = new ListRequest(tenantId, appId, @namespace, take);
             return Task.FromResult(ListServicesResult);
         }
 
@@ -727,5 +821,47 @@ public sealed class ScopeWorkflowEndpointsTests
             Commands.Add(command);
             return Task.FromResult(Result);
         }
+    }
+
+    private sealed class NoOpServiceGovernanceCommandPort : IServiceGovernanceCommandPort
+    {
+        private static readonly ServiceCommandAcceptedReceipt DefaultReceipt =
+            new("governance-actor", "cmd-governance", "corr-governance");
+
+        public Task<ServiceCommandAcceptedReceipt> CreateBindingAsync(CreateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateBindingAsync(UpdateServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetireBindingAsync(RetireServiceBindingCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreateEndpointCatalogAsync(CreateServiceEndpointCatalogCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdateEndpointCatalogAsync(UpdateServiceEndpointCatalogCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> CreatePolicyAsync(CreateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> UpdatePolicyAsync(UpdateServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+
+        public Task<ServiceCommandAcceptedReceipt> RetirePolicyAsync(RetireServicePolicyCommand command, CancellationToken ct = default) =>
+            Task.FromResult(DefaultReceipt);
+    }
+
+    private sealed class NoOpServiceGovernanceQueryPort : IServiceGovernanceQueryPort
+    {
+        public Task<ServiceBindingCatalogSnapshot?> GetBindingsAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceBindingCatalogSnapshot?>(null);
+
+        public Task<ServiceEndpointCatalogSnapshot?> GetEndpointCatalogAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServiceEndpointCatalogSnapshot?>(null);
+
+        public Task<ServicePolicyCatalogSnapshot?> GetPoliciesAsync(ServiceIdentity identity, CancellationToken ct = default) =>
+            Task.FromResult<ServicePolicyCatalogSnapshot?>(null);
     }
 }

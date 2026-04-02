@@ -1,3 +1,4 @@
+using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Projection.Queries;
 using Aevatar.GAgentService.Projection.ReadModels;
 using Aevatar.GAgentService.Tests.TestSupport;
@@ -92,5 +93,55 @@ public sealed class ServiceRevisionCatalogQueryReaderTests
         snapshot!.Revisions.Should().ContainSingle();
         snapshot.Revisions[0].Endpoints.Should().ContainSingle();
         snapshot.Revisions[0].Endpoints[0].EndpointId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldMapVersionWatermarkAndTypedImplementationGovernance()
+    {
+        var store = new RecordingDocumentStore<ServiceRevisionCatalogReadModel>(x => x.Id);
+        await store.UpsertAsync(new ServiceRevisionCatalogReadModel
+        {
+            Id = "tenant:app:default:svc",
+            StateVersion = 42,
+            LastEventId = "evt-42",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Revisions =
+            {
+                new ServiceRevisionEntryReadModel
+                {
+                    RevisionId = "r-workflow",
+                    WorkflowName = "approval",
+                    WorkflowDefinitionActorId = "workflow-def-1",
+                    WorkflowInlineWorkflowCount = 2,
+                },
+                new ServiceRevisionEntryReadModel
+                {
+                    RevisionId = "r-static",
+                    StaticActorTypeName = "Tests.StaticActor, Tests",
+                    StaticPreferredActorId = "static-actor-1",
+                },
+                new ServiceRevisionEntryReadModel
+                {
+                    RevisionId = "r-script",
+                    ScriptingScriptId = "script-a",
+                    ScriptingRevision = "7",
+                    ScriptingDefinitionActorId = "script-def-1",
+                    ScriptingSourceHash = "hash-a",
+                },
+            },
+        });
+        var reader = new ServiceRevisionCatalogQueryReader(store);
+
+        var snapshot = await reader.GetAsync(GAgentServiceTestKit.CreateIdentity());
+
+        snapshot.Should().NotBeNull();
+        snapshot!.StateVersion.Should().Be(42);
+        snapshot.LastEventId.Should().Be("evt-42");
+        snapshot.Revisions.Single(x => x.RevisionId == "r-workflow").Implementation!.Workflow.Should()
+            .BeEquivalentTo(new ServiceRevisionWorkflowSnapshot("approval", "workflow-def-1", 2));
+        snapshot.Revisions.Single(x => x.RevisionId == "r-static").Implementation!.Static.Should()
+            .BeEquivalentTo(new ServiceRevisionStaticSnapshot("Tests.StaticActor, Tests", "static-actor-1"));
+        snapshot.Revisions.Single(x => x.RevisionId == "r-script").Implementation!.Scripting.Should()
+            .BeEquivalentTo(new ServiceRevisionScriptingSnapshot("script-a", "7", "script-def-1", "hash-a"));
     }
 }

@@ -294,6 +294,12 @@ internal sealed class ConfigOperations
 
         var endpointPath = $"LLMProviders:Providers:{name}:Endpoint";
         var endpoint = (request.Endpoint ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(endpoint) &&
+            string.Equals(providerType, "nyxid", StringComparison.OrdinalIgnoreCase))
+        {
+            endpoint = TryResolveNyxIdGatewayEndpointFromConfigJson() ?? string.Empty;
+        }
+
         if (string.IsNullOrWhiteSpace(endpoint))
             _secrets.Remove(endpointPath);
         else
@@ -338,6 +344,46 @@ internal sealed class ConfigOperations
             apiKeyCopiedFrom,
             apiKeyCopySkipped,
         };
+    }
+
+    private static string? TryResolveNyxIdGatewayEndpointFromConfigJson()
+    {
+        var all = LoadJsonFileAsFlat(AevatarPaths.ConfigJson);
+        if (all.TryGetValue("Aevatar:NyxId:GatewayEndpoint", out var configuredEndpoint) &&
+            !string.IsNullOrWhiteSpace(configuredEndpoint))
+        {
+            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+        }
+
+        if (all.TryGetValue("Cli:App:NyxId:GatewayEndpoint", out configuredEndpoint) &&
+            !string.IsNullOrWhiteSpace(configuredEndpoint))
+        {
+            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+        }
+
+        if (!all.TryGetValue("Cli:App:NyxId:Authority", out var authority) &&
+            !all.TryGetValue("Aevatar:NyxId:Authority", out authority))
+        {
+            return null;
+        }
+
+        return NormalizeNyxIdGatewayEndpoint(authority);
+    }
+
+    private static string? NormalizeNyxIdGatewayEndpoint(string? value)
+    {
+        var trimmed = value?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return null;
+
+        var absolute = uri.ToString().TrimEnd('/');
+        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
+            return absolute;
+
+        return $"{absolute}/api/v1/llm/gateway/v1";
     }
 
     public bool DeleteLlmInstance(string providerName)

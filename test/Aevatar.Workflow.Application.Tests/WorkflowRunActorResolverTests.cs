@@ -34,7 +34,7 @@ public sealed class WorkflowRunActorResolverTests
     {
         var bindingReader = new StaticWorkflowActorBindingReader(null);
         var actorPort = new RecordingWorkflowRunActorPort();
-        var registry = new InMemoryWorkflowDefinitionRegistry();
+        var registry = new InMemoryWorkflowDefinitionCatalog();
         registry.Register("direct", "name: direct\nroles: []\nsteps: []\n");
         var resolver = new WorkflowRunActorResolver(bindingReader, actorPort, registry);
 

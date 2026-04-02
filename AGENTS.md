@@ -94,6 +94,7 @@
 - 单线程事实源：Actor/模块运行态只能在事件处理主线程修改；禁止在模块内使用 `lock/Monitor/ConcurrentDictionary` 作为并发补丁来维护事实状态。
 - 回调只发信号：`Task.Run`、`Timer`、线程池回调不得直接读写运行态，也不得直接推进业务分支；只能发布“内部触发事件”（如 timeout/retry fired）。
 - 业务推进内聚：工作流推进（成功/失败/分支/重试）必须在 Actor 事件处理流程内完成，保证顺序性与可重放性。
+- AI 对话主链必须流式化：仓库内新增或修改 AI 对话执行路径时，禁止使用 `ChatAsync` 作为正式主链；必须使用 `ChatStreamAsync` 作为唯一权威执行入口，使文本、reasoning、tool call、tool result、完成态都沿同一条流式链路对外发布。`ChatAsync` 仅可用于明确的非交互式离线场景，且不得用于 CLI / AGUI / Scope Service / NyxID Chat / Workflow Chat 等任何面向用户的实时会话入口。
 - self continuation 必须事件化：Actor 需要“下一拍继续”时，必须通过标准 self-message 进入自身 inbox，再由 Actor 事件处理流程消费；禁止新增绕过消息抽象的临时 helper，或依赖特定 runtime 的 self-dispatch 偶然行为来推进业务。
 - 延迟与超时事件化：所有 `delay/timeout/retry backoff` 统一采用“异步等待 -> 发布内部事件 -> Actor 内消费并对账”的模式，禁止回调线程直接改状态。
 - 跨 actor 等待必须 continuation 化：Actor 向其他 actor 请求事实或动作时，必须采用“发送请求事件 -> 结束当前 turn -> 由 reply event 或 timeout event 唤醒自身继续处理”的模型；禁止在当前 turn 内同步等待 reply，也禁止用本地快照读取、event store 侧读或伪 RPC 绕过这一约束。
@@ -120,12 +121,13 @@
 - `test/`：与 `src/` 对应的测试项目（单元、集成、API）。
 - `docs/`：架构与设计文档；`workflows/`：YAML 工作流定义。
 - `tools/`：开发工具；`demos/`：示例与演示程序。
+- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
 
 ## 构建、测试与本地运行
 - `dotnet restore aevatar.slnx --nologo`：还原依赖。
 - `dotnet build aevatar.slnx --nologo`：编译全部项目。
 - `dotnet test aevatar.slnx --nologo`：运行全量测试。
-- 端口约束：所有 Web API 服务禁止使用 `5000` 与 `5050` 端口；新增或修改 Host、启动脚本、`launchSettings`、README、CLI 示例时，默认端口必须避开 `5000/5050`，并保持代码、脚本与文档一致。若需要提供默认示例，统一使用其他端口（当前文档默认使用 `5100`）。
+- 端口约束：仓库内禁止出现 `5000` 端口，这会与系统冲突；所有 Web API 服务同时禁止使用 `5000` 与 `5050` 端口。新增或修改 Host、启动脚本、`launchSettings`、README、CLI 示例、测试样例、SDK 默认值或任何代码/脚本文案时，不得写入 `5000`，并必须保持代码、脚本与文档一致。若需要提供默认示例，统一使用其他端口（当前文档默认使用 `5100`）。
 - `bash tools/ci/architecture_guards.sh`：本地执行 CI 架构门禁（与 CI 同步）。
 - `bash tools/ci/workflow_binding_boundary_guard.sh`：单独执行 workflow binding 边界门禁。
 - `bash tools/ci/query_projection_priming_guard.sh`：校验 query/read 路径不触发 projection priming 或生命周期操作。
@@ -181,3 +183,19 @@
 - 禁止在同类文档中混用 `2026-3-9`、`20260309`、`03-09-2026`、尾部 `-2026-03-09` 等变长或后置格式；统一使用前置定长格式，例如 `2026-03-09-workflow-architecture.md`。
 - 默认将打分/审计文档生成到 `docs/audit-scorecard/` 目录。
 - 工作文档不需要添加到解决方案（`aevatar.slnx`）。
+
+## 外部依赖仓库（强制）
+
+本仓库依赖以下同级目录下的外部仓库。遇到相关问题时，**必须先回退到上一级目录（`../`）检查对应仓库是否存在，若存在则先阅读其源代码再继续工作**，禁止仅凭本仓库内的接口定义或猜测进行实现。
+
+| 关键词 / 涉及范围 | 外部仓库路径 | 说明 |
+|---|---|---|
+| `NyxID`、`NyxId`、nyxid 相关服务/工具/GAgent | `../NyxID` | NyxID 身份服务仓库，包含 NyxID 协议、服务端实现与 SDK |
+| `chrono-storage`、ChronoStorage、存储 API/客户端 | `../chrono-storage` | ChronoStorage 存储服务仓库，包含 API 定义、存储引擎与客户端 SDK |
+| `chrono-ornn`、Ornn、编排/运行时引擎 | `../chrono-ornn` | Chrono Ornn 编排引擎仓库，包含运行时核心与调度逻辑 |
+
+### 工作流程
+1. 当任务涉及上述关键词时，先执行 `ls ../NyxID`、`ls ../chrono-storage`、`ls ../chrono-ornn`（按需）确认目录存在。
+2. 若目录存在，阅读相关源代码（重点关注接口定义、proto 文件、SDK 公开 API）以理解真实契约。
+3. 基于外部仓库的实际实现进行本仓库的开发、调试或问题排查，禁止仅依赖本仓库内的抽象猜测行为。
+4. 若目录不存在，向用户说明缺少对应仓库，询问是否需要 clone 或提供替代方案。

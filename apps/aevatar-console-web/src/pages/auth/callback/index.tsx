@@ -1,12 +1,13 @@
 import { PageLoading } from '@ant-design/pro-components';
 import { Button, Result } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
-import { useModel } from '@umijs/max';
 import { NyxIDAuthClient } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
+import { loadStoredAuthSession } from '@/shared/auth/session';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { describeError } from '@/shared/ui/errorText';
 
 const CallbackPage: React.FC = () => {
-  const { initialState, setInitialState } = useModel('@@initialState');
   const [errorText, setErrorText] = useState<string | undefined>(undefined);
   const config = useMemo(() => getNyxIDRuntimeConfig(), []);
 
@@ -21,39 +22,26 @@ const CallbackPage: React.FC = () => {
           return;
         }
 
-        setInitialState((current) =>
-          current
-            ? {
-                ...current,
-                auth: {
-                  enabled: true,
-                  isAuthenticated: true,
-                  config,
-                  session: result.session,
-                },
-              }
-            : current,
-        );
         window.location.replace(result.returnTo);
       } catch (error) {
         if (cancelled) {
           return;
         }
 
-        setErrorText(error instanceof Error ? error.message : String(error));
+        setErrorText(describeError(error));
       }
     };
 
-    if (!initialState?.auth?.isAuthenticated) {
+    if (!loadStoredAuthSession()) {
       void finishLogin();
     } else {
-      window.location.replace('/overview');
+      window.location.replace(CONSOLE_HOME_ROUTE);
     }
 
     return () => {
       cancelled = true;
     };
-  }, [config, initialState?.auth?.isAuthenticated, setInitialState]);
+  }, [config]);
 
   if (errorText) {
     return (

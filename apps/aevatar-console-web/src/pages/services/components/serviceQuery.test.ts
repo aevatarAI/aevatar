@@ -46,11 +46,14 @@ describe('serviceQuery', () => {
       '/services?tenantId=t1&appId=a1&namespace=n1&take=20',
     );
     expect(buildServiceDetailHref('service.alpha', query)).toBe(
-      '/services/service.alpha?tenantId=t1&appId=a1&namespace=n1&take=20',
+      '/services?tenantId=t1&appId=a1&namespace=n1&take=20&serviceId=service.alpha',
     );
   });
 
-  it('reads the concrete service identifier from a detail route pathname', () => {
+  it('reads the concrete service identifier from query state or a detail route pathname', () => {
+    expect(
+      readServiceIdFromPathname('/services', '?serviceId=service.alpha'),
+    ).toBe('service.alpha');
     expect(readServiceIdFromPathname('/services/service.alpha')).toBe(
       'service.alpha',
     );

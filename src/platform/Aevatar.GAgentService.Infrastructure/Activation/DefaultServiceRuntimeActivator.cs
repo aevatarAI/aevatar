@@ -39,7 +39,11 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             ServiceDeploymentPlan.PlanSpecOneofCase.StaticPlan =>
                 await ActivateStaticAsync(request.Artifact.DeploymentPlan.StaticPlan, deploymentId, ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.ScriptingPlan =>
-                await ActivateScriptingAsync(request.Artifact.DeploymentPlan.ScriptingPlan, deploymentId, ct),
+                await ActivateScriptingAsync(
+                    request.Artifact.DeploymentPlan.ScriptingPlan,
+                    deploymentId,
+                    request.Identity?.TenantId,
+                    ct),
             ServiceDeploymentPlan.PlanSpecOneofCase.WorkflowPlan =>
                 await ActivateWorkflowAsync(request.Artifact.DeploymentPlan.WorkflowPlan, deploymentId, ct),
             _ => throw new InvalidOperationException("Unsupported deployment plan."),
@@ -64,7 +68,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
         string deploymentId,
         CancellationToken ct)
     {
-        var actorType = Type.GetType(plan.ActorTypeName, throwOnError: true)
+        var actorType = ResolveActorType(plan.ActorTypeName)
             ?? throw new InvalidOperationException($"Static actor type '{plan.ActorTypeName}' was not found.");
         var actorId = string.IsNullOrWhiteSpace(plan.PreferredActorId)
             ? $"gagent-service:static-runtime:{deploymentId}"
@@ -78,6 +82,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
     private async Task<ServiceRuntimeActivationResult> ActivateScriptingAsync(
         ScriptingServiceDeploymentPlan plan,
         string deploymentId,
+        string? scopeId,
         CancellationToken ct)
     {
         var definitionSnapshot = await _scriptDefinitionSnapshotPort.GetRequiredAsync(
@@ -90,6 +95,7 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             plan.Revision,
             runtimeActorId,
             definitionSnapshot,
+            scopeId,
             ct);
         return new ServiceRuntimeActivationResult(deploymentId, actorId, "active");
     }
@@ -121,5 +127,31 @@ public sealed class DefaultServiceRuntimeActivator : IServiceRuntimeActivator
             ct: ct);
 
         return new ServiceRuntimeActivationResult(deploymentId, actor.Id, "active");
+    }
+
+    private static Type? ResolveActorType(string typeName)
+    {
+        // Try direct resolution first (works for assembly-qualified names).
+        var type = Type.GetType(typeName, throwOnError: false);
+        if (type is not null)
+            return type;
+
+        // Fallback: scan all loaded assemblies by full type name.
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic) continue;
+            try
+            {
+                type = assembly.GetType(typeName);
+                if (type is not null)
+                    return type;
+            }
+            catch
+            {
+                // ignored
+            }
+        }
+
+        return null;
     }
 }

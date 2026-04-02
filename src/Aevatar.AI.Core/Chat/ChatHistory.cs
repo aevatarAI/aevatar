@@ -21,6 +21,12 @@ public sealed class ChatHistory
     /// <summary>当前消息数量。</summary>
     public int Count => _messages.Count;
 
+    /// <summary>Token 预算追踪器。记录 provider 返回的 token 用量。</summary>
+    public TokenBudgetTracker Budget { get; } = new();
+
+    /// <summary>可写消息列表。供 ContextCompressor 做索引修改。</summary>
+    internal List<ChatMessage> WritableMessages => _messages;
+
     /// <summary>追加单条消息。追加后若超出 MaxMessages 则截断。</summary>
     /// <param name="message">要追加的消息。</param>
     public void Add(ChatMessage message)
@@ -94,4 +100,56 @@ public sealed class SerializableMessage
     public required string Role { get; init; }
     public string? Content { get; init; }
     public string? ToolCallId { get; init; }
+}
+
+/// <summary>
+/// Token 预算追踪器。基于 LLM provider 返回的 TokenUsage 累计用量，
+/// 判断是否超出 prompt token 预算阈值。
+/// </summary>
+public sealed class TokenBudgetTracker
+{
+    /// <summary>最近一次 LLM 调用的 prompt token 数。</summary>
+    public int LastPromptTokens { get; private set; }
+
+    /// <summary>最近一次 LLM 调用的 completion token 数。</summary>
+    public int LastCompletionTokens { get; private set; }
+
+    /// <summary>累计 prompt token 数。</summary>
+    public int CumulativePromptTokens { get; private set; }
+
+    /// <summary>累计 completion token 数。</summary>
+    public int CumulativeCompletionTokens { get; private set; }
+
+    /// <summary>LLM 调用次数。</summary>
+    public int CallCount { get; private set; }
+
+    /// <summary>记录一次 LLM 调用的 token 用量。</summary>
+    public void RecordUsage(TokenUsage? usage)
+    {
+        if (usage == null) return;
+        LastPromptTokens = usage.PromptTokens;
+        LastCompletionTokens = usage.CompletionTokens;
+        CumulativePromptTokens += usage.PromptTokens;
+        CumulativeCompletionTokens += usage.CompletionTokens;
+        CallCount++;
+    }
+
+    /// <summary>判断是否超出 prompt token 预算。</summary>
+    /// <param name="budgetLimit">Token 预算上限。0 或负数表示禁用。</param>
+    /// <param name="threshold">触发压缩的阈值比例（0.0~1.0）。</param>
+    public bool IsOverBudget(int budgetLimit, double threshold = 0.85)
+    {
+        if (budgetLimit <= 0 || CallCount == 0) return false;
+        return LastPromptTokens > budgetLimit * threshold;
+    }
+
+    /// <summary>重置所有状态。</summary>
+    public void Reset()
+    {
+        LastPromptTokens = 0;
+        LastCompletionTokens = 0;
+        CumulativePromptTokens = 0;
+        CumulativeCompletionTokens = 0;
+        CallCount = 0;
+    }
 }

@@ -1,5 +1,5 @@
 import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, Space, Typography } from 'antd';
+import { Button, Input, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ScopeQueryDraft } from './scopeQuery';
@@ -31,14 +31,45 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
     normalizedResolvedScopeId.length > 0 &&
     draft.scopeId.trim() !== normalizedResolvedScopeId &&
     onUseResolvedScope;
+  const { token } = theme.useToken();
+  const helperLabelStyle = {
+    color: token.colorTextSecondary,
+    fontWeight: 500,
+  };
+  const helperCopyStyle = {
+    color: token.colorTextTertiary,
+  };
+  const resolvedScopeValueStyle = {
+    background: token.colorFillAlter,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    borderRadius: token.borderRadius,
+    color: token.colorText,
+    display: 'block',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    fontSize: 12,
+    margin: 0,
+    maxWidth: '100%',
+    overflowWrap: 'anywhere' as const,
+    padding: '6px 8px',
+    whiteSpace: 'normal' as const,
+    wordBreak: 'break-word' as const,
+  };
 
   return (
     <ProCard {...moduleCardProps}>
-      <Space wrap>
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          width: '100%',
+        }}
+      >
         <Input
           allowClear
-          placeholder="Enter scopeId"
-          style={{ minWidth: 280 }}
+          placeholder="Enter project scopeId"
+          style={{ flex: '1 1 240px', minWidth: 0, width: '100%' }}
           value={draft.scopeId}
           onChange={(event) =>
             onChange({
@@ -51,28 +82,62 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
           {loadLabel}
         </Button>
         {onReset ? <Button onClick={onReset}>Reset</Button> : null}
-      </Space>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gap: 8,
+          marginTop: 12,
+          minWidth: 0,
+        }}
+      >
         {normalizedResolvedScopeId ? (
           <>
-            <Typography.Text type="secondary">Current scope</Typography.Text>
-            <Typography.Text code copyable>
-              {normalizedResolvedScopeId}
+            <Typography.Text style={helperLabelStyle}>
+              Resolved project
             </Typography.Text>
+            <Typography.Paragraph
+              copyable={{ text: normalizedResolvedScopeId }}
+              style={resolvedScopeValueStyle}
+            >
+              {normalizedResolvedScopeId}
+            </Typography.Paragraph>
             {normalizedResolvedScopeSource ? (
-              <Typography.Text type="secondary">
-                Resolved from {normalizedResolvedScopeSource}
+              <Typography.Text
+                style={{
+                  ...helperCopyStyle,
+                  display: 'block',
+                  maxWidth: '100%',
+                  overflowWrap: 'anywhere',
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                }}
+              >
+                Resolved from the current session via {normalizedResolvedScopeSource}
               </Typography.Text>
             ) : null}
             {canUseResolvedScope ? (
-              <Button size="small" onClick={onUseResolvedScope}>
-                Use current scope
-              </Button>
+              <div>
+                <Button size="small" onClick={onUseResolvedScope}>
+                  Use resolved project
+                </Button>
+              </div>
             ) : null}
           </>
         ) : (
-          <Typography.Text type="secondary">
-            No scope was resolved from the current session. Enter a scopeId manually.
+          <Typography.Text
+            style={{
+              ...helperCopyStyle,
+              display: 'block',
+              maxWidth: '100%',
+              overflowWrap: 'anywhere',
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+            }}
+          >
+            No project scope was resolved from the current session. Enter a
+            scopeId manually. tenantId and appId stay platform-managed and
+            hidden in this flow.
           </Typography.Text>
         )}
       </div>

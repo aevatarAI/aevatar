@@ -1,3 +1,4 @@
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
 import type { NyxIDRuntimeConfig } from './config';
 
 export interface NyxIDTokenSet {
@@ -146,12 +147,12 @@ export function buildAuthInitialState(config: NyxIDRuntimeConfig): AuthInitialSt
 export function sanitizeReturnTo(value?: string | null): string {
   const normalized = value?.trim();
   if (!normalized || !normalized.startsWith('/') || normalized.startsWith('//')) {
-    return '/overview';
+    return CONSOLE_HOME_ROUTE;
   }
 
   const target = normalized.split('#')[0].split('?')[0];
   if (AUTH_BLOCKED_PATHS.has(target)) {
-    return '/overview';
+    return CONSOLE_HOME_ROUTE;
   }
 
   return normalized;

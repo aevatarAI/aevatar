@@ -1,46 +1,39 @@
 import {
-  connectChatWebSocket,
-  parseSSEStream,
   useHumanInteraction,
   useRunSession,
 } from "@aevatar-react-sdk/agui";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import {
+  type AGUIEvent,
   AGUIEventType,
-  type ChatRunRequest,
-  type ChatWsAckPayload,
   CustomEventName,
   type WorkflowResumeRequest,
   type WorkflowSignalRequest,
 } from "@aevatar-react-sdk/types";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import type { ProFormInstance } from "@ant-design/pro-components";
 import {
   PageContainer,
-  ProCard,
   ProDescriptions,
   ProForm,
-  ProFormSelect,
   ProFormSwitch,
-  ProFormText,
   ProFormTextArea,
-  ProList,
-  ProTable,
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { history } from "@umijs/max";
+import { history } from "@/shared/navigation/history";
 import {
-  Alert,
-  Badge,
+  buildRuntimeExplorerHref,
+  buildRuntimeWorkflowsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import {
   Button,
-  Col,
   Divider,
   Drawer,
   Empty,
   message,
-  Row,
+  Popover,
   Space,
-  Statistic,
   Tabs,
-  Tag,
   Typography,
 } from "antd";
 import React, {
@@ -59,7 +52,6 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
-import { loadConsolePreferences } from "@/shared/preferences/consolePreferences";
 import {
   clearRecentRuns,
   loadRecentRuns,
@@ -67,83 +59,205 @@ import {
   saveRecentRun,
 } from "@/shared/runs/recentRuns";
 import {
+  type RunEndpointKind,
+  normalizeRunEndpointKind,
+  resolveRunEndpointId as resolveStoredRunEndpointId,
+} from "@/shared/runs/endpointKinds";
+import { isAutoEncodableTextPayloadTypeUrl } from "@/shared/runs/protobufPayload";
+import {
+  deleteDraftRunPayload as deleteQueuedDraftRunPayload,
+  isEndpointInvocationDraftPayload,
+  isObservedRunSessionPayload,
+  isScopeDraftRunPayload,
+  loadDraftRunPayload as loadQueuedDraftRunPayload,
+} from "@/shared/runs/draftRunSession";
+import {
   buildWorkflowCatalogOptions,
   findWorkflowCatalogItem,
   listVisibleWorkflowCatalogItems,
 } from "@/shared/workflows/catalogVisibility";
 import {
   cardStackStyle,
-  compactTableCardProps,
+  drawerBodyStyle,
+  drawerScrollStyle,
   embeddedPanelStyle,
-  moduleCardProps,
-  scrollPanelStyle,
-  stretchColumnStyle,
 } from "@/shared/ui/proComponents";
+import RunsInspectorPane from "./components/RunsInspectorPane";
+import RunsLaunchRail from "./components/RunsLaunchRail";
+import RunsStatusStrip from "./components/RunsStatusStrip";
+import RunsTracePane from "./components/RunsTracePane";
+import RunsTimelineView from "./components/RunsTimelineView";
 import {
+  buildTimelineGroups,
   buildEventRows,
   isHumanApprovalSuspension,
   type RunEventRow,
+  type RunTimelineGroup,
   type RunTransport,
 } from "./runEventPresentation";
 import {
   builtInPresets,
-  clampComposerWidth,
   composerRailDefaultWidth,
   composerRailKeyboardStep,
-  composerRailMinWidth,
   type ConsoleViewKey,
+  defaultRunRouteName,
   formatElapsedDuration,
   humanInputColumns,
   type HumanInputRecord,
-  monitorWorkbenchMinWidth,
   readInitialRunFormValues,
-  recentRunColumns,
-  type RecentRunRow,
   type RecentRunTableRow,
   type ResumeFormValues,
-  type RunFocusStatus,
+  type RunFocusRecord,
   type RunFormValues,
-  type RunPreset,
   type RunStatusValue,
-  runSummaryColumns,
   runStatusValueEnum,
   runsWorkbenchComposerRailStyle,
-  runsWorkbenchHeaderStyle,
   runsWorkbenchMainStyle,
   runsWorkbenchMonitorStyle,
   runsWorkbenchResizeHandleStyle,
   runsWorkbenchResizeRailStyle,
   runsWorkbenchShellStyle,
+  resolveResponsiveComposerWidth,
   type RunSummaryRecord,
-  type SelectedWorkflowRecord,
+  type SelectedRouteRecord,
   type SignalFormValues,
+  trimOptional,
   waitingSignalColumns,
   type WaitingSignalRecord,
-  workbenchCardStyle,
-  workbenchCardBodyStyle,
-  workbenchConsoleBodyStyle,
-  workbenchConsoleCardStyle,
   workbenchConsoleScrollStyle,
   workbenchConsoleSurfaceStyle,
-  workbenchConsoleTabPanelStyle,
-  workbenchConsoleViewportStyle,
   workbenchEventHeaderStyle,
   workbenchEventRowStyle,
-  workbenchHudBodyStyle,
-  workbenchHudCardStyle,
   workbenchMessageListStyle,
-  workbenchOverviewCardStyle,
   workbenchOverviewGridStyle,
-  workbenchScrollableBodyStyle,
-  workflowDescriptionColumns,
 } from "./runWorkbenchConfig";
 
+const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
+  alignItems: "center",
+  background: "var(--ant-color-bg-container)",
+  border: "1px solid var(--ant-color-border-secondary)",
+  borderRadius: 10,
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 12,
+  justifyContent: "space-between",
+  padding: "10px 12px",
+};
+
+const runsWorkbenchHeaderTitleStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  gap: 8,
+  minWidth: 0,
+};
+
+const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
+  alignItems: "center",
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  justifyContent: "flex-end",
+};
+
+function resolveRequestedServiceId(
+  request: Pick<
+    RunFormValues,
+    "endpointId" | "endpointKind" | "routeName" | "serviceOverrideId"
+  >,
+  draftMode: boolean
+): string {
+  if (draftMode) {
+    return "";
+  }
+
+  const normalizedEndpointKind = normalizeRunEndpointKind(
+    request.endpointKind,
+    request.endpointId
+  );
+  const normalizedServiceOverrideId =
+    trimOptional(request.serviceOverrideId) || "";
+  if (normalizedEndpointKind !== "chat") {
+    return normalizedServiceOverrideId;
+  }
+
+  return normalizedServiceOverrideId || trimOptional(request.routeName) || "";
+}
+
 const RunsPage: React.FC = () => {
-  const preferences = useMemo(() => loadConsolePreferences(), []);
   const [messageApi, messageContextHolder] = message.useMessage();
+  const urlInitialFormValues = useMemo(() => readInitialRunFormValues(), []);
+  const draftRunKey = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    return new URLSearchParams(window.location.search).get("draftKey") ?? "";
+  }, []);
+  const draftRunPayload = useMemo(
+    () => loadQueuedDraftRunPayload(draftRunKey),
+    [draftRunKey]
+  );
+  const scopeDraftPayload = useMemo(
+    () =>
+      isScopeDraftRunPayload(draftRunPayload) ? draftRunPayload : undefined,
+    [draftRunPayload]
+  );
+  const endpointInvocationDraftPayload = useMemo(
+    () =>
+      isEndpointInvocationDraftPayload(draftRunPayload)
+        ? draftRunPayload
+        : undefined,
+    [draftRunPayload]
+  );
+  const observedRunDraftPayload = useMemo(
+    () =>
+      isObservedRunSessionPayload(draftRunPayload)
+        ? draftRunPayload
+        : undefined,
+    [draftRunPayload]
+  );
   const initialFormValues = useMemo(
-    () => readInitialRunFormValues(preferences.preferredWorkflow),
-    [preferences.preferredWorkflow]
+    () => ({
+      ...urlInitialFormValues,
+      routeName:
+        observedRunDraftPayload?.routeName ??
+        (endpointInvocationDraftPayload
+          ? undefined
+          : urlInitialFormValues.routeName),
+      prompt:
+        observedRunDraftPayload?.prompt ??
+        endpointInvocationDraftPayload?.prompt ??
+        urlInitialFormValues.prompt,
+      scopeId:
+        observedRunDraftPayload?.scopeId ?? urlInitialFormValues.scopeId,
+      serviceOverrideId:
+        observedRunDraftPayload?.serviceOverrideId ??
+        endpointInvocationDraftPayload?.serviceOverrideId ??
+        urlInitialFormValues.serviceOverrideId,
+      endpointKind:
+        observedRunDraftPayload?.endpointKind ??
+        endpointInvocationDraftPayload?.endpointKind ??
+        urlInitialFormValues.endpointKind,
+      endpointId:
+        observedRunDraftPayload?.endpointId ??
+        endpointInvocationDraftPayload?.endpointId ??
+        urlInitialFormValues.endpointId,
+      payloadTypeUrl:
+        observedRunDraftPayload?.payloadTypeUrl ??
+        endpointInvocationDraftPayload?.payloadTypeUrl ??
+        urlInitialFormValues.payloadTypeUrl,
+      payloadBase64:
+        observedRunDraftPayload?.payloadBase64 ??
+        endpointInvocationDraftPayload?.payloadBase64 ??
+        urlInitialFormValues.payloadBase64,
+      actorId:
+        observedRunDraftPayload?.actorId ?? urlInitialFormValues.actorId,
+    }),
+    [
+      endpointInvocationDraftPayload,
+      observedRunDraftPayload,
+      urlInitialFormValues,
+    ]
   );
   const composerFormRef = useRef<ProFormInstance<RunFormValues> | undefined>(
     undefined
@@ -156,8 +270,13 @@ const RunsPage: React.FC = () => {
     undefined
   );
   const [catalogSearch, setCatalogSearch] = useState("");
-  const [selectedWorkflowName, setSelectedWorkflowName] = useState(
-    initialFormValues.workflow ?? preferences.preferredWorkflow
+  const [selectedRouteName, setSelectedRouteName] = useState(
+    scopeDraftPayload?.bundleName ??
+      (endpointInvocationDraftPayload || observedRunDraftPayload
+        ? ""
+        : undefined) ??
+      initialFormValues.routeName ??
+      defaultRunRouteName
   );
   const [recentRuns, setRecentRuns] = useState<RecentRunEntry[]>(() =>
     loadRecentRuns()
@@ -165,12 +284,13 @@ const RunsPage: React.FC = () => {
   const [selectedTransport, setSelectedTransport] = useState<RunTransport>(
     initialFormValues.transport
   );
+  const [selectedTraceItemKey, setSelectedTraceItemKey] = useState("");
   const [composerWidth, setComposerWidth] = useState(composerRailDefaultWidth);
   const [activeTransport, setActiveTransport] = useState<RunTransport>(
     initialFormValues.transport
   );
-  const [consoleView, setConsoleView] = useState<ConsoleViewKey>("dual");
-  const [isInteractionDrawerOpen, setIsInteractionDrawerOpen] = useState(false);
+  const [consoleView, setConsoleView] = useState<ConsoleViewKey>("timeline");
+  const [isInspectorDrawerOpen, setIsInspectorDrawerOpen] = useState(false);
   const [isComposerResizing, setIsComposerResizing] = useState(false);
   const [runStartedAtMs, setRunStartedAtMs] = useState<number | undefined>(
     undefined
@@ -179,8 +299,49 @@ const RunsPage: React.FC = () => {
   const [transportIssue, setTransportIssue] = useState<
     { code?: string; message: string } | undefined
   >(undefined);
-  const [wsAck, setWsAck] = useState<ChatWsAckPayload | undefined>(undefined);
+  const [activeScopeId, setActiveScopeId] = useState(
+    initialFormValues.scopeId ?? ""
+  );
+  const [activeServiceOverrideId, setActiveServiceOverrideId] = useState(
+    initialFormValues.serviceOverrideId ?? ""
+  );
+  const [activeEndpointKind, setActiveEndpointKind] = useState<RunEndpointKind>(
+    normalizeRunEndpointKind(
+      initialFormValues.endpointKind,
+      initialFormValues.endpointId
+    )
+  );
+  const [activeEndpointId, setActiveEndpointId] = useState(
+    resolveStoredRunEndpointId(
+      initialFormValues.endpointKind,
+      initialFormValues.endpointId
+    )
+  );
+  const handleRouteSelection = useCallback((value: string) => {
+    const normalizedValue = value ?? "";
+    setSelectedRouteName((currentValue) =>
+      currentValue === normalizedValue ? currentValue : normalizedValue
+    );
+  }, []);
+  const handleEndpointKindChange = useCallback((value: RunEndpointKind) => {
+    setActiveEndpointKind((currentValue) =>
+      currentValue === value ? currentValue : value
+    );
+  }, []);
+  const handleEndpointChange = useCallback((value: string) => {
+    const normalizedValue = value.trim();
+    setActiveEndpointId((currentValue) =>
+      currentValue === normalizedValue ? currentValue : normalizedValue
+    );
+  }, []);
+  const handleTransportChange = useCallback((value: RunTransport) => {
+    setSelectedTransport((currentValue) =>
+      currentValue === value ? currentValue : value
+    );
+  }, []);
   const stopActiveRunRef = useRef<(() => void) | undefined>(undefined);
+  const autoStartedDraftRunRef = useRef(false);
+  const hydratedObservedRunRef = useRef(false);
 
   const workflowCatalogQuery = useQuery({
     queryKey: ["workflow-catalog"],
@@ -197,6 +358,60 @@ const RunsPage: React.FC = () => {
     setStreaming(false);
   }, []);
 
+  const hydrateObservedSession = useCallback(
+    (snapshot: {
+      actorId?: string;
+      endpointId: string;
+      endpointKind?: RunEndpointKind;
+      events: AGUIEvent[];
+      payloadBase64?: string;
+      payloadTypeUrl?: string;
+      prompt: string;
+      routeName?: string;
+      scopeId: string;
+      serviceOverrideId?: string;
+    }) => {
+      abortRun();
+      reset();
+      setTransportIssue(undefined);
+      setActiveTransport(selectedTransport);
+      setActiveScopeId(snapshot.scopeId);
+      setActiveServiceOverrideId(snapshot.serviceOverrideId ?? "");
+      setActiveEndpointKind(
+        normalizeRunEndpointKind(snapshot.endpointKind, snapshot.endpointId)
+      );
+      setActiveEndpointId(
+        resolveStoredRunEndpointId(snapshot.endpointKind, snapshot.endpointId)
+      );
+      setSelectedRouteName(snapshot.routeName ?? "");
+      setSelectedTraceItemKey("");
+      setConsoleView("timeline");
+      setRunStartedAtMs(Date.now());
+
+      composerFormRef.current?.setFieldsValue({
+        ...initialFormValues,
+        actorId: snapshot.actorId,
+        endpointId: snapshot.endpointId,
+        endpointKind: normalizeRunEndpointKind(
+          snapshot.endpointKind,
+          snapshot.endpointId
+        ),
+        payloadBase64: snapshot.payloadBase64,
+        payloadTypeUrl: snapshot.payloadTypeUrl,
+        prompt: snapshot.prompt,
+        routeName: snapshot.routeName,
+        scopeId: snapshot.scopeId,
+        serviceOverrideId: snapshot.serviceOverrideId,
+        transport: selectedTransport,
+      });
+
+      snapshot.events.forEach((event) => {
+        dispatch(event);
+      });
+    },
+    [abortRun, dispatch, initialFormValues, reset, selectedTransport]
+  );
+
   const reportTransportError = useCallback(
     (messageText: string, code?: string) => {
       setTransportIssue({ message: messageText, code });
@@ -211,40 +426,83 @@ const RunsPage: React.FC = () => {
   );
 
   const sendRun = useCallback(
-    async (request: ChatRunRequest, transport: RunTransport) => {
+    async (
+      scopeId: string,
+      request: RunFormValues
+    ) => {
+      const normalizedScopeId = scopeId.trim();
+      const normalizedEndpointKind = normalizeRunEndpointKind(
+        request.endpointKind,
+        request.endpointId
+      );
+      const normalizedEndpointId = resolveStoredRunEndpointId(
+        normalizedEndpointKind,
+        request.endpointId
+      );
+      const resolvedServiceId = resolveRequestedServiceId(
+        request,
+        Boolean(scopeDraftPayload)
+      );
+      const requestedPayloadTypeUrl = request.payloadTypeUrl?.trim() ?? "";
+      const requestedPayloadBase64 = request.payloadBase64?.trim() ?? "";
+      if (!normalizedScopeId) {
+        throw new Error("Scope ID is required.");
+      }
+      if (normalizedEndpointKind === "command" && !normalizedEndpointId) {
+        throw new Error("Endpoint ID is required for command invokes.");
+      }
+      if (
+        requestedPayloadTypeUrl &&
+        !requestedPayloadBase64 &&
+        !isAutoEncodableTextPayloadTypeUrl(requestedPayloadTypeUrl)
+      ) {
+        throw new Error(
+          `payloadBase64 is required for payloadTypeUrl '${requestedPayloadTypeUrl}'.`
+        );
+      }
+
       abortRun();
       reset();
       setTransportIssue(undefined);
-      setWsAck(undefined);
-      setActiveTransport(transport);
+      setActiveTransport(request.transport);
+      setActiveScopeId(normalizedScopeId);
+      setActiveServiceOverrideId(resolvedServiceId);
+      setActiveEndpointKind(normalizedEndpointKind);
+      setActiveEndpointId(normalizedEndpointId);
       setRunStartedAtMs(Date.now());
       setStreaming(true);
 
       try {
-        if (transport === "ws") {
-          const { events, close } = connectChatWebSocket(request, {
-            onAck: (payload) => {
-              setWsAck(payload);
-            },
-            onError: (code, messageText) => {
-              reportTransportError(messageText, code);
-            },
-          });
+        const controller = new AbortController();
+        stopActiveRunRef.current = () => controller.abort();
 
-          stopActiveRunRef.current = close;
+        const response = scopeDraftPayload
+          ? await runtimeRunsApi.streamDraftRun(
+              normalizedScopeId,
+              {
+                prompt: request.prompt,
+                workflowYamls: scopeDraftPayload.bundleYamls,
+              },
+              controller.signal
+            )
+          : normalizedEndpointKind === "chat" &&
+              !request.payloadTypeUrl?.trim() &&
+              !request.payloadBase64?.trim()
+            ? await runtimeRunsApi.streamChat(
+                normalizedScopeId,
+                {
+                  prompt: request.prompt,
+                  metadata: undefined,
+                },
+                controller.signal,
+                {
+                  serviceId: resolvedServiceId || undefined,
+                }
+              )
+            : null;
 
-          for await (const event of events) {
-            dispatch(event);
-          }
-        } else {
-          const controller = new AbortController();
-          stopActiveRunRef.current = () => controller.abort();
-
-          const response = await runtimeRunsApi.streamChat(
-            request,
-            controller.signal
-          );
-          for await (const event of parseSSEStream(response, {
+        if (response) {
+          for await (const event of parseBackendSSEStream(response, {
             signal: controller.signal,
           })) {
             if (controller.signal.aborted) {
@@ -253,6 +511,49 @@ const RunsPage: React.FC = () => {
 
             dispatch(event);
           }
+        } else {
+          const receipt = await runtimeRunsApi.invokeEndpoint(
+            normalizedScopeId,
+            {
+              endpointId: normalizedEndpointId,
+              prompt: request.prompt,
+              commandId: undefined,
+              payloadTypeUrl: request.payloadTypeUrl || undefined,
+              payloadBase64: request.payloadBase64 || undefined,
+            },
+            {
+              serviceId: resolvedServiceId || undefined,
+            }
+          );
+          const receiptRunId =
+            String(receipt.request_id ?? receipt.requestId ?? receipt.commandId ?? "").trim() ||
+            `${normalizedEndpointId}-${Date.now().toString(36)}`;
+          const receiptActorId =
+            String(
+              receipt.target_actor_id ?? receipt.targetActorId ?? receipt.actorId ?? ""
+            ).trim();
+          const receiptCorrelationId =
+            String(receipt.correlation_id ?? receipt.correlationId ?? receiptRunId).trim() ||
+            receiptRunId;
+
+          dispatch({
+            type: AGUIEventType.RUN_STARTED,
+            threadId: receiptCorrelationId,
+            runId: receiptRunId,
+          });
+          dispatch({
+            type: AGUIEventType.CUSTOM,
+            name: CustomEventName.RunContext,
+            value: {
+              actorId: receiptActorId || undefined,
+              workflowName: normalizedEndpointId,
+              commandId:
+                String(receipt.command_id ?? receipt.commandId ?? "").trim() || undefined,
+            },
+          });
+          messageApi.success(
+            `Endpoint ${normalizedEndpointId} accepted with request ${receiptRunId}.`
+          );
         }
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
@@ -266,8 +567,47 @@ const RunsPage: React.FC = () => {
         setStreaming(false);
       }
     },
-    [abortRun, dispatch, reportTransportError, reset]
+    [
+      abortRun,
+      dispatch,
+      messageApi,
+      reportTransportError,
+      reset,
+      scopeDraftPayload,
+    ]
   );
+
+  const resolveRunScopeId = useCallback(() => {
+    return (
+      activeScopeId.trim() ||
+      composerFormRef.current?.getFieldValue("scopeId")?.trim?.() ||
+      ""
+    );
+  }, [activeScopeId]);
+
+  const resolveRunServiceOverrideId = useCallback(() => {
+    return (
+      activeServiceOverrideId.trim() ||
+      composerFormRef.current?.getFieldValue("serviceOverrideId")?.trim?.() ||
+      ""
+    );
+  }, [activeServiceOverrideId]);
+
+  const resolveRunEndpointKind = useCallback(() => {
+    return normalizeRunEndpointKind(
+      activeEndpointKind,
+      activeEndpointId ||
+        composerFormRef.current?.getFieldValue("endpointId")?.trim?.()
+    );
+  }, [activeEndpointId, activeEndpointKind]);
+
+  const resolveRunEndpointId = useCallback(() => {
+    return resolveStoredRunEndpointId(
+      resolveRunEndpointKind(),
+      activeEndpointId ||
+        composerFormRef.current?.getFieldValue("endpointId")?.trim?.()
+    );
+  }, [activeEndpointId, resolveRunEndpointKind]);
 
   const resizeComposerRail = useCallback((clientX: number) => {
     const containerRect = runsWorkbenchMainRef.current?.getBoundingClientRect();
@@ -276,7 +616,10 @@ const RunsPage: React.FC = () => {
     }
 
     setComposerWidth(
-      clampComposerWidth(clientX - containerRect.left, containerRect.width)
+      resolveResponsiveComposerWidth(
+        clientX - containerRect.left,
+        containerRect.width
+      )
     );
   }, []);
 
@@ -287,15 +630,120 @@ const RunsPage: React.FC = () => {
       return;
     }
 
-    setComposerWidth(clampComposerWidth(requestedWidth, containerRect.width));
+    setComposerWidth(
+      resolveResponsiveComposerWidth(requestedWidth, containerRect.width)
+    );
   }, []);
 
   const { resume, signal, resuming, signaling } = useHumanInteraction({
-    resume: (request: WorkflowResumeRequest) => runtimeRunsApi.resume(request),
-    signal: (request: WorkflowSignalRequest) => runtimeRunsApi.signal(request),
+    resume: (request: WorkflowResumeRequest) => {
+      const scopeId = resolveRunScopeId();
+      const serviceOverrideId = resolveRunServiceOverrideId();
+      if (!scopeId) {
+        throw new Error("Scope ID is required to resume a run.");
+      }
+
+      return runtimeRunsApi.resume(scopeId, request, {
+        serviceId: serviceOverrideId || undefined,
+      });
+    },
+    signal: (request: WorkflowSignalRequest) => {
+      const scopeId = resolveRunScopeId();
+      const serviceOverrideId = resolveRunServiceOverrideId();
+      if (!scopeId) {
+        throw new Error("Scope ID is required to signal a run.");
+      }
+
+      return runtimeRunsApi.signal(scopeId, request, {
+        serviceId: serviceOverrideId || undefined,
+      });
+    },
   });
 
   useEffect(() => () => abortRun(), [abortRun]);
+
+  useEffect(() => {
+    if (
+      !observedRunDraftPayload ||
+      !draftRunKey ||
+      hydratedObservedRunRef.current
+    ) {
+      return;
+    }
+
+    hydratedObservedRunRef.current = true;
+    deleteQueuedDraftRunPayload(draftRunKey);
+
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      searchParams.delete("draftKey");
+      const search = searchParams.toString();
+      // Avoid router remount during observed-session handoff; we only need to clean the URL.
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+      );
+    }
+
+    hydrateObservedSession({
+      actorId: observedRunDraftPayload.actorId,
+      endpointId: observedRunDraftPayload.endpointId,
+      endpointKind: observedRunDraftPayload.endpointKind,
+      events: observedRunDraftPayload.events,
+      payloadBase64: observedRunDraftPayload.payloadBase64,
+      payloadTypeUrl: observedRunDraftPayload.payloadTypeUrl,
+      prompt: observedRunDraftPayload.prompt,
+      routeName: undefined,
+      scopeId: observedRunDraftPayload.scopeId,
+      serviceOverrideId: observedRunDraftPayload.serviceOverrideId,
+    });
+  }, [
+    draftRunKey,
+    hydrateObservedSession,
+    observedRunDraftPayload,
+  ]);
+
+  useEffect(() => {
+    if (!scopeDraftPayload || !draftRunKey || autoStartedDraftRunRef.current) {
+      return;
+    }
+
+    const scopeId = initialFormValues.scopeId?.trim() ?? "";
+    const prompt = initialFormValues.prompt?.trim() ?? "";
+    if (!scopeId || !prompt) {
+      return;
+    }
+
+    autoStartedDraftRunRef.current = true;
+    deleteQueuedDraftRunPayload(draftRunKey);
+
+    if (typeof window !== "undefined") {
+      const searchParams = new URLSearchParams(window.location.search);
+      searchParams.delete("draftKey");
+      const search = searchParams.toString();
+      // Avoid router remount during auto-start handoff; we only need to clean the URL.
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`
+      );
+    }
+
+    void sendRun(scopeId, {
+      ...initialFormValues,
+      actorId: undefined,
+      endpointId: "chat",
+      endpointKind: "chat",
+      payloadBase64: undefined,
+      payloadTypeUrl: undefined,
+      prompt,
+      scopeId,
+      serviceOverrideId: undefined,
+      routeName: scopeDraftPayload.bundleName,
+      transport: initialFormValues.transport ?? "sse",
+    });
+  }, [draftRunKey, initialFormValues, scopeDraftPayload, sendRun]);
 
   useEffect(() => {
     const syncComposerWidth = () => {
@@ -306,7 +754,7 @@ const RunsPage: React.FC = () => {
       }
 
       setComposerWidth((currentWidth) =>
-        clampComposerWidth(currentWidth, containerRect.width)
+        resolveResponsiveComposerWidth(currentWidth, containerRect.width)
       );
     };
 
@@ -342,13 +790,36 @@ const RunsPage: React.FC = () => {
     };
   }, [isComposerResizing, resizeComposerRail]);
 
-  const workflowName =
-    session.context?.workflowName ??
-    wsAck?.workflow ??
-    composerFormRef.current?.getFieldValue("workflow") ??
+  const endpointKind = resolveRunEndpointKind();
+  const endpointName = resolveRunEndpointId();
+  const routeName = useMemo(() => {
+    const sessionWorkflowName = trimOptional(session.context?.workflowName);
+    if (sessionWorkflowName) {
+      return sessionWorkflowName;
+    }
+
+    if (scopeDraftPayload?.bundleName) {
+      return scopeDraftPayload.bundleName;
+    }
+
+    if (endpointKind !== "chat") {
+      return endpointName;
+    }
+
+    return trimOptional(selectedRouteName);
+  }, [
+    endpointKind,
+    endpointName,
+    scopeDraftPayload,
+    selectedRouteName,
+    session.context?.workflowName,
+  ]);
+  const actorId = session.context?.actorId;
+  const commandId = session.context?.commandId ?? "";
+  const payloadTypeUrl =
+    composerFormRef.current?.getFieldValue("payloadTypeUrl")?.trim?.() ||
+    initialFormValues.payloadTypeUrl ||
     "";
-  const actorId = session.context?.actorId ?? wsAck?.actorId;
-  const commandId = session.context?.commandId ?? wsAck?.commandId ?? "";
 
   const waitingSignal = useMemo(
     () =>
@@ -394,43 +865,77 @@ const RunsPage: React.FC = () => {
     );
   }, [catalogSearch, workflowCatalogQuery.data]);
 
-  const workflowOptions = useMemo(() => {
+  const routeOptions = useMemo(() => {
     const visibleNames = new Set(filteredCatalog.map((item) => item.name));
     return buildWorkflowCatalogOptions(
       workflowCatalogQuery.data ?? [],
-      selectedWorkflowName
+      selectedRouteName
     ).filter(
       (option) =>
-        option.value === selectedWorkflowName || visibleNames.has(option.value)
+        option.value === selectedRouteName || visibleNames.has(option.value)
     );
-  }, [filteredCatalog, selectedWorkflowName, workflowCatalogQuery.data]);
+  }, [filteredCatalog, selectedRouteName, workflowCatalogQuery.data]);
 
-  const selectedWorkflowDetails = useMemo(
+  const selectedRouteDetails = useMemo(
     () =>
       findWorkflowCatalogItem(
         workflowCatalogQuery.data ?? [],
-        selectedWorkflowName
+        selectedRouteName
       ),
-    [selectedWorkflowName, workflowCatalogQuery.data]
+    [selectedRouteName, workflowCatalogQuery.data]
   );
 
-  const selectedWorkflowRecord = useMemo<
-    SelectedWorkflowRecord | undefined
+  const selectedRouteRecord = useMemo<
+    SelectedRouteRecord | undefined
   >(() => {
-    if (!selectedWorkflowDetails) {
-      return undefined;
+    if (!selectedRouteDetails) {
+      if (scopeDraftPayload) {
+        return {
+          routeName: scopeDraftPayload.bundleName,
+          groupLabel: "Studio",
+          sourceLabel: "Draft bundle",
+          llmStatus: "success",
+          description:
+            "Executing the current Studio draft bundle through the scope draft-run endpoint.",
+        };
+      }
+
+      if (!endpointName || endpointKind === "chat") {
+        return undefined;
+      }
+
+      return {
+        routeName: endpointName,
+        groupLabel: endpointInvocationDraftPayload ? "Scope" : "Scope binding",
+        sourceLabel: endpointInvocationDraftPayload
+          ? "Invocation draft"
+          : payloadTypeUrl
+          ? "Typed payload"
+          : "StringValue default",
+        llmStatus: "success",
+        description: endpointInvocationDraftPayload
+          ? "Invoking the scoped endpoint with a prepared protobuf payload."
+          : `Invoking the scoped endpoint '${endpointName}' through the generic invoke path.`,
+      };
     }
 
     return {
-      workflowName: selectedWorkflowDetails.name,
-      groupLabel: selectedWorkflowDetails.groupLabel,
-      sourceLabel: selectedWorkflowDetails.sourceLabel,
-      llmStatus: selectedWorkflowDetails.requiresLlmProvider
+      routeName: selectedRouteDetails.name,
+      groupLabel: selectedRouteDetails.groupLabel,
+      sourceLabel: selectedRouteDetails.sourceLabel,
+      llmStatus: selectedRouteDetails.requiresLlmProvider
         ? "processing"
         : "success",
-      description: selectedWorkflowDetails.description,
+      description: selectedRouteDetails.description,
     };
-  }, [selectedWorkflowDetails]);
+  }, [
+    endpointKind,
+    endpointName,
+    endpointInvocationDraftPayload,
+    payloadTypeUrl,
+    scopeDraftPayload,
+    selectedRouteDetails,
+  ]);
 
   const visiblePresets = useMemo(() => {
     const available = new Set(
@@ -438,7 +943,7 @@ const RunsPage: React.FC = () => {
         (item) => item.name
       )
     );
-    return builtInPresets.filter((preset) => available.has(preset.workflow));
+    return builtInPresets.filter((preset) => available.has(preset.routeName));
   }, [workflowCatalogQuery.data]);
 
   const latestMessagePreview = useMemo(() => {
@@ -458,28 +963,86 @@ const RunsPage: React.FC = () => {
         )
           ? (entry.status as RunStatusValue)
           : "unknown",
-        onRestore: () => {
-          composerFormRef.current?.setFieldsValue({
-            prompt: entry.prompt,
-            workflow: entry.workflowName,
-            actorId: entry.actorId || undefined,
-            transport: selectedTransport,
-          });
-          setSelectedWorkflowName(entry.workflowName);
-        },
         onOpenActor: entry.actorId
           ? () =>
               history.push(
-                `/actors?actorId=${encodeURIComponent(entry.actorId)}`
+                buildRuntimeExplorerHref({
+                  actorId: entry.actorId,
+                  runId: entry.runId || undefined,
+                  scopeId: entry.scopeId || undefined,
+                  serviceOverrideId:
+                    entry.serviceOverrideId === entry.routeName
+                      ? undefined
+                      : entry.serviceOverrideId || undefined,
+                })
               )
           : undefined,
+        onRestore: () => {
+          const restoredEndpointKind = normalizeRunEndpointKind(
+            entry.endpointKind,
+            entry.endpointId
+          );
+          const restoredEndpointId = resolveStoredRunEndpointId(
+            restoredEndpointKind,
+            entry.endpointId
+          );
+          const isChatEndpoint = restoredEndpointKind === "chat";
+          const restoredServiceOverrideId =
+            isChatEndpoint &&
+            entry.serviceOverrideId === entry.routeName
+              ? undefined
+              : entry.serviceOverrideId || undefined;
+          const restoredRouteName = isChatEndpoint
+            ? entry.routeName || undefined
+            : undefined;
+
+          if (entry.observedEvents.length > 0 && entry.scopeId) {
+            hydrateObservedSession({
+              actorId: entry.actorId || undefined,
+              endpointId: restoredEndpointId,
+              endpointKind: restoredEndpointKind,
+              events: entry.observedEvents,
+              payloadBase64: entry.payloadBase64 || undefined,
+              payloadTypeUrl: entry.payloadTypeUrl || undefined,
+            prompt: entry.prompt,
+            routeName: restoredRouteName,
+            scopeId: entry.scopeId,
+            serviceOverrideId: restoredServiceOverrideId,
+          });
+            return;
+          }
+
+          composerFormRef.current?.setFieldsValue({
+            prompt: entry.prompt,
+            routeName: restoredRouteName,
+            scopeId: entry.scopeId || undefined,
+            serviceOverrideId: restoredServiceOverrideId,
+            endpointId: restoredEndpointId,
+            endpointKind: restoredEndpointKind,
+            payloadTypeUrl: entry.payloadTypeUrl || undefined,
+            payloadBase64: entry.payloadBase64 || undefined,
+            actorId: entry.actorId || undefined,
+            transport: selectedTransport,
+          });
+          setSelectedRouteName(isChatEndpoint ? entry.routeName : "");
+          setActiveEndpointKind(restoredEndpointKind);
+          setActiveEndpointId(restoredEndpointId);
+        },
       })),
-    [recentRuns, selectedTransport]
+    [hydrateObservedSession, recentRuns, selectedTransport]
   );
 
   const eventRows = useMemo<RunEventRow[]>(
     () => buildEventRows(session.events),
     [session.events]
+  );
+  const timelineGroups = useMemo<RunTimelineGroup[]>(
+    () => buildTimelineGroups(eventRows),
+    [eventRows]
+  );
+  const selectedTraceItem = useMemo(
+    () => eventRows.find((item) => item.key === selectedTraceItemKey),
+    [eventRows, selectedTraceItemKey]
   );
   const waitingSignalRecord = useMemo<WaitingSignalRecord | undefined>(() => {
     if (!waitingSignal) {
@@ -493,6 +1056,19 @@ const RunsPage: React.FC = () => {
       prompt: waitingSignal.prompt ?? "",
     };
   }, [waitingSignal]);
+
+  useEffect(() => {
+    if (eventRows.length === 0) {
+      if (selectedTraceItemKey) {
+        setSelectedTraceItemKey("");
+      }
+      return;
+    }
+
+    if (!eventRows.some((item) => item.key === selectedTraceItemKey)) {
+      setSelectedTraceItemKey(eventRows[0].key);
+    }
+  }, [eventRows, selectedTraceItemKey]);
 
   const humanInputRecord = useMemo<HumanInputRecord | undefined>(() => {
     if (!session.pendingHumanInput) {
@@ -517,10 +1093,10 @@ const RunsPage: React.FC = () => {
     session.runId,
   ]);
 
-  const runFocus = useMemo(() => {
+  const runFocus = useMemo<RunFocusRecord>(() => {
     if (transportIssue || session.error || session.status === "error") {
       return {
-        status: "error" as RunFocusStatus,
+        status: "error" as const,
         label:
           transportIssue?.message || session.error?.message || "Run failed",
         alertType: "error" as const,
@@ -562,17 +1138,28 @@ const RunsPage: React.FC = () => {
         title: "Waiting for external signal",
         description:
           waitingSignalRecord.prompt ||
-          "The workflow is paused until the expected signal arrives.",
+          "The run is paused until the expected signal arrives.",
       };
     }
 
-    if (streaming || session.status === "running") {
+    if (streaming) {
       return {
         status: "running" as const,
         label: `Streaming over ${activeTransport.toUpperCase()}`,
         alertType: "info" as const,
         title: "Run in progress",
         description: "Messages and events are still arriving from the backend.",
+      };
+    }
+
+    if (session.status === "running") {
+      return {
+        status: "running" as const,
+        label: "Invocation accepted",
+        alertType: "info" as const,
+        title: "Awaiting observation",
+        description:
+          "The backend accepted the command. This console will stay pending until observed events arrive.",
       };
     }
 
@@ -591,7 +1178,8 @@ const RunsPage: React.FC = () => {
       label: "Ready to start a run",
       alertType: "info" as const,
       title: "Idle",
-      description: "Compose a prompt and start a workflow run.",
+      description:
+        "Compose a prompt or payload and start a scoped endpoint run.",
     };
   }, [
     activeTransport,
@@ -613,14 +1201,18 @@ const RunsPage: React.FC = () => {
     session.status === "running" ||
     hasPendingInteraction ||
     runFocus.status === "wait_signal";
+  const runStatusTone = isRunLive
+    ? ("processing" as const)
+    : session.status === "finished"
+    ? ("success" as const)
+    : session.status === "error"
+    ? ("error" as const)
+    : ("default" as const);
 
   useEffect(() => {
     if (hasPendingInteraction) {
-      setIsInteractionDrawerOpen(true);
-      return;
+      setIsInspectorDrawerOpen(true);
     }
-
-    setIsInteractionDrawerOpen(false);
   }, [hasPendingInteraction]);
 
   useEffect(() => {
@@ -655,7 +1247,9 @@ const RunsPage: React.FC = () => {
     () => ({
       status: session.status,
       transport: activeTransport,
-      workflowName,
+      routeName: routeName ?? "",
+      endpointId: endpointName,
+      endpointKind,
       actorId: actorId ?? "",
       commandId,
       runId: session.runId ?? "",
@@ -678,41 +1272,119 @@ const RunsPage: React.FC = () => {
       session.messages.length,
       session.runId,
       session.status,
-      workflowName,
+      endpointKind,
+      endpointName,
+      routeName,
     ]
   );
 
   useEffect(() => {
     const prompt = composerFormRef.current?.getFieldValue("prompt") ?? "";
+    const currentPayloadTypeUrl =
+      composerFormRef.current?.getFieldValue("payloadTypeUrl") ?? "";
+    const currentPayloadBase64 =
+      composerFormRef.current?.getFieldValue("payloadBase64") ?? "";
+    const currentEndpointKind = resolveRunEndpointKind();
+    const currentEndpointId = resolveRunEndpointId();
+    const currentServiceOverrideId = resolveRunServiceOverrideId();
     const candidateId =
       commandId ??
       session.runId ??
-      (actorId && workflowName ? `${workflowName}:${actorId}` : "");
+      (actorId && routeName ? `${routeName}:${actorId}` : "");
 
-    if (!candidateId || (!workflowName && !prompt)) {
+    if (!candidateId || (!routeName && !prompt)) {
       return;
     }
 
     setRecentRuns(
       saveRecentRun({
         id: candidateId,
-        workflowName,
+        scopeId: resolveRunScopeId(),
+        serviceOverrideId:
+          currentEndpointKind === "chat" &&
+          currentServiceOverrideId === routeName
+            ? ""
+            : currentServiceOverrideId,
+        endpointId: currentEndpointId,
+        endpointKind: currentEndpointKind,
+        payloadTypeUrl: currentPayloadTypeUrl,
+        payloadBase64: currentPayloadBase64,
+        routeName,
         prompt,
         actorId: actorId ?? "",
         commandId,
         runId: session.runId ?? "",
         status: session.status,
         lastMessagePreview: latestMessagePreview,
+        observedEvents: session.events.map((event) => ({ ...event })),
       })
     );
   }, [
     actorId,
     commandId,
     latestMessagePreview,
+    payloadTypeUrl,
+    resolveRunEndpointKind,
+    resolveRunScopeId,
+    resolveRunServiceOverrideId,
+    resolveRunEndpointId,
+    session.events,
     session.runId,
     session.status,
-    workflowName,
+    routeName,
   ]);
+
+  const handleAbortRun = useCallback(async () => {
+    const scopeId = resolveRunScopeId();
+    const serviceOverrideId = resolveRunServiceOverrideId();
+    const runId = session.runId?.trim() ?? "";
+    const currentActorId = actorId?.trim() ?? "";
+
+    if (scopeId && runId) {
+      try {
+        await runtimeRunsApi.stop(scopeId, {
+          actorId: currentActorId || undefined,
+          runId,
+          commandId: commandId || undefined,
+          reason: "aborted from runtime console",
+        }, {
+          serviceId: serviceOverrideId || undefined,
+        });
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        messageApi.error(`Failed to stop remote run: ${text}`);
+      }
+    }
+
+    abortRun();
+  }, [
+    abortRun,
+    actorId,
+    commandId,
+    messageApi,
+    resolveRunScopeId,
+    resolveRunServiceOverrideId,
+    session.runId,
+  ]);
+
+  const submitPathLabel = scopeDraftPayload
+    ? "/api/scopes/{scopeId}/workflow/draft-run"
+    : endpointKind === "chat"
+      ? resolveRequestedServiceId(
+          {
+            endpointId: endpointName,
+            endpointKind,
+            routeName: selectedRouteName,
+            serviceOverrideId:
+              activeServiceOverrideId || initialFormValues.serviceOverrideId,
+          },
+          false
+        )
+        ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/chat:stream"
+        : "/api/scopes/{scopeId}/invoke/chat:stream"
+      : trimOptional(activeServiceOverrideId || initialFormValues.serviceOverrideId)
+        ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
+        : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
   const messageConsoleView = (
     <div style={workbenchConsoleSurfaceStyle}>
@@ -870,101 +1542,77 @@ const RunsPage: React.FC = () => {
     <PageContainer pageHeaderRender={false} style={{ overflow: "hidden" }}>
       {messageContextHolder}
       <div style={runsWorkbenchShellStyle}>
-        <Alert
-          showIcon
-          type="info"
-          title="Runtime run console"
-          description="Drive runtime workflows over /api/chat or /api/ws/chat, monitor the live event stream, and jump into adjacent runtime surfaces directly from the runtime console."
-          action={
-            <Space wrap>
-              <Button onClick={() => history.push("/workflows")}>
-                Open workflow catalog
-              </Button>
+        <div style={runsWorkbenchHeaderBarStyle}>
+          <div style={runsWorkbenchHeaderTitleStyle}>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              Runtime endpoint console
+            </Typography.Title>
+            <Popover
+              content={
+                <Typography.Paragraph
+                  style={{ margin: 0, maxWidth: 360 }}
+                  type="secondary"
+                >
+                  Drive scoped endpoints over{" "}
+                  <Typography.Text code>
+                    {submitPathLabel}
+                  </Typography.Text>
+                  , monitor the live event stream when the endpoint is streamed,
+                  and jump into adjacent runtime surfaces directly from the
+                  runtime console.
+                </Typography.Paragraph>
+              }
+              placement="bottomLeft"
+              trigger={["hover", "click"]}
+            >
               <Button
-                onClick={() =>
-                  history.push(
-                    actorId
-                      ? `/actors?actorId=${encodeURIComponent(actorId)}`
-                      : "/actors"
-                  )
-                }
-              >
-                Open runtime explorer
-              </Button>
-              <Button
-                onClick={() =>
-                  history.push(
-                    `/observability?workflow=${encodeURIComponent(
-                      workflowName ||
-                        selectedWorkflowName ||
-                        preferences.preferredWorkflow
-                    )}&actorId=${encodeURIComponent(
-                      actorId ?? ""
-                    )}&commandId=${encodeURIComponent(
-                      commandId
-                    )}&runId=${encodeURIComponent(session.runId ?? "")}`
-                  )
-                }
-              >
-                Open observability hub
-              </Button>
-              <Button onClick={() => history.push("/settings/runtime")}>
-                Open runtime settings
-              </Button>
-            </Space>
-          }
-        />
-        <div style={runsWorkbenchHeaderStyle}>
-          <Space separator={<Divider orientation="vertical" />} size={16}>
-            <Space size={8}>
-              <Badge
-                status={
-                  isRunLive
-                    ? "processing"
-                    : session.status === "finished"
-                    ? "success"
-                    : session.status === "error"
-                    ? "error"
-                    : "default"
-                }
+                aria-label="Open runtime console guide"
+                icon={<InfoCircleOutlined />}
+                shape="circle"
+                type="text"
               />
-              <Typography.Text strong>Run ID</Typography.Text>
-              <Typography.Text code>
-                {session.runId || commandId || "Not started"}
-              </Typography.Text>
-            </Space>
-            <Space size={8}>
-              <Typography.Text type="secondary">Elapsed</Typography.Text>
-              <Typography.Text code>{elapsedLabel}</Typography.Text>
-            </Space>
-            <Space size={8}>
-              <Typography.Text type="secondary">Workflow</Typography.Text>
-              <Typography.Text>{workflowName || "n/a"}</Typography.Text>
-            </Space>
-          </Space>
-          <Space separator={<Divider orientation="vertical" />} size={16}>
-            <Tag color={activeTransport === "ws" ? "success" : "processing"}>
-              {activeTransport.toUpperCase()}
-            </Tag>
-            <Badge
-              color="#ff4d4f"
-              count={hasPendingInteraction ? "Pending" : 0}
-              offset={[-4, 4]}
-            >
-              <Button onClick={() => setIsInteractionDrawerOpen(true)}>
-                Interaction
-              </Button>
-            </Badge>
+            </Popover>
+          </div>
+          <div style={runsWorkbenchHeaderActionStyle}>
             <Button
-              danger
-              type="primary"
-              disabled={!isRunLive}
-              onClick={abortRun}
+              size="small"
+              onClick={() => history.push(buildRuntimeWorkflowsHref())}
             >
-              Abort
+              Catalog
             </Button>
-          </Space>
+            <Button
+              size="small"
+              onClick={() =>
+                history.push(
+                  buildRuntimeExplorerHref({
+                    actorId: actorId ?? undefined,
+                    runId: session.runId || undefined,
+                    scopeId: activeScopeId || undefined,
+                    serviceOverrideId: activeServiceOverrideId || undefined,
+                  })
+                )
+              }
+            >
+              Explorer
+            </Button>
+          </div>
         </div>
+        <RunsStatusStrip
+          activeStepCount={session.activeSteps.size}
+          elapsedLabel={elapsedLabel}
+          eventCount={session.events.length}
+          hasPendingInteraction={hasPendingInteraction}
+          isRunLive={isRunLive}
+          messageCount={session.messages.length}
+          onAbort={handleAbortRun}
+          onOpenInspector={() => setIsInspectorDrawerOpen(true)}
+          runId={session.runId || commandId || "Not started"}
+          runStatusLabel={runStatusText}
+          statusTone={runStatusTone}
+          transport={activeTransport}
+          endpointId={endpointName}
+          endpointKind={endpointKind}
+        />
 
         <div ref={runsWorkbenchMainRef} style={runsWorkbenchMainStyle}>
           <div
@@ -976,293 +1624,64 @@ const RunsPage: React.FC = () => {
               width: composerWidth,
             }}
           >
-            <ProCard
-              title="Composer"
-              hoverable
-              {...moduleCardProps}
-              style={workbenchCardStyle}
-              bodyStyle={workbenchCardBodyStyle}
-            >
-              <div style={workbenchScrollableBodyStyle}>
-                <Tabs
-                  items={[
-                    {
-                      key: "compose",
-                      label: "Compose",
-                      children: (
-                        <div style={cardStackStyle}>
-                          <ProForm<RunFormValues>
-                            formRef={composerFormRef}
-                            layout="vertical"
-                            initialValues={initialFormValues}
-                            onValuesChange={(_, values) => {
-                              setSelectedWorkflowName(values.workflow ?? "");
-                              if (values.transport) {
-                                setSelectedTransport(values.transport);
-                              }
-                            }}
-                            onFinish={async (values) => {
-                              await sendRun(
-                                {
-                                  prompt: values.prompt,
-                                  workflow: values.workflow,
-                                  agentId: values.actorId,
-                                },
-                                values.transport
-                              );
-                              return true;
-                            }}
-                            submitter={{
-                              render: (props) => (
-                                <Space wrap>
-                                  <Button
-                                    type="primary"
-                                    loading={streaming}
-                                    onClick={() => props.form?.submit?.()}
-                                  >
-                                    Start run
-                                  </Button>
-                                  <Button
-                                    onClick={abortRun}
-                                    disabled={!streaming}
-                                  >
-                                    Abort run
-                                  </Button>
-                                  {actorId ? (
-                                    <Button
-                                      onClick={() =>
-                                        history.push(
-                                          `/actors?actorId=${encodeURIComponent(
-                                            actorId
-                                          )}`
-                                        )
-                                      }
-                                    >
-                                      Open actor
-                                    </Button>
-                                  ) : null}
-                                </Space>
-                              ),
-                            }}
-                          >
-                            <ProFormTextArea
-                              name="prompt"
-                              label="Prompt"
-                              fieldProps={{ rows: 8 }}
-                              placeholder="Describe the task for this run."
-                              rules={[
-                                {
-                                  required: true,
-                                  message: "Prompt is required.",
-                                },
-                              ]}
-                            />
-                            <ProFormSelect<RunTransport>
-                              name="transport"
-                              label="Transport"
-                              options={[
-                                {
-                                  label: "SSE /api/chat",
-                                  value: "sse",
-                                },
-                                {
-                                  label: "WebSocket /api/ws/chat",
-                                  value: "ws",
-                                },
-                              ]}
-                              rules={[
-                                {
-                                  required: true,
-                                  message: "Transport is required.",
-                                },
-                              ]}
-                              extra="SSE is the default path. Use WebSocket to validate the alternate live transport already exposed by the backend."
-                            />
-                            <ProFormSelect
-                              name="workflow"
-                              label="Workflow"
-                              placeholder="Select a workflow"
-                              options={workflowOptions}
-                              fieldProps={{
-                                allowClear: true,
-                                showSearch: true,
-                                filterOption: false,
-                                onSearch: setCatalogSearch,
-                                notFoundContent:
-                                  workflowCatalogQuery.isLoading ? (
-                                    <Typography.Text type="secondary">
-                                      Loading workflows...
-                                    </Typography.Text>
-                                  ) : (
-                                    <Empty
-                                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                      description="No workflows available."
-                                    />
-                                  ),
-                              }}
-                            />
-                            <ProFormText
-                              name="actorId"
-                              label="Existing actorId (optional)"
-                              placeholder="Workflow:..."
-                              extra="Provide an actorId to continue on a bound workflow actor."
-                            />
-                          </ProForm>
-
-                          {selectedWorkflowRecord ? (
-                            <div style={embeddedPanelStyle}>
-                              <Alert
-                                showIcon
-                                type={
-                                  selectedTransport === "ws"
-                                    ? "success"
-                                    : "info"
-                                }
-                                title={
-                                  selectedTransport === "ws"
-                                    ? "WebSocket transport selected"
-                                    : "SSE transport selected"
-                                }
-                                description={
-                                  selectedTransport === "ws"
-                                    ? "The next run will be sent through /api/ws/chat."
-                                    : "The next run will be sent through /api/chat."
-                                }
-                                style={{ marginBottom: 16 }}
-                              />
-                              <ProDescriptions<SelectedWorkflowRecord>
-                                column={1}
-                                dataSource={selectedWorkflowRecord}
-                                columns={workflowDescriptionColumns}
-                              />
-                              {selectedWorkflowDetails?.primitives.length ? (
-                                <Space wrap size={[8, 8]}>
-                                  {selectedWorkflowDetails.primitives.map(
-                                    (primitive) => (
-                                      <Tag key={primitive}>{primitive}</Tag>
-                                    )
-                                  )}
-                                </Space>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <Empty
-                              image={Empty.PRESENTED_IMAGE_SIMPLE}
-                              description="Select a workflow to see its profile."
-                            />
-                          )}
-                        </div>
-                      ),
-                    },
-                    {
-                      key: "recent",
-                      label: `Recent (${recentRunRows.length})`,
-                      children: (
-                        <div style={cardStackStyle}>
-                          <ProTable<RecentRunTableRow>
-                            rowKey="key"
-                            search={false}
-                            options={false}
-                            pagination={false}
-                            columns={recentRunColumns}
-                            dataSource={recentRunRows}
-                            cardProps={compactTableCardProps}
-                            scroll={{ y: 420 }}
-                            locale={{
-                              emptyText: (
-                                <Empty
-                                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                  description="No local runs have been recorded yet."
-                                />
-                              ),
-                            }}
-                          />
-                          {recentRunRows.length > 0 ? (
-                            <Space>
-                              <Button
-                                danger
-                                onClick={() => setRecentRuns(clearRecentRuns())}
-                              >
-                                Clear local runs
-                              </Button>
-                            </Space>
-                          ) : null}
-                        </div>
-                      ),
-                    },
-                    {
-                      key: "presets",
-                      label: `Presets (${visiblePresets.length})`,
-                      children: (
-                        <div style={scrollPanelStyle}>
-                          <ProList<RunPreset>
-                            rowKey="key"
-                            search={false}
-                            split
-                            dataSource={visiblePresets}
-                            locale={{
-                              emptyText: (
-                                <Empty
-                                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                  description="No presets are currently available."
-                                />
-                              ),
-                            }}
-                            metas={{
-                              title: {
-                                dataIndex: "title",
-                              },
-                              description: {
-                                dataIndex: "description",
-                              },
-                              subTitle: {
-                                render: (_, record) => (
-                                  <Space wrap size={[4, 4]}>
-                                    <Tag color="processing">
-                                      {record.workflow}
-                                    </Tag>
-                                    {record.tags.map((tag) => (
-                                      <Tag key={`${record.key}-${tag}`}>
-                                        {tag}
-                                      </Tag>
-                                    ))}
-                                  </Space>
-                                ),
-                              },
-                              actions: {
-                                render: (_, record) => [
-                                  <Space key={`${record.key}-actions`}>
-                                    <Button
-                                      type="link"
-                                      onClick={() => {
-                                        composerFormRef.current?.setFieldsValue(
-                                          {
-                                            prompt: record.prompt,
-                                            workflow: record.workflow,
-                                            actorId: undefined,
-                                            transport: selectedTransport,
-                                          }
-                                        );
-                                        setSelectedWorkflowName(
-                                          record.workflow
-                                        );
-                                        setCatalogSearch("");
-                                      }}
-                                    >
-                                      Use preset
-                                    </Button>
-                                  </Space>,
-                                ],
-                              },
-                            }}
-                          />
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
-              </div>
-            </ProCard>
+            <RunsLaunchRail
+              actorId={actorId ?? undefined}
+              activeEndpointId={endpointName}
+              activeEndpointKind={endpointKind}
+              catalogSearch={catalogSearch}
+              composerFormRef={composerFormRef}
+              draftMode={Boolean(draftRunPayload)}
+              initialFormValues={initialFormValues}
+              recentRunRows={recentRunRows}
+              selectedTransport={selectedTransport}
+              selectedRouteDetailsPrimitives={
+                selectedRouteDetails?.primitives ?? []
+              }
+              selectedRouteRecord={selectedRouteRecord}
+              streaming={streaming}
+              submitPathLabel={submitPathLabel}
+              transportOptions={[
+                { label: "Service SSE stream", value: "sse" },
+              ]}
+              visiblePresets={visiblePresets}
+              workflowCatalogLoading={workflowCatalogQuery.isLoading}
+              routeOptions={routeOptions}
+              onAbortRun={abortRun}
+              onCatalogSearchChange={setCatalogSearch}
+              onClearRecentRuns={() => setRecentRuns(clearRecentRuns())}
+              onEndpointChange={handleEndpointChange}
+              onEndpointKindChange={handleEndpointKindChange}
+              onSelectRouteName={handleRouteSelection}
+              onSubmitRun={async (values) => {
+                await sendRun(values.scopeId ?? "", values);
+              }}
+              onTransportChange={handleTransportChange}
+              onUsePreset={(record) => {
+                composerFormRef.current?.setFieldsValue({
+                  prompt: record.prompt,
+                  routeName: scopeDraftPayload?.bundleName ?? record.routeName,
+                  scopeId:
+                    composerFormRef.current?.getFieldValue("scopeId") ??
+                    initialFormValues.scopeId,
+                  serviceOverrideId: undefined,
+                  endpointId:
+                    endpointKind === "chat" ? endpointName || "chat" : "chat",
+                  endpointKind: "chat",
+                  payloadTypeUrl: undefined,
+                  payloadBase64: undefined,
+                  actorId: undefined,
+                  transport: selectedTransport,
+                });
+                setSelectedRouteName(
+                  scopeDraftPayload?.bundleName ?? record.routeName
+                );
+                setActiveEndpointKind("chat");
+                setActiveEndpointId(
+                  endpointKind === "chat" ? endpointName || "chat" : "chat"
+                );
+                setCatalogSearch("");
+              }}
+            />
           </div>
           <button
             aria-label="Resize composer panel"
@@ -1303,278 +1722,72 @@ const RunsPage: React.FC = () => {
             />
           </button>
           <div style={runsWorkbenchMonitorStyle}>
-            <ProCard
-              title="Metric HUD"
-              hoverable
-              {...moduleCardProps}
-              style={workbenchHudCardStyle}
-              bodyStyle={workbenchHudBodyStyle}
-            >
-              <Row gutter={12}>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            isRunLive
-                              ? "processing"
-                              : session.status === "finished"
-                              ? "success"
-                              : session.status === "error"
-                              ? "error"
-                              : "default"
+            <div style={workbenchOverviewGridStyle}>
+              <Tabs
+                activeKey="trace-layout"
+                items={[
+                  {
+                    key: "trace-layout",
+                    label: "Trace workspace",
+                    children: (
+                      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+                        <RunsTracePane
+                          consoleView={consoleView}
+                          eventConsoleView={eventConsoleView}
+                          eventCount={eventRows.length}
+                          hasPendingInteraction={hasPendingInteraction}
+                          messageConsoleView={messageConsoleView}
+                          messageCount={session.messages.length}
+                          onConsoleViewChange={setConsoleView}
+                          timelineView={
+                            <RunsTimelineView
+                              groups={timelineGroups}
+                              onSelectItem={(item) => {
+                                setSelectedTraceItemKey(item.key);
+                                setIsInspectorDrawerOpen(true);
+                              }}
+                              selectedItemKey={selectedTraceItemKey}
+                            />
                           }
                         />
-                        <span>Status</span>
-                      </Space>
-                    }
-                    value={runStatusText}
-                  />
-                </Col>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            session.messages.length > 0
-                              ? "processing"
-                              : "default"
-                          }
-                        />
-                        <span>Messages</span>
-                      </Space>
-                    }
-                    value={session.messages.length}
-                  />
-                </Col>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            session.events.length > 0 ? "processing" : "default"
-                          }
-                        />
-                        <span>Events</span>
-                      </Space>
-                    }
-                    value={session.events.length}
-                  />
-                </Col>
-                <Col span={6}>
-                  <Statistic
-                    title={
-                      <Space size={6}>
-                        <Badge
-                          status={
-                            session.activeSteps.size > 0 ? "warning" : "default"
-                          }
-                        />
-                        <span>Active steps</span>
-                      </Space>
-                    }
-                    value={session.activeSteps.size}
-                  />
-                </Col>
-              </Row>
-            </ProCard>
-
-            <Row gutter={12} style={workbenchOverviewGridStyle}>
-              <Col xs={24} xl={14} style={stretchColumnStyle}>
-                <ProCard
-                  title="Live overview"
-                  hoverable
-                  {...moduleCardProps}
-                  style={workbenchOverviewCardStyle}
-                  bodyStyle={workbenchCardBodyStyle}
-                >
-                  <div style={workbenchScrollableBodyStyle}>
-                    <div style={cardStackStyle}>
-                      <Alert
-                        showIcon
-                        type={runFocus.alertType}
-                        title={runFocus.title}
-                        description={runFocus.description}
-                      />
-                      <ProDescriptions<RunSummaryRecord>
-                        column={1}
-                        dataSource={runSummaryRecord}
-                        columns={runSummaryColumns}
-                      />
-                      {latestMessagePreview ? (
-                        <div style={embeddedPanelStyle}>
-                          <Typography.Text type="secondary">
-                            Latest message preview
-                          </Typography.Text>
-                          <Typography.Paragraph
-                            style={{
-                              margin: "8px 0 0",
-                              whiteSpace: "pre-wrap",
-                            }}
-                          >
-                            {latestMessagePreview}
-                          </Typography.Paragraph>
-                        </div>
-                      ) : null}
-                      {actorSnapshotQuery.data ? (
-                        <Alert
-                          showIcon
-                          type={
-                            actorSnapshotQuery.data.lastSuccess === false
-                              ? "error"
-                              : "success"
-                          }
-                          title="Latest actor snapshot"
-                          description={
-                            <Space direction="vertical" size={4}>
-                              <Typography.Paragraph
-                                ellipsis={{
-                                  rows: 2,
-                                  expandable: true,
-                                  symbol: "Expand output",
-                                }}
-                                style={{ marginBottom: 0 }}
-                              >
-                                Output:{" "}
-                                {actorSnapshotQuery.data.lastOutput || "n/a"}
-                              </Typography.Paragraph>
-                              <Typography.Text>
-                                Updated:{" "}
-                                {formatDateTime(
-                                  actorSnapshotQuery.data.lastUpdatedAt
-                                )}
-                              </Typography.Text>
-                            </Space>
-                          }
-                        />
-                      ) : null}
-                      {session.error ? (
-                        <Alert
-                          showIcon
-                          type="error"
-                          title={session.error.code ?? "Run error"}
-                          description={session.error.message}
-                        />
-                      ) : null}
-                    </div>
-                  </div>
-                </ProCard>
-              </Col>
-              <Col xs={24} xl={10} style={stretchColumnStyle}>
-                <ProCard
-                  title="Workflow profile"
-                  hoverable
-                  {...moduleCardProps}
-                  style={workbenchOverviewCardStyle}
-                  bodyStyle={workbenchCardBodyStyle}
-                >
-                  <div style={workbenchScrollableBodyStyle}>
-                    {selectedWorkflowRecord ? (
-                      <div style={cardStackStyle}>
-                        <ProDescriptions<SelectedWorkflowRecord>
-                          column={1}
-                          dataSource={selectedWorkflowRecord}
-                          columns={workflowDescriptionColumns}
-                        />
-                        {selectedWorkflowDetails?.primitives.length ? (
-                          <Space wrap size={[8, 8]}>
-                            {selectedWorkflowDetails.primitives.map(
-                              (primitive) => (
-                                <Tag key={primitive}>{primitive}</Tag>
-                              )
-                            )}
-                          </Space>
-                        ) : null}
                       </div>
-                    ) : (
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description="Select a workflow to inspect its profile."
-                      />
-                    )}
-                  </div>
-                </ProCard>
-              </Col>
-            </Row>
+                    ),
+                  },
+                ]}
+              />
+            </div>
           </div>
         </div>
-
-        <ProCard
-          title="Console"
-          hoverable
-          {...moduleCardProps}
-          style={workbenchConsoleCardStyle}
-          bodyStyle={workbenchConsoleBodyStyle}
-          extra={
-            <Space separator={<Divider orientation="vertical" />} size={12}>
-              <Typography.Text type="secondary">
-                {session.messages.length} messages
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                {eventRows.length} events
-              </Typography.Text>
-              <Typography.Text type="secondary">
-                {hasPendingInteraction ? "interaction pending" : "monitoring"}
-              </Typography.Text>
-            </Space>
-          }
-        >
-          <div style={workbenchConsoleViewportStyle}>
-            <Tabs
-              activeKey={consoleView}
-              items={[
-                {
-                  key: "dual",
-                  label: "Dual stream",
-                  children: (
-                    <div style={workbenchConsoleTabPanelStyle}>
-                      <Row gutter={12} style={{ flex: 1, minHeight: 0 }}>
-                        <Col span={12} style={stretchColumnStyle}>
-                          {messageConsoleView}
-                        </Col>
-                        <Col span={12} style={stretchColumnStyle}>
-                          {eventConsoleView}
-                        </Col>
-                      </Row>
-                    </div>
-                  ),
-                },
-                {
-                  key: "messages",
-                  label: "Messages",
-                  children: (
-                    <div style={workbenchConsoleTabPanelStyle}>
-                      {messageConsoleView}
-                    </div>
-                  ),
-                },
-                {
-                  key: "events",
-                  label: "Events",
-                  children: (
-                    <div style={workbenchConsoleTabPanelStyle}>
-                      {eventConsoleView}
-                    </div>
-                  ),
-                },
-              ]}
-              onChange={(key) => setConsoleView(key as ConsoleViewKey)}
-            />
-          </div>
-        </ProCard>
 
         <Drawer
           destroyOnHidden
           mask={false}
-          open={isInteractionDrawerOpen}
-          title={hasPendingInteraction ? "Pending interaction" : "Interaction"}
-          size={420}
-          onClose={() => setIsInteractionDrawerOpen(false)}
+          open={isInspectorDrawerOpen}
+          styles={{ body: drawerBodyStyle }}
+          title={hasPendingInteraction ? "Inspector · interaction pending" : "Inspector"}
+          size={520}
+          onClose={() => setIsInspectorDrawerOpen(false)}
         >
-          <div style={cardStackStyle}>
+          <div style={drawerScrollStyle}>
+            <div style={cardStackStyle}>
+            <RunsInspectorPane
+              actorSnapshot={actorSnapshotQuery.data}
+              actorSnapshotLoading={
+                actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
+              }
+              humanInputRecord={humanInputRecord}
+              latestMessagePreview={latestMessagePreview}
+              runFocus={runFocus}
+              runSummaryRecord={runSummaryRecord}
+              selectedTraceItem={selectedTraceItem}
+              selectedRoutePrimitives={
+                selectedRouteDetails?.primitives ?? []
+              }
+              selectedRouteRecord={selectedRouteRecord}
+              showInteractionAction={false}
+              variant="plain"
+              waitingSignalRecord={waitingSignalRecord}
+            />
             {humanInputRecord ? (
               <div style={embeddedPanelStyle}>
                 <Space direction="vertical" style={{ width: "100%" }} size={16}>
@@ -1707,13 +1920,7 @@ const RunsPage: React.FC = () => {
                 </Space>
               </div>
             ) : null}
-
-            {!humanInputRecord && !waitingSignalRecord ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="No pending human interaction."
-              />
-            ) : null}
+            </div>
           </div>
         </Drawer>
       </div>

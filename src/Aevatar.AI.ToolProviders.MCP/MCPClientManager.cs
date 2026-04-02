@@ -31,18 +31,10 @@ public sealed class MCPClientManager : IAsyncDisposable
     public async Task<IReadOnlyList<IAgentTool>> ConnectAndDiscoverAsync(
         MCPServerConfig config, CancellationToken ct = default)
     {
-        _logger.LogInformation("连接 MCP Server: {Name} ({Command})", config.Name, config.Command);
+        var endpoint = !string.IsNullOrWhiteSpace(config.Url) ? config.Url : config.Command;
+        _logger.LogInformation("连接 MCP Server: {Name} ({Endpoint})", config.Name, endpoint);
 
-        // 创建 stdio transport
-        var transport = new StdioClientTransport(new StdioClientTransportOptions
-        {
-            Name = config.Name,
-            Command = config.Command,
-            Arguments = [..config.Arguments],
-            EnvironmentVariables = config.Environment.Count == 0
-                ? null
-                : config.Environment.ToDictionary(static kv => kv.Key, static kv => (string?)kv.Value),
-        });
+        var transport = CreateTransport(config);
 
         var options = new McpClientOptions
         {
@@ -70,6 +62,37 @@ public sealed class MCPClientManager : IAsyncDisposable
 
         _logger.LogInformation("MCP Server {Name}: 发现 {Count} 个工具", config.Name, adapted.Count);
         return adapted;
+    }
+
+    private static IClientTransport CreateTransport(MCPServerConfig config)
+    {
+        if (!string.IsNullOrWhiteSpace(config.Url))
+        {
+            var options = new HttpClientTransportOptions
+            {
+                Name = config.Name,
+                Endpoint = new Uri(config.Url, UriKind.Absolute),
+                TransportMode = HttpTransportMode.AutoDetect,
+                ConnectionTimeout = TimeSpan.FromSeconds(30),
+                AdditionalHeaders = config.AdditionalHeaders.Count == 0
+                    ? null
+                    : new Dictionary<string, string>(config.AdditionalHeaders, StringComparer.OrdinalIgnoreCase),
+            };
+
+            return config.HttpClient != null
+                ? new HttpClientTransport(options, config.HttpClient, NullLoggerFactory.Instance, true)
+                : new HttpClientTransport(options, NullLoggerFactory.Instance);
+        }
+
+        return new StdioClientTransport(new StdioClientTransportOptions
+        {
+            Name = config.Name,
+            Command = config.Command,
+            Arguments = [..config.Arguments],
+            EnvironmentVariables = config.Environment.Count == 0
+                ? null
+                : config.Environment.ToDictionary(static kv => kv.Key, static kv => (string?)kv.Value),
+        });
     }
 
     /// <summary>释放所有 MCP 连接。</summary>

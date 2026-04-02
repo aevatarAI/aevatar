@@ -11,6 +11,8 @@ import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import {
   sanitizeReturnTo,
 } from '@/shared/auth/session';
+import { CONSOLE_HOME_ROUTE } from '@/shared/navigation/consoleHome';
+import { describeError } from '@/shared/ui/errorText';
 
 const pageStyle: React.CSSProperties = {
   minHeight: '100vh',
@@ -43,7 +45,7 @@ const LoginPage: React.FC = () => {
   const config = useMemo(() => getNyxIDRuntimeConfig(), []);
   const redirectTarget = useMemo(() => {
     if (typeof window === 'undefined') {
-      return '/overview';
+      return CONSOLE_HOME_ROUTE;
     }
 
     const params = new URLSearchParams(window.location.search);
@@ -79,7 +81,7 @@ const LoginPage: React.FC = () => {
       });
     } catch (error) {
       setPending(false);
-      setErrorText(error instanceof Error ? error.message : String(error));
+      setErrorText(describeError(error));
     }
   };
 

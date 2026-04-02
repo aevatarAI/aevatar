@@ -1,0 +1,56 @@
+syntax = "proto3";
+package aevatar.gagents.streamingproxy;
+option csharp_namespace = "Aevatar.GAgents.StreamingProxy";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+message StreamingProxyParticipant {
+  string agent_id = 1;
+  string display_name = 2;
+  google.protobuf.Timestamp joined_at = 3;
+}
+
+message StreamingProxyChatMessage {
+  int64 sequence = 1;
+  string sender_agent_id = 2;
+  string sender_name = 3;
+  string content = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  bool is_topic = 6;
+}
+
+message StreamingProxyGAgentState {
+  string room_name = 1;
+  repeated StreamingProxyParticipant participants = 2;
+  repeated StreamingProxyChatMessage messages = 3;
+  int64 next_sequence = 4;
+}
+
+// ─── Events ───
+
+message GroupChatRoomInitializedEvent {
+  string room_name = 1;
+}
+
+message GroupChatTopicEvent {
+  string prompt = 1;
+  string session_id = 2;
+}
+
+message GroupChatMessageEvent {
+  string agent_id = 1;
+  string agent_name = 2;
+  string content = 3;
+  string session_id = 4;
+}
+
+message GroupChatParticipantJoinedEvent {
+  string agent_id = 1;
+  string display_name = 2;
+}
+
+message GroupChatParticipantLeftEvent {
+  string agent_id = 1;
+}

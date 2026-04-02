@@ -1,4 +1,4 @@
-import { requestJson, withQuery } from "./http/client";
+import { jsonBody, requestJson, withQuery } from "./http/client";
 import {
   expectArray,
   expectRecord,
@@ -10,6 +10,7 @@ import {
   type Decoder,
 } from "./http/decoders";
 import type {
+  ServiceCommandAcceptedReceipt,
   ServiceCatalogSnapshot,
   ServiceDeploymentCatalogSnapshot,
   ServiceDeploymentSnapshot,
@@ -20,6 +21,7 @@ import type {
   ServiceRolloutSnapshot,
   ServiceRolloutStageSnapshot,
   ServiceServingSetSnapshot,
+  ServiceServingTargetInput,
   ServiceServingTargetSnapshot,
   ServiceTrafficEndpointSnapshot,
   ServiceTrafficTargetSnapshot,
@@ -521,6 +523,30 @@ function decodeServiceTrafficViewSnapshot(
   };
 }
 
+function decodeServiceCommandAcceptedReceipt(
+  value: unknown,
+  label = "ServiceCommandAcceptedReceipt"
+): ServiceCommandAcceptedReceipt {
+  const record = expectRecord(value, label);
+  return {
+    targetActorId: readString(
+      record,
+      ["targetActorId", "TargetActorId"],
+      `${label}.targetActorId`
+    ),
+    commandId: readString(
+      record,
+      ["commandId", "CommandId"],
+      `${label}.commandId`
+    ),
+    correlationId: readString(
+      record,
+      ["correlationId", "CorrelationId"],
+      `${label}.correlationId`
+    ),
+  };
+}
+
 const decodeServiceCatalogSnapshots: Decoder<ServiceCatalogSnapshot[]> = (
   value
 ) =>
@@ -650,7 +676,165 @@ export const servicesApi = {
           : decodeServiceTrafficViewSnapshot(
               value,
               "ServiceTrafficViewSnapshot"
-            )
+        )
+    );
+  },
+
+  deployRevision(
+    serviceId: string,
+    input: ServiceIdentityQuery & { revisionId: string }
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}:deploy`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: input.tenantId?.trim(),
+          appId: input.appId?.trim(),
+          namespace: input.namespace?.trim(),
+          revisionId: input.revisionId.trim(),
+        }),
+      }
+    );
+  },
+
+  replaceServingTargets(
+    serviceId: string,
+    input: ServiceIdentityQuery & {
+      reason?: string;
+      rolloutId?: string;
+      targets: ServiceServingTargetInput[];
+    }
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}:serving-targets`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: input.tenantId?.trim(),
+          appId: input.appId?.trim(),
+          namespace: input.namespace?.trim(),
+          rolloutId: input.rolloutId?.trim(),
+          reason: input.reason?.trim(),
+          targets: input.targets.map((target) => ({
+            revisionId: target.revisionId.trim(),
+            allocationWeight: target.allocationWeight,
+            servingState: target.servingState?.trim(),
+            enabledEndpointIds: target.enabledEndpointIds?.map((item) =>
+              item.trim()
+            ),
+          })),
+        }),
+      }
+    );
+  },
+
+  deactivateDeployment(
+    serviceId: string,
+    deploymentId: string,
+    query: ServiceIdentityQuery
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/deployments/${encodeURIComponent(
+        deploymentId
+      )}:deactivate`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: query.tenantId?.trim(),
+          appId: query.appId?.trim(),
+          namespace: query.namespace?.trim(),
+        }),
+      }
+    );
+  },
+
+  advanceRollout(
+    serviceId: string,
+    rolloutId: string,
+    query: ServiceIdentityQuery
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/rollouts/${encodeURIComponent(
+        rolloutId
+      )}:advance`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: query.tenantId?.trim(),
+          appId: query.appId?.trim(),
+          namespace: query.namespace?.trim(),
+        }),
+      }
+    );
+  },
+
+  pauseRollout(
+    serviceId: string,
+    rolloutId: string,
+    input: ServiceIdentityQuery & { reason?: string }
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/rollouts/${encodeURIComponent(
+        rolloutId
+      )}:pause`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: input.tenantId?.trim(),
+          appId: input.appId?.trim(),
+          namespace: input.namespace?.trim(),
+          reason: input.reason?.trim(),
+        }),
+      }
+    );
+  },
+
+  resumeRollout(
+    serviceId: string,
+    rolloutId: string,
+    query: ServiceIdentityQuery
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/rollouts/${encodeURIComponent(
+        rolloutId
+      )}:resume`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: query.tenantId?.trim(),
+          appId: query.appId?.trim(),
+          namespace: query.namespace?.trim(),
+        }),
+      }
+    );
+  },
+
+  rollbackRollout(
+    serviceId: string,
+    rolloutId: string,
+    input: ServiceIdentityQuery & { reason?: string }
+  ): Promise<ServiceCommandAcceptedReceipt> {
+    return requestJson(
+      `/api/services/${encodeURIComponent(serviceId)}/rollouts/${encodeURIComponent(
+        rolloutId
+      )}:rollback`,
+      decodeServiceCommandAcceptedReceipt,
+      {
+        method: "POST",
+        ...jsonBody({
+          tenantId: input.tenantId?.trim(),
+          appId: input.appId?.trim(),
+          namespace: input.namespace?.trim(),
+          reason: input.reason?.trim(),
+        }),
+      }
     );
   },
 };

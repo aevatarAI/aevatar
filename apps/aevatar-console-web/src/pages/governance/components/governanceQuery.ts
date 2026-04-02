@@ -1,4 +1,7 @@
-import type { ServiceIdentityQuery } from '@/shared/models/services';
+import type {
+  ServiceCatalogSnapshot,
+  ServiceIdentityQuery,
+} from '@/shared/models/services';
 
 export type GovernanceDraft = {
   tenantId: string;
@@ -6,6 +9,26 @@ export type GovernanceDraft = {
   namespace: string;
   serviceId: string;
   revisionId: string;
+};
+
+export const governanceWorkbenchViews = [
+  'audit',
+  'policies',
+  'bindings',
+  'endpoints',
+  'activation',
+] as const;
+
+export type GovernanceWorkbenchView =
+  (typeof governanceWorkbenchViews)[number];
+
+export type GovernanceServiceOption = {
+  label: string;
+  value: string;
+  tenantId: string;
+  appId: string;
+  namespace: string;
+  serviceId: string;
 };
 
 function readString(value: string | null): string {
@@ -34,6 +57,81 @@ export function normalizeGovernanceDraft(
   };
 }
 
+export function hasGovernanceScope(draft: GovernanceDraft): boolean {
+  return (
+    draft.tenantId.trim().length > 0 &&
+    draft.namespace.trim().length > 0
+  );
+}
+
+export function buildGovernanceServiceOptions(
+  services: readonly ServiceCatalogSnapshot[],
+): GovernanceServiceOption[] {
+  return services.map((service) => {
+    const identityLabel = [
+      service.tenantId,
+      service.namespace,
+      service.serviceId,
+    ].join('/');
+
+    return {
+      label: service.displayName
+        ? `${service.displayName} (${identityLabel})`
+        : identityLabel,
+      value: service.serviceKey,
+      tenantId: service.tenantId,
+      appId: service.appId,
+      namespace: service.namespace,
+      serviceId: service.serviceId,
+    };
+  });
+}
+
+export function findGovernanceServiceOption(
+  serviceOptions: readonly GovernanceServiceOption[],
+  draft: GovernanceDraft,
+): GovernanceServiceOption | null {
+  const normalizedServiceId = draft.serviceId.trim();
+  if (!normalizedServiceId) {
+    return null;
+  }
+
+  const tenantId = draft.tenantId.trim();
+  const appId = draft.appId.trim();
+  const namespace = draft.namespace.trim();
+
+  if (tenantId && namespace) {
+    const exactMatch = serviceOptions.find(
+      (option) =>
+        option.serviceId === normalizedServiceId &&
+        option.tenantId === tenantId &&
+        (!appId || option.appId === appId) &&
+        option.namespace === namespace,
+    );
+    if (exactMatch) {
+      return exactMatch;
+    }
+  }
+
+  const serviceIdMatches = serviceOptions.filter(
+    (option) => option.serviceId === normalizedServiceId,
+  );
+  return serviceIdMatches.length === 1 ? serviceIdMatches[0] : null;
+}
+
+export function applyGovernanceServiceSelection(
+  draft: GovernanceDraft,
+  serviceOption: GovernanceServiceOption,
+): GovernanceDraft {
+  return {
+    ...draft,
+    tenantId: serviceOption.tenantId,
+    appId: serviceOption.appId,
+    namespace: serviceOption.namespace,
+    serviceId: serviceOption.serviceId,
+  };
+}
+
 export function readGovernanceDraft(
   search = typeof window === 'undefined' ? '' : window.location.search,
 ): GovernanceDraft {
@@ -47,9 +145,18 @@ export function readGovernanceDraft(
   };
 }
 
-export function buildGovernanceHref(
-  path: string,
+export function readGovernanceWorkbenchView(
+  search = typeof window === 'undefined' ? '' : window.location.search,
+): GovernanceWorkbenchView {
+  const value = new URLSearchParams(search).get('view')?.trim() ?? '';
+  return governanceWorkbenchViews.includes(value as GovernanceWorkbenchView)
+    ? (value as GovernanceWorkbenchView)
+    : 'audit';
+}
+
+export function buildGovernanceWorkbenchHref(
   draft: GovernanceDraft,
+  view: GovernanceWorkbenchView,
 ): string {
   const params = new URLSearchParams();
 
@@ -68,7 +175,10 @@ export function buildGovernanceHref(
   if (draft.revisionId.trim()) {
     params.set('revisionId', draft.revisionId.trim());
   }
+  if (view !== 'audit') {
+    params.set('view', view);
+  }
 
   const suffix = params.toString();
-  return suffix ? `${path}?${suffix}` : path;
+  return suffix ? `/governance?${suffix}` : '/governance';
 }

@@ -2,29 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useState } from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
-import { buildObservabilityTargets } from "@/shared/observability/observabilityLinks";
-import { loadConsolePreferences } from "@/shared/preferences/consolePreferences";
 import { listVisibleWorkflowCatalogItems } from "@/shared/workflows/catalogVisibility";
 
-export type ConsoleProfileItem = {
-  preferredWorkflow: string;
-  observability: string;
-};
-
-export type ObservabilityOverviewItem = {
-  id: string;
-  label: string;
-  description: string;
-  status: "configured" | "missing";
-  homeUrl: string;
-};
-
-function normalizeBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
-
 export function useOverviewData() {
-  const preferences = useMemo(() => loadConsolePreferences(), []);
   const [deferredDetailsEnabled, setDeferredDetailsEnabled] = useState(false);
 
   useEffect(() => {
@@ -132,52 +112,12 @@ export function useOverviewData() {
     [agentsQuery.data]
   );
 
-  const grafanaBaseUrl = normalizeBaseUrl(preferences.grafanaBaseUrl);
-
-  const profileData = useMemo<ConsoleProfileItem>(
-    () => ({
-      preferredWorkflow: preferences.preferredWorkflow,
-      observability: grafanaBaseUrl ? "Configured" : "Not configured",
-    }),
-    [grafanaBaseUrl, preferences.preferredWorkflow]
-  );
-
-  const observabilityTargets = useMemo<ObservabilityOverviewItem[]>(
-    () =>
-      buildObservabilityTargets(preferences, {
-        workflow: preferences.preferredWorkflow,
-        actorId: "",
-        commandId: "",
-        runId: "",
-        stepId: "",
-      }).map((target) => ({
-        id: target.id,
-        label: target.label,
-        description: target.description,
-        status: target.status,
-        homeUrl: target.homeUrl,
-      })),
-    [preferences]
-  );
-
-  const configuredObservabilityCount = useMemo(
-    () =>
-      observabilityTargets.filter((target) => target.status === "configured")
-        .length,
-    [observabilityTargets]
-  );
-
   return {
     agentsQuery,
     capabilitiesQuery,
     catalogQuery,
-    configuredObservabilityCount,
-    grafanaBaseUrl,
     humanFocusedWorkflows,
     liveActors,
-    observabilityTargets,
-    preferences,
-    profileData,
     visibleCatalogItems,
     workflowsQuery,
     capabilityConnectorSummary,

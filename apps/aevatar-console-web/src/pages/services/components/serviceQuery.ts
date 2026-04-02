@@ -72,14 +72,23 @@ export function buildServiceDetailHref(
 ): string {
   const normalizedServiceId = serviceId.trim();
   const params = buildServiceSearchParams(query);
-  const path = `/services/${encodeURIComponent(normalizedServiceId)}`;
+  if (normalizedServiceId) {
+    params.set('serviceId', normalizedServiceId);
+  }
+  const path = '/services';
   const suffix = params.toString();
   return suffix ? `${path}?${suffix}` : path;
 }
 
 export function readServiceIdFromPathname(
   pathname = typeof window === 'undefined' ? '' : window.location.pathname,
+  search = typeof window === 'undefined' ? '' : window.location.search,
 ): string {
+  const searchValue = new URLSearchParams(search).get('serviceId')?.trim();
+  if (searchValue) {
+    return searchValue;
+  }
+
   const segments = pathname
     .split('/')
     .map((segment) => segment.trim())

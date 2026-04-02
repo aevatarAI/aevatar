@@ -84,6 +84,15 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 
+    public async Task<ServiceCommandAcceptedReceipt> RetireRevisionAsync(
+        RetireServiceRevisionCommand command,
+        CancellationToken ct = default)
+    {
+        var actorId = await _targetProvisioner.EnsureRevisionCatalogTargetAsync(command.Identity, ct);
+        await _revisionProjectionPort.EnsureProjectionAsync(actorId, ct);
+        return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
+    }
+
     public async Task<ServiceCommandAcceptedReceipt> SetDefaultServingRevisionAsync(
         SetDefaultServingRevisionCommand command,
         CancellationToken ct = default)
@@ -98,7 +107,9 @@ public sealed class ServiceCommandApplicationService : IServiceCommandPort
         CancellationToken ct = default)
     {
         var actorId = await _targetProvisioner.EnsureDeploymentTargetAsync(command.Identity, ct);
+        await _targetProvisioner.EnsureServingSetTargetAsync(command.Identity, ct);
         await _deploymentProjectionPort.EnsureProjectionAsync(actorId, ct);
+        await EnsureServingProjectionsAsync(ServiceActorIds.ServingSet(command.Identity), ct);
         return await DispatchAsync(actorId, command, CorrelationForRevision(command.Identity, command.RevisionId), ct);
     }
 

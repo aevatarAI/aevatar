@@ -54,6 +54,7 @@ public abstract class GAgentBase<TState> : GAgentBase, IAgent<TState>, IEventSou
         await OnDeactivateAsync(ct);
         await eventSourcing.ConfirmEventsAsync(ct);
         await eventSourcing.PersistSnapshotAsync(_state, ct);
+        await base.DeactivateAsync(ct);
     }
 
     /// <summary>Hook invoked after state changes, useful for CQRS projection.</summary>

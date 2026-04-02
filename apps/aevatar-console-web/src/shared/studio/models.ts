@@ -38,9 +38,14 @@ export interface StudioAppContext {
   readonly scopeResolved: boolean;
   readonly scopeSource: string;
   readonly workflowStorageMode: 'workspace' | 'scope';
+  readonly scriptStorageMode: 'draft' | 'scope';
   readonly features: {
     readonly publishedWorkflows: boolean;
     readonly scripts: boolean;
+  };
+  readonly scriptContract: {
+    readonly inputType: string;
+    readonly readModelFields: readonly string[];
   };
 }
 
@@ -147,6 +152,236 @@ export interface StudioStartExecutionInput {
   readonly workflowId?: string | null;
   readonly eventFormat?: string | null;
 }
+
+export type StudioScopeBindingImplementationKind =
+  | 'workflow'
+  | 'script'
+  | 'gagent'
+  | 'unknown';
+
+export type StudioScopeBindingTargetKind =
+  StudioScopeBindingImplementationKind;
+
+export function normalizeStudioScopeBindingImplementationKind(
+  value: string | number | null | undefined,
+): StudioScopeBindingImplementationKind {
+  if (typeof value === 'number') {
+    switch (value) {
+      case 1:
+        return 'workflow';
+      case 2:
+        return 'script';
+      case 3:
+        return 'gagent';
+      default:
+        return 'unknown';
+    }
+  }
+
+  const normalized = String(value || '').trim().toLowerCase();
+  switch (normalized) {
+    case 'workflow':
+      return 'workflow';
+    case 'script':
+    case 'scripting':
+      return 'script';
+    case 'gagent':
+      return 'gagent';
+    default:
+      return 'unknown';
+  }
+}
+
+export function formatStudioScopeBindingImplementationKind(
+  value: StudioScopeBindingImplementationKind | string | null | undefined,
+): string {
+  switch (normalizeStudioScopeBindingImplementationKind(value)) {
+    case 'workflow':
+      return 'Workflow';
+    case 'script':
+      return 'Script';
+    case 'gagent':
+      return 'GAgent';
+    default:
+      return 'Unknown';
+  }
+}
+
+export interface StudioScopeBindingResult {
+  readonly scopeId: string;
+  readonly serviceId?: string;
+  readonly displayName: string;
+  readonly revisionId: string;
+  readonly implementationKind?: StudioScopeBindingImplementationKind;
+  readonly targetKind: StudioScopeBindingTargetKind;
+  readonly targetName: string;
+  readonly workflowName?: string;
+  readonly definitionActorIdPrefix?: string;
+  readonly expectedActorId?: string;
+  readonly workflow?: {
+    readonly workflowName: string;
+    readonly definitionActorIdPrefix: string;
+  } | null;
+  readonly script?: {
+    readonly scriptId: string;
+    readonly scriptRevision: string;
+    readonly definitionActorId: string;
+  } | null;
+  readonly gAgent?: {
+    readonly actorTypeName: string;
+  } | null;
+}
+
+export interface StudioScopeBindingRevision {
+  readonly revisionId: string;
+  readonly implementationKind: StudioScopeBindingImplementationKind;
+  readonly status: string;
+  readonly artifactHash: string;
+  readonly failureReason: string;
+  readonly isDefaultServing: boolean;
+  readonly isActiveServing: boolean;
+  readonly isServingTarget: boolean;
+  readonly allocationWeight: number;
+  readonly servingState: string;
+  readonly deploymentId: string;
+  readonly primaryActorId: string;
+  readonly createdAt: string | null;
+  readonly preparedAt: string | null;
+  readonly publishedAt: string | null;
+  readonly retiredAt: string | null;
+  readonly workflowName: string;
+  readonly workflowDefinitionActorId: string;
+  readonly inlineWorkflowCount: number;
+  readonly scriptId: string;
+  readonly scriptRevision: string;
+  readonly scriptDefinitionActorId: string;
+  readonly scriptSourceHash: string;
+  readonly staticActorTypeName: string;
+}
+
+export interface StudioScopeBindingStatus {
+  readonly available: boolean;
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly displayName: string;
+  readonly serviceKey: string;
+  readonly defaultServingRevisionId: string;
+  readonly activeServingRevisionId: string;
+  readonly deploymentId: string;
+  readonly deploymentStatus: string;
+  readonly primaryActorId: string;
+  readonly updatedAt: string | null;
+  readonly revisions: readonly StudioScopeBindingRevision[];
+}
+
+export interface StudioScopeBindingActivationResult {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly displayName: string;
+  readonly revisionId: string;
+}
+
+export interface StudioScopeBindingRetirementResult {
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly revisionId: string;
+  readonly status: string;
+}
+
+export function describeStudioScopeBindingRevisionTarget(
+  revision: StudioScopeBindingRevision | null | undefined,
+): string {
+  if (!revision) {
+    return 'Not configured';
+  }
+
+  switch (normalizeStudioScopeBindingImplementationKind(revision.implementationKind)) {
+    case 'workflow':
+      return revision.workflowName || 'Workflow';
+    case 'script':
+      return revision.scriptId || 'Script';
+    case 'gagent':
+      return revision.staticActorTypeName || 'GAgent';
+    default:
+      return 'Unknown';
+  }
+}
+
+export function describeStudioScopeBindingRevisionContext(
+  revision: StudioScopeBindingRevision | null | undefined,
+): string {
+  if (!revision) {
+    return '';
+  }
+
+  switch (normalizeStudioScopeBindingImplementationKind(revision.implementationKind)) {
+    case 'workflow':
+      if (revision.workflowDefinitionActorId) {
+        return revision.workflowDefinitionActorId;
+      }
+      if (revision.inlineWorkflowCount > 0) {
+        return `${revision.inlineWorkflowCount} inline workflow${revision.inlineWorkflowCount === 1 ? '' : 's'}`;
+      }
+      return '';
+    case 'script':
+      if (revision.scriptRevision && revision.scriptSourceHash) {
+        return `${revision.scriptRevision} · ${revision.scriptSourceHash}`;
+      }
+      return revision.scriptRevision || revision.scriptSourceHash || '';
+    case 'gagent':
+      return '';
+    default:
+      return '';
+  }
+}
+
+export function getStudioScopeBindingCurrentRevision(
+  status: StudioScopeBindingStatus | null | undefined,
+): StudioScopeBindingRevision | null {
+  if (!status?.revisions?.length) {
+    return null;
+  }
+
+  return (
+    status.revisions.find((revision) => revision.isActiveServing) ||
+    status.revisions.find((revision) => revision.isDefaultServing) ||
+    status.revisions[0] ||
+    null
+  );
+}
+
+export interface StudioScopeScriptBindingInput {
+  readonly scopeId: string;
+  readonly displayName?: string | null;
+  readonly scriptId: string;
+  readonly scriptRevision: string;
+  readonly revisionId?: string | null;
+}
+
+export type StudioScopeScriptBindingResult = StudioScopeBindingResult;
+export type StudioScopeScriptBindingStatus = StudioScopeBindingStatus;
+export type StudioScopeScriptBindingActivationResult =
+  StudioScopeBindingActivationResult;
+
+export interface StudioScopeGAgentEndpointInput {
+  readonly endpointId: string;
+  readonly displayName?: string | null;
+  readonly kind?: 'command' | 'chat' | null;
+  readonly requestTypeUrl?: string | null;
+  readonly responseTypeUrl?: string | null;
+  readonly description?: string | null;
+}
+
+export interface StudioScopeGAgentBindingInput {
+  readonly scopeId: string;
+  readonly serviceId?: string | null;
+  readonly displayName?: string | null;
+  readonly actorTypeName: string;
+  readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
+  readonly revisionId?: string | null;
+}
+
+export type StudioScopeGAgentBindingResult = StudioScopeBindingResult;
 
 export interface StudioHttpConnectorDefinition {
   readonly baseUrl: string;

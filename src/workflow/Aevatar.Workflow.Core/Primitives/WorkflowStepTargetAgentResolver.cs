@@ -83,6 +83,17 @@ public sealed class WorkflowStepTargetAgentResolver
             return WorkflowStepTargetAgentResolution.Actor(roleActorId, $"target_role:{targetRole}");
         }
 
+        var implicitTargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
+            workflow: null,
+            configuredTargetRole: request.TargetRole,
+            stepType: request.StepType,
+            parameters: request.Parameters);
+        if (!string.IsNullOrWhiteSpace(implicitTargetRole))
+        {
+            var roleActorId = WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, implicitTargetRole);
+            return WorkflowStepTargetAgentResolution.Actor(roleActorId, $"implicit_target_role:{implicitTargetRole}");
+        }
+
         return WorkflowStepTargetAgentResolution.Self(ctx.AgentId);
     }
 

@@ -16,6 +16,7 @@ sealed record SetSecretRequest(string? Key, string? Value);
 sealed record RemoveSecretRequest(string? Key);
 sealed record WorkflowFileRequest(string? Content);
 sealed record AgentFileRequest(string? Content);
+sealed record OrnnConfigRequest(string? BaseUrl);
 
 enum LLMProviderKind
 {
@@ -33,6 +34,7 @@ enum LLMProviderKind
     OpenRouter = 11,
     DeepInfra = 12,
     Together = 13,
+    NyxId = 14,
 }
 
 sealed record ProviderTypeItem(

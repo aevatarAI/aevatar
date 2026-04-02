@@ -6,6 +6,10 @@ public interface IWorkflowExecutionArtifactQueryPort
 {
     bool EnableActorQueryEndpoints { get; }
 
+    Task<WorkflowRunReport?> GetActorReportAsync(
+        string actorId,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<WorkflowActorTimelineItem>> ListActorTimelineAsync(
         string actorId,
         int take = 200,

@@ -69,7 +69,7 @@
     // Current sidebar nav
     currentNav: "list",
   };
-  const categoryOrder = { configured: 0, tier1: 1, tier2: 2, aggregator: 3, regional: 4, local: 5, experimental: 6, embedding: 7 };
+  const categoryOrder = { configured: 0, tier1: 1, tier2: 2, aggregator: 3, identity: 4, regional: 5, local: 6, experimental: 7, embedding: 8 };
   const webSearchDefaults = {
     tavily: { endpoint: "https://api.tavily.com/search", searchDepth: "basic" },
     brave: { endpoint: "https://api.search.brave.com/res/v1/web/search", searchDepth: "" },
@@ -97,6 +97,23 @@
     return s || raw.replace(/[^a-zA-Z0-9]+/g, "-");
   }
 
+  function usesFixedProviderName(providerType) {
+    const pt = safeText(providerType || "").trim().toLowerCase();
+    return pt === "nyxid";
+  }
+
+  function buildSuggestedProviderName(providerType, model) {
+    const pt = safeText(providerType || "").trim();
+    if (isEmpty(pt)) return "";
+    if (usesFixedProviderName(pt)) return pt.toLowerCase();
+
+    const m = safeText(model || "").trim();
+    if (isEmpty(m)) return pt;
+
+    const suffix = sanitizeModelForInstanceName(m);
+    return isEmpty(suffix) ? pt : `${pt}-${suffix}`;
+  }
+
   function setView(view) {
     $("viewList").classList.toggle("hidden", view !== "list");
     $("viewConnect").classList.toggle("hidden", view !== "connect");
@@ -109,7 +126,8 @@
     $("viewConfigJson") && $("viewConfigJson").classList.toggle("hidden", view !== "configjson");
     $("viewAgents") && $("viewAgents").classList.toggle("hidden", view !== "agents");
     $("viewAgentEdit") && $("viewAgentEdit").classList.toggle("hidden", view !== "agentedit");
-    
+    $("viewOrnn") && $("viewOrnn").classList.toggle("hidden", view !== "ornn");
+
     updateSidebarActive(view);
   }
 
@@ -126,6 +144,7 @@
       configjson: "navConfigRaw",
       agents: "navAgents",
       agentedit: "navAgents",
+      ornn: "navOrnn",
     };
     
     document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
@@ -454,6 +473,7 @@
     const tier1 = providers.filter((p) => p.category === "tier1");
     const tier2 = providers.filter((p) => p.category === "tier2");
     const aggregator = providers.filter((p) => p.category === "aggregator");
+    const identity = providers.filter((p) => p.category === "identity");
     const regional = providers.filter((p) => p.category === "regional" || p.category === "embedding");
     const local = providers.filter((p) => p.category === "local");
     const experimental = providers.filter((p) => p.category === "experimental");
@@ -465,6 +485,7 @@
     $("secTier1") && $("secTier1").classList.toggle("hidden", tier1.length === 0);
     $("secTier2") && $("secTier2").classList.toggle("hidden", tier2.length === 0);
     $("secAggregator") && $("secAggregator").classList.toggle("hidden", aggregator.length === 0);
+    $("secIdentity") && $("secIdentity").classList.toggle("hidden", identity.length === 0);
     $("secRegional") && $("secRegional").classList.toggle("hidden", regional.length === 0);
     $("secLocal") && $("secLocal").classList.toggle("hidden", local.length === 0);
     $("secExperimental") && $("secExperimental").classList.toggle("hidden", experimental.length === 0);
@@ -513,6 +534,7 @@
     $("listTier1") && renderProviderSection("listTier1", tier1);
     $("listTier2") && renderProviderSection("listTier2", tier2);
     $("listAggregator") && renderProviderSection("listAggregator", aggregator);
+    $("listIdentity") && renderProviderSection("listIdentity", identity);
     $("listRegional") && renderProviderSection("listRegional", regional);
     $("listLocal") && renderProviderSection("listLocal", local);
     $("listExperimental") && renderProviderSection("listExperimental", experimental);
@@ -891,6 +913,109 @@ steps:
     }
   }
 
+  // ─── Ornn Skills ───
+
+  function setOrnnMsg(msg, tone) {
+    const el = $("ornnMsg");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.className = "msg" + (tone ? " " + tone : "");
+  }
+
+  async function openOrnn() {
+    setView("ornn");
+    setOrnnMsg("");
+    // Load current Ornn:BaseUrl from config.json
+    try {
+      const res = await fetch("/api/ornn");
+      const json = await res.json().catch(() => ({}));
+      $("ornnBaseUrlInput").value = json.baseUrl || "";
+      const link = $("ornnOpenLink");
+      if (link) link.href = json.baseUrl || "https://ornn.chrono-ai.fun";
+    } catch {
+      $("ornnBaseUrlInput").value = "";
+    }
+    // Load skills preview
+    loadOrnnSkills();
+  }
+
+  async function loadOrnnSkills() {
+    const list = $("ornnSkillsList");
+    if (!list) return;
+    list.innerHTML = '<div class="item placeholder"><div class="item-main"><div class="item-desc">Loading skills from Ornn...</div></div></div>';
+
+    try {
+      const res = await fetch("/api/ornn/skills");
+      const json = await res.json().catch(() => ({}));
+      const items = json.items || [];
+
+      if (items.length === 0) {
+        list.innerHTML = '<div class="item placeholder"><div class="item-main"><div class="item-desc">No skills found. Create skills on the Ornn platform.</div></div></div>';
+        return;
+      }
+
+      list.innerHTML = items.map(skill => {
+        const vis = skill.isPrivate ? "🔒 private" : "🌐 public";
+        const cat = skill.metadata && skill.metadata.category ? skill.metadata.category : "";
+        const tags = skill.metadata && skill.metadata.tag ? skill.metadata.tag.join(", ") : "";
+        const desc = skill.description || "";
+        return `<div class="item">
+          <div class="item-main">
+            <div class="item-title">${escH(skill.name || "(unnamed)")}</div>
+            <div class="item-desc">${escH(desc)}</div>
+            <div class="item-meta">${escH(vis)}${cat ? " · " + escH(cat) : ""}${tags ? " · " + escH(tags) : ""}</div>
+          </div>
+        </div>`;
+      }).join("");
+    } catch (e) {
+      list.innerHTML = `<div class="item placeholder"><div class="item-main"><div class="item-desc">Failed to load: ${escH(e.message || String(e))}</div></div></div>`;
+    }
+  }
+
+  async function saveOrnn() {
+    const baseUrl = safeText($("ornnBaseUrlInput").value).trim();
+    try {
+      const res = await fetch("/api/ornn", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ baseUrl }),
+      });
+      const json = await res.json().catch(() => null);
+      if (json && json.ok) {
+        setOrnnMsg("Saved.", "ok");
+        const link = $("ornnOpenLink");
+        if (link) link.href = baseUrl || "https://ornn.chrono-ai.fun";
+        loadOrnnSkills();
+      } else {
+        setOrnnMsg(json && json.error ? json.error : "Save failed.", "err");
+      }
+    } catch (e) {
+      setOrnnMsg(e.message || String(e), "err");
+    }
+  }
+
+  async function testOrnn() {
+    const baseUrl = safeText($("ornnBaseUrlInput").value).trim() || "https://ornn.chrono-ai.fun";
+    setOrnnMsg("Testing...", "");
+    try {
+      const res = await fetch("/api/ornn/test?" + new URLSearchParams({ baseUrl }));
+      const json = await res.json().catch(() => ({}));
+      if (json.ok) {
+        setOrnnMsg("Connected to Ornn platform.", "ok");
+      } else {
+        setOrnnMsg(json.error || "Cannot reach Ornn. Check URL.", "err");
+      }
+    } catch (e) {
+      setOrnnMsg(e.message || String(e), "err");
+    }
+  }
+
+  function escH(str) {
+    const d = document.createElement("div");
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
   function updateSubmitEnabled() {
     const pn = safeText($("providerNameInput").value).trim();
     const key = safeText($("apiKeyInput").value).trim();
@@ -1107,7 +1232,9 @@ steps:
 
     const type = findProviderType(id);
     const inst = type ? null : findInstance(id);
-    const providerName = inst ? safeText(inst.name || id) : safeText(type ? (type.id || id) : id);
+    const providerName = inst
+      ? safeText(inst.name || id)
+      : buildSuggestedProviderName(type ? (type.id || id) : id, "");
 
     state.selectedProviderType = safeText(inst ? (inst.providerType || "") : (type ? (type.id || "") : "")).trim();
     state.nameEdited = Boolean(inst); // editing an existing instance should not auto-rename on model change.
@@ -1115,8 +1242,9 @@ steps:
     const titleName = safeText(type ? (type.displayName || type.id) : (inst ? (inst.providerDisplayName || inst.providerType || inst.name) : id));
 
     $("connectTitle").textContent = "Connect " + titleName;
-    $("connectSubtitle").textContent =
-      "Enter your " + titleName + " API key to connect your account and use it in Aevatar apps.";
+    $("connectSubtitle").textContent = usesFixedProviderName(state.selectedProviderType)
+      ? "Enter your NyxID bearer token to connect the fixed gateway provider `nyxid` in Aevatar apps."
+      : "Enter your " + titleName + " API key to connect your account and use it in Aevatar apps.";
 
     $("providerNameInput").value = providerName;
     $("endpointInput").value = "";
@@ -2121,6 +2249,11 @@ steps:
     if ($("navSecretsRaw")) $("navSecretsRaw").onclick = () => openRawJson();
     if ($("navConfigRaw")) $("navConfigRaw").onclick = () => openConfigJson();
     if ($("navAgents")) $("navAgents").onclick = () => openAgents();
+    if ($("navOrnn")) $("navOrnn").onclick = () => openOrnn();
+    if ($("ornnBackBtn")) $("ornnBackBtn").onclick = () => setView("list");
+    if ($("ornnCloseBtn")) $("ornnCloseBtn").onclick = () => setView("list");
+    if ($("ornnSaveBtn")) $("ornnSaveBtn").onclick = () => saveOrnn();
+    if ($("ornnTestBtn")) $("ornnTestBtn").onclick = () => testOrnn();
 
     $("toggleKeyBtn").onclick = () => {
       // Existing key draft: toggle reveal via API; draft mode toggles input type.
@@ -2168,10 +2301,10 @@ steps:
     }, 60));
     $("endpointInput").addEventListener("input", debounce(updateSubmitEnabled, 60));
     $("modelSelect").addEventListener("change", debounce(() => {
-      // Auto-suggest instance name: "<provider>-<model>" (unless user already edited the name).
+      // Auto-suggest instance name unless the provider type uses a fixed singleton name.
       const m = safeText($("modelSelect").value).trim();
-      if (!state.nameEdited && !isEmpty(state.selectedProviderType) && !isEmpty(m)) {
-        const suggested = safeText(state.selectedProviderType).trim() + "-" + sanitizeModelForInstanceName(m);
+      if (!state.nameEdited && !isEmpty(state.selectedProviderType)) {
+        const suggested = buildSuggestedProviderName(state.selectedProviderType, m);
         if (!isEmpty(suggested)) {
           $("providerNameInput").value = suggested;
         }
@@ -2507,5 +2640,4 @@ steps:
   // Auto-init for the standalone page.
   void init();
 })();
-
 

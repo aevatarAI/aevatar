@@ -1,4 +1,4 @@
-import { waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
@@ -32,18 +32,37 @@ describe("OverviewPage", () => {
     );
 
     expect(container.textContent).toContain("Overview");
+    expect(
+      screen.queryByText(
+        "A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
+      )
+    ).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
+    expect(container.textContent).toContain("Command Path");
+    expect(container.textContent).toContain("Operator Shortcuts");
     expect(container.textContent).toContain(
-      "Overview of runtime workflows, scope assets, services, governance, actors, and observability."
+      "Anchor work to a project"
     );
-    expect(container.textContent).toContain("Quick actions");
-    expect(container.textContent).toContain("Platform entry points");
-    expect(container.textContent).toContain("Local console tools");
-    expect(container.textContent).toContain("Capability surfaces");
-    expect(container.textContent).toContain("Service runtime");
-    expect(container.textContent).toContain("Governance");
-    expect(container.textContent).toContain("Open runtime explorer");
-    expect(container.textContent).toContain("Open runtime settings");
-    expect(container.textContent).not.toContain("Open Studio");
+    expect(container.textContent).toContain(
+      "Promote a capability"
+    );
+    expect(container.textContent).toContain(
+      "Operate the runtime"
+    );
+    expect(container.textContent).toContain("State Board");
+    expect(container.textContent).toContain("Human Loop");
+    expect(container.textContent).toContain("Live Actors");
+    expect(container.textContent).toContain("Open Projects");
+    expect(container.textContent).toContain("Open workflow workspace");
+    expect(container.textContent).toContain("Open Runs");
+    expect(container.textContent).toContain("Open Invoke Lab");
+    expect(container.textContent).toContain("Open governance");
+    expect(container.textContent).toContain("Workflow sources");
+    expect(container.textContent).toContain("Runtime attention");
+    expect(container.textContent).not.toContain("Start preferred workflow");
+    expect(container.textContent).not.toContain("Preferred workflow");
+    expect(container.textContent).not.toContain("Open Runtime Observability");
+    expect(container.textContent).not.toContain("Capability surfaces");
     await waitFor(() => {
       expect(runtimeCatalogApi.listWorkflowNames).toHaveBeenCalled();
       expect(runtimeQueryApi.listAgents).toHaveBeenCalled();

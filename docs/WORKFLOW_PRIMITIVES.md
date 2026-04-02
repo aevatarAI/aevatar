@@ -62,8 +62,8 @@ roles:
 
 ### `transform`
 
-- 作用：对输入做纯文本变换（如 `trim`/`uppercase`/`count_words`/`split`）。
-- 常用参数：`op`、`n`、`separator`。
+- 作用：对输入做确定性变换，既支持纯文本操作（如 `trim`/`uppercase`/`count_words`/`split`），也支持 `json_extract` 这类 JSON 投影。
+- 常用参数：`op`、`n`、`separator`；当 `op=json_extract` 时，还可用 `path`、`field`、`sort_by`、`order`。
 
 ```yaml
 steps:
@@ -71,6 +71,19 @@ steps:
     type: transform
     parameters:
       op: trim
+```
+
+```yaml
+steps:
+  - id: pick_recent_nodes
+    type: transform
+    parameters:
+      op: json_extract
+      path: nodes
+      field: id,properties.abstract
+      sort_by: createdAt
+      order: desc
+      n: "50"
 ```
 
 ### `assign`

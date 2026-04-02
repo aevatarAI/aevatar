@@ -120,6 +120,7 @@
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
 - `docs/`：架构文档；`workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
+- **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
 
 ## 构建与运行
 
@@ -176,3 +177,38 @@
 - 文件名时间戳前置定长：日期 `YYYY-MM-DD-`，日期时间 `YYYY-MM-DD-HH-mm-ss-`。示例：`2026-03-09-workflow-architecture.md`。
 - 打分/审计文档 → `docs/audit-scorecard/`。
 - 工作文档不加入 `aevatar.slnx`。
+
+## gstack
+
+Use the `/browse` skill from gstack for all web browsing. Never use `mcp__Claude_in_Chrome__*` tools directly.
+
+Available skills:
+- `/office-hours` — YC-style brainstorming and idea validation
+- `/plan-ceo-review` — CEO/founder-mode plan review
+- `/plan-eng-review` — Eng manager-mode plan review
+- `/plan-design-review` — Designer's eye plan review
+- `/design-consultation` — Design system creation
+- `/design-shotgun` — Multi-variant design exploration
+- `/review` — Pre-landing PR review
+- `/ship` — Ship workflow (test, review, PR)
+- `/land-and-deploy` — Merge + deploy + verify
+- `/canary` — Post-deploy canary monitoring
+- `/benchmark` — Performance regression detection
+- `/browse` — Headless browser for testing and dogfooding
+- `/connect-chrome` — Launch real Chrome controlled by gstack
+- `/qa` — QA test + fix bugs
+- `/qa-only` — QA report only (no fixes)
+- `/design-review` — Visual design audit + fix
+- `/setup-browser-cookies` — Import browser cookies for auth
+- `/setup-deploy` — Configure deployment settings
+- `/retro` — Weekly engineering retrospective
+- `/investigate` — Systematic debugging with root cause analysis
+- `/document-release` — Post-ship documentation update
+- `/codex` — Second opinion via OpenAI Codex
+- `/cso` — Security audit
+- `/autoplan` — Auto-review pipeline (CEO + design + eng)
+- `/careful` — Safety guardrails for destructive commands
+- `/freeze` — Restrict edits to a specific directory
+- `/guard` — Full safety mode (careful + freeze)
+- `/unfreeze` — Remove edit restrictions
+- `/gstack-upgrade` — Upgrade gstack to latest version

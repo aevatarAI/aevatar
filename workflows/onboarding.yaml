@@ -1,0 +1,197 @@
+name: onboarding
+description: |
+  Guide first-time users through LLM provider configuration.
+  Entirely LLM-free — uses pre-defined prompts, human_input steps,
+  and connector_call to NyxID API.
+
+roles: []
+
+steps:
+  # ── Pick Provider — always start here ──
+  - id: select_provider
+    type: human_input
+    parameters:
+      prompt: |
+        No AI service connected. Let's set one up.
+
+        Pick a provider:
+          1. Anthropic (Claude)
+          2. OpenAI
+          3. DeepSeek
+          4. Custom OpenAI-compatible endpoint (SiliconFlow, Groq, etc.)
+
+        Enter the number (1-4):
+      variable: provider_choice
+      timeout: "600"
+      on_timeout: "fail"
+    next: map_provider
+
+  # switch uses _default for fallback
+  - id: map_provider
+    type: switch
+    parameters:
+      condition: "${trim(variables.select_provider)}"
+    branches:
+      "1": set_slug_anthropic
+      "2": set_slug_openai
+      "3": set_slug_deepseek
+      "4": ask_custom_endpoint
+      _default: set_slug_openai
+
+  - id: set_slug_anthropic
+    type: assign
+    parameters:
+      target: service_slug
+      value: "llm-anthropic"
+    next: set_label_anthropic
+
+  - id: set_label_anthropic
+    type: assign
+    parameters:
+      target: service_label
+      value: "Anthropic (Claude)"
+    next: clear_custom_endpoint
+
+  - id: set_slug_openai
+    type: assign
+    parameters:
+      target: service_slug
+      value: "llm-openai"
+    next: set_label_openai
+
+  - id: set_label_openai
+    type: assign
+    parameters:
+      target: service_label
+      value: "OpenAI"
+    next: clear_custom_endpoint
+
+  - id: set_slug_deepseek
+    type: assign
+    parameters:
+      target: service_slug
+      value: "llm-deepseek"
+    next: set_label_deepseek
+
+  - id: set_label_deepseek
+    type: assign
+    parameters:
+      target: service_label
+      value: "DeepSeek"
+    next: clear_custom_endpoint
+
+  - id: clear_custom_endpoint
+    type: assign
+    parameters:
+      target: custom_endpoint
+      value: ""
+    next: ask_api_key
+
+  # ── Custom endpoint path ──
+  - id: ask_custom_endpoint
+    type: human_input
+    parameters:
+      prompt: |
+        Enter the API endpoint URL:
+        (e.g. https://api.siliconflow.cn/v1)
+      variable: custom_endpoint_url
+      timeout: "600"
+      on_timeout: "fail"
+    next: save_custom_endpoint
+
+  - id: save_custom_endpoint
+    type: assign
+    parameters:
+      target: custom_endpoint
+      value: "${variables.ask_custom_endpoint}"
+    next: set_slug_custom
+
+  - id: set_slug_custom
+    type: assign
+    parameters:
+      target: service_slug
+      value: "custom-openai"
+    next: set_label_custom
+
+  - id: set_label_custom
+    type: assign
+    parameters:
+      target: service_label
+      value: "Custom OpenAI-compatible"
+    next: ask_api_key
+
+  # ── Credential Entry ──
+  - id: ask_api_key
+    type: human_input
+    parameters:
+      prompt: |
+        Enter your API key:
+      variable: api_key
+      timeout: "600"
+      on_timeout: "fail"
+    next: create_service
+
+  # ── Create service on NyxID (Verification) ──
+  - id: create_service
+    type: connector_call
+    parameters:
+      connector: nyxid_api
+      operation: create_service
+      method: POST
+      path: /api/v1/keys
+      timeout_ms: "30000"
+      stdin_mode: template
+      payload_template: '{"service_slug":"${variables.service_slug}","credential":"${variables.ask_api_key}","label":"${variables.service_label}","endpoint_url":"${variables.custom_endpoint}"}'
+    on_error:
+      strategy: fallback
+      fallback_step: create_failed
+    next: verify_status
+
+  # ── Verify connection ──
+  - id: verify_status
+    type: connector_call
+    parameters:
+      connector: nyxid_api
+      operation: verify_status
+      method: GET
+      path: /api/v1/llm/status
+      timeout_ms: "15000"
+      on_error: "continue"
+    next: complete
+
+  # ── Success ──
+  - id: complete
+    type: human_input
+    parameters:
+      prompt: |
+        Connected! Your LLM provider is ready.
+        Type anything to continue.
+      variable: final_ack
+      timeout: "60"
+      on_timeout: "skip"
+
+  # ── Error: creation failed → retry or change provider ──
+  - id: create_failed
+    type: human_input
+    parameters:
+      prompt: |
+        Connection failed. The API key may be invalid or expired.
+
+        Type "retry" to try a different key, or "change" to pick another provider:
+      variable: retry_choice
+      timeout: "600"
+    next: route_retry
+
+  - id: route_retry
+    type: conditional
+    parameters:
+      condition: "${if(eq(lower(trim(variables.create_failed)), 'change'), 'true', 'false')}"
+    branches:
+      "true": select_provider
+      "false": ask_api_key
+
+  - id: exit_failed
+    type: assign
+    parameters:
+      target: exit_reason
+      value: "User exited onboarding."

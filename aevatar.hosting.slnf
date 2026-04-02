@@ -8,6 +8,7 @@
       "src\\Aevatar.Foundation.Runtime.Implementations.Local\\Aevatar.Foundation.Runtime.Implementations.Local.csproj",
       "src\\Aevatar.Bootstrap\\Aevatar.Bootstrap.csproj",
       "src\\Aevatar.Bootstrap.Extensions.AI\\Aevatar.Bootstrap.Extensions.AI.csproj",
+      "src\\Aevatar.AI.LLMProviders.NyxId\\Aevatar.AI.LLMProviders.NyxId.csproj",
       "src\\Aevatar.Mainnet.Host.Api\\Aevatar.Mainnet.Host.Api.csproj",
       "src\\Aevatar.Scripting.Application\\Aevatar.Scripting.Application.csproj",
       "src\\Aevatar.Scripting.Infrastructure\\Aevatar.Scripting.Infrastructure.csproj",

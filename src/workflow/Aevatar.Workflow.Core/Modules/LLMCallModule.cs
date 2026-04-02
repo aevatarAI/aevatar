@@ -1,8 +1,10 @@
 using System.Globalization;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Propagation;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Primitives;
 using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
@@ -101,7 +103,11 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             {
                 StepId = stepId,
                 RunId = runId,
-                TargetRole = request.TargetRole ?? string.Empty,
+                TargetRole = WorkflowImplicitLlmRolePolicy.ResolveEffectiveTargetRole(
+                    workflow: null,
+                    configuredTargetRole: request.TargetRole,
+                    stepType: request.StepType,
+                    parameters: request.Parameters),
                 RequestDispatched = false,
                 WatchdogCallbackId = BuildWatchdogCallbackId(sessionId),
                 DispatchDedupId = BuildDispatchDedupId(sessionId),
@@ -117,26 +123,15 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             return;
 
         WorkflowStepTargetAgentResolution target;
-        if (!HasNonEmptyParameter(request.Parameters, "agent_type"))
+        try
         {
-            target = string.IsNullOrWhiteSpace(request.TargetRole)
-                ? WorkflowStepTargetAgentResolution.Self(ctx.AgentId)
-                : WorkflowStepTargetAgentResolution.Actor(
-                    WorkflowRoleActorIdResolver.ResolveTargetActorId(ctx.AgentId, request.TargetRole),
-                    $"target_role:{request.TargetRole}");
+            target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
         }
-        else
+        catch (Exception ex)
         {
-            try
-            {
-                target = await ResolveTargetAgentResolver(ctx).ResolveAsync(request, ctx, ct);
-            }
-            catch (Exception ex)
-            {
-                ctx.Logger.LogWarning(ex, "LLMCallModule: target resolution failed for step={StepId}", stepId);
-                await FailPendingAsync(sessionId, $"LLM target resolution failed: {ex.Message}", ctx.AgentId, ctx, ct);
-                return;
-            }
+            ctx.Logger.LogWarning(ex, "LLMCallModule: target resolution failed for step={StepId}", stepId);
+            await FailPendingAsync(sessionId, $"LLM target resolution failed: {ex.Message}", ctx.AgentId, ctx, ct);
+            return;
         }
 
         try
@@ -335,6 +330,26 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
         return true;
     }
 
+    private static readonly string[] PropagatedMetadataKeys =
+    [
+        LLMRequestMetadataKeys.NyxIdAccessToken,
+        LLMRequestMetadataKeys.ModelOverride,
+    ];
+
+    private static void CopyPropagatedMetadata(
+        IWorkflowExecutionContext ctx,
+        MapField<string, string> metadata)
+    {
+        foreach (var key in PropagatedMetadataKeys)
+        {
+            if (WorkflowExecutionItemsAccess.TryGetItem<string>(ctx, key, out var value) &&
+                !string.IsNullOrWhiteSpace(value))
+            {
+                metadata[key] = value;
+            }
+        }
+    }
+
     private static void CopyParametersToChatMetadata(
         MapField<string, string> parameters,
         MapField<string, string> metadata)
@@ -351,23 +366,6 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
             metadata[key.Trim()] = value.Trim();
         }
-    }
-
-    private static bool HasNonEmptyParameter(MapField<string, string> parameters, string key)
-    {
-        if (parameters.TryGetValue(key, out var direct) && !string.IsNullOrWhiteSpace(direct))
-            return true;
-
-        foreach (var (existingKey, value) in parameters)
-        {
-            if (string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrWhiteSpace(value))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private WorkflowStepTargetAgentResolver ResolveTargetAgentResolver(IEventContext ctx)
@@ -435,7 +433,9 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
             SessionId = sessionId,
             TimeoutMs = timeoutMs,
         };
+        CopyPropagatedMetadata(ctx, chatRequest.Metadata);
         CopyParametersToChatMetadata(request.Parameters, chatRequest.Metadata);
+        WorkflowRequestMetadataItemsAccess.CopyRequestMetadata(ctx, chatRequest.Metadata);
         var dispatchOptions = BuildDispatchOptions(dispatchDedupId);
 
         if (!target.UseSelf)

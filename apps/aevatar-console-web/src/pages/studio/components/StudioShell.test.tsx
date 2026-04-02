@@ -26,7 +26,7 @@ describe("StudioShell", () => {
   it("renders a collapsible icon rail and forwards selection", () => {
     const handleSelectPage = jest.fn();
 
-    render(
+    const { container } = render(
       React.createElement(StudioShell, {
         currentPage: "workflows",
         navItems,
@@ -35,6 +35,21 @@ describe("StudioShell", () => {
         children: React.createElement("div", null, "Studio content"),
       })
     );
+
+    expect(container.firstChild).toHaveStyle({
+      flex: "1",
+      minHeight: "calc(100vh - 176px)",
+    });
+    expect(container.querySelector(".ant-row")).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+    });
+    expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+      overflowX: "hidden",
+      overflowY: "auto",
+    });
 
     expect(screen.getByLabelText("Workbench")).toHaveStyle({ width: "64px" });
     expect(screen.getByLabelText("Workbench navigation")).toBeTruthy();

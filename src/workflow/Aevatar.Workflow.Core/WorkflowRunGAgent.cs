@@ -1,9 +1,11 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Composition;
 using Aevatar.Workflow.Core.Execution;
@@ -239,6 +241,10 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
+        // Propagate per-request metadata (e.g. NyxID token, model override)
+        // to execution items so that inner LLM steps can forward them.
+        PropagateRequestMetadataToExecutionItems(request.Metadata);
+
         await EnsureAgentTreeAsync();
 
         var runId = string.IsNullOrWhiteSpace(State.RunId)
@@ -252,6 +258,20 @@ public sealed class WorkflowRunGAgent
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             ScopeId = ResolveScopeId(request.ScopeId, request.Metadata, State.ScopeId),
         });
+
+        if (request.Metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization))
+            ConnectorAuthorizationRuntimeItemsAccess.SetAuthorization(this, authorization);
+        else
+            ConnectorAuthorizationRuntimeItemsAccess.RemoveAuthorization(this);
+
+        if (request.Metadata.Count > 0)
+        {
+            WorkflowRequestMetadataItemsAccess.SetRequestMetadata(this, request.Metadata);
+        }
+        else
+        {
+            WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(this);
+        }
 
         await PublishAsync(new StartWorkflowEvent
         {
@@ -360,6 +380,64 @@ public sealed class WorkflowRunGAgent
         }
 
         await HandleWorkflowCompleted(completed);
+    }
+
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleWorkflowStoppedEnvelope(EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(WorkflowStoppedEvent.Descriptor) != true)
+            return;
+
+        var stopped = envelope.Payload.Unpack<WorkflowStoppedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (await _subWorkflowOrchestrator.TryHandleStoppedAsync(
+                stopped,
+                publisherActorId,
+                State,
+                CancellationToken.None))
+        {
+            return;
+        }
+
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal))
+        {
+            Logger.LogDebug(
+                "Ignore external WorkflowStoppedEvent from publisher={PublisherId} run={RunId}.",
+                publisherActorId,
+                stopped.RunId);
+            return;
+        }
+
+        await HandleWorkflowStopped(stopped);
+    }
+
+    [AllEventHandler(Priority = 50, AllowSelfHandling = true)]
+    public async Task HandleWorkflowRunStoppedEnvelope(EventEnvelope envelope)
+    {
+        if (envelope.Payload?.Is(WorkflowRunStoppedEvent.Descriptor) != true)
+            return;
+
+        var stopped = envelope.Payload.Unpack<WorkflowRunStoppedEvent>();
+        var publisherActorId = envelope.Route?.PublisherActorId ?? string.Empty;
+        if (await _subWorkflowOrchestrator.TryHandleRunStoppedAsync(
+                stopped,
+                publisherActorId,
+                State,
+                CancellationToken.None))
+        {
+            return;
+        }
+
+        if (!string.Equals(publisherActorId, Id, StringComparison.Ordinal))
+        {
+            Logger.LogDebug(
+                "Ignore external WorkflowRunStoppedEvent from publisher={PublisherId} run={RunId}.",
+                publisherActorId,
+                stopped.RunId);
+            return;
+        }
+
+        await HandleWorkflowRunStoppedAsync(stopped);
     }
 
     public async Task HandleWorkflowCompleted(WorkflowCompletedEvent evt)
@@ -484,11 +562,8 @@ public sealed class WorkflowRunGAgent
         if (_compiledWorkflow == null)
             return roleActorIds.ToList();
 
-        foreach (var role in _compiledWorkflow.Roles)
+        foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow))
         {
-            if (string.IsNullOrWhiteSpace(role.Id))
-                continue;
-
             roleActorIds.Add(BuildChildActorId(role.Id));
         }
 
@@ -507,18 +582,9 @@ public sealed class WorkflowRunGAgent
                 $"Role agent type '{roleAgentType.FullName}' does not implement IRoleAgent.");
         }
 
-        foreach (var role in _compiledWorkflow.Roles)
+        foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(_compiledWorkflow))
         {
             var roleId = role.Id;
-            if (string.IsNullOrWhiteSpace(roleId))
-            {
-                Logger.LogWarning(
-                    "Skip workflow role without id while building agent tree. workflow={WorkflowName} actor={ActorId}",
-                    _compiledWorkflow.Name,
-                    Id);
-                continue;
-            }
-
             var childActorId = BuildChildActorId(roleId);
             var actor = await _runtime.GetAsync(childActorId)
                         ?? await _runtime.CreateAsync(roleAgentType, childActorId);
@@ -936,6 +1002,22 @@ public sealed class WorkflowRunGAgent
         return WorkflowCompilationResult.Success(parsed);
     }
 
+    private static readonly string[] PropagatedMetadataKeys =
+    [
+        LLMRequestMetadataKeys.NyxIdAccessToken,
+        LLMRequestMetadataKeys.ModelOverride,
+    ];
+
+    private void PropagateRequestMetadataToExecutionItems(
+        Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        foreach (var key in PropagatedMetadataKeys)
+        {
+            if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+                _executionItems[key] = value.Trim();
+        }
+    }
+
     private static string ResolveScopeId(
         string? requestedScopeId,
         Google.Protobuf.Collections.MapField<string, string>? metadata,
@@ -1007,7 +1089,7 @@ public sealed class WorkflowRunGAgent
         if (currentWorkflow == null)
             return roleActorIds;
 
-        foreach (var role in currentWorkflow.Roles)
+        foreach (var role in WorkflowImplicitLlmRolePolicy.GetEffectiveRoles(currentWorkflow))
         {
             if (string.IsNullOrWhiteSpace(role.Id))
                 continue;

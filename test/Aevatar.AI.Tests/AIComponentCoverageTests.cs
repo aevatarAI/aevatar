@@ -367,7 +367,7 @@ public class AIComponentCoverageTests
         Directory.CreateDirectory(dirB);
 
         File.WriteAllText(Path.Combine(dirA, "SKILL.md"), "# Writer Skill\n\nCreate concise text\n\nUse markdown.");
-        File.WriteAllText(Path.Combine(dirB, "SKILL.md"), "# Writer Skill\n\nRewrite text\n\nUse plain text.");
+        File.WriteAllText(Path.Combine(dirB, "SKILL.md"), "# Editor Skill\n\nRewrite text\n\nUse plain text.");
 
         try
         {
@@ -378,18 +378,23 @@ public class AIComponentCoverageTests
             skills.Should().HaveCount(2);
             skills.All(x => x.DirectoryPath.Length > 0).Should().BeTrue();
 
-            var adapter = new SkillToolAdapter(skills[0]);
-            adapter.Name.Should().StartWith("skill_writer_skill");
-            var toolOutput = await adapter.ExecuteAsync("{}");
-            toolOutput.Should().Contain("# Writer Skill");
-
+            var registry = new SkillRegistry();
             var source = new SkillsAgentToolSource(
                 new SkillsOptions { Directories = { dirA, dirB } },
-                discovery);
+                discovery,
+                registry);
 
             var tools = await source.DiscoverToolsAsync();
             tools.Should().ContainSingle();
-            tools[0].Name.Should().StartWith("skill_writer_skill");
+            tools[0].Name.Should().Be("use_skill");
+
+            // Registry should have both skills
+            registry.Count.Should().Be(2);
+
+            // UseSkillTool should load skill content
+            var useSkill = tools[0];
+            var toolOutput = await useSkill.ExecuteAsync("{\"skill\":\"Writer Skill\"}");
+            toolOutput.Should().Contain("Writer Skill");
         }
         finally
         {
