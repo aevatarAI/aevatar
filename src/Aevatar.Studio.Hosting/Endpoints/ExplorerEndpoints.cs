@@ -22,6 +22,7 @@ public static class ExplorerEndpoints
         group.MapGet("/grep", HandleGrepAsync);
         group.MapGet("/files/{**key}", HandleGetFileAsync);
         group.MapPut("/files/{**key}", HandlePutFileAsync);
+        group.MapPost("/upload/{**key}", HandleUploadFileAsync).DisableAntiforgery();
         group.MapDelete("/files/{**key}", HandleDeleteFileAsync);
         return app;
     }
@@ -119,14 +120,11 @@ public static class ExplorerEndpoints
             if (resolved is null)
                 return Results.NotFound(new { error = $"File not found: {key}" });
 
-            var contentType = key switch
-            {
-                _ when key.EndsWith(".json") || key.EndsWith(".jsonl") => "application/json",
-                _ when key.EndsWith(".yaml") || key.EndsWith(".yml") => "text/yaml",
-                _ when key.EndsWith(".cs") => "text/plain",
-                _ => "application/octet-stream",
-            };
-            return Results.Text(Encoding.UTF8.GetString(resolved.Value.Payload), contentType);
+            var contentType = ResolveContentType(key);
+            if (IsTextContentType(contentType))
+                return Results.Text(Encoding.UTF8.GetString(resolved.Value.Payload), contentType);
+
+            return Results.Bytes(resolved.Value.Payload, contentType);
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -163,15 +161,10 @@ public static class ExplorerEndpoints
             if (context == null)
                 return ChronoStorageErrorResponses.DisabledResult();
 
-            var body = await new StreamReader(http.Request.Body).ReadToEndAsync(ct);
-            var bytes = Encoding.UTF8.GetBytes(body);
-            var contentType = key switch
-            {
-                _ when key.EndsWith(".json") || key.EndsWith(".jsonl") => "application/json",
-                _ when key.EndsWith(".yaml") || key.EndsWith(".yml") => "text/yaml",
-                _ when key.EndsWith(".cs") => "text/plain",
-                _ => "application/octet-stream",
-            };
+            using var ms = new MemoryStream();
+            await http.Request.Body.CopyToAsync(ms, ct);
+            var bytes = ms.ToArray();
+            var contentType = ResolveContentType(key);
             await blobClient.UploadAsync(context, bytes, contentType, ct);
             return Results.NoContent();
         }
@@ -215,6 +208,52 @@ public static class ExplorerEndpoints
             }
 
             return Results.NoContent();
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToResult(exception);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> HandleUploadFileAsync(
+        HttpContext http,
+        string key,
+        IFormFile? file,
+        [FromServices] IAppScopeResolver scopeResolver,
+        [FromServices] ChronoStorageCatalogBlobClient? blobClient,
+        [FromServices] IOptions<ConnectorCatalogStorageOptions> storageOptions,
+        CancellationToken ct)
+    {
+        try
+        {
+            key = NormalizeFileKey(key);
+            var scope = scopeResolver.Resolve(http);
+            if (scope == null)
+                return Results.BadRequest(new { error = "Not authenticated" });
+
+            if (file is null || file.Length == 0)
+                return Results.BadRequest(new { error = "No file provided." });
+
+            if (file.Length > MaxUploadBytes)
+                return Results.BadRequest(new { error = $"File too large. Maximum size is {MaxUploadBytes / (1024 * 1024)} MB." });
+
+            if (blobClient == null)
+                return ChronoStorageErrorResponses.DisabledResult();
+
+            var context = await TryResolveWritableContextAsync(blobClient, key, storageOptions.Value, ct);
+            if (context == null)
+                return ChronoStorageErrorResponses.DisabledResult();
+
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms, ct);
+            var bytes = ms.ToArray();
+            var contentType = ResolveContentType(key);
+            await blobClient.UploadAsync(context, bytes, contentType, ct);
+            return Results.Ok(new { key, size = bytes.Length, contentType });
         }
         catch (ChronoStorageServiceException exception)
         {
@@ -344,6 +383,45 @@ public static class ExplorerEndpoints
         [JsonPropertyName("matches")] public List<GrepMatch> Matches { get; set; } = new();
     }
 
+    private static string ResolveContentType(string key)
+    {
+        var ext = Path.GetExtension(key).ToLowerInvariant();
+        return ext switch
+        {
+            ".json" or ".jsonl" => "application/json",
+            ".yaml" or ".yml" => "text/yaml",
+            ".cs" or ".csx" or ".txt" or ".proto" or ".xml" => "text/plain",
+            ".md" => "text/markdown",
+            ".html" or ".htm" => "text/html",
+            ".css" => "text/css",
+            ".js" => "text/javascript",
+            // images
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".svg" => "image/svg+xml",
+            ".ico" => "image/x-icon",
+            // audio
+            ".mp3" => "audio/mpeg",
+            ".wav" => "audio/wav",
+            ".ogg" => "audio/ogg",
+            ".m4a" => "audio/mp4",
+            ".flac" => "audio/flac",
+            // video
+            ".mp4" => "video/mp4",
+            ".webm" => "video/webm",
+            ".mov" => "video/quicktime",
+            // documents
+            ".pdf" => "application/pdf",
+            _ => "application/octet-stream",
+        };
+    }
+
+    private static bool IsTextContentType(string contentType) =>
+        contentType.StartsWith("text/", StringComparison.Ordinal)
+        || contentType is "application/json" or "application/xml";
+
     private static string InferType(string key)
     {
         var dir = key.Contains('/') ? key[..key.IndexOf('/')] : string.Empty;
@@ -366,8 +444,15 @@ public static class ExplorerEndpoints
         return dotIdx > 0 ? fileName[..dotIdx] : fileName;
     }
 
-    private static string NormalizeFileKey(string key) =>
-        Uri.UnescapeDataString(key ?? string.Empty).Trim('/');
+    private const long MaxUploadBytes = 50 * 1024 * 1024; // 50 MB
+
+    private static string NormalizeFileKey(string key)
+    {
+        var normalized = Uri.UnescapeDataString(key ?? string.Empty).Trim('/');
+        if (normalized.Contains(".."))
+            throw new InvalidOperationException("File key must not contain '..' path segments.");
+        return normalized;
+    }
 
     /// <summary>
     /// Returns the bucket-level prefix that a given key is stored under, matching the prefix
@@ -375,7 +460,8 @@ public static class ExplorerEndpoints
     /// </summary>
     private static string GetPrefixForKey(string key, ConnectorCatalogStorageOptions opts)
     {
-        if (key.StartsWith("chat-histories/", StringComparison.Ordinal))
+        if (key.StartsWith("chat-histories/", StringComparison.Ordinal)
+            || key.StartsWith("chat-media/", StringComparison.Ordinal))
             return opts.UserConfigPrefix;
 
         return InferType(key) switch

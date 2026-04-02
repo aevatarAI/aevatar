@@ -85,7 +85,7 @@ public static class NyxIdChatEndpoints
             }
 
             var prompt = request.Prompt?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(prompt))
+            if (string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 })
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
@@ -129,6 +129,11 @@ public static class NyxIdChatEndpoints
                 SessionId = request.SessionId ?? messageId,
                 ScopeId = scopeId,
             };
+            if (request.InputParts is { Count: > 0 })
+            {
+                foreach (var part in request.InputParts)
+                    chatRequest.InputParts.Add(part.ToProto());
+            }
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
             chatRequest.Metadata["scope_id"] = scopeId;
             await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
@@ -224,6 +229,11 @@ public static class NyxIdChatEndpoints
                 evt.RequestId, evt.ToolName, evt.ToolCallId,
                 evt.ArgumentsJson, evt.IsDestructive, evt.TimeoutSeconds,
                 CancellationToken.None);
+        }
+        else if (payload.Is(MediaContentEvent.Descriptor))
+        {
+            var evt = payload.Unpack<MediaContentEvent>();
+            await writer.WriteMediaContentAsync(evt, CancellationToken.None);
         }
         else if (payload.Is(TextMessageEndEvent.Descriptor))
         {
@@ -599,7 +609,36 @@ public static class NyxIdChatEndpoints
         }
     }
 
-    public sealed record NyxIdChatStreamRequest(string? Prompt, string? SessionId = null);
+    public sealed record NyxIdChatStreamRequest(
+        string? Prompt,
+        string? SessionId = null,
+        IReadOnlyList<ContentPartDto>? InputParts = null);
+
+    public sealed record ContentPartDto(
+        string Type,
+        string? Text = null,
+        string? DataBase64 = null,
+        string? MediaType = null,
+        string? Uri = null,
+        string? Name = null)
+    {
+        public ChatContentPart ToProto() => new()
+        {
+            Kind = Type?.ToLowerInvariant() switch
+            {
+                "image" => ChatContentPartKind.Image,
+                "audio" => ChatContentPartKind.Audio,
+                "video" => ChatContentPartKind.Video,
+                "text" => ChatContentPartKind.Text,
+                _ => ChatContentPartKind.Unspecified,
+            },
+            Text = Text ?? string.Empty,
+            DataBase64 = DataBase64 ?? string.Empty,
+            MediaType = MediaType ?? string.Empty,
+            Uri = Uri ?? string.Empty,
+            Name = Name ?? string.Empty,
+        };
+    }
 
     // ─── NyxID Channel Bot Relay ───
 

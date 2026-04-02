@@ -12,6 +12,7 @@ export type RuntimeEventType =
   | 'TOOL_CALL_END'
   | 'TOOL_APPROVAL_REQUEST'
   | 'HUMAN_INPUT_REQUEST'
+  | 'MEDIA_CONTENT'
   | 'CUSTOM'
   | 'STATE_SNAPSHOT';
 
@@ -54,6 +55,7 @@ const ONEOF_KEY_MAP: Record<string, RuntimeEventType> = {
   toolCallEnd: 'TOOL_CALL_END',
   toolApprovalRequest: 'TOOL_APPROVAL_REQUEST',
   humanInputRequest: 'HUMAN_INPUT_REQUEST',
+  mediaContent: 'MEDIA_CONTENT',
   custom: 'CUSTOM',
   stateSnapshot: 'STATE_SNAPSHOT',
 };
@@ -185,6 +187,18 @@ export function normalizeBackendSseFrame(raw: unknown): RuntimeEvent | null {
           stepId: d ? str(d, 'stepId') : '',
           runId: d ? str(d, 'runId') : '',
           prompt: d ? str(d, 'prompt') : '',
+        };
+      }
+      case 'MEDIA_CONTENT': {
+        const d = nested;
+        return {
+          type: 'MEDIA_CONTENT', timestamp,
+          kind: d ? str(d, 'kind') : '',
+          dataBase64: d ? str(d, 'dataBase64') : '',
+          mediaType: d ? str(d, 'mediaType') : '',
+          uri: d ? str(d, 'uri') : '',
+          name: d ? str(d, 'name') : '',
+          text: d ? str(d, 'text') : '',
         };
       }
       case 'CUSTOM': {

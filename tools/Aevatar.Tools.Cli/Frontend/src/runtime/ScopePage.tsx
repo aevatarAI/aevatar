@@ -7,10 +7,12 @@ import {
   Copy as CopyIcon,
   FileText,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   RotateCcw,
   Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   normalizeBackendSseFrame,
@@ -20,7 +22,7 @@ import {
   type RuntimeEvent,
 } from './sseUtils';
 import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
-import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
+import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta, AttachmentInfo, ContentPartDto } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
 import { NYXID_API_URL } from '../auth/nyxid';
@@ -615,6 +617,100 @@ function MessageMenuItem(props: {
   );
 }
 
+// ── Media Rendering ──────────────────────────────────────────────────────────
+
+function buildMediaSrc(part: ContentPartDto): string | undefined {
+  if (part.uri) {
+    // Only allow safe URI schemes
+    const lower = part.uri.toLowerCase();
+    if (lower.startsWith('https://') || lower.startsWith('http://') || lower.startsWith('data:'))
+      return part.uri;
+    return undefined; // reject javascript:, etc.
+  }
+  if (part.dataBase64 && part.mediaType) return `data:${part.mediaType};base64,${part.dataBase64}`;
+  if (part.dataBase64) return `data:application/octet-stream;base64,${part.dataBase64}`;
+  return undefined;
+}
+
+function MediaPartRenderer({ part }: { part: ContentPartDto }) {
+  const src = buildMediaSrc(part);
+  if (!src) return null;
+
+  switch (part.type) {
+    case 'image':
+      return (
+        <div className="my-2">
+          <img src={src} alt={part.name || 'image'} className="max-w-full max-h-[400px] rounded-lg border border-gray-200" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    case 'audio':
+      return (
+        <div className="my-2">
+          <audio controls src={src} className="max-w-full" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    case 'video':
+      return (
+        <div className="my-2">
+          <video controls src={src} className="max-w-full max-h-[400px] rounded-lg" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+function AttachmentPreview({ att }: { att: AttachmentInfo }) {
+  const isImage = att.mediaType.startsWith('image/');
+  const isAudio = att.mediaType.startsWith('audio/');
+  const isVideo = att.mediaType.startsWith('video/');
+  const isPdf = att.mediaType === 'application/pdf';
+
+  if (isImage && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <img src={att.previewUrl} alt={att.name} className="max-w-full max-h-[300px] rounded-lg" />
+      </div>
+    );
+  }
+
+  if (isAudio && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <audio controls src={att.previewUrl} className="max-w-full" />
+      </div>
+    );
+  }
+
+  if (isVideo && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <video controls src={att.previewUrl} className="max-w-full max-h-[300px] rounded-lg" />
+      </div>
+    );
+  }
+
+  if (isPdf && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <a href={att.previewUrl} target="_blank" rel="noopener noreferrer"
+           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-[13px] text-blue-600 hover:bg-gray-100">
+          <FileText size={14} /> {att.name}
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-[13px] text-gray-600">
+      <Paperclip size={14} /> {att.name} <span className="text-[11px] text-gray-400">({Math.round(att.size / 1024)}KB)</span>
+    </div>
+  );
+}
+
 function ChatBubble({
   msg,
   canRegenerate,
@@ -790,7 +886,12 @@ function ChatBubble({
     return (
       <div className="flex flex-col items-end">
         <div className="scope-chat-user-bubble max-w-[80%] rounded-[30px] rounded-br-[14px] px-5 py-3.5 text-[14px] leading-relaxed text-white">
-          <div className="break-words">{renderContent(msg.content, 'user')}</div>
+          {msg.attachments?.map(att => (
+            <div key={att.id} className="mb-2">
+              <AttachmentPreview att={att} />
+            </div>
+          ))}
+          {msg.content && <div className="break-words">{renderContent(msg.content, 'user')}</div>}
         </div>
         <div className="relative mt-2.5 flex items-center gap-1.5">
           <MessageIconButton
@@ -879,7 +980,10 @@ function ChatBubble({
             <span className="ml-0.5 inline-block h-[18px] w-[2px] animate-blink align-text-bottom bg-gray-400" />
           )}
         </div>
-        {!displayContent && msg.status === 'streaming' && (
+        {msg.mediaParts?.map((part, i) => (
+          <MediaPartRenderer key={`media-${i}`} part={part} />
+        ))}
+        {!displayContent && !msg.mediaParts?.length && msg.status === 'streaming' && (
           <div className="flex items-center gap-1.5 py-2">
             <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
             <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />
@@ -1250,24 +1354,32 @@ function ChatInput({
   disabled,
   focusToken,
   footer,
+  pendingAttachments,
+  onAttach,
+  onRemoveAttachment,
 }: {
   value: string;
   onChange: (text: string) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: AttachmentInfo[]) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled: boolean;
   focusToken: number;
   footer?: ReactNode;
+  pendingAttachments?: AttachmentInfo[];
+  onAttach?: (files: FileList) => void;
+  onRemoveAttachment?: (id: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const canSend = (value.trim() || (pendingAttachments && pendingAttachments.length > 0)) && !isStreaming && !disabled;
 
   const handleSend = useCallback(() => {
-    const trimmed = value.trim();
-    if (!trimmed || isStreaming || disabled) return;
-    onSend(trimmed);
+    if (!canSend) return;
+    onSend(value.trim(), pendingAttachments);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [value, isStreaming, disabled, onSend]);
+  }, [value, canSend, onSend, pendingAttachments]);
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -1295,9 +1407,43 @@ function ChatInput({
     el.style.height = Math.min(el.scrollHeight, 160) + 'px';
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0 && onAttach) {
+      onAttach(e.target.files);
+    }
+    e.target.value = '';
+  };
+
   return (
     <div className="relative">
       <div className="rounded-2xl border border-[#E6E3DE] bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent">
+        {/* Attachment preview bar */}
+        {pendingAttachments && pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-3">
+            {pendingAttachments.map(att => (
+              <div key={att.id} className="relative group flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-[12px] text-gray-600">
+                {att.mediaType.startsWith('image/') && att.previewUrl ? (
+                  <img src={att.previewUrl} alt={att.name} className="h-8 w-8 rounded object-cover" />
+                ) : (
+                  <span className="text-[16px]">
+                    {att.mediaType.startsWith('audio/') ? '\u{1F3B5}' :
+                     att.mediaType.startsWith('video/') ? '\u{1F3AC}' :
+                     att.mediaType === 'application/pdf' ? '\u{1F4C4}' : '\u{1F4CE}'}
+                  </span>
+                )}
+                <span className="max-w-[120px] truncate">{att.name}</span>
+                {onRemoveAttachment && (
+                  <button
+                    onClick={() => onRemoveAttachment(att.id)}
+                    className="ml-0.5 rounded-full p-0.5 hover:bg-gray-200 transition-colors"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-end">
           <textarea
             ref={textareaRef}
@@ -1309,7 +1455,25 @@ function ChatInput({
             placeholder="Send a message..."
             disabled={disabled}
           />
-          <div className="flex-shrink-0 p-2">
+          <div className="flex-shrink-0 flex items-center gap-1 p-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,audio/*,video/*,.pdf,.md"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            {!isStreaming && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-20 transition-colors"
+                title="Attach file"
+              >
+                <Paperclip size={16} />
+              </button>
+            )}
             {isStreaming ? (
               <button
                 onClick={onStop}
@@ -1323,7 +1487,7 @@ function ChatInput({
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!value.trim() || disabled}
+                disabled={!canSend}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#18181B] text-white hover:bg-[#333] disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                 title="Send"
               >
@@ -1518,6 +1682,7 @@ export default function ScopePage() {
   const [showDebug, setShowDebug] = useState(false);
   const [composerText, setComposerText] = useState('');
   const [composerFocusToken, setComposerFocusToken] = useState(0);
+  const [pendingAttachments, setPendingAttachments] = useState<AttachmentInfo[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -1807,6 +1972,8 @@ export default function ScopePage() {
     options?: {
       baseMessages?: ChatMessage[];
       includeUserMessage?: boolean;
+      attachments?: AttachmentInfo[];
+      inputParts?: ContentPartDto[];
     },
   ) => {
     if (!scopeId || isStreaming) return;
@@ -1820,6 +1987,7 @@ export default function ScopePage() {
           content: text,
           timestamp: Date.now(),
           status: 'complete' as const,
+          attachments: options?.attachments,
         }
       : null;
     const assistantMsg: ChatMessage = {
@@ -1929,6 +2097,29 @@ export default function ScopePage() {
           break;
         }
 
+        case 'MEDIA_CONTENT': {
+          const mediaPart: ContentPartDto = {
+            type: (String(evt.kind || 'image')) as ContentPartDto['type'],
+            dataBase64: evt.dataBase64 ? String(evt.dataBase64) : undefined,
+            mediaType: evt.mediaType ? String(evt.mediaType) : undefined,
+            uri: evt.uri ? String(evt.uri) : undefined,
+            name: evt.name ? String(evt.name) : undefined,
+            text: evt.text ? String(evt.text) : undefined,
+          };
+          setMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...last,
+                mediaParts: [...(last.mediaParts || []), mediaPart],
+              };
+            }
+            return updated;
+          });
+          break;
+        }
+
         case 'HUMAN_INPUT_REQUEST': {
           const prompt = String(evt.prompt || '');
           setIsStreaming(false);
@@ -2028,9 +2219,9 @@ export default function ScopePage() {
           );
           nyxidChatBoundRef.current = true;
         }
-        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
+        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
       } else {
-        await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
+        await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
       }
 
       setMessages(prev => {
@@ -2059,8 +2250,42 @@ export default function ScopePage() {
     }
   }, [scopeId, isStreaming, messages, activeService, conversationHeaders, saveCurrentConversation]);
 
-  const handleSend = useCallback((text: string) => {
+  const handleAttach = useCallback((files: FileList) => {
+    const maxSize = 50 * 1024 * 1024; // 50 MB
+    const newAttachments: AttachmentInfo[] = Array.from(files)
+      .filter(file => file.size <= maxSize)
+      .map(file => {
+        const id = crypto.randomUUID();
+        const ext = file.name.split('.').pop() || 'bin';
+        return {
+          id,
+          name: file.name,
+          mediaType: file.type || 'application/octet-stream',
+          size: file.size,
+          storageKey: `chat-media/${id}.${ext}`,
+          previewUrl: URL.createObjectURL(file),
+          file,
+        };
+      });
+    setPendingAttachments(prev => [...prev, ...newAttachments]);
+  }, []);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setPendingAttachments(prev => {
+      const removed = prev.find(a => a.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter(a => a.id !== id);
+    });
+  }, []);
+
+  const handleSend = useCallback(async (text: string, attachments?: AttachmentInfo[]) => {
     setComposerText('');
+    const atts = attachments || pendingAttachments;
+    // Revoke all object URLs before clearing (prevent memory leak)
+    setPendingAttachments(prev => {
+      prev.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
+      return [];
+    });
 
     // ── Onboarding state machine ──
     if (onboardingState && selectedService === 'onboarding') {
@@ -2167,8 +2392,43 @@ export default function ScopePage() {
       }
     }
 
-    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true });
-  }, [messages, streamChatTurn, scopeId, onboardingState, selectedService]);
+    // Build inputParts from attachments
+    const inputParts: ContentPartDto[] = [];
+    if (atts.length > 0) {
+      for (const att of atts) {
+        const fileRef = att.file;
+        if (!fileRef) continue;
+
+        // Upload to chrono-storage for persistence
+        try {
+          await api.explorer.uploadFile(att.storageKey, fileRef);
+        } catch (err) {
+          console.warn('Upload to chrono-storage failed, falling back to inline base64:', err);
+        }
+
+        // Only send media types the LLM can handle as inline base64
+        const isMedia = att.mediaType.startsWith('image/') || att.mediaType.startsWith('audio/') || att.mediaType.startsWith('video/');
+        if (!isMedia) continue; // Skip PDF/markdown for inline LLM input
+
+        // Convert to base64 ContentPart for LLM
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            resolve(result.split(',')[1] || '');
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(fileRef);
+        });
+        const kind: ContentPartDto['type'] = att.mediaType.startsWith('image/') ? 'image'
+          : att.mediaType.startsWith('audio/') ? 'audio'
+          : 'video';
+        inputParts.push({ type: kind, dataBase64: base64, mediaType: att.mediaType, name: att.name });
+      }
+    }
+
+    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true, attachments: atts, inputParts: inputParts.length > 0 ? inputParts : undefined });
+  }, [messages, streamChatTurn, scopeId, onboardingState, selectedService, pendingAttachments]);
 
   const handleRegenerate = useCallback((messageIndex: number) => {
     if (isStreaming) return;
@@ -2997,6 +3257,9 @@ export default function ScopePage() {
             isStreaming={isStreaming}
             disabled={!scopeId}
             focusToken={composerFocusToken}
+            pendingAttachments={pendingAttachments}
+            onAttach={handleAttach}
+            onRemoveAttachment={handleRemoveAttachment}
             footer={(
               <ConversationLlmConfigBar
                 routeValue={conversationRoute}
