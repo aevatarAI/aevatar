@@ -37,6 +37,13 @@ public static class NyxIdChatEndpoints
             last_check = DateTimeOffset.UtcNow,
         })).WithTags("NyxIdRelay");
 
+        // Pairing management endpoints (called by bot owner via Console/agent)
+        var pairingGroup = app.MapGroup("/api/scopes/{scopeId}/nyxid-chat/pairing").WithTags("NyxIdRelay");
+        pairingGroup.MapGet("/pending", HandleListPendingPairingsAsync);
+        pairingGroup.MapPost("/approve/{code}", HandleApprovePairingAsync);
+        pairingGroup.MapGet("/paired", HandleListPairedAsync);
+        pairingGroup.MapDelete("/paired/{platform}/{senderPlatformId}", HandleUnpairAsync);
+
         return app;
     }
 
@@ -562,6 +569,41 @@ public static class NyxIdChatEndpoints
         return null;
     }
 
+    /// <summary>
+    /// Decode the JWT payload (without verification) to extract the 'sub' claim.
+    /// Used by the relay endpoint to resolve the user's scope ID for chrono-storage
+    /// config access, since the auth middleware has already run by the time the handler
+    /// executes and won't re-process the injected Authorization header.
+    /// </summary>
+    private static string? TryExtractJwtSubject(string token)
+    {
+        try
+        {
+            var parts = token.Split('.');
+            if (parts.Length < 2) return null;
+
+            // JWT payload is base64url-encoded
+            var payload = parts[1];
+            // Pad to multiple of 4
+            payload = payload.Replace('-', '+').Replace('_', '/');
+            switch (payload.Length % 4)
+            {
+                case 2: payload += "=="; break;
+                case 3: payload += "="; break;
+            }
+
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("sub", out var sub))
+                return sub.GetString()?.Trim();
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public sealed record NyxIdChatStreamRequest(string? Prompt, string? SessionId = null);
 
     // ─── NyxID Channel Bot Relay ───
@@ -575,6 +617,7 @@ public static class NyxIdChatEndpoints
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
         [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] NyxIdRelayPairingStore pairingStore,
         [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -601,17 +644,53 @@ public static class NyxIdChatEndpoints
         if (string.IsNullOrWhiteSpace(userToken))
             return Results.Json(new { error = "Missing X-NyxID-User-Token header" }, statusCode: 401);
 
-        // Resolve scope and conversation actor
-        var scopeId = message.Agent?.ApiKeyId ?? "default";
+        // Parse the JWT sub claim to resolve the user's scope ID for chrono-storage.
+        // We can't rely on auth middleware (it ran before this handler, and the relay
+        // endpoint is unauthenticated). Instead, decode the JWT payload directly.
+        var jwtScopeId = TryExtractJwtSubject(userToken);
+        var scopeId = jwtScopeId ?? message.Agent?.ApiKeyId ?? "default";
+
+        // Set Authorization header + X-Aevatar-Scope-Id so that IAppScopeResolver
+        // and any downstream service reads (InjectUserConfigMetadataAsync) can
+        // resolve the user's chrono-storage scope even though auth middleware already ran.
+        http.Request.Headers.Authorization = $"Bearer {userToken}";
+        http.Request.Headers["X-Aevatar-Scope-Id"] = scopeId;
+        var platform = message.Platform ?? "unknown";
+        var senderPlatformId = message.Sender?.PlatformId ?? "unknown";
+        var senderDisplayName = message.Sender?.DisplayName;
+        var conversationPlatformId = message.Conversation?.PlatformId ?? "unknown";
+
+        // ─── Pairing gate ───
+        // Unpaired senders get a pairing code instead of LLM response.
+        // Bot owner must approve the code before the sender can trigger LLM calls.
+        if (!await pairingStore.IsPairedAsync(scopeId, platform, senderPlatformId, ct))
+        {
+            var code = await pairingStore.CreatePairingRequestAsync(
+                scopeId, platform, senderPlatformId, senderDisplayName, conversationPlatformId, ct);
+
+            logger.LogInformation(
+                "Unpaired sender: platform={Platform}, sender={Sender}, code={Code}",
+                platform, senderPlatformId, code);
+
+            var pairingReply = $"You are not paired with this agent yet.\n\n" +
+                               $"Please send this pairing code to the bot owner for approval:\n" +
+                               $"**{code}**\n\n" +
+                               $"Once approved, you can start chatting.";
+
+            return Results.Json(new { reply = new { text = pairingReply } });
+        }
+
+        // ─── Paired sender — proceed with LLM ───
+
         var conversationId = message.Conversation?.Id;
         if (string.IsNullOrWhiteSpace(conversationId))
-            conversationId = $"{message.Platform}-{message.Conversation?.PlatformId ?? "unknown"}";
+            conversationId = $"{platform}-{conversationPlatformId}";
 
         var actorId = $"nyxid-relay-{conversationId}";
 
         logger.LogInformation(
             "Relay message: platform={Platform}, conversation={ConversationId}, sender={Sender}",
-            message.Platform, conversationId, message.Sender?.DisplayName);
+            platform, conversationId, senderDisplayName);
 
         // Get or create actor
         var actor = await actorRuntime.GetAsync(actorId)
@@ -671,7 +750,9 @@ public static class NyxIdChatEndpoints
         chatRequest.Metadata["relay.platform"] = message.Platform ?? "";
         chatRequest.Metadata["relay.sender"] = message.Sender?.DisplayName ?? "";
         chatRequest.Metadata["relay.message_id"] = message.MessageId ?? "";
-        await InjectConnectedServicesAsync(http, userToken, chatRequest.Metadata, ct);
+        // Inject user's preferred model and route from chrono-storage config
+        await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
+        await InjectUserMemoryAsync(http, chatRequest.Metadata, ct);
 
         var envelope = new EventEnvelope
         {
@@ -767,5 +848,56 @@ public static class NyxIdChatEndpoints
     {
         public string? Type { get; set; }
         public string? Text { get; set; }
+    }
+
+    // ─── Pairing management endpoints ───
+
+    private static Task<IResult> HandleListPendingPairingsAsync(
+        string scopeId,
+        [FromServices] NyxIdRelayPairingStore pairingStore)
+    {
+        var pending = pairingStore.ListPending(scopeId);
+        return Task.FromResult(Results.Json(new { pending }));
+    }
+
+    private static async Task<IResult> HandleApprovePairingAsync(
+        string scopeId,
+        string code,
+        [FromServices] NyxIdRelayPairingStore pairingStore,
+        CancellationToken ct)
+    {
+        var request = await pairingStore.ApprovePairingAsync(code, ct);
+        if (request == null)
+            return Results.Json(new { error = "Pairing code not found or expired" }, statusCode: 404);
+
+        return Results.Json(new
+        {
+            status = "paired",
+            platform = request.Platform,
+            sender_platform_id = request.SenderPlatformId,
+            sender_display_name = request.SenderDisplayName,
+        });
+    }
+
+    private static async Task<IResult> HandleListPairedAsync(
+        string scopeId,
+        [FromServices] NyxIdRelayPairingStore pairingStore,
+        CancellationToken ct)
+    {
+        var paired = await pairingStore.ListPairedAsync(scopeId, ct);
+        return Results.Json(new { paired });
+    }
+
+    private static async Task<IResult> HandleUnpairAsync(
+        string scopeId,
+        string platform,
+        string senderPlatformId,
+        [FromServices] NyxIdRelayPairingStore pairingStore,
+        CancellationToken ct)
+    {
+        var removed = await pairingStore.UnpairAsync(scopeId, platform, senderPlatformId, ct);
+        return removed
+            ? Results.Json(new { status = "unpaired" })
+            : Results.Json(new { error = "Sender not found" }, statusCode: 404);
     }
 }

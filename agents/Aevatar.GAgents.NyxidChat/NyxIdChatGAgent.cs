@@ -24,7 +24,6 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private readonly SkillRegistry? _skillRegistry;
     private readonly IToolApprovalHandler? _remoteApprovalHandler;
-    private readonly IUserConfigStore? _userConfigStore;
 
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -34,14 +33,12 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
         IEnumerable<IAgentToolSource>? toolSources = null,
         SkillRegistry? skillRegistry = null,
-        IToolApprovalHandler? approvalHandler = null,
-        IUserConfigStore? userConfigStore = null)
+        IToolApprovalHandler? approvalHandler = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                approvalHandler: new YieldApprovalHandler())
     {
         _skillRegistry = skillRegistry;
         _remoteApprovalHandler = approvalHandler;
-        _userConfigStore = userConfigStore;
     }
 
     /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
@@ -65,11 +62,9 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         var prompt = basePrompt;
 
-        // Inject relay callback URL from user's chrono-storage config
+        // Inject relay callback URL
         var relayUrl = ResolveRelayCallbackUrl();
-        if (!string.IsNullOrWhiteSpace(relayUrl))
-        {
-            prompt += $"""
+        prompt += $"""
 
 ## Relay Configuration (Auto-Injected)
 
@@ -81,7 +76,6 @@ nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_
 ```
 Then create a default conversation route linking the bot to this API key.
 """;
-        }
 
         if (_skillRegistry != null && _skillRegistry.Count > 0)
         {
@@ -94,38 +88,14 @@ Then create a default conversation route linking the bot to this API key.
     }
 
     /// <summary>
-    /// Resolves the relay callback URL. Tries chrono-storage user config first,
-    /// falls back to the well-known remote runtime default.
+    /// Resolves the relay callback URL using the well-known default remote runtime URL.
+    /// Does NOT call chrono-storage (which would block the Orleans grain scheduler).
     /// </summary>
-    private string? ResolveRelayCallbackUrl()
+    private static string ResolveRelayCallbackUrl()
     {
         const string relayPath = "/api/webhooks/nyxid-relay";
-
-        // Try reading from user config (chrono-storage)
-        if (_userConfigStore != null)
-        {
-            try
-            {
-                var config = _userConfigStore.GetAsync(CancellationToken.None)
-                    .ConfigureAwait(false).GetAwaiter().GetResult();
-
-                var baseUrl = config.RemoteRuntimeBaseUrl;
-                if (!string.IsNullOrWhiteSpace(baseUrl) && !IsLocalAddress(baseUrl))
-                    return $"{baseUrl.TrimEnd('/')}{relayPath}";
-            }
-            catch
-            {
-                // Fall through to default
-            }
-        }
-
-        // Fall back to the well-known default
         return $"{UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl}{relayPath}";
     }
-
-    private static bool IsLocalAddress(string url) =>
-        url.Contains("127.0.0.1") || url.Contains("localhost") ||
-        url.Contains("0.0.0.0") || url.Contains("+:") || url.Contains("*:");
 
     private bool RequiresNyxIdProviderMigration()
     {

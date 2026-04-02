@@ -2588,40 +2588,34 @@
   color: #94a3b8;
 }
 
-.scope-chat-llm-route-strip {
+.scope-chat-llm-route-row {
+  align-items: center;
   display: flex;
-  flex-wrap: nowrap;
-  gap: 8px;
-  overflow-x: auto;
-  padding: 12px 14px 8px;
-  scrollbar-width: none;
+  gap: 12px;
+  padding: 12px 14px 10px;
 }
 
-.scope-chat-llm-route-strip::-webkit-scrollbar {
-  display: none;
-}
-
-.scope-chat-llm-route-chip {
-  border: 1px solid rgba(var(--accent-rgb), 0.1);
-  border-radius: 999px;
-  background: rgba(var(--accent-rgb), 0.045);
-  color: #64748b;
+.scope-chat-llm-route-label {
+  color: #94a3b8;
   font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scope-chat-llm-route-select {
+  appearance: none;
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.05);
+  color: #334155;
+  flex: 1 1 auto;
+  font-size: 13px;
   font-weight: 600;
-  min-height: 30px;
-  padding: 0 12px;
-  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-}
-
-.scope-chat-llm-route-chip:hover {
-  border-color: rgba(var(--accent-rgb), 0.2);
-  color: var(--accent-text);
-}
-
-.scope-chat-llm-route-chip.is-active {
-  border-color: rgba(var(--accent-rgb), 0.24);
-  background: rgba(var(--accent-rgb), 0.14);
-  color: var(--accent-strong);
+  height: 36px;
+  min-width: 0;
+  outline: none;
+  padding: 0 36px 0 12px;
 }
 
 .scope-chat-llm-options {
@@ -2669,6 +2663,16 @@
   margin-bottom: 6px;
 }
 
+.scope-chat-llm-option-badge {
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 12px;
+  padding: 4px 8px;
+}
+
 .scope-chat-llm-option-main {
   align-items: center;
   display: inline-flex;
@@ -2677,16 +2681,6 @@
 }
 
 .scope-chat-llm-option-main span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scope-chat-llm-option-meta {
-  color: #94a3b8;
-  font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 11px;
-  margin-left: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2832,21 +2826,14 @@
   color: #94a3b8;
 }
 
-.studio-shell[data-color-mode="dark"] .scope-chat-llm-route-chip {
-  border-color: rgba(var(--accent-rgb), 0.16);
-  background: rgba(var(--accent-rgb), 0.08);
-  color: #cbd5e1;
+.studio-shell[data-color-mode="dark"] .scope-chat-llm-route-label {
+  color: #94a3b8;
 }
 
-.studio-shell[data-color-mode="dark"] .scope-chat-llm-route-chip:hover {
-  border-color: rgba(var(--accent-rgb), 0.28);
-  color: #f8fafc;
-}
-
-.studio-shell[data-color-mode="dark"] .scope-chat-llm-route-chip.is-active {
-  border-color: rgba(var(--accent-rgb), 0.34);
-  background: rgba(var(--accent-rgb), 0.2);
-  color: #f8fafc;
+.studio-shell[data-color-mode="dark"] .scope-chat-llm-route-select {
+  border-color: rgba(var(--accent-rgb), 0.22);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: #e2e8f0;
 }
 
 .studio-shell[data-color-mode="dark"] .scope-chat-llm-option {
@@ -2862,9 +2849,9 @@
   border-color: rgba(var(--accent-rgb), 0.26);
 }
 
-.studio-shell[data-color-mode="dark"] .scope-chat-llm-option-meta,
+.studio-shell[data-color-mode="dark"] .scope-chat-llm-option-badge,
 .studio-shell[data-color-mode="dark"] .scope-chat-llm-empty {
-  color: #94a3b8;
+  color: #cbd5e1;
 }
 
 .studio-shell[data-color-mode="dark"] .scope-chat-thinking-toggle {

@@ -23,146 +23,46 @@ import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageConte
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
+import { NYXID_API_URL } from '../auth/nyxid';
 import { createPortal } from 'react-dom';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const USER_LLM_ROUTE_GATEWAY = '';
 
-/** Onboarding workflow YAML — embedded from workflows/onboarding.yaml. */
-const ONBOARDING_WORKFLOW_YAML = `name: onboarding
-description: Guide first-time users through LLM provider configuration.
-roles: []
-steps:
-  - id: select_provider
-    type: human_input
-    parameters:
-      prompt: |
-        No AI service connected. Pick a provider:
-          1. Anthropic (Claude)
-          2. OpenAI
-          3. DeepSeek
-          4. Custom OpenAI-compatible endpoint
-        Enter the number (1-4):
-      variable: provider_choice
-      timeout: "600"
-      on_timeout: "fail"
-    next: map_provider
-  - id: map_provider
-    type: switch
-    parameters:
-      condition: "\${trim(variables.select_provider)}"
-    branches:
-      "1": set_slug_anthropic
-      "2": set_slug_openai
-      "3": set_slug_deepseek
-      "4": ask_custom_endpoint
-      _default: set_slug_openai
-  - id: set_slug_anthropic
-    type: assign
-    parameters: { target: service_slug, value: "llm-anthropic" }
-    next: set_label_anthropic
-  - id: set_label_anthropic
-    type: assign
-    parameters: { target: service_label, value: "Anthropic (Claude)" }
-    next: clear_custom_endpoint
-  - id: set_slug_openai
-    type: assign
-    parameters: { target: service_slug, value: "llm-openai" }
-    next: set_label_openai
-  - id: set_label_openai
-    type: assign
-    parameters: { target: service_label, value: "OpenAI" }
-    next: clear_custom_endpoint
-  - id: set_slug_deepseek
-    type: assign
-    parameters: { target: service_slug, value: "llm-deepseek" }
-    next: set_label_deepseek
-  - id: set_label_deepseek
-    type: assign
-    parameters: { target: service_label, value: "DeepSeek" }
-    next: clear_custom_endpoint
-  - id: clear_custom_endpoint
-    type: assign
-    parameters: { target: custom_endpoint, value: "" }
-    next: ask_api_key
-  - id: ask_custom_endpoint
-    type: human_input
-    parameters:
-      prompt: "Enter the API endpoint URL (e.g. https://api.siliconflow.cn/v1):"
-      variable: custom_endpoint_url
-      timeout: "600"
-      on_timeout: "fail"
-    next: save_custom_endpoint
-  - id: save_custom_endpoint
-    type: assign
-    parameters: { target: custom_endpoint, value: "\${variables.ask_custom_endpoint}" }
-    next: set_slug_custom
-  - id: set_slug_custom
-    type: assign
-    parameters: { target: service_slug, value: "custom-openai" }
-    next: set_label_custom
-  - id: set_label_custom
-    type: assign
-    parameters: { target: service_label, value: "Custom OpenAI-compatible" }
-    next: ask_api_key
-  - id: ask_api_key
-    type: human_input
-    parameters:
-      prompt: "Enter your API key:"
-      variable: api_key
-      timeout: "600"
-      on_timeout: "fail"
-    next: create_service
-  - id: create_service
-    type: connector_call
-    parameters:
-      connector: nyxid_api
-      operation: create_service
-      method: POST
-      path: /api/v1/keys
-      timeout_ms: "30000"
-      stdin_mode: template
-      payload_template: '{"service_slug":"\${variables.service_slug}","credential":"\${variables.ask_api_key}","label":"\${variables.service_label}","endpoint_url":"\${variables.custom_endpoint}"}'
-    on_error:
-      strategy: fallback
-      fallback_step: create_failed
-    next: verify_status
-  - id: verify_status
-    type: connector_call
-    parameters:
-      connector: nyxid_api
-      operation: verify_status
-      method: GET
-      path: /api/v1/llm/status
-      timeout_ms: "15000"
-      on_error: "continue"
-    next: complete
-  - id: complete
-    type: human_input
-    parameters:
-      prompt: "Connected! Your LLM provider is ready. Type anything to continue."
-      variable: final_ack
-      timeout: "60"
-      on_timeout: "skip"
-  - id: create_failed
-    type: human_input
-    parameters:
-      prompt: "Connection failed. The API key may be invalid. Type \\"retry\\" to try again, or \\"change\\" to pick another provider:"
-      variable: retry_choice
-      timeout: "600"
-    next: route_retry
-  - id: route_retry
-    type: conditional
-    parameters:
-      condition: "\${if(eq(lower(trim(variables.create_failed)), 'change'), 'true', 'false')}"
-    branches:
-      "true": select_provider
-      "false": ask_api_key
-  - id: exit_failed
-    type: assign
-    parameters: { target: exit_reason, value: "User exited onboarding." }
-`;
+/**
+ * Onboarding flow — managed entirely in the frontend.
+ * Steps: select_provider → (optional) ask_custom_endpoint → ask_api_key → create_service → done
+ */
+type OnboardingStep = 'select_provider' | 'ask_custom_endpoint' | 'ask_api_key' | 'creating' | 'done' | 'error';
+type OnboardingState = {
+  step: OnboardingStep;
+  slug?: string;
+  label?: string;
+  endpointUrl?: string;
+};
+
+const ONBOARDING_PROVIDER_PROMPT = `No AI service connected. Pick a provider:
+
+  1. Anthropic (Claude)
+  2. OpenAI
+  3. DeepSeek
+  4. Custom OpenAI-compatible endpoint
+
+Enter the number (1-4):`;
+
+const ONBOARDING_CUSTOM_ENDPOINT_PROMPT = 'Enter the API endpoint URL (e.g. https://api.siliconflow.cn/v1):';
+const ONBOARDING_API_KEY_PROMPT = 'Enter your API key:';
+
+const PROVIDER_MAP: Record<string, { slug: string; label: string }> = {
+  '1': { slug: 'llm-anthropic', label: 'Anthropic (Claude)' },
+  '2': { slug: 'llm-openai', label: 'OpenAI' },
+  '3': { slug: 'llm-deepseek', label: 'DeepSeek' },
+  '4': { slug: 'custom-openai', label: 'Custom OpenAI-compatible' },
+};
+
+// Onboarding workflow YAML is in workflows/onboarding.yaml
+// (for future use when backend supports keeping SSE alive during workflow suspension).
 const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const CONVERSATION_ROUTE_DEFAULT_VALUE = '__config_default__';
@@ -1127,10 +1027,7 @@ function ConversationLlmConfigBar({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [panelPosition, setPanelPosition] = useState<{ top: number; left: number; height: number; width: number } | null>(null);
   const selectedModel = trimOptional(modelValue) || effectiveModel;
-  const routeChips = [
-    { value: CONVERSATION_ROUTE_DEFAULT_VALUE, label: 'Config default' },
-    ...routeOptions.map(option => ({ value: option.value, label: option.label })),
-  ];
+  const routeSelectValue = encodeRouteSelectValue(routeValue);
   const normalizedQuery = query.trim().toLowerCase();
   const filteredGroups = modelGroups
     .map(group => ({
@@ -1259,20 +1156,20 @@ function ConversationLlmConfigBar({
           />
         </div>
 
-        <div className="scope-chat-llm-route-strip">
-          {routeChips.map(option => {
-            const isActive = encodeRouteSelectValue(routeValue) === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => onRouteChange(decodeRouteSelectValue(option.value))}
-                className={`scope-chat-llm-route-chip ${isActive ? 'is-active' : ''}`}
-              >
+        <div className="scope-chat-llm-route-row">
+          <span className="scope-chat-llm-route-label">Route</span>
+          <select
+            value={routeSelectValue}
+            onChange={event => onRouteChange(decodeRouteSelectValue(event.target.value))}
+            className="scope-chat-llm-route-select"
+          >
+            <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>Config default</option>
+            {routeOptions.map(option => (
+              <option key={option.value} value={option.value}>
                 {option.label}
-              </button>
-            );
-          })}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="scope-chat-llm-options">
@@ -1286,7 +1183,7 @@ function ConversationLlmConfigBar({
                 <Check size={15} className="opacity-0" />
                 <span>Use “{query.trim()}”</span>
               </div>
-              <span className="scope-chat-llm-option-meta">Manual model</span>
+              <span className="scope-chat-llm-option-badge">Manual</span>
             </button>
           ) : null}
 
@@ -1310,7 +1207,6 @@ function ConversationLlmConfigBar({
                       <Check size={15} className={isActive ? 'opacity-100' : 'opacity-0'} />
                       <span>{model}</span>
                     </div>
-                    <span className="scope-chat-llm-option-meta">{model}</span>
                   </button>
                 );
               })}
@@ -1609,9 +1505,11 @@ export default function ScopePage() {
   const [selectedService, setSelectedService] = useState('nyxid-chat');
 
 
-  // NyxID Chat / Onboarding: track whether we've ensured the scope binding this session
+  // ── Onboarding: frontend-driven state machine ──
+  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
+
+  // NyxID Chat: track whether we've ensured the scope binding this session
   const nyxidChatBoundRef = useRef(false);
-  const onboardingBoundRef = useRef(false);
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1791,7 +1689,7 @@ export default function ScopePage() {
   // Reset NyxID Chat binding flag when scope changes
   useEffect(() => {
     nyxidChatBoundRef.current = false;
-    onboardingBoundRef.current = false;
+    setOnboardingState(null);
   }, [scopeId]);
 
   // Load conversation index when scope changes
@@ -2120,18 +2018,7 @@ export default function ScopePage() {
 
     try {
       const requestActorId = trimOptional(activeConvId ?? undefined) || undefined;
-      if (activeService.kind === 'onboarding') {
-        if (!onboardingBoundRef.current) {
-          await api.scope.bindWorkflow(
-            scopeId,
-            [ONBOARDING_WORKFLOW_YAML],
-            'Onboarding',
-            'onboarding',
-          );
-          onboardingBoundRef.current = true;
-        }
-        await api.scope.streamInvoke(scopeId, 'onboarding', text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
-      } else if (activeService.kind === 'nyxid-chat') {
+      if (activeService.kind === 'nyxid-chat') {
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
             scopeId,
@@ -2175,41 +2062,113 @@ export default function ScopePage() {
   const handleSend = useCallback((text: string) => {
     setComposerText('');
 
-    // Check if the last assistant message has a pending human_input request.
-    // If so, resume the workflow run instead of starting a new chat turn.
-    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-    if (lastAssistant?.pendingHumanInput && scopeId) {
-      const { stepId, runId, serviceId: resumeServiceId } = lastAssistant.pendingHumanInput;
-      const svcId = resumeServiceId || selectedService || 'default';
-      // Clear the pending state and add user message.
-      setMessages(prev => {
-        const updated = prev.map(m =>
-          m.id === lastAssistant.id ? { ...m, pendingHumanInput: undefined } : m,
-        );
-        updated.push({
-          id: `user-${Date.now()}`,
-          role: 'user',
-          content: text,
-          timestamp: Date.now(),
-          status: 'complete',
-        });
-        return updated;
-      });
-      // Resume the workflow. The ORIGINAL SSE stream from the initial streamChatTurn
-      // is still alive and will deliver continuation events (next human_input prompt, etc).
-      void api.scope.resumeRun(scopeId, svcId, runId, { stepId, userInput: text, approved: true })
-        .catch((err: any) => {
-          setMessages(prev => [...prev, {
-            id: `error-${Date.now()}`, role: 'assistant' as const, content: '',
-            timestamp: Date.now(), status: 'error' as const,
-            error: `Failed to resume workflow: ${err?.message || 'Unknown error'}`,
-          }]);
-        });
-      return;
+    // ── Onboarding state machine ──
+    if (onboardingState && selectedService === 'onboarding') {
+      const userMsg: ChatMessage = {
+        id: `user-${Date.now()}`, role: 'user', content: text,
+        timestamp: Date.now(), status: 'complete',
+      };
+
+      if (onboardingState.step === 'select_provider') {
+        const trimmed = text.trim();
+        const provider = PROVIDER_MAP[trimmed] ?? PROVIDER_MAP['2']; // default to OpenAI
+        const isCustom = trimmed === '4';
+        const nextStep: OnboardingStep = isCustom ? 'ask_custom_endpoint' : 'ask_api_key';
+        const nextPrompt = isCustom ? ONBOARDING_CUSTOM_ENDPOINT_PROMPT : ONBOARDING_API_KEY_PROMPT;
+        setOnboardingState({ step: nextStep, slug: provider.slug, label: provider.label });
+        setMessages(prev => [...prev, userMsg, {
+          id: `onboarding-${Date.now()}`, role: 'assistant', content: nextPrompt,
+          timestamp: Date.now(), status: 'complete',
+        }]);
+        return;
+      }
+
+      if (onboardingState.step === 'ask_custom_endpoint') {
+        setOnboardingState(prev => prev ? { ...prev, step: 'ask_api_key', endpointUrl: text.trim() } : prev);
+        setMessages(prev => [...prev, userMsg, {
+          id: `onboarding-${Date.now()}`, role: 'assistant', content: ONBOARDING_API_KEY_PROMPT,
+          timestamp: Date.now(), status: 'complete',
+        }]);
+        return;
+      }
+
+      if (onboardingState.step === 'ask_api_key' && scopeId) {
+        const apiKey = text.trim();
+        setOnboardingState(prev => prev ? { ...prev, step: 'creating' } : prev);
+        setMessages(prev => [...prev, userMsg, {
+          id: `onboarding-creating-${Date.now()}`, role: 'assistant', content: 'Configuring your provider...',
+          timestamp: Date.now(), status: 'streaming',
+        }]);
+        // Call NyxID API to create the service via the scope proxy
+        const body = {
+          service_slug: onboardingState.slug,
+          credential: apiKey,
+          label: onboardingState.label,
+          ...(onboardingState.endpointUrl ? { endpoint_url: onboardingState.endpointUrl } : {}),
+        };
+        void (async () => {
+          try {
+            // Use the NyxIdChat's tool endpoint or direct proxy. For now, use the scope's
+            // streamInvoke with nyxid-chat to create the service via the agent.
+            // Simplest: POST directly to the NyxID proxy through the backend.
+            const token = nyxid.getAccessToken();
+            const resp = await fetch(`${NYXID_API_URL}/api/v1/keys`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify(body),
+            });
+            if (!resp.ok) {
+              const errText = await resp.text().catch(() => resp.statusText);
+              throw new Error(errText || `HTTP ${resp.status}`);
+            }
+            setOnboardingState({ step: 'done' });
+            setMessages(prev => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.role === 'assistant' && last.status === 'streaming') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: `Connected! ${onboardingState.label} is ready.\nYou can switch to NyxID Chat to start using it.`,
+                  status: 'complete',
+                };
+              }
+              return updated;
+            });
+          } catch (err: any) {
+            setOnboardingState(prev => prev ? { ...prev, step: 'ask_api_key' } : prev);
+            setMessages(prev => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.role === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  content: `Connection failed: ${err?.message || 'Unknown error'}\n\nPlease enter a valid API key:`,
+                  status: 'complete',
+                };
+              }
+              return updated;
+            });
+          }
+        })();
+        return;
+      }
+
+      // done or error — reset onboarding on any further input
+      if (onboardingState.step === 'done') {
+        setOnboardingState({ step: 'select_provider' });
+        setMessages(prev => [...prev, userMsg, {
+          id: `onboarding-${Date.now()}`, role: 'assistant', content: ONBOARDING_PROVIDER_PROMPT,
+          timestamp: Date.now(), status: 'complete',
+        }]);
+        return;
+      }
     }
 
     void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true });
-  }, [messages, streamChatTurn, scopeId]);
+  }, [messages, streamChatTurn, scopeId, onboardingState, selectedService]);
 
   const handleRegenerate = useCallback((messageIndex: number) => {
     if (isStreaming) return;
@@ -2430,19 +2389,23 @@ export default function ScopePage() {
     abortRef.current?.abort();
   }, []);
 
-  // Auto-start onboarding workflow when the service is selected and chat is empty.
-  const onboardingAutoStartedRef = useRef(false);
+  // Auto-start onboarding when selected and chat is empty.
   useEffect(() => {
-    if (selectedService !== 'onboarding' || isStreaming || messages.length > 0) {
-      if (selectedService !== 'onboarding') onboardingAutoStartedRef.current = false;
+    if (selectedService !== 'onboarding' || messages.length > 0) {
+      if (selectedService !== 'onboarding') setOnboardingState(null);
       return;
     }
-    if (onboardingAutoStartedRef.current) return;
-    onboardingAutoStartedRef.current = true;
-    // Kick off the workflow with a synthetic prompt — the workflow ignores it
-    // and immediately runs its first step (check_llm_status → select_provider).
-    void streamChatTurn('start', { baseMessages: [], includeUserMessage: false });
-  }, [selectedService, isStreaming, messages.length, streamChatTurn]);
+    if (onboardingState) return;
+    // Show provider selection immediately.
+    setOnboardingState({ step: 'select_provider' });
+    setMessages([{
+      id: `onboarding-${Date.now()}`,
+      role: 'assistant',
+      content: ONBOARDING_PROVIDER_PROMPT,
+      timestamp: Date.now(),
+      status: 'complete',
+    }]);
+  }, [selectedService, messages.length, onboardingState]);
 
   const handleNewChat = useCallback(() => {
     setMessages([]);
@@ -2451,7 +2414,7 @@ export default function ScopePage() {
     setComposerText('');
     setConversationRoute(undefined);
     setConversationModel(undefined);
-    onboardingAutoStartedRef.current = false;
+    setOnboardingState(null);
   }, []);
 
   const handleSelectConversation = useCallback(async (convId: string) => {
