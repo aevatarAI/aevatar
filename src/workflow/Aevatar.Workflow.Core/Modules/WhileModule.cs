@@ -183,7 +183,7 @@ public sealed class WhileModule : IEventModule<IWorkflowExecutionContext>
         foreach (var (key, value) in state.SubParameters)
             request.Parameters[key] = _expressionEvaluator.Evaluate(value, vars);
 
-        await ctx.PublishAsync(request, TopologyAudience.Children, ct);
+        await ctx.PublishAsync(request, TopologyAudience.Self, ct);
     }
 
     private static Dictionary<string, string> BuildIterationVariables(string input, int iteration, int maxIterations) =>

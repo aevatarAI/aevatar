@@ -87,6 +87,7 @@ public sealed class WorkflowRunGAgent
             _dispatchPort,
             () => Id,
             () => Logger,
+            CaptureRequestMetadataSnapshot,
             (evt, token) => PersistDomainEventAsync(evt, token),
             (events, token) => PersistDomainEventsAsync(events, token),
             (evt, direction, token) => PublishAsync(evt, direction, token),
@@ -1016,6 +1017,18 @@ public sealed class WorkflowRunGAgent
             if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
                 _executionItems[key] = value.Trim();
         }
+    }
+
+    private IReadOnlyDictionary<string, string> CaptureRequestMetadataSnapshot()
+    {
+        if (!_executionItems.TryGetValue("workflow.request.metadata", out var stored) ||
+            stored is not Dictionary<string, string> metadata ||
+            metadata.Count == 0)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        return new Dictionary<string, string>(metadata, StringComparer.Ordinal);
     }
 
     private static string ResolveScopeId(

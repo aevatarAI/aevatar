@@ -313,7 +313,7 @@ public sealed class WorkflowCoreModulesCoverageTests
         secondDispatch.StepId.Should().Be("while-1_iter_1");
         secondDispatch.StepType.Should().Be("transform");
         secondDispatch.Input.Should().Be("continue");
-        deltaEvents[0].direction.Should().Be(TopologyAudience.Children);
+        deltaEvents[0].direction.Should().Be(TopologyAudience.Self);
 
         var completed = deltaEvents[1].evt.Should().BeOfType<StepCompletedEvent>().Subject;
         completed.StepId.Should().Be("while-1");
@@ -364,6 +364,85 @@ public sealed class WorkflowCoreModulesCoverageTests
             CancellationToken.None);
         var thirdDispatch = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepRequestEvent>().Subject;
         thirdDispatch.Parameters["prompt"].Should().Be("iter=2,input=out-1");
+    }
+
+    [Fact]
+    public async Task WhileModule_ShouldIterateWorkflowCallSubStepUntilMaxIterations()
+    {
+        var module = new WhileModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "while-workflow-call",
+                StepType = "while",
+                RunId = "run-sisyphus",
+                Input = "seed-input",
+                Parameters =
+                {
+                    ["step"] = "workflow_call",
+                    ["max_iterations"] = "2",
+                    ["sub_param_workflow"] = "sisyphus-research-iteration",
+                    ["sub_param_lifecycle"] = "transient",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var firstDispatch = ctx.Published.Should().ContainSingle().Subject;
+        firstDispatch.direction.Should().Be(TopologyAudience.Self);
+        var firstRequest = firstDispatch.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        firstRequest.StepId.Should().Be("while-workflow-call_iter_0");
+        firstRequest.StepType.Should().Be("workflow_call");
+        firstRequest.RunId.Should().Be("run-sisyphus");
+        firstRequest.Input.Should().Be("seed-input");
+        firstRequest.Parameters["workflow"].Should().Be("sisyphus-research-iteration");
+        firstRequest.Parameters["lifecycle"].Should().Be("transient");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "while-workflow-call_iter_0",
+                RunId = "run-sisyphus",
+                Success = true,
+                Output = "iteration-1-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var secondDispatch = ctx.Published.Should().ContainSingle().Subject;
+        secondDispatch.direction.Should().Be(TopologyAudience.Self);
+        var secondRequest = secondDispatch.evt.Should().BeOfType<StepRequestEvent>().Subject;
+        secondRequest.StepId.Should().Be("while-workflow-call_iter_1");
+        secondRequest.StepType.Should().Be("workflow_call");
+        secondRequest.RunId.Should().Be("run-sisyphus");
+        secondRequest.Input.Should().Be("iteration-1-output");
+        secondRequest.Parameters["workflow"].Should().Be("sisyphus-research-iteration");
+        secondRequest.Parameters["lifecycle"].Should().Be("transient");
+
+        ctx.Published.Clear();
+
+        await module.HandleAsync(
+            Envelope(new StepCompletedEvent
+            {
+                StepId = "while-workflow-call_iter_1",
+                RunId = "run-sisyphus",
+                Success = true,
+                Output = "iteration-2-output",
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completed = ctx.Published.Should().ContainSingle().Subject.evt.Should().BeOfType<StepCompletedEvent>().Subject;
+        completed.StepId.Should().Be("while-workflow-call");
+        completed.RunId.Should().Be("run-sisyphus");
+        completed.Success.Should().BeTrue();
+        completed.Output.Should().Be("iteration-2-output");
+        completed.Annotations["while.iterations"].Should().Be("2");
+        completed.Annotations["while.max_iterations"].Should().Be("2");
     }
 
     [Fact]

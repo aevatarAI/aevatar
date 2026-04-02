@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Validation;
@@ -31,6 +32,7 @@ internal sealed class SubWorkflowOrchestrator
     private readonly IActorDispatchPort _dispatchPort;
     private readonly Func<string> _ownerActorIdAccessor;
     private readonly Func<ILogger> _loggerAccessor;
+    private readonly Func<IReadOnlyDictionary<string, string>> _requestMetadataAccessor;
     private readonly Func<IMessage, CancellationToken, Task> _persistDomainEventAsync;
     private readonly Func<IReadOnlyList<IMessage>, CancellationToken, Task> _persistDomainEventsAsync;
     private readonly Func<IMessage, TopologyAudience, CancellationToken, Task> _publishAsync;
@@ -43,6 +45,7 @@ internal sealed class SubWorkflowOrchestrator
         IActorDispatchPort dispatchPort,
         Func<string> ownerActorIdAccessor,
         Func<ILogger> loggerAccessor,
+        Func<IReadOnlyDictionary<string, string>> requestMetadataAccessor,
         Func<IMessage, CancellationToken, Task> persistDomainEventAsync,
         Func<IReadOnlyList<IMessage>, CancellationToken, Task> persistDomainEventsAsync,
         Func<IMessage, TopologyAudience, CancellationToken, Task> publishAsync,
@@ -54,6 +57,7 @@ internal sealed class SubWorkflowOrchestrator
         _dispatchPort = dispatchPort ?? throw new ArgumentNullException(nameof(dispatchPort));
         _ownerActorIdAccessor = ownerActorIdAccessor ?? throw new ArgumentNullException(nameof(ownerActorIdAccessor));
         _loggerAccessor = loggerAccessor ?? throw new ArgumentNullException(nameof(loggerAccessor));
+        _requestMetadataAccessor = requestMetadataAccessor ?? throw new ArgumentNullException(nameof(requestMetadataAccessor));
         _persistDomainEventAsync = persistDomainEventAsync ?? throw new ArgumentNullException(nameof(persistDomainEventAsync));
         _persistDomainEventsAsync = persistDomainEventsAsync ?? throw new ArgumentNullException(nameof(persistDomainEventsAsync));
         _publishAsync = publishAsync ?? throw new ArgumentNullException(nameof(publishAsync));
@@ -380,21 +384,31 @@ internal sealed class SubWorkflowOrchestrator
             DefinitionVersion = definition.DefinitionVersion,
         }, ct);
 
-        var start = new StartWorkflowEvent
+        var requestMetadata = _requestMetadataAccessor();
+        var chatRequest = new ChatRequestEvent
         {
-            WorkflowName = definition.WorkflowName ?? string.Empty,
-            Input = input ?? string.Empty,
-            RunId = childRunId,
+            Prompt = input ?? string.Empty,
+            SessionId = childRunId,
+            ScopeId = string.IsNullOrWhiteSpace(definition.ScopeId)
+                ? state.ScopeId ?? string.Empty
+                : definition.ScopeId,
         };
-        start.Parameters[WorkflowCallInvocationIdMetadataKey] = invocationId;
-        start.Parameters[WorkflowCallParentRunIdMetadataKey] = parentRunId;
-        start.Parameters[WorkflowCallParentStepIdMetadataKey] = parentStepId;
-        start.Parameters[WorkflowCallWorkflowNameMetadataKey] = definition.WorkflowName ?? string.Empty;
-        start.Parameters[WorkflowCallLifecycleMetadataKey] = lifecycle;
+        foreach (var (key, value) in requestMetadata)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
+                continue;
+
+            chatRequest.Metadata[key] = value;
+        }
+        chatRequest.Metadata[WorkflowCallInvocationIdMetadataKey] = invocationId;
+        chatRequest.Metadata[WorkflowCallParentRunIdMetadataKey] = parentRunId;
+        chatRequest.Metadata[WorkflowCallParentStepIdMetadataKey] = parentStepId;
+        chatRequest.Metadata[WorkflowCallWorkflowNameMetadataKey] = definition.WorkflowName ?? string.Empty;
+        chatRequest.Metadata[WorkflowCallLifecycleMetadataKey] = lifecycle;
 
         try
         {
-            await _sendToAsync(childActor.Id, start, ct);
+            await _sendToAsync(childActor.Id, chatRequest, ct);
         }
         catch (Exception ex)
         {
@@ -404,7 +418,7 @@ internal sealed class SubWorkflowOrchestrator
                     InvocationId = invocationId,
                     ChildRunId = childRunId,
                     Success = false,
-                    Error = $"workflow_call failed to dispatch StartWorkflowEvent: {ex.Message}",
+                    Error = $"workflow_call failed to dispatch ChatRequestEvent: {ex.Message}",
                 },
                 ct);
             await TryFinalizeNonSingletonChildAsync(
