@@ -96,4 +96,36 @@ message RoleGAgentState {
   map<string, RoleChatSessionState> sessions = 4;
   string event_modules = 5;
   string event_routes = 6;
+  PendingToolApprovalState pending_approval = 7;
+}
+
+// ─── Multi-turn tool approval continuation ───
+
+// Persisted state for a tool call waiting for user approval.
+message PendingToolApprovalState {
+  string request_id = 1;
+  string session_id = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string arguments_json = 5;
+  bool is_destructive = 6;
+  string timeout_callback_id = 7;
+  bytes timeout_lease = 8;
+  map<string, string> metadata = 9;
+}
+
+// Domain event: approval pending persisted.
+message PendingToolApprovalPersistedEvent {
+  PendingToolApprovalState pending = 1;
+}
+
+// Domain event: pending approval cleared (approved, denied, or timed out).
+message ClearPendingApprovalEvent {
+  string request_id = 1;
+}
+
+// Self-continuation: local approval timeout fired → escalate to NyxID remote.
+message ToolApprovalTimeoutFiredEvent {
+  string request_id = 1;
+  string session_id = 2;
 }

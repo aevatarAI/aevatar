@@ -250,6 +250,19 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
   return blocks;
 }
 
+export function markdownToPlainText(text: string): string {
+  if (!text) {
+    return '';
+  }
+
+  return parseMarkdownBlocks(text)
+    .map(block => markdownBlockToPlainText(block))
+    .filter(Boolean)
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function appendLinkifiedTokens(tokens: InlineContentToken[], text: string, bold: boolean): void {
   let lastIndex = 0;
   for (const match of text.matchAll(MARKDOWN_OR_BARE_LINK_PATTERN)) {
@@ -281,4 +294,48 @@ function normalizeExternalHref(rawHref: string): string {
   return rawHref.startsWith('www.')
     ? `https://${rawHref}`
     : rawHref;
+}
+
+function markdownBlockToPlainText(block: MarkdownBlock): string {
+  switch (block.kind) {
+    case 'code':
+      return block.code.trim();
+    case 'heading':
+      return inlineContentToPlainText(block.text);
+    case 'blockquote':
+      return markdownLinesToPlainText(block.lines);
+    case 'unordered-list':
+      return block.items
+        .map(item => `- ${inlineContentToPlainText(item)}`)
+        .join('\n');
+    case 'ordered-list':
+      return block.items
+        .map((item, index) => `${index + 1}. ${inlineContentToPlainText(item)}`)
+        .join('\n');
+    case 'thematic-break':
+      return '---';
+    case 'paragraph':
+    default:
+      return markdownLinesToPlainText(block.lines);
+  }
+}
+
+function markdownLinesToPlainText(lines: string[]): string {
+  return lines
+    .map(line => inlineContentToPlainText(line))
+    .join('\n');
+}
+
+function inlineContentToPlainText(text: string): string {
+  return tokenizeInlineContent(text)
+    .map(token => {
+      if (token.kind === 'link') {
+        return token.text === token.href
+          ? token.href
+          : `${token.text} (${token.href})`;
+      }
+
+      return token.text;
+    })
+    .join('');
 }

@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Aevatar.Studio.Hosting;
 using Aevatar.Studio.Infrastructure.Storage;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Microsoft.AspNetCore.Builder;
@@ -27,7 +28,7 @@ public static class ExplorerEndpoints
 
     /// <summary>
     /// Lists all objects under this scope's directory in chrono-storage.
-    /// Returns an empty manifest if chrono-storage is unavailable or the scope has no files.
+    /// Returns a service-unavailable error if chrono-storage is disabled or unavailable.
     /// </summary>
     private static async Task<IResult> HandleGetManifestAsync(
         HttpContext http,
@@ -42,11 +43,11 @@ public static class ExplorerEndpoints
                 return Results.BadRequest(new { error = "Not authenticated" });
 
             if (blobClient == null)
-                return Results.Ok(new ChronoStorageCatalogBlobClient.StorageManifest());
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var context = blobClient.TryResolveContext(string.Empty, "_");
             if (context == null)
-                return Results.Ok(new ChronoStorageCatalogBlobClient.StorageManifest());
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var result = await blobClient.ListObjectsAsync(context, cancellationToken: ct);
 
@@ -86,6 +87,10 @@ public static class ExplorerEndpoints
 
             return Results.Ok(new ChronoStorageCatalogBlobClient.StorageManifest { Files = files });
         }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToResult(exception);
+        }
         catch (InvalidOperationException ex)
         {
             return Results.BadRequest(new { error = ex.Message });
@@ -108,7 +113,7 @@ public static class ExplorerEndpoints
                 return Results.BadRequest(new { error = "Not authenticated" });
 
             if (blobClient == null)
-                return Results.NotFound(new { error = $"File not found: {key}" });
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var resolved = await TryDownloadFromKnownPrefixesAsync(blobClient, key, storageOptions.Value, ct);
             if (resolved is null)
@@ -122,6 +127,10 @@ public static class ExplorerEndpoints
                 _ => "application/octet-stream",
             };
             return Results.Text(Encoding.UTF8.GetString(resolved.Value.Payload), contentType);
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToResult(exception);
         }
         catch (InvalidOperationException ex)
         {
@@ -148,11 +157,11 @@ public static class ExplorerEndpoints
                 return Results.BadRequest(new { error = "Workflow and script files are managed by Studio. Use the Studio API to edit them." });
 
             if (blobClient == null)
-                return Results.StatusCode(503);
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var context = await TryResolveWritableContextAsync(blobClient, key, storageOptions.Value, ct);
             if (context == null)
-                return Results.StatusCode(503);
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var body = await new StreamReader(http.Request.Body).ReadToEndAsync(ct);
             var bytes = Encoding.UTF8.GetBytes(body);
@@ -165,6 +174,10 @@ public static class ExplorerEndpoints
             };
             await blobClient.UploadAsync(context, bytes, contentType, ct);
             return Results.NoContent();
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToResult(exception);
         }
         catch (InvalidOperationException ex)
         {
@@ -191,7 +204,7 @@ public static class ExplorerEndpoints
                 return Results.BadRequest(new { error = "Workflow and script files are managed by Studio. Use the Studio API to delete them." });
 
             if (blobClient == null)
-                return Results.StatusCode(503);
+                return ChronoStorageErrorResponses.DisabledResult();
 
             foreach (var prefix in GetCandidatePrefixesForKey(key, storageOptions.Value))
             {
@@ -202,6 +215,10 @@ public static class ExplorerEndpoints
             }
 
             return Results.NoContent();
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToResult(exception);
         }
         catch (InvalidOperationException ex)
         {
@@ -232,11 +249,11 @@ public static class ExplorerEndpoints
                 return Results.BadRequest(new { error = "Not authenticated" });
 
             if (blobClient == null)
-                return Results.Ok(new GrepResponse());
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var context = blobClient.TryResolveContext(string.Empty, "_");
             if (context == null)
-                return Results.Ok(new GrepResponse());
+                return ChronoStorageErrorResponses.DisabledResult();
 
             var limit = Math.Clamp(maxResults ?? 50, 1, 100);
 
@@ -293,6 +310,10 @@ public static class ExplorerEndpoints
             }
 
             return Results.Ok(new GrepResponse { Matches = matches });
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToResult(exception);
         }
         catch (InvalidOperationException ex)
         {

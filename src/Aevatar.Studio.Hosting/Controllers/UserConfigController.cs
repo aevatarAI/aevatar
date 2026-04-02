@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -44,6 +45,11 @@ public sealed class UserConfigController : ControllerBase
         {
             return Ok(await _userConfigStore.GetAsync(cancellationToken));
         }
+        catch (ChronoStorageServiceException exception)
+        {
+            _logger.LogWarning(exception, "Chrono-storage is unavailable when reading user config");
+            return ChronoStorageErrorResponses.ToActionResult(exception);
+        }
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
@@ -71,6 +77,11 @@ public sealed class UserConfigController : ControllerBase
                 RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim());
             await _userConfigStore.SaveAsync(merged, cancellationToken);
             return Ok(merged);
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            _logger.LogWarning(exception, "Chrono-storage is unavailable when saving user config");
+            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {

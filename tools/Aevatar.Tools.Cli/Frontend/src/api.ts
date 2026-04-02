@@ -4,6 +4,9 @@ import { getAccessToken } from './auth/nyxid';
 
 const BASE = '/api';
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
+const CHRONO_STORAGE_SERVICE_ERROR_CODE = 'chrono_storage_service_unavailable';
+const CHRONO_STORAGE_SERVICE_DEPENDENCY = 'chrono-storage-service';
+const DEFAULT_CHRONO_STORAGE_SERVICE_MESSAGE = 'Studio could not access chrono-storage-service. It may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.';
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAccessToken();
@@ -35,6 +38,38 @@ function notifyAuthRequired(detail: AuthRequiredDetail) {
   }));
 }
 
+function createRequestHeaders(opts?: RequestInit) {
+  const headers = new Headers(opts?.headers);
+  const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
+  if (!isFormDataBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (!headers.has('Authorization')) {
+    const auth = getAuthHeaders();
+    if (auth.Authorization) {
+      headers.set('Authorization', auth.Authorization);
+    }
+  }
+
+  return headers;
+}
+
+async function parseErrorResponse(res: Response): Promise<never> {
+  const contentType = res.headers.get('content-type');
+  const body = isJsonContentType(contentType)
+    ? await res.json().catch(() => ({}))
+    : { message: await res.text().catch(() => '') };
+
+  if (res.status === 401 || body?.loginUrl) {
+    notifyAuthRequired({
+      loginUrl: body?.loginUrl,
+      message: body?.message || 'Sign in to continue.',
+    });
+  }
+
+  throw { status: res.status, ...body };
+}
+
 export function onAuthRequired(listener: (detail: AuthRequiredDetail) => void) {
   if (typeof window === 'undefined') {
     return () => undefined;
@@ -50,16 +85,7 @@ export function onAuthRequired(listener: (detail: AuthRequiredDetail) => void) {
 }
 
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
-  const headers = new Headers(opts?.headers);
-  const isFormDataBody = typeof FormData !== 'undefined' && opts?.body instanceof FormData;
-  if (!isFormDataBody && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json');
-  }
-  // Inject NyxID Bearer token if available and not already set.
-  if (!headers.has('Authorization')) {
-    const auth = getAuthHeaders();
-    if (auth.Authorization) headers.set('Authorization', auth.Authorization);
-  }
+  const headers = createRequestHeaders(opts);
 
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
@@ -68,18 +94,7 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
 
   const contentType = res.headers.get('content-type');
   if (!res.ok) {
-    const body = isJsonContentType(contentType)
-      ? await res.json().catch(() => ({}))
-      : { message: await res.text().catch(() => '') };
-
-    if (res.status === 401 || body?.loginUrl) {
-      notifyAuthRequired({
-        loginUrl: body?.loginUrl,
-        message: body?.message || 'Sign in to continue.',
-      });
-    }
-
-    throw { status: res.status, ...body };
+    return parseErrorResponse(res);
   }
 
   if (res.status === 204) return undefined as T;
@@ -118,6 +133,48 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
       : 'API returned an unexpected response format.',
     rawBody,
   };
+}
+
+async function requestText(path: string, opts?: RequestInit): Promise<string> {
+  const headers = createRequestHeaders(opts);
+  const res = await fetch(`${BASE}${path}`, {
+    ...opts,
+    headers,
+  });
+
+  const contentType = res.headers.get('content-type');
+  if (!res.ok) {
+    return parseErrorResponse(res);
+  }
+
+  if (res.redirected || isHtmlContentType(contentType)) {
+    notifyAuthRequired({
+      loginUrl: res.redirected ? res.url : null,
+      message: 'API returned HTML instead of the requested file. Sign-in may be required.',
+    });
+    throw {
+      status: res.redirected ? 401 : res.status,
+      message: 'API returned HTML instead of the requested file. Sign-in may be required.',
+    };
+  }
+
+  return res.text();
+}
+
+export function isChronoStorageServiceError(error: any) {
+  return Boolean(
+    error?.code === CHRONO_STORAGE_SERVICE_ERROR_CODE ||
+    error?.dependency === CHRONO_STORAGE_SERVICE_DEPENDENCY ||
+    (typeof error?.message === 'string' && error.message.includes('chrono-storage-service'))
+  );
+}
+
+export function getChronoStorageServiceErrorMessage(error: any) {
+  if (typeof error?.message === 'string' && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  return DEFAULT_CHRONO_STORAGE_SERVICE_MESSAGE;
 }
 
 async function streamSse(
@@ -685,21 +742,15 @@ const encodeExplorerKey = (key: string) => key.split('/').map(segment => encodeU
 
 export const explorer = {
   getManifest: () => request<{ version: number; files: Array<{ key: string; type: string; name?: string; updatedAt?: string }> }>('/explorer/manifest'),
-  getFile: (key: string) => fetch(`/api/explorer/files/${encodeExplorerKey(key)}`, {
-    headers: { ...getAuthHeaders() },
-  }).then(res => {
-    if (!res.ok) throw { status: res.status, message: 'File not found' };
-    return res.text();
-  }),
-  putFile: (key: string, content: string) => fetch(`/api/explorer/files/${encodeExplorerKey(key)}`, {
+  getFile: (key: string) => requestText(`/explorer/files/${encodeExplorerKey(key)}`),
+  putFile: (key: string, content: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'text/plain', ...getAuthHeaders() },
+    headers: { 'Content-Type': 'text/plain' },
     body: content,
-  }).then(res => { if (!res.ok) throw { status: res.status, message: 'Save failed' }; }),
-  deleteFile: (key: string) => fetch(`/api/explorer/files/${encodeExplorerKey(key)}`, {
+  }),
+  deleteFile: (key: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
     method: 'DELETE',
-    headers: { ...getAuthHeaders() },
-  }).then(res => { if (!res.ok) throw { status: res.status, message: 'Delete failed' }; }),
+  }),
 };
 
 export const app = {

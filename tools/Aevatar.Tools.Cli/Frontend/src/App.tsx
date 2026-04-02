@@ -387,6 +387,18 @@ function summarizeBootstrapFailures(labels: string[]) {
   return `Loaded studio with defaults for ${visibleLabels.join(', ')}${suffix}.`;
 }
 
+function summarizeChronoStorageWarning(failures: Array<{ label: string; error: any }>) {
+  if (failures.length === 0) {
+    return null;
+  }
+
+  const labels = Array.from(new Set(failures.map(item => item.label)));
+  const affectedLabel = labels.length === 1
+    ? labels[0]
+    : `${labels.slice(0, 2).join(', ')}${labels.length > 2 ? `, +${labels.length - 2} more` : ''}`;
+  return `${api.getChronoStorageServiceErrorMessage(failures[0].error)} Affected: ${affectedLabel}.`;
+}
+
 type ExecutionLogsWindowState = {
   isPopout: boolean;
   executionId: string | null;
@@ -961,6 +973,7 @@ function App() {
     text: string;
     type: 'success' | 'error' | 'info';
   } | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const reactFlowInstanceRef = useRef<any>(null);
   const syncSuppressedRef = useRef(true);
@@ -1467,6 +1480,7 @@ function App() {
 
       const authFailure = bootstrapFailures.find(item => isAuthResponseInvalid(item.error));
       if (authFailure) {
+        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1481,6 +1495,11 @@ function App() {
       bootstrapFailures.forEach(item => {
         console.warn(`[Aevatar App] Failed to load bootstrap resource: ${item.label}`, item.error);
       });
+
+      const chronoStorageFailures = bootstrapFailures.filter(item => api.isChronoStorageServiceError(item.error));
+      const nonChronoStorageFailures = bootstrapFailures.filter(item => !api.isChronoStorageServiceError(item.error));
+      const nextStorageWarning = summarizeChronoStorageWarning(chronoStorageFailures);
+      setStorageWarning(nextStorageWarning);
 
       const context = contextResult.status === 'fulfilled' ? contextResult.value : null;
       const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null;
@@ -1545,11 +1564,16 @@ function App() {
         directoryId: defaultDirectoryId,
       }));
 
-      if (bootstrapFailures.length > 0) {
-        flash(summarizeBootstrapFailures(bootstrapFailures.map(item => item.label)), 'info');
+      if (nextStorageWarning) {
+        flash(nextStorageWarning, 'error');
+      }
+
+      if (nonChronoStorageFailures.length > 0) {
+        flash(summarizeBootstrapFailures(nonChronoStorageFailures.map(item => item.label)), 'info');
       }
     } catch (error: any) {
       if (isAuthResponseInvalid(error)) {
+        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1559,6 +1583,12 @@ function App() {
           errorMessage: error?.message || 'Sign in to continue.',
         }));
         return;
+      }
+
+      if (api.isChronoStorageServiceError(error)) {
+        const message = api.getChronoStorageServiceErrorMessage(error);
+        setStorageWarning(message);
+        flash(message, 'error');
       }
 
       setAuthSession(prev => ({
@@ -3365,6 +3395,18 @@ function App() {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col">
+        {storageWarning && workspacePage !== 'explorer' ? (
+          <div className="mx-6 mt-4 rounded-[24px] border border-[#F0D7A5] bg-[#FFF7E8] px-5 py-4 text-[#8A4B12] shadow-[0_14px_32px_rgba(180,125,44,0.12)]">
+            <div className="flex items-start gap-3">
+              <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#A55A17]">Chrono Storage</div>
+                <div className="mt-1 text-[14px] font-semibold">Some cloud-backed studio features are unavailable</div>
+                <div className="mt-1 text-[13px] leading-6">{storageWarning}</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {workspacePage === 'scripts' ? (
           <ScriptsStudio
             appContext={{

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Aevatar.Studio.Infrastructure.Storage;
@@ -99,6 +100,36 @@ public sealed class ExplorerEndpointsTests
         content.Should().Be("name: draft");
     }
 
+    [Fact]
+    public async Task GetManifestAsync_WhenChronoStorageProxyReturnsForbidden_ShouldReturnExplicitStorageError()
+    {
+        await using var host = await ExplorerTestHost.StartAsync(
+            "scope-a",
+            new ConnectorCatalogStorageOptions
+            {
+                Enabled = true,
+                UseNyxProxy = true,
+                NyxProxyBaseUrl = "http://chrono-storage.test",
+                NyxProxyServiceSlug = "chrono-storage-service",
+                Bucket = "aevatar-studio",
+                Prefix = string.Empty,
+                RolesPrefix = string.Empty,
+                UserConfigPrefix = string.Empty,
+            },
+            failListWithForbidden: true);
+
+        var response = await host.Client.GetAsync("/api/explorer/manifest");
+        var content = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(content);
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        document.RootElement.GetProperty("code").GetString().Should().Be(ChronoStorageServiceException.DefaultCode);
+        document.RootElement.GetProperty("dependency").GetString().Should().Be(ChronoStorageServiceException.DependencyName);
+        document.RootElement.GetProperty("upstreamStatusCode").GetInt32().Should().Be((int)HttpStatusCode.Forbidden);
+        document.RootElement.GetProperty("message").GetString().Should().Contain("chrono-storage-service");
+        document.RootElement.GetProperty("message").GetString().Should().Contain("approval");
+    }
+
     private sealed class ExplorerTestHost : IAsyncDisposable
     {
         private readonly WebApplication _app;
@@ -117,7 +148,8 @@ public sealed class ExplorerEndpointsTests
         public static async Task<ExplorerTestHost> StartAsync(
             string scopeId,
             ConnectorCatalogStorageOptions? storageOptions = null,
-            bool failDirectDownload = false)
+            bool failDirectDownload = false,
+            bool failListWithForbidden = false)
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
@@ -125,7 +157,7 @@ public sealed class ExplorerEndpointsTests
             });
             builder.WebHost.UseUrls("http://127.0.0.1:0");
 
-            var storageServer = new InMemoryChronoStorageServer(failDirectDownload);
+            var storageServer = new InMemoryChronoStorageServer(failDirectDownload, failListWithForbidden);
             builder.Services.AddSingleton<IAppScopeResolver>(new StubAppScopeResolver(scopeId));
             builder.Services.AddSingleton<IHttpClientFactory>(_ => storageServer.CreateHttpClientFactory());
             builder.Services.AddHttpContextAccessor();
@@ -180,18 +212,20 @@ public sealed class ExplorerEndpointsTests
     private sealed class InMemoryChronoStorageServer
     {
         private readonly bool _failDirectDownload;
+        private readonly bool _failListWithForbidden;
         private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
 
-        public InMemoryChronoStorageServer(bool failDirectDownload = false)
+        public InMemoryChronoStorageServer(bool failDirectDownload = false, bool failListWithForbidden = false)
         {
             _failDirectDownload = failDirectDownload;
+            _failListWithForbidden = failListWithForbidden;
         }
 
         public void StoreText(string bucket, string key, string content) =>
             _objects[$"{bucket}:{key}"] = Encoding.UTF8.GetBytes(content);
 
         public IHttpClientFactory CreateHttpClientFactory() =>
-            new StubHttpClientFactory(new HttpClient(new Handler(_objects, _failDirectDownload))
+            new StubHttpClientFactory(new HttpClient(new Handler(_objects, _failDirectDownload, _failListWithForbidden))
             {
                 BaseAddress = new Uri("http://chrono-storage.test/"),
             });
@@ -200,11 +234,13 @@ public sealed class ExplorerEndpointsTests
         {
             private readonly IReadOnlyDictionary<string, byte[]> _objects;
             private readonly bool _failDirectDownload;
+            private readonly bool _failListWithForbidden;
 
-            public Handler(IReadOnlyDictionary<string, byte[]> objects, bool failDirectDownload)
+            public Handler(IReadOnlyDictionary<string, byte[]> objects, bool failDirectDownload, bool failListWithForbidden)
             {
                 _objects = objects;
                 _failDirectDownload = failDirectDownload;
+                _failListWithForbidden = failListWithForbidden;
             }
 
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -233,7 +269,7 @@ public sealed class ExplorerEndpointsTests
                 }
 
                 if (request.Method == HttpMethod.Get &&
-                    string.Equals(path, "api/buckets/aevatar-studio/objects/download", StringComparison.Ordinal))
+                    path.EndsWith("api/buckets/aevatar-studio/objects/download", StringComparison.Ordinal))
                 {
                     if (_failDirectDownload)
                     {
@@ -253,7 +289,7 @@ public sealed class ExplorerEndpointsTests
                 }
 
                 if (request.Method == HttpMethod.Get &&
-                    string.Equals(path, "api/buckets/aevatar-studio/presigned-url", StringComparison.Ordinal))
+                    path.EndsWith("api/buckets/aevatar-studio/presigned-url", StringComparison.Ordinal))
                 {
                     var key = GetRequiredQueryValue(uri, "key");
                     if (!_objects.ContainsKey($"aevatar-studio:{key}"))
@@ -268,6 +304,43 @@ public sealed class ExplorerEndpointsTests
                             data = new
                             {
                                 url = $"http://download.local/aevatar-studio/{Uri.EscapeDataString(key)}",
+                            },
+                        }),
+                    });
+                }
+
+                if (request.Method == HttpMethod.Get &&
+                    path.EndsWith("api/buckets/aevatar-studio/objects", StringComparison.Ordinal))
+                {
+                    if (_failListWithForbidden)
+                    {
+                        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)
+                        {
+                            Content = JsonContent.Create(new
+                            {
+                                message = "approval required",
+                            }),
+                        });
+                    }
+
+                    var prefix = GetRequiredQueryValue(uri, "prefix");
+                    var objects = _objects
+                        .Where(item => item.Key.StartsWith($"aevatar-studio:{prefix}", StringComparison.Ordinal))
+                        .Select(item => new
+                        {
+                            key = item.Key["aevatar-studio:".Length..],
+                            lastModified = "2026-04-02T00:00:00Z",
+                            size = (long)item.Value.Length,
+                        })
+                        .ToList();
+
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = JsonContent.Create(new
+                        {
+                            data = new
+                            {
+                                objects,
                             },
                         }),
                     });

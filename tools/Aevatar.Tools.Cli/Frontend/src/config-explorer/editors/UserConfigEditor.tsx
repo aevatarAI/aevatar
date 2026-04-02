@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Loader2, HelpCircle } from 'lucide-react';
 import * as api from '../../api';
 
 type Props = { flash: (msg: string, type: 'success' | 'error') => void };
@@ -58,6 +58,38 @@ type FieldDef = {
   description?: string;
   options?: string[];
 };
+
+function Tooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function close(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="text-gray-300 hover:text-gray-500 transition-colors"
+      >
+        <HelpCircle size={14} />
+      </button>
+      {open && (
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 z-50 w-[240px] rounded-lg bg-gray-800 text-white text-[11px] leading-relaxed px-3 py-2 shadow-lg">
+          {text}
+          <div className="absolute left-1/2 -translate-x-1/2 top-full w-0 h-0 border-x-[5px] border-x-transparent border-t-[5px] border-t-gray-800" />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function UserConfigEditor({ flash }: Props) {
   const [tab, setTab] = useState<'fields' | 'raw'>('fields');
@@ -174,14 +206,12 @@ export default function UserConfigEditor({ flash }: Props) {
         <div className="rounded-2xl border border-[#EEEAE4] bg-white divide-y divide-[#EEEAE4]">
           {FIELDS.map(field => (
             <div key={field.key} className="px-5 py-4">
-              <div className="flex items-baseline justify-between gap-4">
-                <div className="min-w-0">
-                  <label className="block text-[13px] font-semibold text-gray-800">{field.label}</label>
-                  {field.description && (
-                    <p className="text-[11px] text-gray-400 mt-0.5">{field.description}</p>
-                  )}
+              <div className="flex items-center gap-4">
+                <div className="flex-shrink-0 w-[180px] flex items-center gap-1.5">
+                  <label className="text-[13px] font-semibold text-gray-800">{field.label}</label>
+                  {field.description && <Tooltip text={field.description} />}
                 </div>
-                <div className="flex-shrink-0 w-[320px]">
+                <div className="flex-1 min-w-0">
                   {field.type === 'select' ? (
                     <select
                       value={config[field.key] ?? ''}

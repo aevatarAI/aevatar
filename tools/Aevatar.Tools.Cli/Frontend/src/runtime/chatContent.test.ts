@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
+import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
 
 describe('sanitizeAssistantMessageContent', () => {
   it('removes completed DSML function call blocks from assistant text', () => {
@@ -106,5 +106,39 @@ describe('sanitizeAssistantMessageContent', () => {
       { kind: 'thematic-break' },
       { kind: 'code', lang: 'json', code: '{"ok":true}' },
     ]);
+  });
+
+  it('converts markdown-rich chat content into readable plain text', () => {
+    const plainText = markdownToPlainText(`# 标题
+
+参考 [文档](https://aevatar.ai/docs) 和 \`aevatar chat\`
+
+- 第一项
+- 第二项
+
+1. 步骤一
+2. 步骤二
+
+> 引用
+> 第二行
+
+\`\`\`json
+{"ok":true}
+\`\`\``);
+
+    expect(plainText).toBe(`标题
+
+参考 文档 (https://aevatar.ai/docs) 和 aevatar chat
+
+- 第一项
+- 第二项
+
+1. 步骤一
+2. 步骤二
+
+引用
+第二行
+
+{"ok":true}`);
   });
 });

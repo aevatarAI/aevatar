@@ -83,7 +83,7 @@ public sealed class ChronoStorageCatalogBlobClient
                 $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/objects/download",
                 $"key={Uri.EscapeDataString(context.ObjectKey)}"),
             context);
-        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
+        using var response = await SendChronoStorageRequestAsync(context, request, cancellationToken);
         if (response.IsSuccessStatusCode)
         {
             return await response.Content.ReadAsByteArrayAsync(cancellationToken);
@@ -91,7 +91,7 @@ public sealed class ChronoStorageCatalogBlobClient
 
         if (response.StatusCode != HttpStatusCode.NotFound)
         {
-            response.EnsureSuccessStatusCode();
+            ThrowChronoStorageFailure(context, response.StatusCode);
         }
 
         return await TryDownloadViaPresignedUrlAsync(context, cancellationToken);
@@ -108,13 +108,16 @@ public sealed class ChronoStorageCatalogBlobClient
                 $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/presigned-url",
                 $"key={Uri.EscapeDataString(context.ObjectKey)}"),
             context);
-        using var presignedResponse = await GetCatalogApiClient(context).SendAsync(presignedRequest, cancellationToken);
+        using var presignedResponse = await SendChronoStorageRequestAsync(context, presignedRequest, cancellationToken);
         if (presignedResponse.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
 
-        presignedResponse.EnsureSuccessStatusCode();
+        if (!presignedResponse.IsSuccessStatusCode)
+        {
+            ThrowChronoStorageFailure(context, presignedResponse.StatusCode);
+        }
 
         var payload = await presignedResponse.Content.ReadFromJsonAsync<ChronoStorageEnvelope<PresignedUrlPayload>>(cancellationToken);
         var presignedUrl = payload?.Data?.Url?.Trim() ?? payload?.Data?.PresignedUrl?.Trim();
@@ -124,13 +127,17 @@ public sealed class ChronoStorageCatalogBlobClient
         }
 
         using var downloadRequest = new HttpRequestMessage(HttpMethod.Get, presignedUrl);
-        using var downloadResponse = await _httpClientFactory.CreateClient().SendAsync(downloadRequest, cancellationToken);
+        using var downloadResponse = await SendDirectRequestAsync(downloadRequest, cancellationToken);
         if (downloadResponse.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
 
-        downloadResponse.EnsureSuccessStatusCode();
+        if (!downloadResponse.IsSuccessStatusCode)
+        {
+            ThrowChronoStorageFailure(context, downloadResponse.StatusCode);
+        }
+
         return await downloadResponse.Content.ReadAsByteArrayAsync(cancellationToken);
     }
 
@@ -151,8 +158,11 @@ public sealed class ChronoStorageCatalogBlobClient
                 $"key={Uri.EscapeDataString(context.ObjectKey)}&contentType={Uri.EscapeDataString(contentType)}"),
             context,
             content);
-        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        using var response = await SendChronoStorageRequestAsync(context, request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            ThrowChronoStorageFailure(context, response.StatusCode);
+        }
     }
 
     public async Task<ListObjectsResult> ListObjectsAsync(
@@ -175,8 +185,12 @@ public sealed class ChronoStorageCatalogBlobClient
                 $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/objects",
                 query),
             context);
-        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        using var response = await SendChronoStorageRequestAsync(context, request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            ThrowChronoStorageFailure(context, response.StatusCode);
+        }
+
         var envelope = await response.Content.ReadFromJsonAsync<ChronoStorageEnvelope<ListObjectsPayload>>(cancellationToken);
         var objects = envelope?.Data?.Objects ?? [];
         // Strip the scopeDirectory prefix (including any bucket-level prefix) so keys are relative
@@ -208,13 +222,16 @@ public sealed class ChronoStorageCatalogBlobClient
                 $"api/buckets/{Uri.EscapeDataString(context.Bucket)}/objects",
                 $"key={Uri.EscapeDataString(context.ObjectKey)}"),
             context);
-        using var response = await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
+        using var response = await SendChronoStorageRequestAsync(context, request, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return;
         }
 
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            ThrowChronoStorageFailure(context, response.StatusCode);
+        }
     }
 
     public string CreateRemoteHomeDirectory(RemoteScopeContext context) =>
@@ -312,6 +329,79 @@ public sealed class ChronoStorageCatalogBlobClient
         context.UseNyxProxy
             ? _httpClientFactory.CreateClient(NyxProxyHttpClientName)
             : _httpClientFactory.CreateClient();
+
+    private async Task<HttpResponseMessage> SendChronoStorageRequestAsync(
+        RemoteScopeContext context,
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await GetCatalogApiClient(context).SendAsync(request, cancellationToken);
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new ChronoStorageServiceException(
+                "Studio could not access chrono-storage-service because the request timed out. The service may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.",
+                innerException: exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new ChronoStorageServiceException(
+                BuildChronoStorageFailureMessage(context, exception.StatusCode),
+                exception.StatusCode,
+                exception);
+        }
+    }
+
+    private async Task<HttpResponseMessage> SendDirectRequestAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
+        }
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new ChronoStorageServiceException(
+                "Studio could not access chrono-storage-service because the request timed out. The service may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.",
+                innerException: exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new ChronoStorageServiceException(
+                "Studio could not access chrono-storage-service. The service may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.",
+                exception.StatusCode,
+                exception);
+        }
+    }
+
+    private static void ThrowChronoStorageFailure(RemoteScopeContext context, HttpStatusCode statusCode) =>
+        throw new ChronoStorageServiceException(
+            BuildChronoStorageFailureMessage(context, statusCode),
+            statusCode);
+
+    private static string BuildChronoStorageFailureMessage(RemoteScopeContext context, HttpStatusCode? statusCode)
+    {
+        const string prefix = "Studio could not access chrono-storage-service.";
+        if (statusCode == HttpStatusCode.Forbidden && context.UseNyxProxy)
+        {
+            return $"{prefix} NyxID may be configured to require approval for every proxy request, the service may not be enabled for this account, or the service may be unavailable.";
+        }
+
+        if (statusCode == HttpStatusCode.Forbidden)
+        {
+            return $"{prefix} The current credentials may not have access, or the service may be unavailable.";
+        }
+
+        if (statusCode == HttpStatusCode.Unauthorized)
+        {
+            return $"{prefix} Sign in again or verify the configured service credentials.";
+        }
+
+        return $"{prefix} The service may not be enabled for this host, the service may be unavailable, or NyxID may be configured to require approval for every proxy request.";
+    }
 
     private static Uri CreateChronoStorageUri(RemoteScopeContext context, string relativePath, string? query = null)
     {

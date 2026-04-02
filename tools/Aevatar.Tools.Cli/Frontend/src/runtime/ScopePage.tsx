@@ -6,7 +6,7 @@ import {
   isRawObserved,
   type RuntimeEvent,
 } from './sseUtils';
-import { parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
+import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
@@ -175,6 +175,115 @@ function renderLines(lines: string[], tone: RenderTone) {
   ));
 }
 
+function getVisibleMessageContent(msg: ChatMessage): string {
+  return msg.role === 'assistant'
+    ? sanitizeAssistantMessageContent(msg.content)
+    : msg.content;
+}
+
+function formatQuotedMarkdown(text: string): string {
+  return text
+    .split('\n')
+    .map(line => `> ${line}`)
+    .join('\n');
+}
+
+function buildMessageCopyText(msg: ChatMessage): string {
+  const visibleContent = getVisibleMessageContent(msg).trim();
+  if (visibleContent) {
+    return visibleContent;
+  }
+
+  return buildMessagePlainText(msg);
+}
+
+function buildMessageMarkdown(msg: ChatMessage): string {
+  const sections: string[] = [];
+  const thinking = msg.thinking?.trim();
+  const visibleContent = getVisibleMessageContent(msg).trim();
+  const error = msg.error?.trim();
+
+  if (thinking) {
+    sections.push(`> Thinking\n>\n${formatQuotedMarkdown(thinking)}`);
+  }
+
+  if (visibleContent) {
+    sections.push(visibleContent);
+  }
+
+  if (error) {
+    sections.push(`> Error: ${error}`);
+  }
+
+  return sections.join('\n\n').trim();
+}
+
+function buildMessagePlainText(msg: ChatMessage): string {
+  const sections: string[] = [];
+  const thinking = msg.thinking?.trim();
+  const visibleContent = getVisibleMessageContent(msg).trim();
+  const error = msg.error?.trim();
+
+  if (thinking) {
+    sections.push(`Thinking\n${thinking}`);
+  }
+
+  if (visibleContent) {
+    sections.push(markdownToPlainText(visibleContent));
+  }
+
+  if (error) {
+    sections.push(`Error: ${error}`);
+  }
+
+  return sections.join('\n\n').trim();
+}
+
+function findPreviousUserMessageIndex(messages: ChatMessage[], startIndex: number): number {
+  for (let index = startIndex - 1; index >= 0; index--) {
+    if (messages[index]?.role === 'user') {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(trimmed);
+      return true;
+    } catch {
+      // Fall back to a temporary textarea when async clipboard is unavailable.
+    }
+  }
+
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = trimmed;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  textarea.style.pointerEvents = 'none';
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 // ── Step Indicator ─────────────────────────────────────────────────────────────
 
 function StepIndicator({ step }: { step: StepInfo }) {
@@ -263,18 +372,95 @@ function ThinkingBlock({ text, isStreaming }: { text: string; isStreaming: boole
 
 // ── Chat Message Bubble ─────────────────────────────────────────────────────────
 
-function ChatBubble({ msg }: { msg: ChatMessage }) {
+type BubbleActionKind = 'copy' | 'markdown' | 'plain' | 'regenerate';
+
+function BubbleActionButton(props: {
+  label: string;
+  title: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      disabled={props.disabled}
+      title={props.title}
+      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+        props.active
+          ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : 'border-[#E6E3DE] bg-white text-gray-500 hover:bg-[#F7F5F2] hover:text-gray-700'
+      } disabled:cursor-not-allowed disabled:opacity-40`}
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function ChatBubble({
+  msg,
+  canRegenerate,
+  onCopy,
+  onCopyMarkdown,
+  onCopyPlainText,
+  onRegenerate,
+}: {
+  msg: ChatMessage;
+  canRegenerate: boolean;
+  onCopy: (msg: ChatMessage) => Promise<boolean>;
+  onCopyMarkdown: (msg: ChatMessage) => Promise<boolean>;
+  onCopyPlainText: (msg: ChatMessage) => Promise<boolean>;
+  onRegenerate: () => void;
+}) {
   const isUser = msg.role === 'user';
   const [stepsOpen, setStepsOpen] = useState(false);
+  const [activeAction, setActiveAction] = useState<BubbleActionKind | null>(null);
+  const actionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasSteps = msg.steps && msg.steps.length > 0;
   const hasTools = msg.toolCalls && msg.toolCalls.length > 0;
-  const displayContent = isUser ? msg.content : sanitizeAssistantMessageContent(msg.content);
+  const displayContent = getVisibleMessageContent(msg);
+
+  useEffect(() => {
+    return () => {
+      if (actionTimerRef.current) {
+        clearTimeout(actionTimerRef.current);
+      }
+    };
+  }, []);
+
+  function showActionFeedback(kind: BubbleActionKind) {
+    if (actionTimerRef.current) {
+      clearTimeout(actionTimerRef.current);
+    }
+
+    setActiveAction(kind);
+    actionTimerRef.current = setTimeout(() => {
+      setActiveAction(null);
+      actionTimerRef.current = null;
+    }, 1600);
+  }
+
+  async function handleCopyClick(action: BubbleActionKind, handler: (msg: ChatMessage) => Promise<boolean>) {
+    const copied = await handler(msg);
+    if (copied) {
+      showActionFeedback(action);
+    }
+  }
 
   if (isUser) {
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end">
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[#2563eb] text-white px-4 py-3 text-[14px] leading-relaxed">
           <div className="break-words">{renderContent(msg.content, 'user')}</div>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <BubbleActionButton
+            label={activeAction === 'copy' ? '已复制' : '复制'}
+            title="复制当前消息"
+            active={activeAction === 'copy'}
+            onClick={() => { void handleCopyClick('copy', onCopy); }}
+          />
         </div>
       </div>
     );
@@ -349,6 +535,38 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
             <span className="text-[13px] text-red-600">{msg.error}</span>
           </div>
         )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <BubbleActionButton
+            label={activeAction === 'copy' ? '已复制' : '复制'}
+            title="复制当前回复"
+            active={activeAction === 'copy'}
+            onClick={() => { void handleCopyClick('copy', onCopy); }}
+          />
+          <BubbleActionButton
+            label={activeAction === 'markdown' ? 'Markdown 已复制' : '复制 Markdown'}
+            title="按 Markdown 复制当前回复"
+            active={activeAction === 'markdown'}
+            onClick={() => { void handleCopyClick('markdown', onCopyMarkdown); }}
+          />
+          <BubbleActionButton
+            label={activeAction === 'plain' ? '纯文本已复制' : '复制纯文本'}
+            title="按纯文本复制当前回复"
+            active={activeAction === 'plain'}
+            onClick={() => { void handleCopyClick('plain', onCopyPlainText); }}
+          />
+          {canRegenerate && (
+            <BubbleActionButton
+              label={activeAction === 'regenerate' ? '重新生成中' : '重新生成'}
+              title="从这一轮消息重新生成回复"
+              active={activeAction === 'regenerate'}
+              onClick={() => {
+                onRegenerate();
+                showActionFeedback('regenerate');
+              }}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -736,19 +954,36 @@ export default function ScopePage() {
     }, 500);
   }, [scopeId, activeConvId, activeService, conversations]);
 
-  // ── Send message ──
-  const handleSend = useCallback(async (text: string) => {
+  // ── Send / regenerate message ──
+  const streamChatTurn = useCallback(async (
+    text: string,
+    options?: {
+      baseMessages?: ChatMessage[];
+      includeUserMessage?: boolean;
+    },
+  ) => {
     if (!scopeId || isStreaming) return;
 
-    const userMsg: ChatMessage = {
-      id: genId(), role: 'user', content: text, timestamp: Date.now(), status: 'complete',
-    };
+    const includeUserMessage = options?.includeUserMessage ?? true;
+    const baseMessages = options?.baseMessages ?? messages;
+    const userMsg = includeUserMessage
+      ? {
+          id: genId(),
+          role: 'user' as const,
+          content: text,
+          timestamp: Date.now(),
+          status: 'complete' as const,
+        }
+      : null;
     const assistantMsg: ChatMessage = {
       id: genId(), role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming',
       steps: [], toolCalls: [], thinking: '',
     };
+    const nextMessages = userMsg
+      ? [...baseMessages, userMsg, assistantMsg]
+      : [...baseMessages, assistantMsg];
 
-    setMessages(prev => [...prev, userMsg, assistantMsg]);
+    setMessages(nextMessages);
     setIsStreaming(true);
     setDebugEvents([]);
 
@@ -779,7 +1014,6 @@ export default function ScopePage() {
       events.push(evt);
       setDebugEvents([...events]);
 
-      // Reset reasoning tracking for every event; the reasoning branch re-sets it to true.
       const wasReasoning = lastWasReasoning;
       lastWasReasoning = false;
 
@@ -834,19 +1068,15 @@ export default function ScopePage() {
         }
 
         case 'CUSTOM': {
-          // Extract text from step completed output
           const stepOutput = extractStepCompletedOutput(evt);
           if (stepOutput && !contentText) {
-            // Use step output as the response text if no streaming text was received
             contentText = stepOutput;
             updateAssistant({ content: contentText });
             break;
           }
 
-          // Extract reasoning/thinking delta
           const reasoningDelta = extractReasoningDelta(evt);
           if (reasoningDelta) {
-            // Insert paragraph break when reasoning resumes after non-reasoning events
             if (thinking && !wasReasoning) {
               thinking += '\n\n';
             }
@@ -856,7 +1086,6 @@ export default function ScopePage() {
             break;
           }
 
-          // Skip raw observed events (catch-all, not user-facing)
           if (isRawObserved(evt)) break;
 
           break;
@@ -866,9 +1095,6 @@ export default function ScopePage() {
 
     try {
       if (activeService.kind === 'nyxid-chat') {
-        // Bind NyxIdChatGAgent as a named service on first use (idempotent PUT).
-        // serviceId='nyxid-chat' ensures it doesn't overwrite other bindings.
-        // preferredActorId ensures the same actor is reused for conversation history.
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
             scopeId,
@@ -883,7 +1109,7 @@ export default function ScopePage() {
       } else {
         await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal);
       }
-      // Only mark complete if no error was already set by RUN_ERROR during streaming.
+
       setMessages(prev => {
         const updated = [...prev];
         const last = updated[updated.length - 1];
@@ -899,13 +1125,45 @@ export default function ScopePage() {
         updateAssistant({
           status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
         });
-        setMessages(prev => { saveCurrentConversation(prev); return prev; });
+        setMessages(prev => {
+          saveCurrentConversation(prev);
+          return prev;
+        });
       }
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, activeService, saveCurrentConversation]);
+  }, [scopeId, isStreaming, messages, activeService, saveCurrentConversation]);
+
+  const handleSend = useCallback((text: string) => {
+    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true });
+  }, [messages, streamChatTurn]);
+
+  const handleRegenerate = useCallback((assistantIndex: number) => {
+    if (isStreaming) return;
+
+    const userIndex = findPreviousUserMessageIndex(messages, assistantIndex);
+    if (userIndex < 0) return;
+
+    const prompt = messages[userIndex]?.content.trim();
+    if (!prompt) return;
+
+    const baseMessages = messages.slice(0, userIndex + 1);
+    void streamChatTurn(prompt, { baseMessages, includeUserMessage: false });
+  }, [isStreaming, messages, streamChatTurn]);
+
+  const handleCopyMessage = useCallback((msg: ChatMessage) => {
+    return copyTextToClipboard(buildMessageCopyText(msg));
+  }, []);
+
+  const handleCopyMessageMarkdown = useCallback((msg: ChatMessage) => {
+    return copyTextToClipboard(buildMessageMarkdown(msg));
+  }, []);
+
+  const handleCopyMessagePlainText = useCallback((msg: ChatMessage) => {
+    return copyTextToClipboard(buildMessagePlainText(msg));
+  }, []);
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();
@@ -1445,8 +1703,16 @@ export default function ScopePage() {
               </div>
             </div>
           )}
-          {messages.map(msg => (
-            <ChatBubble key={msg.id} msg={msg} />
+          {messages.map((msg, index) => (
+            <ChatBubble
+              key={msg.id}
+              msg={msg}
+              canRegenerate={msg.role === 'assistant' && !isStreaming && findPreviousUserMessageIndex(messages, index) >= 0}
+              onCopy={handleCopyMessage}
+              onCopyMarkdown={handleCopyMessageMarkdown}
+              onCopyPlainText={handleCopyMessagePlainText}
+              onRegenerate={() => handleRegenerate(index)}
+            />
           ))}
           <div ref={scrollRef} />
         </div>

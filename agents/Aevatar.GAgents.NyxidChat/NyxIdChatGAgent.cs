@@ -39,17 +39,22 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     }
 
     /// <summary>
-    /// Compose local-first + NyxID-remote-fallback approval chain.
-    /// Local handler publishes ToolApprovalRequestEvent to the chat UI (15s timeout).
-    /// On timeout, PriorityApprovalHandler falls back to NyxID remote approval
-    /// (Telegram / mobile app, 45s poll).
+    /// Compose the approval handler chain.
+    /// Currently goes directly to NyxID remote approval (Telegram / mobile app, 45s poll)
+    /// because local chat-based approval is blocked by the actor single-thread model:
+    /// the grain cannot process ToolApprovalDecisionEvent while HandleChatRequest
+    /// holds the write scope, causing an inevitable 15s deadlock-timeout.
+    ///
+    /// TODO: Once the actor model supports reentrant event handling for approval decisions
+    /// (e.g. via a separate approval inbox or cooperative scheduling), compose as:
+    ///   new PriorityApprovalHandler(new LocalApprovalHandler(), remoteHandler)
+    /// to enable local-first + NyxID-remote-fallback.
     /// </summary>
-    private static IToolApprovalHandler ComposeApprovalHandler(IToolApprovalHandler? remoteHandler)
+    private static IToolApprovalHandler? ComposeApprovalHandler(IToolApprovalHandler? remoteHandler)
     {
-        var local = new LocalApprovalHandler();
-        return remoteHandler != null
-            ? new PriorityApprovalHandler(local, remoteHandler)
-            : local;
+        // Remote handler (NyxIdToolApprovalHandler) is injected from DI.
+        // Local handler is skipped until the reentrancy issue is resolved.
+        return remoteHandler;
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)

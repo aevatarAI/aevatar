@@ -30,13 +30,15 @@ public sealed class PriorityApprovalHandler : IToolApprovalHandler
         // 1. 先尝试本地审批
         var localResult = await LocalHandler.RequestApprovalAsync(request, ct);
 
-        // 如果本地返回明确决策（Approved 或 Denied），直接使用
-        if (localResult.Decision != ToolApprovalDecision.Timeout)
+        // 本地明确批准 → 直接使用
+        if (localResult.Decision == ToolApprovalDecision.Approved)
             return localResult;
 
-        // 2. 本地超时 → fallback 到远程
+        // 2. 本地未批准（超时、拒绝、或技术性失败如 "No local approval channel"）→ fallback 到远程
+        // 注意：在 actor 单线程模型下，本地审批因可重入性限制会始终超时（grain 无法在
+        // HandleChatRequest 运行期间处理 ToolApprovalDecisionEvent），因此 fallback 到远程是必须的。
         if (_remoteHandler == null)
-            return localResult; // 没有远程 handler，返回超时
+            return localResult;
 
         return await _remoteHandler.RequestApprovalAsync(request, ct);
     }

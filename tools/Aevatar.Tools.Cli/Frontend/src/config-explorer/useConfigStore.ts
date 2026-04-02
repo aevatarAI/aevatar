@@ -7,6 +7,7 @@ export type ConfigStore = ReturnType<typeof useConfigStore>;
 export function useConfigStore(_scopeId: string) {
   const [loading, setLoading] = useState(true);
   const [manifest, setManifest] = useState<ManifestEntry[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [selectedContent, setSelectedContent] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
@@ -16,8 +17,14 @@ export function useConfigStore(_scopeId: string) {
     try {
       const result = await api.explorer.getManifest();
       setManifest(result.files ?? []);
-    } catch {
+      setErrorMessage(null);
+    } catch (error: any) {
       setManifest([]);
+      setErrorMessage(
+        api.isChronoStorageServiceError(error)
+          ? api.getChronoStorageServiceErrorMessage(error)
+          : (error?.message || 'Failed to load explorer files.')
+      );
     } finally {
       setLoading(false);
     }
@@ -52,6 +59,7 @@ export function useConfigStore(_scopeId: string) {
   return {
     loading,
     manifest,
+    errorMessage,
     selectedKey,
     setSelectedKey,
     selectedContent,

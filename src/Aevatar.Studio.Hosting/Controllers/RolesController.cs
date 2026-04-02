@@ -1,5 +1,6 @@
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
+using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,6 +24,10 @@ public sealed class RolesController : ControllerBase
         {
             return Ok(await _roleCatalogService.GetCatalogAsync(cancellationToken));
         }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToActionResult(exception);
+        }
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
@@ -39,6 +44,10 @@ public sealed class RolesController : ControllerBase
         try
         {
             return Ok(await _roleCatalogService.GetDraftAsync(cancellationToken));
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {
@@ -58,6 +67,10 @@ public sealed class RolesController : ControllerBase
         try
         {
             return Ok(await _roleCatalogService.SaveCatalogAsync(request, cancellationToken));
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {
@@ -84,6 +97,10 @@ public sealed class RolesController : ControllerBase
             await using var stream = file.OpenReadStream();
             return Ok(await _roleCatalogService.ImportCatalogAsync(file.FileName, stream, cancellationToken));
         }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToActionResult(exception);
+        }
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
@@ -98,6 +115,10 @@ public sealed class RolesController : ControllerBase
         try
         {
             return Ok(await _roleCatalogService.SaveDraftAsync(request, cancellationToken));
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {
@@ -116,6 +137,10 @@ public sealed class RolesController : ControllerBase
         {
             await _roleCatalogService.DeleteDraftAsync(cancellationToken);
             return NoContent();
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {
