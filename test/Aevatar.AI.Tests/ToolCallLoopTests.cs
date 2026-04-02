@@ -470,6 +470,53 @@ public class ToolCallLoopTests
         ToolCallLoop.IsLengthTruncated("").Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("base64")]
+    [InlineData("data")]
+    public async Task ExecuteAsync_WhenToolReturnsLegacyRootImageAliases_ShouldPreserveImageContentParts(string payloadKey)
+    {
+        var provider = new QueueLLMProvider(
+        [
+            new LLMResponse
+            {
+                ToolCalls =
+                [
+                    new ToolCall
+                    {
+                        Id = "tc-image",
+                        Name = "image",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            },
+            new LLMResponse { Content = "done" },
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("image", _ =>
+            $$"""{"{{payloadKey}}":"Zm9v","media_type":"image/png","text":"diagram"}"""));
+        var loop = new ToolCallLoop(tools);
+        var messages = new List<ChatMessage> { ChatMessage.User("hello") };
+        var request = new LLMRequest { Messages = [], Tools = null };
+
+        var result = await loop.ExecuteAsync(provider, messages, request, maxRounds: 2, CancellationToken.None);
+
+        result.Should().Be("done");
+        var toolMessage = messages.Single(m => m.Role == "tool" && m.ToolCallId == "tc-image");
+        toolMessage.Content.Should().Be("diagram");
+        toolMessage.ContentParts.Should().HaveCount(2);
+        toolMessage.ContentParts![0].Kind.Should().Be(ContentPartKind.Text);
+        toolMessage.ContentParts[0].Text.Should().Be("diagram");
+        toolMessage.ContentParts[1].Kind.Should().Be(ContentPartKind.Image);
+        toolMessage.ContentParts[1].DataBase64.Should().Be("Zm9v");
+        toolMessage.ContentParts[1].MediaType.Should().Be("image/png");
+
+        provider.Requests.Should().HaveCount(2);
+        var forwardedToolMessage = provider.Requests[1].Messages.Single(m => m.Role == "tool" && m.ToolCallId == "tc-image");
+        forwardedToolMessage.ContentParts.Should().HaveCount(2);
+        forwardedToolMessage.ContentParts![1].Kind.Should().Be(ContentPartKind.Image);
+        forwardedToolMessage.ContentParts[1].DataBase64.Should().Be("Zm9v");
+    }
+
     private sealed class QueueLLMProvider : ILLMProvider
     {
         private readonly Queue<LLMResponse> _responses;

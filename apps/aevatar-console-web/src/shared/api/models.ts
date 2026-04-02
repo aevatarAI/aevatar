@@ -451,8 +451,3 @@ export interface WorkflowActorGraphSubgraph {
   nodes: WorkflowActorGraphNode[];
   edges: WorkflowActorGraphEdge[];
 }
-
-export interface WorkflowActorGraphEnrichedSnapshot {
-  snapshot: WorkflowActorSnapshot;
-  subgraph: WorkflowActorGraphSubgraph;
-}

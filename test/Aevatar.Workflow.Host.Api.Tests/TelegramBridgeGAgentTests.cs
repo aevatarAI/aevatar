@@ -37,7 +37,7 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "hello telegram",
             SessionId = "session-1",
         };
-        request.Metadata["chat_id"] = "10001";
+        request.Headers["chat_id"] = "10001";
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
         connector.Received.Should().ContainSingle();
@@ -72,7 +72,7 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "hello telegram",
             SessionId = "session-2",
         };
-        request.Metadata["chat_id"] = "10001";
+        request.Headers["chat_id"] = "10001";
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
         var textEnd = publisher.Published.Select(x => x.evt).OfType<TextMessageEndEvent>().Single();
@@ -104,9 +104,9 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "hello",
             SessionId = "session-timeout-buffer",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["timeout_ms"] = "15000";
-        request.Metadata["aevatar.llm_timeout_ms"] = "15000";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["timeout_ms"] = "15000";
+        request.Headers["aevatar.llm_timeout_ms"] = "15000";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -140,10 +140,10 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "hello",
             SessionId = "session-runtime-login",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["telegram.verification_code"] = "123 456";
-        request.Metadata["telegram.2fa_password"] = "secret-2fa";
-        request.Metadata["telegram.phone_number"] = "+8613800000000";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["telegram.verification_code"] = "123 456";
+        request.Headers["telegram.2fa_password"] = "secret-2fa";
+        request.Headers["telegram.phone_number"] = "+8613800000000";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -185,11 +185,11 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "wait",
             SessionId = "session-wait",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["operation"] = "/waitReply";
-        request.Metadata["expected_from_username"] = "openclaw_bot";
-        request.Metadata["wait_timeout_ms"] = "5000";
-        request.Metadata["poll_timeout_sec"] = "1";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["operation"] = "/waitReply";
+        request.Headers["expected_from_username"] = "openclaw_bot";
+        request.Headers["wait_timeout_ms"] = "5000";
+        request.Headers["poll_timeout_sec"] = "1";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -247,12 +247,12 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "wait-edited",
             SessionId = "session-wait-edited",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["operation"] = "/waitReply";
-        request.Metadata["expected_from_username"] = "openclaw_bot";
-        request.Metadata["wait_timeout_ms"] = "5000";
-        request.Metadata["poll_timeout_sec"] = "1";
-        request.Metadata["start_from_latest"] = "true";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["operation"] = "/waitReply";
+        request.Headers["expected_from_username"] = "openclaw_bot";
+        request.Headers["wait_timeout_ms"] = "5000";
+        request.Headers["poll_timeout_sec"] = "1";
+        request.Headers["start_from_latest"] = "true";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -323,14 +323,14 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "wait-collect-all",
             SessionId = "session-wait-collect-all",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["operation"] = "/waitReply";
-        request.Metadata["expected_from_username"] = "openclaw_bot";
-        request.Metadata["wait_timeout_ms"] = "5000";
-        request.Metadata["poll_timeout_sec"] = "1";
-        request.Metadata["start_from_latest"] = "true";
-        request.Metadata["collect_all_replies"] = "true";
-        request.Metadata["settle_polls_after_match"] = "2";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["operation"] = "/waitReply";
+        request.Headers["expected_from_username"] = "openclaw_bot";
+        request.Headers["wait_timeout_ms"] = "5000";
+        request.Headers["poll_timeout_sec"] = "1";
+        request.Headers["start_from_latest"] = "true";
+        request.Headers["collect_all_replies"] = "true";
+        request.Headers["settle_polls_after_match"] = "2";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -365,13 +365,13 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "wait-bootstrap",
             SessionId = "session-wait-bootstrap",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["operation"] = "/waitReply";
-        request.Metadata["expected_from_username"] = "openclaw_bot";
-        request.Metadata["correlation_contains"] = "[AEVATAR_STREAM_REPLY]";
-        request.Metadata["wait_timeout_ms"] = "5000";
-        request.Metadata["poll_timeout_sec"] = "1";
-        request.Metadata["start_from_latest"] = "true";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["operation"] = "/waitReply";
+        request.Headers["expected_from_username"] = "openclaw_bot";
+        request.Headers["correlation_contains"] = "[AEVATAR_STREAM_REPLY]";
+        request.Headers["wait_timeout_ms"] = "5000";
+        request.Headers["poll_timeout_sec"] = "1";
+        request.Headers["start_from_latest"] = "true";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -409,13 +409,13 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "wait-username-missing",
             SessionId = "session-wait-username-missing",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["operation"] = "/waitReply";
-        request.Metadata["expected_from_username"] = "openclaw_bot";
-        request.Metadata["correlation_contains"] = "[AEVATAR_STREAM_REPLY]";
-        request.Metadata["wait_timeout_ms"] = "5000";
-        request.Metadata["poll_timeout_sec"] = "1";
-        request.Metadata["start_from_latest"] = "true";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["operation"] = "/waitReply";
+        request.Headers["expected_from_username"] = "openclaw_bot";
+        request.Headers["correlation_contains"] = "[AEVATAR_STREAM_REPLY]";
+        request.Headers["wait_timeout_ms"] = "5000";
+        request.Headers["poll_timeout_sec"] = "1";
+        request.Headers["start_from_latest"] = "true";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 
@@ -444,9 +444,9 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "hello telegram",
             SessionId = "session-watchdog-timeout",
         };
-        request.Metadata["chat_id"] = "10001";
-        request.Metadata["telegram.timeout_ms"] = "100";
-        request.Metadata["aevatar.llm_timeout_ms"] = "30000";
+        request.Headers["chat_id"] = "10001";
+        request.Headers["telegram.timeout_ms"] = "100";
+        request.Headers["aevatar.llm_timeout_ms"] = "30000";
 
         var stopwatch = Stopwatch.StartNew();
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
@@ -485,7 +485,7 @@ public sealed class TelegramBridgeGAgentTests
             Prompt = "hello telegram user",
             SessionId = "session-user-1",
         };
-        request.Metadata["chat_id"] = "10001";
+        request.Headers["chat_id"] = "10001";
 
         await agent.HandleEventAsync(Envelope(request), CancellationToken.None);
 

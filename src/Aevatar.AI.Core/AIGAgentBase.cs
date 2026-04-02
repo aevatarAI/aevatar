@@ -217,14 +217,26 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     {
         EnsureRuntime();
         var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatAsync(userMessage, maxRounds, requestId, metadata, ct);
+        return _chat!.ChatAsync([ContentPart.TextPart(userMessage)], maxRounds, requestId, metadata, ct);
+    }
+
+    /// <summary>单轮 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
+    protected Task<string?> ChatAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatAsync(userContent, maxRounds, requestId, metadata, ct);
     }
 
     /// <summary>流式 Chat。</summary>
     protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(string userMessage, CancellationToken ct = default)
     {
         EnsureRuntime();
-        return _chat!.ChatStreamAsync(userMessage, EffectiveConfig.MaxToolRounds, ct);
+        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], EffectiveConfig.MaxToolRounds, ct);
     }
 
     /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
@@ -236,7 +248,19 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
     {
         EnsureRuntime();
         var maxRounds = ResolveMaxToolRounds(metadata);
-        return _chat!.ChatStreamAsync(userMessage, maxRounds, requestId, metadata, ct);
+        return _chat!.ChatStreamAsync([ContentPart.TextPart(userMessage)], maxRounds, requestId, metadata, ct);
+    }
+
+    /// <summary>流式 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
+    protected IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default)
+    {
+        EnsureRuntime();
+        var maxRounds = ResolveMaxToolRounds(metadata);
+        return _chat!.ChatStreamAsync(userContent, maxRounds, requestId, metadata, ct);
     }
 
     /// <summary>

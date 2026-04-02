@@ -55,6 +55,21 @@ public class ChatWebSocketCommandParserTests
     }
 
     [Fact]
+    public void TryParse_InputPartsWithoutPrompt_ShouldReturnEnvelope()
+    {
+        var frame = TextFrame(
+            """{"type":"chat.command","requestId":"req-mm","payload":{"inputParts":[{"type":"image","uri":"https://example.com/cat.png","mediaType":"image/png"}]}}""");
+
+        var ok = ChatWebSocketCommandParser.TryParse(frame, out var envelope, out _);
+
+        ok.Should().BeTrue();
+        envelope.RequestId.Should().Be("req-mm");
+        envelope.Input.Prompt.Should().BeNull();
+        envelope.Input.InputParts.Should().ContainSingle();
+        envelope.Input.InputParts![0].Type.Should().Be("image");
+    }
+
+    [Fact]
     public void TryParse_ValidCommand_ShouldReturnEnvelope()
     {
         var frame = TextFrame("""{"type":"chat.command","requestId":"req-9","payload":{"prompt":"hello","workflow":"direct","workflowYamls":["name: direct"],"agentId":"a-1"}}""");

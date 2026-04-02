@@ -147,7 +147,7 @@
    - `Prompt -> prompt`
    - `ActorId -> agentId`
    - `SessionId -> sessionId`
-   - `Headers -> metadata`
+   - `Headers -> headers`
 3. `WorkflowRunActorResolver` 会基于 definition actor 的 binding 创建新的 `WorkflowRunGAgent`
 4. SSE 第一帧返回 `aevatar.run.context`，其中包含新的 `runActorId`
 
@@ -159,7 +159,7 @@ run 创建后，继续复用现有查询端点：
 
 - `GET /api/actors/{runActorId}`
 - `GET /api/actors/{runActorId}/timeline`
-- `GET /api/actors/{runActorId}/graph-enriched`
+- `GET /api/actors/{runActorId}/graph-subgraph`
 
 如果后续需要做用户级 resume/signal，同样建议在用户 API 外层增加 ownership 校验后，再转发到已有 `/api/workflows/resume` 和 `/api/workflows/signal`。
 

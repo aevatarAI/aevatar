@@ -851,7 +851,7 @@ public class WorkflowGAgentCoverageTests
         {
             Prompt = "hello",
             SessionId = "session-1",
-            Metadata =
+            Headers =
             {
                 ["workflow.command_id"] = "cmd-123",
             },

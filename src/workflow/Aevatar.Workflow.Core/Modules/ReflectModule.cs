@@ -206,7 +206,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             Prompt = prompt,
             SessionId = sessionId,
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Metadata);
+        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);
@@ -240,7 +240,7 @@ public sealed class ReflectModule : IEventModule<IWorkflowExecutionContext>
             Prompt = prompt,
             SessionId = sessionId,
         };
-        CopyParameters(state.ChatMetadataParameters, chatRequest.Metadata);
+        CopyParameters(state.ChatMetadataParameters, chatRequest.Headers);
 
         if (!string.IsNullOrWhiteSpace(state.TargetActorId))
             await ctx.SendToAsync(state.TargetActorId, chatRequest, ct);

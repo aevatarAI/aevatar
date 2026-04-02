@@ -25,11 +25,21 @@ namespace Aevatar.AI.LLMProviders.Tornado;
 /// </summary>
 public sealed class TornadoLLMProvider : ILLMProvider
 {
+    private static readonly LLMProviderCapabilities ProviderCapabilities = new()
+    {
+        SupportedInputModalities = new HashSet<ContentPartKind> { ContentPartKind.Text },
+        SupportedOutputModalities = new HashSet<ContentPartKind> { ContentPartKind.Text },
+        SupportsStreaming = true,
+        SupportsToolCalls = true,
+        SupportsReasoningDeltas = false,
+    };
+
     private readonly TornadoApi _api;
     private readonly string _modelName;
     private readonly ILogger _logger;
 
     public string Name { get; }
+    public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     public TornadoLLMProvider(string name, TornadoApi api, string modelName, ILogger? logger = null)
     {
@@ -107,6 +117,13 @@ public sealed class TornadoLLMProvider : ILLMProvider
 
     private LlmTornado.Chat.ChatRequest MapRequest(LLMRequest request)
     {
+        var requestedModalities = request.GetRequestedInputModalities();
+        if (requestedModalities.Any(modality => modality is not (ContentPartKind.Unspecified or ContentPartKind.Text)))
+        {
+            throw new NotSupportedException(
+                $"Tornado provider '{Name}' only supports text input. Requested: {string.Join(", ", requestedModalities)}");
+        }
+
         var messages = request.Messages.Select(m => new TornadoChatMessage(
             m.Role switch
             {
