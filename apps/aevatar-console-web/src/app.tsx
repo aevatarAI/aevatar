@@ -8,6 +8,7 @@ import {
   DashboardOutlined,
   DownOutlined,
   LogoutOutlined,
+  MessageOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
   UserOutlined,
@@ -106,6 +107,13 @@ type NavigationMenuItem = {
   [key: string]: unknown;
 };
 
+type NavigationGroup = {
+  flattenSingleItem?: boolean;
+  icon: React.ReactNode;
+  key: string;
+  label: string;
+};
+
 type AuthSessionBootstrapProps = {
   pathname: string;
   children: React.ReactNode;
@@ -115,11 +123,17 @@ const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
 const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
-const NAVIGATION_GROUP_ORDER = [
+const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
   {
     icon: <AppstoreOutlined />,
     key: "build",
     label: "Build / Studio",
+  },
+  {
+    flattenSingleItem: true,
+    icon: <MessageOutlined />,
+    key: "chat",
+    label: "Chat",
   },
   {
     icon: <DashboardOutlined />,
@@ -470,6 +484,16 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
       return [];
     }
 
+    if (group.flattenSingleItem && children.length === 1) {
+      return [
+        {
+          ...children[0],
+          icon: children[0].icon ?? group.icon,
+          menuGroupKey: group.key,
+        },
+      ];
+    }
+
     return [
       {
         children,
@@ -786,7 +810,11 @@ export const layout = ({
     ...initialState?.settings,
     contentStyle: {
       background: "transparent",
-      minHeight: "calc(100vh - 56px)",
+      display: "flex",
+      flexDirection: "column",
+      height: "calc(100vh - 56px)",
+      minHeight: 0,
+      overflow: "hidden",
       padding: 0,
     },
     logo: <BrandLogo />,

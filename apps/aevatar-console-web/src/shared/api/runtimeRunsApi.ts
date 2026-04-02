@@ -62,6 +62,17 @@ function buildInvokeEndpointPath(
     : `${buildScopePath(scopeId)}/invoke/${encodedEndpointId}`;
 }
 
+function buildInvokeEndpointStreamPath(
+  scopeId: string,
+  endpointId: string,
+  serviceId?: string
+): string {
+  const encodedEndpointId = encodeSegment(endpointId);
+  return serviceId?.trim()
+    ? `${buildScopedServicePath(scopeId, serviceId)}/invoke/${encodedEndpointId}:stream`
+    : `${buildScopePath(scopeId)}/invoke/${encodedEndpointId}:stream`;
+}
+
 function buildInvokeChatStreamPath(
   scopeId: string,
   serviceId?: string
@@ -158,6 +169,14 @@ export type EndpointInvokeRequest = {
   correlationId?: string;
   payloadTypeUrl?: string;
   payloadBase64?: string;
+};
+
+export type StreamEndpointInvokeRequest = {
+  endpointId: string;
+  prompt?: string;
+  sessionId?: string;
+  revisionId?: string;
+  headers?: Record<string, string>;
 };
 
 export type WorkflowRunSummary = {
@@ -308,6 +327,45 @@ export const runtimeRunsApi = {
         ),
       }
     );
+  },
+
+  async streamEndpoint(
+    scopeId: string,
+    request: StreamEndpointInvokeRequest,
+    signal: AbortSignal,
+    options?: {
+      serviceId?: string;
+    }
+  ): Promise<Response> {
+    const response = await authFetch(
+      buildInvokeEndpointStreamPath(
+        scopeId,
+        request.endpointId,
+        options?.serviceId
+      ),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(
+          compactObject({
+            prompt: request.prompt?.trim() ?? "",
+            sessionId: trimOptional(request.sessionId),
+            revisionId: trimOptional(request.revisionId),
+            headers: request.headers,
+          })
+        ),
+        signal,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(await readResponseError(response));
+    }
+
+    return response;
   },
 
   resume(

@@ -170,15 +170,18 @@ const OverviewPage: React.FC = () => {
 
   return (
     <AevatarPageShell
-      content="A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
+      layoutMode="document"
       title="Overview"
+      titleHelp="A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
     >
       <AevatarWorkbenchLayout
+        layoutMode="document"
         rail={
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
-              description="The console now teaches one consistent path: project, publish, observe, govern."
+              layoutMode="document"
               title="Command Path"
+              titleHelp="The console now teaches one consistent path: project, publish, observe, govern."
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {quickStartSteps.map((step) => (
@@ -211,7 +214,7 @@ const OverviewPage: React.FC = () => {
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Operator Shortcuts">
+            <AevatarPanel layoutMode="document" title="Operator Shortcuts">
               <Space direction="vertical" size={8} style={{ width: "100%" }}>
                 <Button onClick={() => history.push("/scopes/assets")}>
                   Open assets
@@ -296,8 +299,8 @@ const OverviewPage: React.FC = () => {
             </ProCard>
 
             <AevatarPanel
-              description="A ghost-board view keeps the command center visually fused to the global shell instead of feeling like a separate application."
               title="State Board"
+              titleHelp="A ghost-board view keeps the command center visually fused to the global shell instead of feeling like a separate application."
             >
               <div
                 style={{

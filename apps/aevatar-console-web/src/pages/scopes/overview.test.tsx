@@ -176,6 +176,12 @@ describe('ScopeOverviewPage', () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
     expect(await screen.findByText('Scope Status Board')).toBeTruthy();
+    expect(
+      screen.queryByText(
+        'Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage.',
+      ),
+    ).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
     expect(await screen.findByText('Current Binding')).toBeTruthy();
     expect(await screen.findByText('Revision Rollout')).toBeTruthy();
     expect(screen.getByText('Revision Rollout')).toBeTruthy();

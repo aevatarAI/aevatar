@@ -486,11 +486,15 @@ export function buildAevatarViewportStyle(
 ): CSSProperties {
   return {
     background: `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${token.colorBgContainer} 100%)`,
+    boxSizing: "border-box",
     display: "flex",
     flex: 1,
     flexDirection: "column",
     gap: AEVATAR_GLOBAL_UI_SPEC.tokens.sectionGap,
-    minHeight: `calc(100vh - ${AEVATAR_GLOBAL_UI_SPEC.tokens.headerHeight}px)`,
+    height: "100%",
+    minHeight: 0,
+    overflowX: "hidden",
+    overflowY: "auto",
     padding: `${AEVATAR_GLOBAL_UI_SPEC.tokens.sectionGap}px ${AEVATAR_GLOBAL_UI_SPEC.tokens.contentPadding}px ${AEVATAR_GLOBAL_UI_SPEC.tokens.contentPadding}px`,
   };
 }
@@ -500,6 +504,7 @@ export function buildAevatarPanelStyle(
   options?: {
     background?: string;
     minHeight?: number | string;
+    overflow?: CSSProperties['overflow'];
     padding?: number | string;
   },
 ): CSSProperties {
@@ -509,7 +514,7 @@ export function buildAevatarPanelStyle(
     borderRadius: token.borderRadiusLG,
     boxShadow: token.boxShadowSecondary,
     minHeight: options?.minHeight ?? 0,
-    overflow: "hidden",
+    overflow: options?.overflow ?? "hidden",
     padding: options?.padding ?? 0,
   };
 }

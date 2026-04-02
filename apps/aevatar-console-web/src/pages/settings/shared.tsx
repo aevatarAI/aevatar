@@ -11,7 +11,7 @@ import {
 import {
   AevatarPageShell,
   AevatarPanel,
-  AevatarWorkbenchLayout,
+  AevatarTwoPaneLayout,
 } from "@/shared/ui/aevatarPageShells";
 import {
   summaryFieldLabelStyle,
@@ -95,15 +95,18 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
   title = "Settings",
 }) => (
   <AevatarPageShell
-    content={content}
+    layoutMode="document"
     onBack={() => history.push(CONSOLE_HOME_ROUTE)}
     title={title}
+    titleHelp={content}
   >
-    <AevatarWorkbenchLayout
+    <AevatarTwoPaneLayout
+      layoutMode="document"
       rail={
         <AevatarPanel
-          description="Workspace preferences, access posture, and identity stay anchored in the same focused shell as the rest of the console."
+          layoutMode="document"
           title="Preferences"
+          titleHelp="Workspace preferences, access posture, and identity stay anchored in the same focused shell as the rest of the console."
         >
           <Menu
             items={[...settingsTabs]}
@@ -117,17 +120,9 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
             selectedKeys={["account"]}
             style={{ background: "transparent", borderInlineEnd: "none" }}
           />
-          <Space direction="vertical" size={4}>
-            <Typography.Text strong>Industrial minimalism</Typography.Text>
-            <Typography.Text type="secondary">
-              Settings pages use the same viewport, panel density, and navigation
-              rhythm as production modules so the console feels continuous.
-            </Typography.Text>
-          </Space>
         </AevatarPanel>
       }
       stage={<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>}
-      stageAside={null}
     />
   </AevatarPageShell>
 );

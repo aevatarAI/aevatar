@@ -376,6 +376,7 @@ export interface StudioScopeGAgentEndpointInput {
 
 export interface StudioScopeGAgentBindingInput {
   readonly scopeId: string;
+  readonly serviceId?: string | null;
   readonly displayName?: string | null;
   readonly actorTypeName: string;
   readonly preferredActorId?: string | null;

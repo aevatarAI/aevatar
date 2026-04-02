@@ -57,6 +57,7 @@ import {
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
+import { AevatarTitleWithHelp } from "@/shared/ui/aevatarPageShells";
 
 type DeploymentDrawerTab = "compare" | "rollback" | "weights";
 
@@ -676,8 +677,13 @@ const DeploymentsPage: React.FC = () => {
 
   return (
     <PageContainer
-      content="Deployment center focused on rollout visibility. The list stays concise, the detail column stays readable, and rollout policy, weight, and rollback controls live inside one extra-wide drawer."
-      title="Deployments"
+      className="aevatar-page-shell-document"
+      title={
+        <AevatarTitleWithHelp
+          help="Deployment center focused on rollout visibility. The list stays concise, the detail column stays readable, and rollout policy, weight, and rollback controls live inside one extra-wide drawer."
+          title="Deployments"
+        />
+      }
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {notice ? (
@@ -709,8 +715,8 @@ const DeploymentsPage: React.FC = () => {
           style={{
             display: "grid",
             gap: 16,
+            alignItems: "start",
             gridTemplateColumns: "minmax(360px, 420px) minmax(0, 1fr)",
-            minHeight: "calc(100vh - 260px)",
           }}
         >
           <ProCard

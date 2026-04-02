@@ -138,6 +138,8 @@ const shellContentStyle: React.CSSProperties = {
   ...cardStackStyle,
   flex: 1,
   minHeight: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
 };
 
 const navItemIconByKey: Record<StudioWorkspacePage, React.ReactNode> = {

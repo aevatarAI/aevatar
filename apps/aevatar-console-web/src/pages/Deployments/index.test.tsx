@@ -302,8 +302,11 @@ describe("DeploymentsPage", () => {
     );
 
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Open detail" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Policy & Weight" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Policy & Weight" }),
+    );
 
     expect(await screen.findByText("Deployment Control Drawer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply weights" })).toBeInTheDocument();
@@ -315,8 +318,11 @@ describe("DeploymentsPage", () => {
     );
 
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Open detail" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Rollout Strategy" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Rollout Strategy" }),
+    );
     fireEvent.click(
       await screen.findByRole("button", { name: "Deploy candidate revision" }),
     );
