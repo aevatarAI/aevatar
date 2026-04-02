@@ -471,8 +471,8 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         commandPort.Calls.Should().HaveCount(6);
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
-        createCommand.Spec.Endpoints.Should().ContainSingle();
-        createCommand.Spec.Endpoints[0].EndpointId.Should().Be("run");
+        createCommand.Spec.Endpoints.Should().HaveCount(2);
+        createCommand.Spec.Endpoints.Select(x => x.EndpointId).Should().Contain(["chat", "run"]);
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
@@ -484,7 +484,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldRejectGAgentBinding_WhenEndpointsAreMissing()
+    public async Task UpsertAsync_ShouldInsertDefaultChatEndpoint_WhenEndpointsAreMissing()
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
@@ -493,16 +493,17 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var actorPort = new FakeWorkflowRunActorPort();
         var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
-        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
                 [])));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("gagent endpoints are required.");
-        commandPort.Calls.Should().BeEmpty();
+        commandPort.Calls.Should().HaveCount(6);
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Endpoints.Should().ContainSingle();
+        createCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
     }
 
     [Fact]
