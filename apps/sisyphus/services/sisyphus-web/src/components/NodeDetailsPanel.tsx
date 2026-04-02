@@ -12,9 +12,9 @@ interface NodeDetailsPanelProps {
 export default function NodeDetailsPanel({ node, traverseResult, onClose }: NodeDetailsPanelProps) {
   if (!node) return null
 
-  // Merge: use traverse result's full node data if available, fallback to lightweight node
-  const fullNode = traverseResult?.node ?? node
-  const props = fullNode.properties ?? node.properties ?? {}
+  // node (selectedNode) is the primary source — it gets updated to full data by fetchNodeDetail
+  // traverseResult.node may be lightweight or null, don't let it override
+  const props = node.properties ?? {}
   const abstract = typeof props.abstract === 'string' ? props.abstract : undefined
   const body = typeof props.body === 'string' ? props.body : undefined
   const rawData = typeof props.raw_data === 'string' ? props.raw_data : undefined

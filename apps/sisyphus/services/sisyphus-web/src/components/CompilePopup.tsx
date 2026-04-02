@@ -161,6 +161,10 @@ export default function CompilePopup({ snapshot, filterName, onClose }: CompileP
       setCompileResult(data)
     } else if (event === 'error') {
       setCompileError(data.error as string)
+      // Mark the running step as error
+      setSteps((prev) => prev.map((s) =>
+        s.status === 'running' ? { ...s, status: 'error', detail: data.error as string } : s
+      ))
     } else if (event === 'aborted') {
       setCompileError('Compile aborted')
     }
@@ -211,18 +215,21 @@ export default function CompilePopup({ snapshot, filterName, onClose }: CompileP
           <div className="flex-1 overflow-auto p-5 space-y-3">
             {/* Action button */}
             <div className="flex items-center gap-3 mb-4">
-              {!compiling ? (
+              {compiling ? (
+                <button onClick={handleAbort} className="btn-neon-danger text-xs gap-1.5 py-2 px-4">
+                  <Square size={14} /> Abort
+                </button>
+              ) : compileError ? (
+                <button onClick={handleStart} disabled={!snapshot || snapshot.nodes.length === 0}
+                  className="text-xs gap-1.5 py-2 px-4 rounded-md font-medium flex items-center"
+                  style={{ background: 'rgba(252,211,77,0.15)', border: '1px solid rgba(252,211,77,0.4)', color: '#fcd34d' }}>
+                  <Play size={14} /> Retry Compile
+                </button>
+              ) : (
                 <button onClick={handleStart} disabled={!snapshot || snapshot.nodes.length === 0}
                   className="btn-neon-green text-xs gap-1.5 py-2 px-4 disabled:opacity-30">
                   <Play size={14} /> Start Compile ({snapshot?.nodes.length ?? 0} nodes, {snapshot?.edges.length ?? 0} edges)
                 </button>
-              ) : (
-                <button onClick={handleAbort} className="btn-neon-danger text-xs gap-1.5 py-2 px-4">
-                  <Square size={14} /> Abort
-                </button>
-              )}
-              {compileError && (
-                <span className="text-[11px] truncate" style={{ color: 'var(--accent-red)' }}>{compileError}</span>
               )}
             </div>
 
@@ -249,6 +256,16 @@ export default function CompilePopup({ snapshot, filterName, onClose }: CompileP
                 </div>
               ))}
             </div>
+
+            {/* Error detail */}
+            {compileError && !compiling && (
+              <div className="mt-4 p-3 rounded" style={{ background: 'rgba(255,68,68,0.08)', border: '1px solid rgba(255,68,68,0.2)' }}>
+                <div className="text-xs font-semibold mb-1" style={{ color: 'var(--neon-red)' }}>Compile Failed</div>
+                <div className="text-[11px] font-mono whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text-secondary)', maxHeight: 120, overflow: 'auto' }}>
+                  {compileError}
+                </div>
+              </div>
+            )}
 
             {/* Complete result */}
             {compileResult && (

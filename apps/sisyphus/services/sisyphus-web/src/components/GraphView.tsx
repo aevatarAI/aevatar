@@ -1,10 +1,30 @@
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
 import ForceGraph3D from 'react-force-graph-3d'
+import * as THREE from 'three'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { RefreshCw } from 'lucide-react'
 import { useGraphData } from '../hooks/use-graph-data'
 import { getNodeColor, getEdgeColor, buildLegend } from '../types/graph'
 import type { GraphSnapshot } from '../types/graph'
 import NodeDetailsPanel from './NodeDetailsPanel'
+
+// Shared geometry + glow texture (reused across all nodes)
+const _sphereGeo = new THREE.SphereGeometry(1, 16, 16)
+const _glowTex = (() => {
+  const size = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = size; canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2)
+  g.addColorStop(0, 'rgba(255,255,255,0.8)')
+  g.addColorStop(0.2, 'rgba(255,255,255,0.4)')
+  g.addColorStop(0.5, 'rgba(255,255,255,0.1)')
+  g.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = g; ctx.fillRect(0, 0, size, size)
+  return new THREE.CanvasTexture(canvas)
+})()
 
 interface GraphViewProps {
   onFilteredSnapshotChange?: (snapshot: GraphSnapshot | null) => void
@@ -87,6 +107,72 @@ export default function GraphView({ onFilteredSnapshotChange, onFilterNameChange
     return buildLegend(fullSnapshot)
   }, [fullSnapshot])
 
+  // Custom 3D node with glowing sphere + outer glow sprite
+  const nodeThreeObject = useCallback((node: any) => {
+    const color = new THREE.Color(getNodeColor(node))
+    const group = new THREE.Group()
+
+    // Glass-like sphere with emissive glow
+    const mat = new THREE.MeshPhysicalMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.8,
+      metalness: 0.1,
+      roughness: 0.15,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.1,
+      transparent: true,
+      opacity: 0.92,
+    })
+    const sphere = new THREE.Mesh(_sphereGeo, mat)
+    sphere.scale.setScalar(1.8)
+    group.add(sphere)
+
+    // Soft outer glow
+    const spriteMat = new THREE.SpriteMaterial({
+      map: _glowTex,
+      color,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+    const glow = new THREE.Sprite(spriteMat)
+    glow.scale.set(12, 12, 1)
+    group.add(glow)
+
+    return group
+  }, [])
+
+  // Setup bloom post-processing after graph mounts
+  useEffect(() => {
+    const fg = fgRef.current
+    if (!fg) return
+    const renderer = fg.renderer() as THREE.WebGLRenderer
+    const scene = fg.scene() as THREE.Scene
+    const camera = fg.camera() as THREE.Camera
+    if (!renderer || !scene || !camera) return
+
+    const composer = new EffectComposer(renderer)
+    composer.addPass(new RenderPass(scene, camera))
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(dimensions.width, dimensions.height),
+      0.8,   // strength
+      0.4,   // radius
+      0.6,   // threshold
+    )
+    composer.addPass(bloom)
+
+    // Override the render loop
+    const origAnimate = fg._animationCycle
+    fg._animationCycle = () => {
+      origAnimate?.call(fg)
+      composer.render()
+    }
+
+    return () => { fg._animationCycle = origAnimate }
+  }, [snapshot, rendering, dimensions])
+
   const handleNodeClick = useCallback((node: any) => {
     selectNode(node.id)
   }, [selectNode])
@@ -159,13 +245,15 @@ export default function GraphView({ onFilteredSnapshotChange, onFilterNameChange
           height={dimensions.height}
           graphData={graphData}
           backgroundColor="#050508"
-          nodeColor={(node: any) => getNodeColor(node)}
-          nodeVal={1}
-          nodeOpacity={0.85}
-          nodeResolution={4}
+          nodeThreeObject={nodeThreeObject}
+          nodeThreeObjectExtend={false}
           linkColor={(link: any) => getEdgeColor(link)}
-          linkOpacity={0.15}
-          linkWidth={0.2}
+          linkOpacity={0.6}
+          linkWidth={0.4}
+          linkDirectionalParticles={2}
+          linkDirectionalParticleWidth={0.6}
+          linkDirectionalParticleSpeed={0.004}
+          linkDirectionalParticleColor={(link: any) => getEdgeColor(link)}
           onNodeClick={handleNodeClick}
           onBackgroundClick={handleBackgroundClick}
           enableNodeDrag={false}

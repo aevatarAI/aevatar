@@ -45,14 +45,15 @@ export async function compilePdf(latex: string): Promise<Buffer> {
 
     logger.info({ tempDir, latexLength: latex.length, activeCompilations }, "Compiling LaTeX with tectonic");
 
+    let tectonicStderr = "";
     await new Promise<void>((resolve, reject) => {
       const proc = execFile(
         "tectonic",
         ["--untrusted", "-Z", "continue-on-errors", texPath],
-        { cwd: tempDir, timeout: COMPILE_TIMEOUT_MS },
+        { cwd: tempDir, timeout: COMPILE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
         (error, _stdout, stderr) => {
+          tectonicStderr = stderr ?? "";
           if (error) {
-            // Fatal process errors: binary not found, signal kills, spawn failures
             const code = (error as NodeJS.ErrnoException).code;
             if (code === "ENOENT") {
               reject(new Error("tectonic binary not found — is it installed?"));
@@ -62,8 +63,6 @@ export async function compilePdf(latex: string): Promise<Buffer> {
               reject(new Error(`Tectonic killed by signal ${proc.signalCode}`));
               return;
             }
-
-            // Non-fatal: tectonic exited with error code but may have produced a PDF
             logger.warn({ exitCode: proc.exitCode, stderr: stderr?.slice(-2000) }, "Tectonic exited with error");
           }
           resolve();
@@ -76,7 +75,14 @@ export async function compilePdf(latex: string): Promise<Buffer> {
       pdfBytes = await readFile(pdfPath);
     } catch {
       logger.error("Tectonic did not produce a PDF file");
-      throw new Error("Tectonic compilation failed — no PDF produced");
+      // Extract unique error lines for the user
+      const errorLines = tectonicStderr
+        .split("\n")
+        .filter((l) => l.startsWith("error:"))
+        .map((l) => l.replace(/^error:\s*/, "").trim());
+      const uniqueErrors = [...new Set(errorLines)].slice(0, 5);
+      const detail = uniqueErrors.length > 0 ? uniqueErrors.join("; ") : "unknown LaTeX error";
+      throw new Error(`Tectonic compilation failed — ${detail}`);
     }
 
     logger.info({ pdfSize: pdfBytes.length }, "PDF compiled successfully");

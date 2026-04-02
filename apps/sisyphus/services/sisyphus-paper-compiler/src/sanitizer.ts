@@ -210,6 +210,47 @@ export function stripToPlainText(text: string): string {
   return result;
 }
 
+/**
+ * Escape bare & characters that are outside table/array/align/matrix environments.
+ * Inside these environments & is a valid column separator; outside it causes
+ * "Misplaced alignment tab character &" errors.
+ */
+const TABULAR_ENVS = new Set([
+  "array", "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix", "Bmatrix", "smallmatrix",
+  "tabular", "tabular*", "longtable",
+  "align", "align*", "aligned", "flalign", "flalign*",
+  "eqnarray", "eqnarray*", "split", "gather", "gather*",
+  "cases", "CD",
+]);
+
+function escapeBareMathAmps(body: string): string {
+  // Track which tabular-like environments we're inside
+  let depth = 0;
+  const RE = /\\(begin|end)\{([^}]+)\}|&/g;
+  let result = "";
+  let lastIndex = 0;
+  let match;
+  RE.lastIndex = 0;
+  while ((match = RE.exec(body)) !== null) {
+    result += body.slice(lastIndex, match.index);
+    if (match[1] === "begin" && TABULAR_ENVS.has(match[2])) {
+      depth++;
+      result += match[0];
+    } else if (match[1] === "end" && TABULAR_ENVS.has(match[2])) {
+      depth = Math.max(0, depth - 1);
+      result += match[0];
+    } else if (match[0] === "&") {
+      // Only escape if not inside a tabular environment
+      result += depth > 0 ? "&" : "\\&";
+    } else {
+      result += match[0];
+    }
+    lastIndex = RE.lastIndex;
+  }
+  result += body.slice(lastIndex);
+  return result;
+}
+
 export function balanceBraces(body: string): string {
   const sb: string[] = [];
   let depth = 0;
@@ -264,6 +305,12 @@ export function sanitizeBody(body: string): string {
   RE_DANGEROUS_INCLUDE.lastIndex = 0;
   body = body.replace(RE_DANGEROUS_INCLUDE, "");
 
+  // Strip \csname...\endcsname (low-level TeX that often breaks in fragments)
+  body = body.replace(/\\csname\b.*?\\endcsname/gs, "");
+  // Strip orphan \csname or \endcsname
+  body = body.replace(/\\csname\b/g, "");
+  body = body.replace(/\\endcsname\b/g, "");
+
   // Strip theorem-like environments from body content
   for (const env of DANGEROUS_ENVS) {
     body = body.replaceAll(`\\begin{${env}}`, "");
@@ -299,6 +346,9 @@ export function sanitizeBody(body: string): string {
     cleaned = cleaned.replace(/\\\\_/g, "\\_").replace(/\\\\\^\{\}/g, "\\^{}");
     return prefix + cleaned + "}";
   });
+
+  // Escape bare & outside of table/array/align environments
+  body = escapeBareMathAmps(body);
 
   // Balance braces
   body = balanceBraces(body);

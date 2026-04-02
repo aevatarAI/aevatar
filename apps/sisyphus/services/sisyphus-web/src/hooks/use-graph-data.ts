@@ -127,7 +127,8 @@ export function useGraphData() {
       setTraverseResult(result)
     } catch (err) {
       console.error('[sisyphus] fetchNodeTraversal failed:', err)
-      setTraverseResult({ node: lightNode!, neighbors: [], edges: [] })
+      // Use a sentinel with empty neighbors so "Loading connections..." stops
+      setTraverseResult({ node: null as unknown as GraphNode, neighbors: [], edges: [] })
     }
   }, [fullSnapshot, getAccessToken, graphId])
 

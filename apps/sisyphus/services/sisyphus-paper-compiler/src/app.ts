@@ -43,7 +43,7 @@ const GRAPH_SERVICE_URL = process.env["GRAPH_SERVICE_URL"] ?? "http://chrono-gra
 const GRAPH_ID = process.env["GRAPH_ID"] ?? "8f917b59-ebfd-4a8b-912f-21bd262a5514";
 const FETCH_BATCH = 200;
 
-import { sanitizeBody, isBodyBroken } from "./sanitizer.js";
+import { sanitizeBody, isBodyBroken, stripToPlainText } from "./sanitizer.js";
 
 app.post("/compile-stream", async (req: Request, res: Response) => {
   const body = req.body as {
@@ -88,6 +88,9 @@ app.post("/compile-stream", async (req: Request, res: Response) => {
     if (res.writableEnded) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
+
+  // Yield event loop so SSE flushes to client before continuing
+  const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
   const db = getDb();
   const col = getCompileCollection(db);
@@ -134,9 +137,11 @@ app.post("/compile-stream", async (req: Request, res: Response) => {
       send("progress", { step: 1, label: "Fetching node details from graph", status: "running", detail: `${fetched} / ${nodeIds.length} nodes fetched` });
     }
     send("progress", { step: 1, label: "Fetching node details from graph", status: "done", detail: `${fullNodes.length} nodes fetched` });
+    await flush();
 
     // Step 2: Sanitize LaTeX content with per-batch progress
     send("progress", { step: 2, label: "Sanitizing LaTeX content", status: "running", detail: `0 / ${fullNodes.length}` });
+    await flush();
     let fixedCount = 0;
     for (let i = 0; i < fullNodes.length; i++) {
       if (abortController.signal.aborted) throw new Error("Aborted");
@@ -150,36 +155,76 @@ app.post("/compile-stream", async (req: Request, res: Response) => {
       // Send progress every 500 nodes
       if ((i + 1) % 500 === 0 || i === fullNodes.length - 1) {
         send("progress", { step: 2, label: "Sanitizing LaTeX content", status: "running", detail: `${i + 1} / ${fullNodes.length} sanitized, ${fixedCount} fixed` });
+        await flush();
       }
     }
     send("progress", { step: 2, label: "Sanitizing LaTeX content", status: "done", detail: `${fullNodes.length} sanitized, ${fixedCount} fixed` });
+    await flush();
 
     // Step 3: Topological ordering
     if (abortController.signal.aborted) throw new Error("Aborted");
     send("progress", { step: 3, label: "Computing topological ordering", status: "running" });
+    await flush();
     const sorted = topologicalSort(fullNodes, edges);
     send("progress", { step: 3, label: "Computing topological ordering", status: "done", detail: `Ordered ${sorted.length} nodes by ${edges.length} edges` });
+    await flush();
 
     // Step 4: Generate LaTeX document
     if (abortController.signal.aborted) throw new Error("Aborted");
     send("progress", { step: 4, label: "Generating LaTeX document", status: "running" });
+    await flush();
     const latex = generateLatex(sorted, edges);
     send("progress", { step: 4, label: "Generating LaTeX document", status: "done", detail: `${(latex.length / 1024).toFixed(0)} KB` });
+    await flush();
 
-    // Step 5: Compile PDF with tectonic
+    // Step 5: Compile PDF with tectonic (auto-fallback to plain text on failure)
     if (abortController.signal.aborted) throw new Error("Aborted");
     send("progress", { step: 5, label: "Compiling LaTeX to PDF (tectonic)", status: "running" });
-    const pdfBytes = await compilePdf(latex);
-    send("progress", { step: 5, label: "Compiling LaTeX to PDF (tectonic)", status: "done", detail: `${(pdfBytes.length / 1024).toFixed(0)} KB` });
+    await flush();
+    let pdfBytes: Buffer;
+    let finalLatex = latex;
+    try {
+      pdfBytes = await compilePdf(latex);
+      send("progress", { step: 5, label: "Compiling LaTeX to PDF (tectonic)", status: "done", detail: `${(pdfBytes.length / 1024).toFixed(0)} KB` });
+    } catch (firstErr) {
+      // Fallback: only strip broken bodies to plain text, keep good ones as-is
+      const errMsg = firstErr instanceof Error ? firstErr.message : "Unknown error";
+      send("progress", { step: 5, label: "Compiling LaTeX to PDF (tectonic)", status: "running", detail: `LaTeX errors detected, fixing broken nodes and retrying...` });
+      await flush();
+      logger.warn({ err: errMsg }, "First compile failed, stripping broken bodies to plain text");
+
+      let strippedCount = 0;
+      for (const node of sorted) {
+        const body = typeof node.properties.body === "string" ? node.properties.body : "";
+        const abstract = typeof node.properties.abstract === "string" ? node.properties.abstract : "";
+        let changed = false;
+        if (body && isBodyBroken(body)) {
+          node.properties = { ...node.properties, body: stripToPlainText(body) };
+          changed = true;
+        }
+        if (abstract && isBodyBroken(abstract)) {
+          node.properties = { ...node.properties, abstract: stripToPlainText(abstract) };
+          changed = true;
+        }
+        if (changed) strippedCount++;
+      }
+      send("progress", { step: 5, label: "Compiling LaTeX to PDF (tectonic)", status: "running", detail: `${strippedCount} broken nodes fixed, regenerating...` });
+      await flush();
+      finalLatex = generateLatex(sorted, edges);
+      pdfBytes = await compilePdf(finalLatex);
+      send("progress", { step: 5, label: "Compiling LaTeX to PDF (tectonic)", status: "done", detail: `${(pdfBytes.length / 1024).toFixed(0)} KB (plain text fallback)` });
+    }
+    await flush();
 
     // Step 6: Upload to storage
     if (abortController.signal.aborted) throw new Error("Aborted");
     send("progress", { step: 6, label: "Uploading to storage", status: "running" });
+    await flush();
     const latexKey = `papers/${baseFileName}.tex`;
     const pdfKey = `papers/${baseFileName}.pdf`;
     let latexUploaded = false;
     let pdfUploaded = false;
-    try { await uploadFile(latexKey, Buffer.from(latex, "utf-8"), "text/x-tex"); latexUploaded = true; } catch (err) { logger.warn({ err: (err as Error).message }, "LaTeX upload failed"); }
+    try { await uploadFile(latexKey, Buffer.from(finalLatex, "utf-8"), "text/x-tex"); latexUploaded = true; } catch (err) { logger.warn({ err: (err as Error).message }, "LaTeX upload failed"); }
     try { await uploadFile(pdfKey, pdfBytes, "application/pdf"); pdfUploaded = true; } catch (err) { logger.warn({ err: (err as Error).message }, "PDF upload failed"); }
     send("progress", { step: 6, label: "Uploading to storage", status: "done", detail: `${latexUploaded ? "LaTeX ✓" : "LaTeX ✗"}, ${pdfUploaded ? "PDF ✓" : "PDF ✗"}` });
 
@@ -193,7 +238,7 @@ app.post("/compile-stream", async (req: Request, res: Response) => {
     send("complete", {
       compileId, latexFileName: `${baseFileName}.tex`, pdfFileName: `${baseFileName}.pdf`,
       latexKey: latexUploaded ? latexKey : null, pdfKey: pdfUploaded ? pdfKey : null,
-      pdfSize: pdfBytes.length, latexSize: latex.length,
+      pdfSize: pdfBytes.length, latexSize: finalLatex.length,
     });
 
   } catch (err) {
