@@ -7,6 +7,7 @@ using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -23,7 +24,7 @@ public sealed class NyxIdChatGAgent : RoleGAgent
 {
     private readonly SkillRegistry? _skillRegistry;
     private readonly IToolApprovalHandler? _remoteApprovalHandler;
-    private readonly NyxIdRelayOptions? _relayOptions;
+    private readonly IUserConfigStore? _userConfigStore;
 
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
@@ -34,15 +35,13 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         IEnumerable<IAgentToolSource>? toolSources = null,
         SkillRegistry? skillRegistry = null,
         IToolApprovalHandler? approvalHandler = null,
-        NyxIdRelayOptions? relayOptions = null)
+        IUserConfigStore? userConfigStore = null)
         : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
                approvalHandler: new YieldApprovalHandler())
     {
         _skillRegistry = skillRegistry;
-        // Keep reference to the DI-injected remote handler (NyxIdToolApprovalHandler)
-        // for timeout escalation in HandleToolApprovalTimeout.
         _remoteApprovalHandler = approvalHandler;
-        _relayOptions = relayOptions;
+        _userConfigStore = userConfigStore;
     }
 
     /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
@@ -62,27 +61,25 @@ public sealed class NyxIdChatGAgent : RoleGAgent
         await base.OnActivateAsync(ct);
     }
 
-    /// <summary>
-    /// 装饰系统 prompt：追加 SkillRegistry 中的可用技能列表。
-    /// </summary>
     protected override string DecorateSystemPrompt(string basePrompt)
     {
         var prompt = basePrompt;
 
-        // Inject relay callback URL so the agent can auto-configure channel bots
-        if (!string.IsNullOrWhiteSpace(_relayOptions?.RelayCallbackUrl))
+        // Inject relay callback URL from user's chrono-storage config
+        var relayUrl = ResolveRelayCallbackUrl();
+        if (!string.IsNullOrWhiteSpace(relayUrl))
         {
             prompt += $"""
 
 ## Relay Configuration (Auto-Injected)
 
-This agent's relay callback URL is: `{_relayOptions.RelayCallbackUrl}`
+This agent's relay callback URL is: `{relayUrl}`
 
-When setting up channel bots, use this URL as the `callback_url` for API keys. You can create an API key with this callback automatically:
+When setting up channel bots, use this URL as the `callback_url` for API keys:
 ```
-nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_url="{_relayOptions.RelayCallbackUrl}"
+nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_url="{relayUrl}"
 ```
-Then create a conversation route linking the bot to this API key.
+Then create a default conversation route linking the bot to this API key.
 """;
         }
 
@@ -94,6 +91,32 @@ Then create a conversation route linking the bot to this API key.
         }
 
         return prompt;
+    }
+
+    /// <summary>
+    /// Resolves the relay callback URL from the user's chrono-storage config.
+    /// Reads remoteRuntimeBaseUrl and appends the relay webhook path.
+    /// </summary>
+    private string? ResolveRelayCallbackUrl()
+    {
+        if (_userConfigStore == null) return null;
+
+        try
+        {
+            // Synchronous wait is acceptable here — DecorateSystemPrompt is called once
+            // during initialization, and the config is typically cached.
+            var config = _userConfigStore.GetAsync(CancellationToken.None)
+                .ConfigureAwait(false).GetAwaiter().GetResult();
+
+            var baseUrl = UserConfigRuntime.ResolveActiveRuntimeBaseUrl(config);
+            if (string.IsNullOrWhiteSpace(baseUrl)) return null;
+
+            return $"{baseUrl.TrimEnd('/')}/api/webhooks/nyxid-relay";
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private bool RequiresNyxIdProviderMigration()
@@ -113,7 +136,6 @@ Then create a conversation route linking the bot to this API key.
                 : roleName.Trim(),
             ProviderName = NyxIdChatServiceDefaults.ProviderName,
             SystemPrompt = NyxIdChatSystemPrompt.Value,
-            // 0 = use ChatRuntime default (40). User config can override.
             MaxToolRounds = State.ConfigOverrides?.HasMaxToolRounds == true &&
                             State.ConfigOverrides.MaxToolRounds > 0
                 ? State.ConfigOverrides.MaxToolRounds
