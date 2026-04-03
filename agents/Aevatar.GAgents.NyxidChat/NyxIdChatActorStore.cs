@@ -62,6 +62,19 @@ public sealed class NyxIdChatActorStore
         return Task.FromResult(removed);
     }
 
+    /// <summary>Ensure an actor entry exists for the given scope + actorId (idempotent).</summary>
+    public Task EnsureActorAsync(string scopeId, string actorId, CancellationToken ct = default)
+    {
+        var key = BuildKey(scopeId);
+        var actors = _store.GetOrAdd(key, _ => []);
+        lock (actors)
+        {
+            if (!actors.Exists(e => string.Equals(e.ActorId, actorId, StringComparison.Ordinal)))
+                actors.Add(new ActorEntry { ActorId = actorId, CreatedAt = DateTimeOffset.UtcNow });
+        }
+        return Task.CompletedTask;
+    }
+
     private static string BuildKey(string scopeId) => scopeId.Trim().ToLowerInvariant();
 
     public sealed class ActorEntry

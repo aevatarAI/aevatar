@@ -1,6 +1,6 @@
 namespace Aevatar.Studio.Infrastructure.Storage;
 
-internal sealed class ConnectorCatalogStorageOptions
+public sealed class ConnectorCatalogStorageOptions
 {
     public const string SectionName = "Cli:App:Connectors:ChronoStorage";
 
@@ -12,9 +12,9 @@ internal sealed class ConnectorCatalogStorageOptions
 
     public string NyxProxyServiceSlug { get; set; } = "chrono-storage-service";
 
-    public string BaseUrl { get; set; } = "http://chrono-storage.chronoai-platform.svc.cluster.local:3805";
+    public string BaseUrl { get; set; } = string.Empty;
 
-    public string Bucket { get; set; } = "chrono-platform-aevatar-studio";
+    public string Bucket { get; set; } = string.Empty;
 
     public string Prefix { get; set; } = string.Empty;
 

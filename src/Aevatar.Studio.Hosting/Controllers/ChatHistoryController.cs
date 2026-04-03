@@ -44,16 +44,7 @@ public static class ChatHistoryEndpoints
         [FromServices] IChatHistoryStore store,
         CancellationToken ct)
     {
-        await store.SaveMessagesAsync(scopeId, conversationId, request.Messages, ct);
-
-        var currentIndex = await store.GetIndexAsync(scopeId, ct);
-        var conversations = currentIndex.Conversations
-            .Where(c => !string.Equals(c.Id, conversationId, StringComparison.Ordinal))
-            .Append(request.Meta)
-            .OrderByDescending(c => c.UpdatedAt)
-            .ToList();
-
-        await store.SaveIndexAsync(scopeId, new ChatHistoryIndex(conversations), ct);
+        await store.SaveMessagesAsync(scopeId, conversationId, request.Meta, request.Messages, ct);
         return Results.Ok();
     }
 

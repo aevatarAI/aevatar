@@ -15,9 +15,7 @@ public sealed class NyxIdServicesTool : IAgentTool
 
     public string Description =>
         "Manage the user's connected services in NyxID. " +
-        "Use 'list' to see all connected services, 'show' for details, " +
-        "'create' to add a new service with an API key/token, " +
-        "or 'delete' to remove a service connection.";
+        "Actions: list, show, create, update, delete, rotate_credential, route.";
 
     public string ParametersSchema => """
         {
@@ -25,31 +23,42 @@ public sealed class NyxIdServicesTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "create", "delete"],
-              "description": "Action: 'list' all services, 'show' details, 'create' a new service, or 'delete' a service"
+              "enum": ["list", "show", "create", "delete", "update", "rotate_credential", "route"],
+              "description": "Action to perform (default: list)"
             },
             "id": {
               "type": "string",
-              "description": "Service ID (required for 'show' and 'delete')"
+              "description": "Service ID (for show/delete/update/rotate_credential/route)"
             },
             "service_slug": {
               "type": "string",
-              "description": "Catalog service slug (for 'create', e.g. 'telegram-bot', 'openai')"
+              "description": "Catalog slug (for create)"
             },
             "credential": {
               "type": "string",
-              "description": "API key or token value (for 'create')"
+              "description": "API key or token (for create or rotate_credential)"
             },
             "label": {
               "type": "string",
-              "description": "User-friendly label for the service (for 'create')"
+              "description": "Label (for create or update)"
             },
             "endpoint_url": {
               "type": "string",
-              "description": "Custom endpoint URL for self-hosted services (for 'create', e.g. OpenClaw gateway URL)"
+              "description": "Endpoint URL (for create or update)"
+            },
+            "node_id": {
+              "type": "string",
+              "description": "Node ID for routing (for update or route)"
+            },
+            "active": {
+              "type": "boolean",
+              "description": "Set active/inactive (for update)"
+            },
+            "direct": {
+              "type": "boolean",
+              "description": "Use direct routing (for route)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -57,32 +66,11 @@ public sealed class NyxIdServicesTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? id = null;
-        string? serviceSlug = null;
-        string? credential = null;
-        string? label = null;
-        string? endpointUrl = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("id", out var i))
-                id = i.GetString();
-            if (doc.RootElement.TryGetProperty("service_slug", out var ss))
-                serviceSlug = ss.GetString();
-            if (doc.RootElement.TryGetProperty("credential", out var c))
-                credential = c.GetString();
-            if (doc.RootElement.TryGetProperty("label", out var l))
-                label = l.GetString();
-            if (doc.RootElement.TryGetProperty("endpoint_url", out var eu))
-                endpointUrl = eu.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "list");
+        var id = args.Str("id");
 
         return action switch
         {
@@ -90,29 +78,87 @@ public sealed class NyxIdServicesTool : IAgentTool
                 await _client.GetServiceAsync(token, id, ct),
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteServiceAsync(token, id, ct),
-            "create" when !string.IsNullOrWhiteSpace(serviceSlug) && !string.IsNullOrWhiteSpace(credential) =>
-                await CreateServiceAsync(token, serviceSlug, credential, label, endpointUrl, ct),
+            "create" => await CreateServiceAsync(token, args, ct),
+            "update" when !string.IsNullOrWhiteSpace(id) =>
+                await UpdateServiceAsync(token, id, args, ct),
+            "rotate_credential" when !string.IsNullOrWhiteSpace(id) =>
+                await RotateCredentialAsync(token, id, args, ct),
+            "route" when !string.IsNullOrWhiteSpace(id) =>
+                await RouteServiceAsync(token, id, args, ct),
 
-            "show" or "delete" => "Error: 'id' is required for this action.",
-            "create" => "Error: 'service_slug' and 'credential' are required for create.",
+            "show" or "delete" or "update" or "rotate_credential" or "route" =>
+                $"{{\"error\":\"'id' is required for {action}\",\"received\":{args.Raw}}}",
             _ => await _client.ListServicesAsync(token, ct),
         };
     }
 
-    private async Task<string> CreateServiceAsync(
-        string token, string serviceSlug, string credential, string? label, string? endpointUrl,
-        CancellationToken ct)
+    private async Task<string> CreateServiceAsync(string token, ToolArgs args, CancellationToken ct)
     {
+        var slug = args.Str("service_slug") ?? args.Str("slug");
+        var credential = args.Str("credential");
+        if (string.IsNullOrWhiteSpace(slug) || string.IsNullOrWhiteSpace(credential))
+            return $"{{\"error\":\"'service_slug' and 'credential' required for create\",\"received\":{args.Raw}}}";
+
         var payload = new Dictionary<string, object?>
         {
-            ["service_slug"] = serviceSlug,
+            ["service_slug"] = slug,
             ["credential"] = credential,
-            ["label"] = label ?? serviceSlug,
+            ["label"] = args.Str("label") ?? slug,
         };
-
-        if (!string.IsNullOrWhiteSpace(endpointUrl))
-            payload["endpoint_url"] = endpointUrl;
+        var url = args.Str("endpoint_url");
+        if (!string.IsNullOrWhiteSpace(url)) payload["endpoint_url"] = url;
 
         return await _client.CreateServiceAsync(token, JsonSerializer.Serialize(payload), ct);
+    }
+
+    private async Task<string> UpdateServiceAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        var payload = new Dictionary<string, object?>();
+        var label = args.Str("label");
+        if (label != null) payload["label"] = label;
+        var url = args.Str("endpoint_url");
+        if (url != null) payload["endpoint_url"] = url;
+        var nodeId = args.Str("node_id");
+        if (nodeId != null) payload["node_id"] = nodeId;
+        var active = args.Bool("active");
+        if (active.HasValue) payload["is_active"] = active.Value;
+
+        return await _client.UpdateServiceAsync(token, id, JsonSerializer.Serialize(payload), ct);
+    }
+
+    private async Task<string> RotateCredentialAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        var credential = args.Str("credential");
+        if (string.IsNullOrWhiteSpace(credential))
+            return """{"error":"'credential' is required for rotate_credential"}""";
+
+        var serviceJson = await _client.GetServiceAsync(token, id, ct);
+        string? apiKeyId = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(serviceJson);
+            if (doc.RootElement.TryGetProperty("api_key_id", out var ak))
+                apiKeyId = ak.GetString();
+        }
+        catch { /* ignore */ }
+
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+            return """{"error":"Could not find api_key_id for this service"}""";
+
+        return await _client.UpdateExternalKeyAsync(token, apiKeyId,
+            JsonSerializer.Serialize(new { credential }), ct);
+    }
+
+    private async Task<string> RouteServiceAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        var payload = new Dictionary<string, object?>();
+        if (args.Bool("direct") == true)
+            payload["node_id"] = string.Empty;
+        else if (!string.IsNullOrWhiteSpace(args.Str("node_id")))
+            payload["node_id"] = args.Str("node_id");
+        else
+            return """{"error":"Either 'node_id' or 'direct: true' is required for route"}""";
+
+        return await _client.UpdateServiceAsync(token, id, JsonSerializer.Serialize(payload), ct);
     }
 }

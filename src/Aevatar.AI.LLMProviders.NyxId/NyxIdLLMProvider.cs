@@ -1,3 +1,6 @@
+using System.ClientModel.Primitives;
+using System.Net.Http;
+using System.Runtime.CompilerServices;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Microsoft.Extensions.AI;
@@ -7,20 +10,23 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.LLMProviders.NyxId;
 
 /// <summary>
-/// NyxID gateway-backed provider. Requests are sent through NyxID's OpenAI-compatible gateway
-/// using the logged-in user's NyxID access token, so NyxID resolves that user's own LLM credentials.
+/// NyxID-backed provider. Requests use the logged-in user's NyxID access token and can override
+/// the configured Nyx endpoint with a per-request relative route under the same authority base.
 /// </summary>
 public sealed class NyxIdLLMProvider : ILLMProvider
 {
+    private const string GatewaySuffix = "/api/v1/llm/gateway/v1/";
+
     private readonly string _defaultModel;
-    private readonly Uri _gatewayEndpoint;
+    private readonly Uri _defaultNyxEndpoint;
+    private readonly Uri _authorityBase;
     private readonly Func<string?> _accessTokenAccessor;
     private readonly ILogger _logger;
 
     public NyxIdLLMProvider(
         string name,
         string defaultModel,
-        string gatewayEndpoint,
+        string nyxEndpoint,
         Func<string?> accessTokenAccessor,
         ILogger? logger = null)
     {
@@ -28,39 +34,143 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             throw new ArgumentException("Provider name is required.", nameof(name));
         if (string.IsNullOrWhiteSpace(defaultModel))
             throw new ArgumentException("Default model is required.", nameof(defaultModel));
-        if (string.IsNullOrWhiteSpace(gatewayEndpoint))
-            throw new ArgumentException("Gateway endpoint is required.", nameof(gatewayEndpoint));
+        if (string.IsNullOrWhiteSpace(nyxEndpoint))
+            throw new ArgumentException("Nyx endpoint is required.", nameof(nyxEndpoint));
 
         Name = name.Trim();
         _defaultModel = defaultModel.Trim();
-        _gatewayEndpoint = NormalizeGatewayEndpoint(gatewayEndpoint);
+        _defaultNyxEndpoint = NormalizeNyxEndpoint(nyxEndpoint);
+        _authorityBase = ResolveAuthorityBase(_defaultNyxEndpoint);
         _accessTokenAccessor = accessTokenAccessor ?? throw new ArgumentNullException(nameof(accessTokenAccessor));
         _logger = logger ?? NullLogger.Instance;
     }
 
     public string Name { get; }
 
-    public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default) =>
-        CreateDelegateProvider(request).ChatAsync(NormalizeRequest(request), ct);
-
-    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, CancellationToken ct = default) =>
-        CreateDelegateProvider(request).ChatStreamAsync(NormalizeRequest(request), ct);
-
-    private ILLMProvider CreateDelegateProvider(LLMRequest request)
+    public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
     {
-        var resolvedModel = ResolveModel(request);
-        var accessToken = ResolveAccessToken(request);
+        var route = await ResolveRouteAsync(request, ct);
+        return await CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken)
+            .ChatAsync(route.Request, ct);
+    }
 
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        LLMRequest request,
+        CancellationToken ct = default)
+    {
+        return ChatStreamCoreAsync(request, ct);
+    }
+
+    private async IAsyncEnumerable<LLMStreamChunk> ChatStreamCoreAsync(
+        LLMRequest request,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var route = await ResolveRouteAsync(request, ct);
+        var provider = CreateDelegateProvider(route.Request, route.Endpoint, route.RouteName, route.AccessToken);
+
+        await foreach (var chunk in EnrichErrors(provider.ChatStreamAsync(route.Request, ct), route).WithCancellation(ct))
+            yield return chunk;
+    }
+
+    private async IAsyncEnumerable<LLMStreamChunk> EnrichErrors(
+        IAsyncEnumerable<LLMStreamChunk> inner,
+        NyxIdResolvedRoute route,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var enumerator = inner.GetAsyncEnumerator(ct);
+        try
+        {
+            while (true)
+            {
+                LLMStreamChunk current;
+                try
+                {
+                    if (!await enumerator.MoveNextAsync())
+                        yield break;
+                    current = enumerator.Current;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    string? body = null;
+                    int? status = null;
+                    for (var cur = ex; cur != null; cur = cur.InnerException)
+                    {
+                        if (cur is System.ClientModel.ClientResultException cre)
+                        {
+                            status = cre.Status;
+                            var raw = cre.GetRawResponse();
+                            if (raw != null)
+                                body = System.Text.Encoding.UTF8.GetString(raw.Content.ToArray());
+                            break;
+                        }
+                    }
+
+                    _logger?.LogWarning(ex,
+                        "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
+                        status, route.RouteName, route.Endpoint, body);
+
+                    var detail = !string.IsNullOrWhiteSpace(body)
+                        ? $"{ex.Message} | NyxID response: {body}"
+                        : ex.Message;
+                    throw new InvalidOperationException(detail, ex);
+                }
+
+                yield return current;
+            }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync();
+        }
+    }
+
+    internal Task<NyxIdResolvedRoute> ResolveRouteAsync(LLMRequest request, CancellationToken ct = default)
+    {
+        _ = ct;
+        var normalizedRequest = NormalizeRequest(request);
+        var accessToken = ResolveAccessToken(normalizedRequest);
+        var routePreference = NormalizeRoutePreference(
+            TryGetMetadataValue(normalizedRequest, LLMRequestMetadataKeys.NyxIdRoutePreference));
+        var route = ResolvePreferredRoute(normalizedRequest, accessToken, routePreference);
+
+        _logger.LogDebug(
+            "Resolved NyxID LLM route '{RouteName}' to {Endpoint} for model {Model}",
+            route.RouteName,
+            route.Endpoint,
+            route.Request.Model);
+
+        return Task.FromResult(route);
+    }
+
+    private NyxIdResolvedRoute ResolvePreferredRoute(
+        LLMRequest request,
+        string accessToken,
+        string routePreference)
+    {
+        if (string.IsNullOrWhiteSpace(routePreference))
+            return new NyxIdResolvedRoute(Name, _defaultNyxEndpoint, request, accessToken);
+
+        var endpoint = new Uri(_authorityBase, routePreference.TrimStart('/'));
+        return new NyxIdResolvedRoute(routePreference, endpoint, request, accessToken);
+    }
+
+    private ILLMProvider CreateDelegateProvider(
+        LLMRequest request,
+        Uri endpoint,
+        string routeName,
+        string accessToken)
+    {
         var options = new OpenAI.OpenAIClientOptions
         {
-            Endpoint = _gatewayEndpoint,
+            Endpoint = endpoint,
         };
-        // Override User-Agent to avoid Cloudflare WAF blocking the default "OpenAI/x.x" agent string.
-        options.AddPolicy(new NyxIdUserAgentPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
-        options.AddPolicy(new NyxIdRequestLoggingPolicy(), System.ClientModel.Primitives.PipelinePosition.BeforeTransport);
+
+        if (ShouldSuppressDefaultUserAgent(endpoint))
+            options.Transport = new NyxIdProxyTransport();
+
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
-        var chatClient = client.GetChatClient(resolvedModel).AsIChatClient();
-        return new MEAILLMProvider(Name, chatClient, _logger);
+        var chatClient = client.GetChatClient(request.Model!).AsIChatClient();
+        return new MEAILLMProvider(routeName, chatClient, _logger);
     }
 
     private LLMRequest NormalizeRequest(LLMRequest request)
@@ -81,40 +191,25 @@ public sealed class NyxIdLLMProvider : ILLMProvider
 
     private string ResolveModel(LLMRequest request)
     {
-        // Priority 1: per-request model override from metadata (user's configured default model)
         var metadataModel = TryGetMetadataValue(request, LLMRequestMetadataKeys.ModelOverride);
         var requestedModel = request.Model?.Trim();
-        var metadataKeyCount = request.Metadata?.Count ?? -1;
 
-        var resolved = !string.IsNullOrWhiteSpace(metadataModel)
+        return !string.IsNullOrWhiteSpace(metadataModel)
             ? metadataModel
             : !string.IsNullOrWhiteSpace(requestedModel)
                 ? requestedModel
                 : _defaultModel;
-
-        Console.Error.WriteLine(
-            $"[NyxIdLLM.ResolveModel] metadataModel={metadataModel ?? "<null>"}, requestModel={requestedModel ?? "<null>"}, default={_defaultModel}, resolved={resolved}, metadataKeys={metadataKeyCount}");
-
-        return resolved;
     }
 
     private string ResolveAccessToken(LLMRequest request)
     {
-        // Priority 1: per-user token from request metadata (user's NyxID login token)
         var userToken = TryGetMetadataValue(request, LLMRequestMetadataKeys.NyxIdAccessToken);
         if (!string.IsNullOrWhiteSpace(userToken))
-        {
-            Console.Error.WriteLine($"[NyxIdLLM.ResolveAccessToken] Using per-request token (len={userToken.Length})");
             return userToken;
-        }
 
-        // Priority 2: static/configured token (fallback for background tasks)
         var configuredToken = _accessTokenAccessor()?.Trim();
         if (!string.IsNullOrWhiteSpace(configuredToken))
-        {
-            Console.Error.WriteLine($"[NyxIdLLM.ResolveAccessToken] Using configured/fallback token (len={configuredToken.Length})");
             return configuredToken;
-        }
 
         throw new NyxIdAuthenticationRequiredException(Name);
     }
@@ -124,87 +219,63 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             ? value?.Trim()
             : null;
 
-    private static Uri NormalizeGatewayEndpoint(string gatewayEndpoint)
+    private static string NormalizeRoutePreference(string? value)
     {
-        var trimmed = gatewayEndpoint.Trim();
+        var normalized = value?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        if (normalized.StartsWith("/", StringComparison.Ordinal))
+            return normalized;
+
+        if (normalized.StartsWith("//", StringComparison.Ordinal) ||
+            normalized.Contains("://", StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        return $"/api/v1/proxy/s/{normalized.Trim('/')}";
+    }
+
+    private static Uri NormalizeNyxEndpoint(string nyxEndpoint)
+    {
+        var trimmed = nyxEndpoint.Trim();
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var endpoint))
             throw new ArgumentException(
-                $"NyxID gateway endpoint '{gatewayEndpoint}' must be an absolute URI.",
-                nameof(gatewayEndpoint));
+                $"NyxID endpoint '{nyxEndpoint}' must be an absolute URI.",
+                nameof(nyxEndpoint));
 
         return new Uri(endpoint.ToString().TrimEnd('/') + "/", UriKind.Absolute);
     }
-}
 
-/// <summary>
-/// Pipeline policy that logs the actual HTTP request URL and response status for debugging.
-/// </summary>
-/// <summary>
-/// Replaces the default OpenAI SDK User-Agent with a neutral one.
-/// Cloudflare WAF on NyxID gateway blocks the "OpenAI/x.x" agent string.
-/// </summary>
-internal sealed class NyxIdUserAgentPolicy : System.ClientModel.Primitives.PipelinePolicy
-{
-    private const string UserAgent = "Aevatar/1.0";
-
-    public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
+    private static Uri ResolveAuthorityBase(Uri nyxEndpoint)
     {
-        message.Request.Headers.Set("User-Agent", UserAgent);
-        ProcessNext(message, pipeline, currentIndex);
+        var absolute = nyxEndpoint.ToString();
+        if (absolute.EndsWith(GatewaySuffix, StringComparison.OrdinalIgnoreCase))
+            return new Uri(absolute[..^GatewaySuffix.Length] + "/", UriKind.Absolute);
+
+        return new Uri(nyxEndpoint.GetLeftPart(UriPartial.Authority) + "/", UriKind.Absolute);
     }
 
-    public override async ValueTask ProcessAsync(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
-    {
-        message.Request.Headers.Set("User-Agent", UserAgent);
-        await ProcessNextAsync(message, pipeline, currentIndex);
-    }
-}
+    private static bool ShouldSuppressDefaultUserAgent(Uri endpoint) =>
+        endpoint.AbsolutePath.StartsWith("/api/v1/proxy/", StringComparison.OrdinalIgnoreCase);
 
-internal sealed class NyxIdRequestLoggingPolicy : System.ClientModel.Primitives.PipelinePolicy
-{
-    public override void Process(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
+    private sealed class NyxIdProxyTransport : HttpClientPipelineTransport
     {
-        LogRequest(message);
-        ProcessNext(message, pipeline, currentIndex);
-        LogResponse(message);
-    }
-
-    public override async ValueTask ProcessAsync(System.ClientModel.Primitives.PipelineMessage message, IReadOnlyList<System.ClientModel.Primitives.PipelinePolicy> pipeline, int currentIndex)
-    {
-        LogRequest(message);
-        await ProcessNextAsync(message, pipeline, currentIndex);
-        LogResponse(message);
-    }
-
-    private static void LogRequest(System.ClientModel.Primitives.PipelineMessage message)
-    {
-        Console.Error.WriteLine($"[NyxIdLLM.HTTP] {message.Request.Method} {message.Request.Uri}");
-        foreach (var header in message.Request.Headers)
+        protected override void OnSendingRequest(PipelineMessage message, HttpRequestMessage httpRequest)
         {
-            var val = header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)
-                ? header.Value?[..Math.Min(header.Value.Length, 30)] + "..."
-                : header.Value;
-            Console.Error.WriteLine($"[NyxIdLLM.HTTP]   {header.Key}: {val}");
-        }
-    }
-
-    private static void LogResponse(System.ClientModel.Primitives.PipelineMessage message)
-    {
-        var status = message.Response?.Status;
-        Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response: {status}");
-        if (status is >= 400)
-        {
-            try
-            {
-                using var reader = new StreamReader(message.Response!.ContentStream!, leaveOpen: true);
-                var body = reader.ReadToEnd();
-                message.Response.ContentStream!.Position = 0;
-                Console.Error.WriteLine($"[NyxIdLLM.HTTP] Response body: {body}");
-            }
-            catch
-            {
-                // best-effort
-            }
+            httpRequest.Headers.UserAgent.Clear();
+            base.OnSendingRequest(message, httpRequest);
         }
     }
 }
+
+internal sealed record NyxIdResolvedRoute(
+    string RouteName,
+    Uri Endpoint,
+    LLMRequest Request,
+    string AccessToken);

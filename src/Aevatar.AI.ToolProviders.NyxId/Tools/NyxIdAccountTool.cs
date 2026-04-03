@@ -15,19 +15,13 @@ public sealed class NyxIdAccountTool : IAgentTool
     public string Description =>
         "Get the current NyxID user's profile information including name, email, and account status.";
 
-    public string ParametersSchema => """
-        {
-          "type": "object",
-          "properties": {},
-          "required": []
-        }
-        """;
+    public string ParametersSchema => """{"type":"object","properties":{}}""";
 
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
         return await _client.GetCurrentUserAsync(token, ct);
     }

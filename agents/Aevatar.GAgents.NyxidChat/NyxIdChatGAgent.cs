@@ -4,10 +4,10 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core;
 using Aevatar.AI.Core.Hooks;
-using Aevatar.Foundation.Abstractions;
+using Aevatar.AI.Core.Middleware;
+using Aevatar.AI.ToolProviders.Skills;
 using Aevatar.Foundation.Abstractions.Attributes;
-using Aevatar.Foundation.Core;
-using Microsoft.Extensions.Logging;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.GAgents.NyxidChat;
 
@@ -15,113 +15,129 @@ namespace Aevatar.GAgents.NyxidChat;
 /// NyxID chat GAgent. Extends RoleGAgent with a chat system prompt.
 /// On first activation (empty state), self-initializes with the system prompt
 /// so callers never need to dispatch InitializeRoleAgentEvent manually.
-/// Uses the default LLM provider (same as other scope services).
-///
-/// Overrides HandleChatRequest to use non-streaming ChatAsync which runs
-/// the full ToolCallLoop (LLM -> tool_call -> execute -> result -> LLM -> ...),
-/// instead of the base class's ChatStreamAsync which only makes one LLM call.
+/// Always pins the NyxID-backed provider so requests are routed using the
+/// authenticated NyxID account instead of drifting with the app default.
+/// The NyxID provider itself decides whether to use a user-configured
+/// chrono-llm service or fall back to the NyxID LLM gateway.
 /// </summary>
 public sealed class NyxIdChatGAgent : RoleGAgent
 {
+    private readonly SkillRegistry? _skillRegistry;
+    private readonly IToolApprovalHandler? _remoteApprovalHandler;
+
     public NyxIdChatGAgent(
         ILLMProviderFactory? llmProviderFactory = null,
         IEnumerable<IAIGAgentExecutionHook>? additionalHooks = null,
         IEnumerable<IAgentRunMiddleware>? agentMiddlewares = null,
         IEnumerable<IToolCallMiddleware>? toolMiddlewares = null,
         IEnumerable<ILLMCallMiddleware>? llmMiddlewares = null,
-        IEnumerable<IAgentToolSource>? toolSources = null)
-        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources)
+        IEnumerable<IAgentToolSource>? toolSources = null,
+        SkillRegistry? skillRegistry = null,
+        IToolApprovalHandler? approvalHandler = null)
+        : base(llmProviderFactory, additionalHooks, agentMiddlewares, toolMiddlewares, llmMiddlewares, toolSources,
+               approvalHandler: new YieldApprovalHandler())
     {
+        _skillRegistry = skillRegistry;
+        _remoteApprovalHandler = approvalHandler;
     }
+
+    /// <summary>Provides the NyxID remote handler for approval timeout escalation.</summary>
+    protected override IToolApprovalHandler? ResolveRemoteApprovalHandler() => _remoteApprovalHandler;
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
-        // Self-initialize on first activation so the system prompt is persisted
-        // into actor state without requiring an external init command.
-        // ProviderName is intentionally left unset so the GAgent uses the default
-        // LLM provider, consistent with other scope services (e.g. workflow-bound).
         if (string.IsNullOrWhiteSpace(State.RoleName))
         {
-            await PersistDomainEventAsync(new InitializeRoleAgentEvent
-            {
-                RoleName = NyxIdChatServiceDefaults.DisplayName,
-                SystemPrompt = NyxIdChatSystemPrompt.Value,
-                MaxToolRounds = 5,
-            });
+            await PersistDomainEventAsync(BuildInitializeRoleAgentEvent(NyxIdChatServiceDefaults.DisplayName));
         }
-        else if (string.Equals(State.ConfigOverrides?.ProviderName, "nyxid", StringComparison.OrdinalIgnoreCase))
+        else if (RequiresNyxIdProviderMigration())
         {
-            // Migration: clear the hardcoded "nyxid" provider so the GAgent uses
-            // the default LLM provider, consistent with other scope services.
-            await PersistDomainEventAsync(new InitializeRoleAgentEvent
-            {
-                RoleName = State.RoleName,
-                SystemPrompt = NyxIdChatSystemPrompt.Value,
-                MaxToolRounds = 5,
-            });
+            await PersistDomainEventAsync(BuildInitializeRoleAgentEvent(State.RoleName));
         }
 
         await base.OnActivateAsync(ct);
     }
 
-    /// <summary>
-    /// Handles chat requests using non-streaming ChatAsync which runs the full
-    /// ToolCallLoop. The base class uses ChatStreamAsync which only makes one
-    /// LLM call and does not execute tools.
-    /// </summary>
-    [EventHandler]
-    public override async Task HandleChatRequest(ChatRequestEvent request)
+    protected override string DecorateSystemPrompt(string basePrompt)
     {
-        var promptPreview = request.Prompt.Length > 200
-            ? request.Prompt[..200] + "..."
-            : request.Prompt;
-        Logger.LogInformation("[NyxIdChat] LLM request: {Preview}", promptPreview);
+        var prompt = basePrompt;
 
-        IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count == 0
-            ? null
-            : new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
+        // Inject relay callback URL
+        var relayUrl = ResolveRelayCallbackUrl();
+        prompt += $"""
 
-        // Publish TEXT_MESSAGE_START
-        await PublishAsync(new TextMessageStartEvent
-        {
-            SessionId = request.SessionId,
-            AgentId = Id,
-        }, TopologyAudience.Parent);
+## Relay Configuration (Auto-Injected)
 
-        string? result;
-        try
+This agent's relay callback URL is: `{relayUrl}`
+
+When setting up channel bots, use this URL as the `callback_url` for API keys:
+```
+nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_url="{relayUrl}"
+```
+Then create a default conversation route linking the bot to this API key.
+""";
+
+        if (_skillRegistry != null && _skillRegistry.Count > 0)
         {
-            // Use non-streaming ChatAsync which runs the full ToolCallLoop:
-            // LLM -> tool_calls -> execute tools -> add results -> LLM -> ...
-            result = await ChatAsync(request.Prompt, request.SessionId, metadata, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            // Dig out the real error — MEAI/OpenAI SDK often wraps the cause
-            var inner = ex;
-            while (inner.InnerException != null) inner = inner.InnerException;
-            var errorDetail = !string.IsNullOrWhiteSpace(ex.Message) ? ex.Message
-                : !string.IsNullOrWhiteSpace(inner.Message) ? inner.Message
-                : ex.GetType().Name;
-            Logger.LogWarning(ex, "[NyxIdChat] LLM request failed: {Error} (type={ExType})", errorDetail, ex.GetType().FullName);
-            result = $"LLM request failed: {errorDetail}";
+            var skillSection = _skillRegistry.BuildSystemPromptSection();
+            if (!string.IsNullOrEmpty(skillSection))
+                prompt += "\n" + skillSection;
         }
 
-        // Publish the full result as a single content event
-        if (!string.IsNullOrEmpty(result))
-        {
-            await PublishAsync(new TextMessageContentEvent
-            {
-                Delta = result,
-                SessionId = request.SessionId,
-            }, TopologyAudience.Parent);
-        }
+        return prompt;
+    }
 
-        // Publish TEXT_MESSAGE_END
-        await PublishAsync(new TextMessageEndEvent
+    /// <summary>
+    /// Resolves the relay callback URL using the well-known default remote runtime URL.
+    /// Does NOT call chrono-storage (which would block the Orleans grain scheduler).
+    /// </summary>
+    private static string ResolveRelayCallbackUrl()
+    {
+        const string relayPath = "/api/webhooks/nyxid-relay";
+        return $"{UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl}{relayPath}";
+    }
+
+    private bool RequiresNyxIdProviderMigration()
+    {
+        var overrides = State.ConfigOverrides;
+        return overrides == null ||
+               !overrides.HasProviderName ||
+               string.IsNullOrWhiteSpace(overrides.ProviderName);
+    }
+
+    private InitializeRoleAgentEvent BuildInitializeRoleAgentEvent(string roleName)
+    {
+        var initializeEvent = new InitializeRoleAgentEvent
         {
-            Content = result ?? string.Empty,
-            SessionId = request.SessionId,
-        }, TopologyAudience.Parent);
+            RoleName = string.IsNullOrWhiteSpace(roleName)
+                ? NyxIdChatServiceDefaults.DisplayName
+                : roleName.Trim(),
+            ProviderName = NyxIdChatServiceDefaults.ProviderName,
+            SystemPrompt = NyxIdChatSystemPrompt.Value,
+            MaxToolRounds = State.ConfigOverrides?.HasMaxToolRounds == true &&
+                            State.ConfigOverrides.MaxToolRounds > 0
+                ? State.ConfigOverrides.MaxToolRounds
+                : 0,
+            EventModules = State.EventModules ?? string.Empty,
+            EventRoutes = State.EventRoutes ?? string.Empty,
+        };
+
+        var overrides = State.ConfigOverrides;
+        if (overrides?.HasModel == true)
+            initializeEvent.Model = overrides.Model;
+
+        if (overrides?.HasTemperature == true)
+            initializeEvent.Temperature = overrides.Temperature;
+
+        if (overrides?.HasMaxTokens == true && overrides.MaxTokens > 0)
+            initializeEvent.MaxTokens = overrides.MaxTokens;
+
+        if (overrides?.HasMaxHistoryMessages == true && overrides.MaxHistoryMessages > 0)
+            initializeEvent.MaxHistoryMessages = overrides.MaxHistoryMessages;
+
+        if (overrides?.HasStreamBufferCapacity == true && overrides.StreamBufferCapacity > 0)
+            initializeEvent.StreamBufferCapacity = overrides.StreamBufferCapacity;
+
+        return initializeEvent;
     }
 }

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
+using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Tools;
 using FluentAssertions;
@@ -110,6 +111,100 @@ public sealed class ChatRuntimeStreamingBufferTests
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaReasoningContent == "thinking step");
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenStreamReturnsToolCall_ShouldExecuteToolAndContinueWithFollowUpRound()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-follow-up",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"lark\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "tool-finished" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+        var output = new StringBuilder();
+
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 2))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Be("tool-finished");
+        provider.StreamRequests.Should().HaveCount(2);
+        provider.StreamRequests[1].Messages.Any(m =>
+            m.Role == "assistant" &&
+            m.ToolCalls != null &&
+            m.ToolCalls.Count == 1 &&
+            m.ToolCalls[0].Id == "tc-follow-up").Should().BeTrue();
+        provider.StreamRequests[1].Messages.Any(m =>
+            m.Role == "tool" &&
+            m.ToolCallId == "tc-follow-up" &&
+            m.Content == "RESULT:{\"q\":\"lark\"}").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldIncludeToolResultInSummaryRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+
+        var output = new StringBuilder();
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Contain("summary-ready");
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages.Any(m =>
+            m.Role == "tool" &&
+            m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
     }
 
     [Fact]
@@ -285,12 +380,13 @@ public sealed class ChatRuntimeStreamingBufferTests
     private static ChatRuntime CreateRuntime(
         ILLMProvider provider,
         int streamBufferCapacity,
+        ToolManager? tools = null,
         IReadOnlyList<IAgentRunMiddleware>? agentMiddlewares = null,
         IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
         Func<LLMRequest>? requestBuilder = null)
     {
         var history = new ChatHistory();
-        var toolLoop = new ToolCallLoop(new ToolManager());
+        var toolLoop = new ToolCallLoop(tools ?? new ToolManager());
 
         return new ChatRuntime(
             providerFactory: () => provider,
@@ -301,6 +397,37 @@ public sealed class ChatRuntimeStreamingBufferTests
             agentMiddlewares: agentMiddlewares,
             llmMiddlewares: llmMiddlewares,
             streamBufferCapacity: streamBufferCapacity);
+    }
+
+    private sealed class QueuedStreamingProvider(
+        IReadOnlyList<IReadOnlyList<LLMStreamChunk>> rounds) : ILLMProvider
+    {
+        private readonly Queue<IReadOnlyList<LLMStreamChunk>> _rounds = new(rounds);
+
+        public string Name => "queued-streaming-provider";
+        public List<LLMRequest> StreamRequests { get; } = [];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        {
+            _ = request;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new LLMResponse());
+        }
+
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            StreamRequests.Add(request);
+            var round = _rounds.Count > 0 ? _rounds.Dequeue() : [];
+
+            foreach (var chunk in round)
+            {
+                ct.ThrowIfCancellationRequested();
+                yield return chunk;
+                await Task.Yield();
+            }
+        }
     }
 
     private sealed class StreamingProvider(
@@ -391,5 +518,18 @@ public sealed class ChatRuntimeStreamingBufferTests
         Func<LLMCallContext, Func<Task>, Task> handler) : ILLMCallMiddleware
     {
         public Task InvokeAsync(LLMCallContext context, Func<Task> next) => handler(context, next);
+    }
+
+    private sealed class DelegateTool(string name, Func<string, string> execute) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "delegate";
+        public string ParametersSchema => "{}";
+
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(execute(argumentsJson));
+        }
     }
 }

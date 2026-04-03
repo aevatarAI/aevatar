@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.Agents;
@@ -387,6 +388,40 @@ public class AIFeatureBootstrapCoverageTests
         connector.Should().NotBeNull();
         connector!.Type.Should().Be("mcp");
         connector.Name.Should().Be("mcp-b");
+    }
+
+    [Fact]
+    public void MCPConnectorBuilder_ShouldSupportRemoteUrlConfiguration()
+    {
+        var builder = new MCPConnectorBuilder();
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "nyxid_mcp",
+            Type = "mcp",
+            TimeoutMs = 15000,
+            MCP = new MCPConnectorConfig
+            {
+                ServerName = "nyxid",
+                Url = "https://nyxid.example.com/mcp",
+                AdditionalHeaders = new Dictionary<string, string> { ["x-tenant"] = "demo" },
+                DefaultTool = "chrono-graph__query",
+                AllowedTools = ["chrono-graph__query"],
+            },
+        };
+
+        var ok = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+
+        ok.Should().BeTrue();
+        connector.Should().NotBeNull();
+        connector!.Type.Should().Be("mcp");
+        connector.Name.Should().Be("nyxid_mcp");
+
+        var serverConfigField = connector.GetType().GetField("_serverConfig", BindingFlags.Instance | BindingFlags.NonPublic);
+        serverConfigField.Should().NotBeNull();
+        var serverConfig = serverConfigField!.GetValue(connector).Should().BeOfType<MCPServerConfig>().Subject;
+        serverConfig.Url.Should().Be("https://nyxid.example.com/mcp");
+        serverConfig.HttpClient.Should().NotBeNull();
+        serverConfig.HttpClient!.Timeout.Should().Be(Timeout.InfiniteTimeSpan);
     }
 
     private static IReadOnlyList<object> InvokeReadConfiguredProviders(

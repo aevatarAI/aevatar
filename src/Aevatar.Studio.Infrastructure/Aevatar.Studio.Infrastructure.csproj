@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>

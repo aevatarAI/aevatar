@@ -4,7 +4,9 @@
 // 在每次 LLM 调用和 Tool 执行前后调用 Hook Pipeline + Middleware
 // ─────────────────────────────────────────────────────────────
 
+using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Core.Chat;
 using Aevatar.AI.Core.Hooks;
 using Aevatar.AI.Core.Middleware;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -20,18 +22,27 @@ public sealed class ToolCallLoop
     private readonly AgentHookPipeline? _hooks;
     private readonly IReadOnlyList<IToolCallMiddleware> _toolMiddlewares;
     private readonly IReadOnlyList<ILLMCallMiddleware> _llmMiddlewares;
+    private readonly TokenBudgetTracker? _budgetTracker;
 
     public ToolCallLoop(
         ToolManager tools,
         AgentHookPipeline? hooks = null,
         IReadOnlyList<IToolCallMiddleware>? toolMiddlewares = null,
-        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null)
+        IReadOnlyList<ILLMCallMiddleware>? llmMiddlewares = null,
+        TokenBudgetTracker? budgetTracker = null)
     {
         _tools = tools;
         _hooks = hooks;
         _toolMiddlewares = toolMiddlewares ?? [];
         _llmMiddlewares = llmMiddlewares ?? [];
+        _budgetTracker = budgetTracker;
     }
+
+    /// <summary>Exposes the tool manager for streaming tool execution.</summary>
+    internal ToolManager Tools => _tools;
+
+    /// <summary>Exposes the tool middlewares for streaming tool execution.</summary>
+    internal IReadOnlyList<IToolCallMiddleware> ToolMiddlewares => _toolMiddlewares;
 
     /// <summary>
     /// 执行 Tool Calling 循环。返回最终的 LLM 文本内容。
@@ -45,7 +56,7 @@ public sealed class ToolCallLoop
         AgentToolRequestContext.CurrentMetadata = baseRequest.Metadata;
         try
         {
-        return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
+            return await ExecuteCoreAsync(provider, messages, baseRequest, maxRounds, ct);
         }
         finally
         {
@@ -53,10 +64,21 @@ public sealed class ToolCallLoop
         }
     }
 
+    /// <summary>Max recovery attempts when the LLM response is truncated by output token limit.</summary>
+    internal const int MaxLengthRecoveries = 3;
+
+    internal const string LengthRecoveryNudge =
+        "[System: Your previous response was cut off due to length limits. " +
+        "Continue exactly where you left off — do not repeat any text you already produced. " +
+        "If you were in the middle of a tool call, please make the tool call again.]";
+
     private async Task<string?> ExecuteCoreAsync(
         ILLMProvider provider, List<ChatMessage> messages,
         LLMRequest baseRequest, int maxRounds, CancellationToken ct)
     {
+        var lengthRecoveryCount = 0;
+        StringBuilder? accumulatedContent = null;
+
         for (var round = 0; round < maxRounds; round++)
         {
             var callId = ComposeRoundCallId(baseRequest.RequestId, round);
@@ -73,61 +95,106 @@ public sealed class ToolCallLoop
 
             var (response, terminated) = await InvokeLlmAsync(provider, request, ct);
 
+            // ─── Hook: Post-Sampling（LLM 输出后、Tool 执行前） ───
+            if (_hooks != null && response.HasToolCalls && !terminated)
+            {
+                var postSamplingCtx = new AIGAgentExecutionHookContext
+                {
+                    LLMResponse = response,
+                };
+                postSamplingCtx.Items["tool_call_count"] = response.ToolCalls?.Count ?? 0;
+                await _hooks.RunPostSamplingAsync(postSamplingCtx, ct);
+
+                // Hook 可通过 Items["block_tool_calls"] = true 阻止 tool call 执行
+                if (postSamplingCtx.Items.TryGetValue("block_tool_calls", out var block)
+                    && block is true)
+                {
+                    if (response.Content != null)
+                        messages.Add(ChatMessage.Assistant(response.Content));
+                    return response.Content;
+                }
+            }
+
             if (terminated || !response.HasToolCalls)
             {
-                if (response.Content != null)
-                    messages.Add(ChatMessage.Assistant(response.Content));
-                return response.Content;
+                // ─── Fallback: parse text-based function calls (DSML/XML) ───
+                // Some LLMs emit tool invocations as DSML-formatted text instead of
+                // structured FunctionCallContent. Detect and execute them.
+                if (!terminated && response.Content != null)
+                {
+                    var parsed = TextToolCallParser.Parse(response.Content);
+                    if (parsed.ToolCalls.Count > 0)
+                    {
+                        // Run PostSampling hook — same gate as structured calls
+                        if (_hooks != null)
+                        {
+                            var postCtx = new AIGAgentExecutionHookContext
+                            {
+                                LLMResponse = new LLMResponse
+                                {
+                                    Content = parsed.CleanedContent,
+                                    ToolCalls = parsed.ToolCalls,
+                                },
+                            };
+                            postCtx.Items["tool_call_count"] = parsed.ToolCalls.Count;
+                            await _hooks.RunPostSamplingAsync(postCtx, ct);
+
+                            if (postCtx.Items.TryGetValue("block_tool_calls", out var block)
+                                && block is true)
+                            {
+                                if (parsed.CleanedContent != null)
+                                    messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
+                                return parsed.CleanedContent;
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(parsed.CleanedContent))
+                            messages.Add(ChatMessage.Assistant(parsed.CleanedContent));
+                        messages.Add(new ChatMessage { Role = "assistant", ToolCalls = parsed.ToolCalls });
+                        await ExecuteToolCallsCoreAsync(parsed.ToolCalls, messages, ct);
+                        accumulatedContent = null;
+                        continue;
+                    }
+                }
+
+                // Recovery: if the response was truncated by max_tokens, inject a continuation
+                // nudge and retry instead of exiting — mirrors Claude Code's recovery logic.
+                if (!terminated
+                    && IsLengthTruncated(response.FinishReason)
+                    && lengthRecoveryCount < MaxLengthRecoveries)
+                {
+                    if (response.Content != null)
+                    {
+                        accumulatedContent ??= new StringBuilder();
+                        accumulatedContent.Append(response.Content);
+                        messages.Add(ChatMessage.Assistant(response.Content));
+                    }
+                    messages.Add(ChatMessage.User(LengthRecoveryNudge));
+                    lengthRecoveryCount++;
+                    continue;
+                }
+
+                // Build result: concatenate any previously accumulated partial content
+                // with this final segment so the caller gets the full reconstructed answer.
+                var resultContent = response.Content;
+                if (accumulatedContent != null)
+                {
+                    if (resultContent != null)
+                        accumulatedContent.Append(resultContent);
+                    resultContent = accumulatedContent.ToString();
+                }
+
+                if (resultContent != null)
+                    messages.Add(ChatMessage.Assistant(resultContent));
+                return resultContent;
             }
+
+            // Tool call round resets accumulation — tool results break the text continuation.
+            accumulatedContent = null;
 
             // 记录 assistant tool_call 消息
             messages.Add(new ChatMessage { Role = "assistant", ToolCalls = response.ToolCalls });
-
-            // 执行每个 tool call
-            foreach (var call in response.ToolCalls!)
-            {
-                // ─── Hook: Tool Execute Start ───
-                var toolCtx = new AIGAgentExecutionHookContext
-                {
-                    ToolName = call.Name, ToolArguments = call.ArgumentsJson, ToolCallId = call.Id,
-                };
-                if (_hooks != null) await _hooks.RunToolExecuteStartAsync(toolCtx, ct);
-
-                var tool = _tools.Get(call.Name);
-                var toolCallContext = new ToolCallContext
-                {
-                    Tool = tool ?? new NullAgentTool(call.Name),
-                    ToolName = string.IsNullOrWhiteSpace(toolCtx.ToolName) ? call.Name : toolCtx.ToolName!,
-                    ToolCallId = call.Id,
-                    ArgumentsJson = toolCtx.ToolArguments ?? call.ArgumentsJson,
-                    CancellationToken = ct,
-                };
-
-                await MiddlewarePipeline.RunToolCallAsync(_toolMiddlewares, toolCallContext, async () =>
-                {
-                    if (toolCallContext.Terminate) return;
-
-                    var resolvedCall = new ToolCall
-                    {
-                        Id = toolCallContext.ToolCallId,
-                        Name = toolCallContext.ToolName,
-                        ArgumentsJson = toolCallContext.ArgumentsJson,
-                    };
-
-                    var result = await _tools.ExecuteToolCallAsync(resolvedCall, ct);
-                    toolCallContext.Result = result.Content;
-                });
-
-                var toolResult = toolCallContext.Result ?? $"Tool '{toolCallContext.ToolName}' returned no result";
-                if (toolCallContext.Terminate)
-                    messages.Add(ChatMessage.Tool(call.Id, toolCallContext.Result ?? "Tool call terminated by middleware"));
-                else
-                    messages.Add(BuildToolResultMessage(call.Id, toolResult));
-
-                // ─── Hook: Tool Execute End ───
-                toolCtx.ToolResult = toolResult;
-                if (_hooks != null) await _hooks.RunToolExecuteEndAsync(toolCtx, ct);
-            }
+            await ExecuteToolCallsCoreAsync(response.ToolCalls!, messages, ct);
         }
 
         // maxRounds exhausted — tool results from the last round are already in messages.
@@ -145,9 +212,57 @@ public sealed class ToolCallLoop
         };
         var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
         var finalContent = finalResponse?.Content;
+
+        // ─── Fallback: the final no-tools call may still contain DSML text calls ───
         if (finalContent != null)
+        {
+            var finalParsed = TextToolCallParser.Parse(finalContent);
+            if (finalParsed.ToolCalls.Count > 0)
+            {
+                if (!string.IsNullOrWhiteSpace(finalParsed.CleanedContent))
+                    messages.Add(ChatMessage.Assistant(finalParsed.CleanedContent));
+                messages.Add(new ChatMessage { Role = "assistant", ToolCalls = finalParsed.ToolCalls });
+                await ExecuteToolCallsCoreAsync(finalParsed.ToolCalls, messages, ct);
+
+                // One more LLM call to summarize
+                var summaryRequest = new LLMRequest
+                {
+                    Messages = [..messages],
+                    RequestId = finalRequest.RequestId,
+                    Metadata = finalRequest.Metadata,
+                    Tools = null,
+                    Model = finalRequest.Model,
+                    Temperature = finalRequest.Temperature,
+                    MaxTokens = finalRequest.MaxTokens,
+                };
+                var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
+                var summaryContent = summaryResponse?.Content;
+                if (summaryContent != null)
+                    messages.Add(ChatMessage.Assistant(summaryContent));
+                return summaryContent;
+            }
+
             messages.Add(ChatMessage.Assistant(finalContent));
+        }
+
         return finalContent;
+    }
+
+    internal async Task ExecuteToolCallsAsync(
+        IReadOnlyList<ToolCall> toolCalls,
+        List<ChatMessage> messages,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct)
+    {
+        AgentToolRequestContext.CurrentMetadata = metadata;
+        try
+        {
+            await ExecuteToolCallsCoreAsync(toolCalls, messages, ct);
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
     }
 
     private async Task<(LLMResponse Response, bool Terminated)> InvokeLlmAsync(
@@ -176,6 +291,7 @@ public sealed class ToolCallLoop
 
         var response = llmCallContext.Response
             ?? new LLMResponse { Content = null, ToolCalls = null };
+        _budgetTracker?.RecordUsage(response.Usage);
         llmCtx.LLMResponse = response;
 
         // ─── Hook: LLM Request End ───
@@ -184,7 +300,7 @@ public sealed class ToolCallLoop
         return (response, llmCallContext.Terminate);
     }
 
-    private static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
+    internal static IReadOnlyDictionary<string, string>? BuildPerCallMetadata(
         IReadOnlyDictionary<string, string>? baseMetadata,
         string? callId)
     {
@@ -205,7 +321,7 @@ public sealed class ToolCallLoop
         return metadata;
     }
 
-    private static string? ComposeRoundCallId(string? baseRequestId, int round)
+    internal static string? ComposeRoundCallId(string? baseRequestId, int round)
     {
         if (string.IsNullOrWhiteSpace(baseRequestId))
             return null;
@@ -215,7 +331,7 @@ public sealed class ToolCallLoop
             : $"{baseRequestId}:tool-round:{round + 1}";
     }
 
-    private static string? ComposeFinalCallId(string? baseRequestId)
+    internal static string? ComposeFinalCallId(string? baseRequestId)
     {
         if (string.IsNullOrWhiteSpace(baseRequestId))
             return null;
@@ -236,7 +352,7 @@ public sealed class ToolCallLoop
         }
     }
 
-    private static ChatMessage BuildToolResultMessage(string callId, string toolResult)
+    internal static ChatMessage BuildToolResultMessage(string callId, string toolResult)
     {
         if (!TryExtractToolContentParts(toolResult, out var text, out var parts))
             return ChatMessage.Tool(callId, toolResult);
@@ -344,14 +460,27 @@ public sealed class ToolCallLoop
 
         return null;
     }
-    private sealed class NullAgentTool(string name) : IAgentTool
-    {
-        public string Name => name;
-        public string Description => "";
-        public string ParametersSchema => "{}";
-        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
-        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
-            Task.FromResult($"Tool '{name}' not found");
+    private async Task ExecuteToolCallsCoreAsync(
+        IReadOnlyList<ToolCall> toolCalls,
+        List<ChatMessage> messages,
+        CancellationToken ct)
+    {
+        using var executor = new StreamingToolExecutor(_tools, _hooks, _toolMiddlewares);
+
+        foreach (var call in toolCalls)
+            executor.AddTool(call);
+
+        await foreach (var result in executor.GetRemainingResultsAsync(ct))
+            messages.Add(BuildToolResultMessage(result.CallId, result.Result));
     }
+
+    /// <summary>
+    /// Detects whether the LLM response was truncated by the output token limit.
+    /// Different providers use different finish_reason strings for this condition.
+    /// </summary>
+    public static bool IsLengthTruncated(string? finishReason) =>
+        string.Equals(finishReason, "length", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(finishReason, "max_tokens", StringComparison.OrdinalIgnoreCase);
+
 }

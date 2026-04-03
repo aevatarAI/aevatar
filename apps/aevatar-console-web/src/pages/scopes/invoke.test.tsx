@@ -296,7 +296,6 @@ describe('ScopeInvokePage', () => {
           scriptDefinitionActorId: '',
           scriptSourceHash: '',
           staticActorTypeName: '',
-          staticPreferredActorId: '',
         },
       ],
     });
@@ -325,7 +324,6 @@ describe('ScopeInvokePage', () => {
       scriptDefinitionActorId: '',
       scriptSourceHash: '',
       staticActorTypeName: '',
-      staticPreferredActorId: '',
     });
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValue({
       scopeId: 'scope-a',

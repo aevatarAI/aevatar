@@ -192,7 +192,7 @@ public sealed class WorkspaceService
     private static string NormalizeRuntimeBaseUrl(string url)
     {
         var normalized = string.IsNullOrWhiteSpace(url)
-            ? "https://aevatar-console-backend-api.aevatar.ai"
+            ? UserConfigRuntimeDefaults.LocalRuntimeBaseUrl
             : url.Trim();
 
         return normalized.TrimEnd('/');

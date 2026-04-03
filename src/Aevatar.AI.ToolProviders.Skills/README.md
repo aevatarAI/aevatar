@@ -4,16 +4,20 @@
 
 ## 职责
 
-- 扫描目录发现 `SKILL.md`
-- 解析技能定义（名称、描述、指令、路径）
-- 将技能适配为 `IAgentTool`，供 LLM 在运行时调用
+- 扫描目录发现 `SKILL.md`（支持 YAML frontmatter）
+- 解析技能定义（名称、描述、参数、指令、元数据）
+- 通过统一 `UseSkillTool` 提供单一 `use_skill` 工具入口
+- `SkillRegistry` 汇聚本地 + 远程技能，支持系统 prompt 集成
 - 提供 DI 扩展 `AddSkills(...)`
 
 ## 核心类型
 
-- `SkillDefinition`：技能模型
+- `SkillDefinition`：技能模型（含 frontmatter 元数据）
 - `SkillDiscovery`：技能扫描与解析
-- `SkillToolAdapter`：技能 -> `IAgentTool`
+- `SkillFrontmatterParser`：SKILL.md frontmatter 解析
+- `SkillRegistry`：统一技能注册表
+- `UseSkillTool`：统一 use_skill 工具（替代散装 skill_xxx 工具）
+- `IRemoteSkillFetcher`：远程技能拉取抽象
 - `ServiceCollectionExtensions`：DI 注册入口
 
 ## 快速接入

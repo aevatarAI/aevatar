@@ -6,6 +6,7 @@ using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1148,6 +1149,74 @@ public sealed class WorkflowCoreModulesCoverageTests
         outputs["lower-1"].Should().Be("abc");
         outputs["trim-1"].Should().Be("hi");
         outputs["rev-1"].Should().Be("3\n2\n1");
+    }
+
+    [Fact]
+    public async Task TransformModule_ShouldSupportJsonExtractProjectionSortingAndTake()
+    {
+        var module = new TransformModule();
+        var ctx = CreateContext();
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "json-extract-1",
+                StepType = "transform",
+                Input =
+                    """
+                    {
+                      "nodes": [
+                        {
+                          "id": "node-1",
+                          "createdAt": "2026-03-20T10:00:00Z",
+                          "properties": {
+                            "abstract": "older abstract",
+                            "body": "older body"
+                          }
+                        },
+                        {
+                          "id": "node-2",
+                          "createdAt": "2026-03-22T10:00:00Z",
+                          "properties": {
+                            "abstract": "newest abstract",
+                            "body": "newest body"
+                          }
+                        },
+                        {
+                          "id": "node-3",
+                          "createdAt": "2026-03-21T10:00:00Z",
+                          "properties": {
+                            "abstract": "middle abstract",
+                            "body": "middle body"
+                          }
+                        }
+                      ]
+                    }
+                    """,
+                Parameters =
+                {
+                    ["op"] = "json_extract",
+                    ["path"] = "nodes",
+                    ["field"] = "id,properties.abstract",
+                    ["sort_by"] = "createdAt",
+                    ["order"] = "desc",
+                    ["n"] = "2",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var completion = ctx.Published.Select(x => x.evt).OfType<StepCompletedEvent>().Single();
+        completion.Success.Should().BeTrue();
+
+        using var output = JsonDocument.Parse(completion.Output);
+        output.RootElement.ValueKind.Should().Be(JsonValueKind.Array);
+        output.RootElement.GetArrayLength().Should().Be(2);
+        output.RootElement[0].GetProperty("id").GetString().Should().Be("node-2");
+        output.RootElement[0].GetProperty("properties").GetProperty("abstract").GetString().Should().Be("newest abstract");
+        output.RootElement[1].GetProperty("id").GetString().Should().Be("node-3");
+        output.RootElement[1].GetProperty("properties").GetProperty("abstract").GetString().Should().Be("middle abstract");
+        output.RootElement[0].TryGetProperty("createdAt", out _).Should().BeFalse();
     }
 
     [Fact]

@@ -207,7 +207,6 @@ const ScopeOverviewPage: React.FC = () => {
   const currentBindingContext = describeStudioScopeBindingRevisionContext(activeRevision);
   const currentBindingActor =
     activeRevision?.primaryActorId ||
-    activeRevision?.staticPreferredActorId ||
     binding?.primaryActorId ||
     "";
   const selectedServiceCard =
@@ -385,7 +384,7 @@ const ScopeOverviewPage: React.FC = () => {
                     history.push(
                       buildRuntimeGAgentsHref({
                         scopeId,
-                        actorId: activeRevision?.staticPreferredActorId || undefined,
+                        actorId: activeRevision?.primaryActorId || undefined,
                         actorTypeName: activeRevision?.staticActorTypeName || undefined,
                       }),
                     )
@@ -514,7 +513,7 @@ const ScopeOverviewPage: React.FC = () => {
                               buildRuntimeGAgentsHref({
                                 scopeId,
                                 actorId:
-                                  activeRevision.staticPreferredActorId || undefined,
+                                  activeRevision.primaryActorId || undefined,
                                 actorTypeName:
                                   activeRevision.staticActorTypeName || undefined,
                               }),
@@ -725,11 +724,7 @@ const ScopeOverviewPage: React.FC = () => {
               <MetricCard label="Serving state" value={focusedRevision.servingState || focusedRevision.status} />
               <MetricCard
                 label="Actor"
-                value={
-                  focusedRevision.primaryActorId ||
-                  focusedRevision.staticPreferredActorId ||
-                  "n/a"
-                }
+                value={focusedRevision.primaryActorId || "n/a"}
               />
             </div>
             {describeStudioScopeBindingRevisionContext(focusedRevision) ? (
@@ -768,7 +763,7 @@ const ScopeOverviewPage: React.FC = () => {
                     buildRuntimeGAgentsHref({
                       scopeId,
                       actorId:
-                        focusedRevision.staticPreferredActorId || undefined,
+                        focusedRevision.primaryActorId || undefined,
                       actorTypeName:
                         focusedRevision.staticActorTypeName || undefined,
                     }),
@@ -1012,7 +1007,7 @@ const RevisionCard: React.FC<{
         wordBreak: "break-word",
       }}
     >
-      Actor {revision.primaryActorId || revision.staticPreferredActorId || "n/a"} · Deployment{" "}
+      Actor {revision.primaryActorId || "n/a"} · Deployment{" "}
       {revision.deploymentId || "draft"}
     </Typography.Text>
     <Space wrap>

@@ -1256,12 +1256,6 @@ const StudioPage: React.FC = () => {
     retry: false,
     queryFn: () => runtimeGAgentApi.listTypes(),
   });
-  const gAgentActorsQuery = useQuery({
-    queryKey: ['studio-runtime-gagent-actors', resolvedStudioScopeId],
-    enabled: studioHostReady && Boolean(resolvedStudioScopeId),
-    retry: false,
-    queryFn: () => runtimeGAgentApi.listActors(resolvedStudioScopeId),
-  });
   const runtimePrimitivesQuery = useQuery({
     queryKey: ['studio-runtime-primitives'],
     enabled: studioHostReady,
@@ -2406,7 +2400,6 @@ const StudioPage: React.FC = () => {
   const handleBindGAgent = async (input: {
     displayName?: string;
     actorTypeName: string;
-    preferredActorId?: string;
     endpoints?: Array<{
       endpointId: string;
       displayName?: string;
@@ -2522,7 +2515,6 @@ const StudioPage: React.FC = () => {
           launchEndpoint?.endpointId ||
           actorTypeName,
         actorTypeName,
-        preferredActorId: input.preferredActorId?.trim() || undefined,
         endpoints: normalizedEndpoints,
       });
       await queryClient.invalidateQueries({
@@ -4596,9 +4588,6 @@ const StudioPage: React.FC = () => {
           gAgentTypes={gAgentTypesQuery.data ?? []}
           gAgentTypesLoading={gAgentTypesQuery.isLoading}
           gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
-          gAgentActorGroups={gAgentActorsQuery.data ?? []}
-          gAgentActorsLoading={gAgentActorsQuery.isLoading}
-          gAgentActorsError={gAgentActorsQuery.isError ? gAgentActorsQuery.error : null}
           bindingActivationRevisionId={bindingActivationRevisionId}
           bindingRetirementRevisionId={bindingRetirementRevisionId}
           onSwitchStudioView={handleSwitchStudioView}

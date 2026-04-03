@@ -214,6 +214,14 @@ function bumpRevision(revision: string): string {
   return `${revision}-2`;
 }
 
+function getNextCandidateRevision(baseRevision: string): string {
+  const match = baseRevision.match(/^(.*?)(\d+)$/);
+  if (match) {
+    return `${match[1]}${Number(match[2]) + 1}`;
+  }
+  return `${baseRevision}_new`;
+}
+
 function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraft {
   const now = new Date().toISOString();
   const normalizedPackage = normalizeDraftPackageForAppRuntime(seed.package);
@@ -1242,11 +1250,28 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       await api.scope.bindScript(scopeId, scriptId, scriptId, sid);
       setBindModalOpen(false);
       onFlash(`Bound script "${scriptId}" as service "${sid}"`, 'success');
-    } catch (e: any) {
-      onFlash(e?.message || 'Bind failed', 'error');
+    } catch (error: any) {
+      onFlash(error?.message || 'Failed to bind script', 'error');
     } finally {
       setBindPending(false);
     }
+  }
+
+  function handleOpenBindModal() {
+    if (!selectedDraft) {
+      return;
+    }
+
+    if (selectedDraft.lastPromotion?.status === 'promoted') {
+      setBindModalOpen(true);
+      return;
+    }
+
+    updateDraft(selectedDraft.key, draft => ({
+      ...draft,
+      revision: getNextCandidateRevision(draft.baseRevision || ''),
+    }));
+    setPromotionModalOpen(true);
   }
 
   async function handleSaveScript() {
@@ -1401,7 +1426,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
     }
 
     let accumulated = '';
-    await api.scope.streamDefaultChat(scopeId, inputText, undefined, (frame: any) => {
+    await api.scope.streamDefaultChat(scopeId, inputText, undefined, undefined, (frame: any) => {
       if (frame.textMessageContent?.delta) {
         accumulated += frame.textMessageContent.delta;
       } else if (frame.type === 'TEXT_MESSAGE_CONTENT' && frame.delta) {
@@ -2177,7 +2202,7 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
               </button>
               <button
                 type="button"
-                onClick={() => setBindModalOpen(true)}
+                onClick={handleOpenBindModal}
                 data-tooltip="Bind as Service"
                 aria-label="Bind as Service"
                 className="panel-icon-button header-toolbar-action"

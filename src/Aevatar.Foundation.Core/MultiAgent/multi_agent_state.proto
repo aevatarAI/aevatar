@@ -1,0 +1,57 @@
+// ─────────────────────────────────────────────────────────────
+// Multi-Agent actor state definitions.
+// ─────────────────────────────────────────────────────────────
+syntax = "proto3";
+package aevatar.multiagent;
+option csharp_namespace = "Aevatar.Foundation.Core.MultiAgent";
+
+import "google/protobuf/timestamp.proto";
+
+// ═══════════════════════════════════════════════════════════════
+// TaskBoard state
+// ═══════════════════════════════════════════════════════════════
+
+enum TaskStatus {
+  TASK_STATUS_PENDING = 0;
+  TASK_STATUS_IN_PROGRESS = 1;
+  TASK_STATUS_COMPLETED = 2;
+  TASK_STATUS_FAILED = 3;
+}
+
+message TaskEntry {
+  string task_id = 1;
+  string content = 2;
+  string active_form = 3;
+  TaskStatus status = 4;
+  string owner_agent_id = 5;
+  repeated string blocked_by = 6;
+  string output = 7;
+  string error = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+  int32 sequence = 11;
+}
+
+message TaskBoardState {
+  map<string, TaskEntry> tasks = 1;
+  map<string, string> agent_current_task = 2;
+  int32 next_task_sequence = 3;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TeamManager state
+// ═══════════════════════════════════════════════════════════════
+
+message TeamMember {
+  string agent_id = 1;
+  string agent_name = 2;
+  string agent_type = 3;
+  string status = 4;
+  google.protobuf.Timestamp joined_at = 5;
+}
+
+message TeamManagerState {
+  string team_name = 1;
+  string lead_agent_id = 2;
+  map<string, TeamMember> members = 3;
+}

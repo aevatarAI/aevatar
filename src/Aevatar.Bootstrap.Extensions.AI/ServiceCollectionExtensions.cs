@@ -7,9 +7,18 @@ using Aevatar.AI.LLMProviders.NyxId;
 using Aevatar.AI.LLMProviders.Tornado;
 using Aevatar.AI.ToolProviders.MCP;
 using Aevatar.AI.ToolProviders.Ornn;
+using Aevatar.AI.ToolProviders.Scripting;
+using Aevatar.AI.ToolProviders.ServiceInvoke;
 using Aevatar.AI.ToolProviders.Skills;
+using Aevatar.AI.ToolProviders.Web;
+using Aevatar.AI.ToolProviders.Binding;
+using Aevatar.AI.ToolProviders.Workflow;
+using Aevatar.AI.ToolProviders.Workflow.Ports;
+using Aevatar.AI.Infrastructure.Local.Adapters;
 using Aevatar.Bootstrap.Connectors;
 using Aevatar.Bootstrap.Extensions.AI.Connectors;
+using Aevatar.Workflow.Application.Abstractions.Workflows;
+using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,11 +41,21 @@ public sealed class AevatarAIFeatureOptions
     public string? OrnnBaseUrl { get; set; }
     public IAevatarSecretsStore? SecretsStore { get; set; }
     public string? ApiKey { get; set; }
-    public string? NyxIdGatewayEndpoint { get; set; }
+    public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
     public string DefaultProvider { get; set; } = "openai";
     public string OpenAIModel { get; set; } = "gpt-4o-mini";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
+    public bool EnableServiceInvokeTools { get; set; }
+    public string? ServiceInvokeTenantId { get; set; }
+    public string? ServiceInvokeAppId { get; set; }
+    public string? ServiceInvokeNamespace { get; set; }
+    public bool EnableWebTools { get; set; }
+    public string? WebSearchNyxIdSlug { get; set; }
+    public string? WebSearchApiBaseUrl { get; set; }
+    public bool EnableWorkflowTools { get; set; }
+    public bool EnableScriptingTools { get; set; }
+    public bool EnableBindingTools { get; set; }
 }
 
 public static class ServiceCollectionExtensions
@@ -53,6 +72,12 @@ public static class ServiceCollectionExtensions
         configure?.Invoke(options);
 
         services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
+        services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
+            new LocalWorkflowDefinitionCommandAdapter(
+                sp.GetRequiredService<IWorkflowYamlValidator>(),
+                workflowsDirectory: null,
+                sp.GetService<ILogger<LocalWorkflowDefinitionCommandAdapter>>()));
         RegisterMeaiProviders(services, configuration, options);
 
         if (options.EnableMCPTools)
@@ -66,6 +91,21 @@ public static class ServiceCollectionExtensions
 
         if (options.EnableOrnnSkills)
             RegisterOrnnSkills(services, options);
+
+        if (options.EnableServiceInvokeTools)
+            RegisterServiceInvokeTools(services, options);
+
+        if (options.EnableWebTools)
+            RegisterWebTools(services, options);
+
+        if (options.EnableWorkflowTools)
+            RegisterWorkflowTools(services);
+
+        if (options.EnableScriptingTools)
+            RegisterScriptingTools(services);
+
+        if (options.EnableBindingTools)
+            RegisterBindingTools(services);
 
         return services;
     }
@@ -280,14 +320,7 @@ public static class ServiceCollectionExtensions
         IConfiguration configuration,
         AevatarAIFeatureOptions options)
     {
-        var authority = configuration["Aevatar:NyxId:Authority"]
-            ?? configuration["Cli:App:NyxId:Authority"]
-            ?? configuration["Aevatar:Authentication:Authority"];
-
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        var gatewayEndpoint = NormalizeNyxIdGatewayEndpoint(authority);
+        var gatewayEndpoint = ResolveNyxIdGatewayEndpoint(configuration, options);
         if (string.IsNullOrWhiteSpace(gatewayEndpoint))
             return null;
 
@@ -483,33 +516,15 @@ public static class ServiceCollectionExtensions
 
     private static string? ResolveNyxIdGatewayEndpoint(IConfiguration configuration, AevatarAIFeatureOptions options)
     {
-        var configuredEndpoint = options.NyxIdGatewayEndpoint;
-        if (!string.IsNullOrWhiteSpace(configuredEndpoint))
-            return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+        if (options.NyxIdLlmEndpoint != null)
+        {
+            var authority = configuration["Cli:App:NyxId:Authority"]
+                ?? configuration["Aevatar:NyxId:Authority"]
+                ?? configuration["Aevatar:Authentication:Authority"];
+            return NyxIdLlmEndpointResolver.ResolveEndpoint(authority, options.NyxIdLlmEndpoint);
+        }
 
-        var authority = configuration["Cli:App:NyxId:Authority"]
-            ?? configuration["Aevatar:NyxId:Authority"]
-            ?? configuration["Aevatar:Authentication:Authority"];
-        if (string.IsNullOrWhiteSpace(authority))
-            return null;
-
-        return NormalizeNyxIdGatewayEndpoint(authority);
-    }
-
-    private static string? NormalizeNyxIdGatewayEndpoint(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        var trimmed = value.Trim().TrimEnd('/');
-        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
-            return trimmed;
-
-        var absolute = uri.ToString().TrimEnd('/');
-        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
-            return absolute;
-
-        return $"{absolute}/api/v1/llm/gateway/v1";
+        return NyxIdLlmEndpointResolver.ResolveEndpoint(configuration);
     }
 
     private sealed record FallbackRegistration(
@@ -589,11 +604,46 @@ public static class ServiceCollectionExtensions
         });
     }
 
+    private static void RegisterServiceInvokeTools(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        services.AddServiceInvokeTools(o =>
+        {
+            o.TenantId = options.ServiceInvokeTenantId;
+            o.AppId = options.ServiceInvokeAppId;
+            o.Namespace = options.ServiceInvokeNamespace;
+            o.EnableDynamicScopeResolution = true;
+        });
+    }
+
     private static void RegisterOrnnSkills(IServiceCollection services, AevatarAIFeatureOptions options)
     {
         if (string.IsNullOrWhiteSpace(options.OrnnBaseUrl))
             return;
 
         services.AddOrnnSkills(o => o.BaseUrl = options.OrnnBaseUrl);
+    }
+
+    private static void RegisterWebTools(IServiceCollection services, AevatarAIFeatureOptions options)
+    {
+        services.AddWebTools(o =>
+        {
+            o.NyxIdSearchSlug = options.WebSearchNyxIdSlug;
+            o.SearchApiBaseUrl = options.WebSearchApiBaseUrl;
+        });
+    }
+
+    private static void RegisterWorkflowTools(IServiceCollection services)
+    {
+        services.AddWorkflowTools();
+    }
+
+    private static void RegisterScriptingTools(IServiceCollection services)
+    {
+        services.AddScriptingTools();
+    }
+
+    private static void RegisterBindingTools(IServiceCollection services)
+    {
+        services.AddBindingTools();
     }
 }

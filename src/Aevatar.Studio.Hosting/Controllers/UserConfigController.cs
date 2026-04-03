@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -44,6 +45,11 @@ public sealed class UserConfigController : ControllerBase
         {
             return Ok(await _userConfigStore.GetAsync(cancellationToken));
         }
+        catch (ChronoStorageServiceException exception)
+        {
+            _logger.LogWarning(exception, "Chrono-storage is unavailable when reading user config");
+            return ChronoStorageErrorResponses.ToActionResult(exception);
+        }
         catch (InvalidOperationException exception)
         {
             return BadRequest(new { message = exception.Message });
@@ -57,13 +63,25 @@ public sealed class UserConfigController : ControllerBase
 
     [HttpPut]
     public async Task<ActionResult<UserConfig>> Save(
-        [FromBody] UserConfig request,
+        [FromBody] SaveUserConfigRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            await _userConfigStore.SaveAsync(request, cancellationToken);
-            return Ok(request);
+            var current = await _userConfigStore.GetAsync(cancellationToken);
+            var merged = new UserConfig(
+                DefaultModel: request.DefaultModel is null ? current.DefaultModel : request.DefaultModel.Trim(),
+                PreferredLlmRoute: request.PreferredLlmRoute is null ? current.PreferredLlmRoute : UserConfigLlmRoute.Normalize(request.PreferredLlmRoute),
+                RuntimeMode: request.RuntimeMode is null ? current.RuntimeMode : request.RuntimeMode.Trim(),
+                LocalRuntimeBaseUrl: request.LocalRuntimeBaseUrl is null ? current.LocalRuntimeBaseUrl : request.LocalRuntimeBaseUrl.Trim(),
+                RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim());
+            await _userConfigStore.SaveAsync(merged, cancellationToken);
+            return Ok(merged);
+        }
+        catch (ChronoStorageServiceException exception)
+        {
+            _logger.LogWarning(exception, "Chrono-storage is unavailable when saving user config");
+            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {
@@ -75,6 +93,13 @@ public sealed class UserConfigController : ControllerBase
             return StatusCode(502, new { message = "User config storage is temporarily unavailable." });
         }
     }
+
+    public sealed record SaveUserConfigRequest(
+        [property: JsonPropertyName("defaultModel")] string? DefaultModel = null,
+        [property: JsonPropertyName("preferredLlmRoute")] string? PreferredLlmRoute = null,
+        [property: JsonPropertyName("runtimeMode")] string? RuntimeMode = null,
+        [property: JsonPropertyName("localRuntimeBaseUrl")] string? LocalRuntimeBaseUrl = null,
+        [property: JsonPropertyName("remoteRuntimeBaseUrl")] string? RemoteRuntimeBaseUrl = null);
 
     [HttpGet("models")]
     public async Task<ActionResult<NyxIdLlmStatusResponse>> GetModels(CancellationToken cancellationToken)
@@ -118,6 +143,9 @@ public sealed class UserConfigController : ControllerBase
             if (status == null)
                 return Ok(NyxIdLlmStatusResponse.Empty);
 
+            foreach (var provider in status.Providers ?? [])
+                provider.Source ??= NyxIdLlmProviderSource.GatewayProvider;
+
             // Fetch actual model names from each ready LLM provider via proxy
             var readyProviders = (status.Providers ?? [])
                 .Where(p => string.Equals(p.Status, "ready", StringComparison.OrdinalIgnoreCase))
@@ -136,6 +164,7 @@ public sealed class UserConfigController : ControllerBase
                     ProviderName = svc.Label,
                     Status = "ready",
                     ProxyUrl = $"{authorityBase}/api/v1/proxy/s/{Uri.EscapeDataString(svc.Slug)}",
+                    Source = NyxIdLlmProviderSource.UserService,
                 });
                 readyProviders.Add(new NyxIdLlmProviderStatus
                 {
@@ -143,11 +172,17 @@ public sealed class UserConfigController : ControllerBase
                     ProviderName = svc.Label,
                     Status = "ready",
                     ProxyUrl = $"{authorityBase}/api/v1/proxy/s/{Uri.EscapeDataString(svc.Slug)}",
+                    Source = NyxIdLlmProviderSource.UserService,
                 });
             }
 
-            status.SupportedModels = await FetchModelsFromProvidersAsync(
+            status.ModelsByProvider = await FetchModelsFromProvidersAsync(
                 authorityBase, bearerToken, readyProviders, cancellationToken);
+            status.SupportedModels = status.ModelsByProvider
+                .Values
+                .SelectMany(models => models)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
             _logger.LogInformation(
                 "Fetched LLM status: {ProviderCount} providers, {ModelCount} models from live providers",
@@ -215,7 +250,7 @@ public sealed class UserConfigController : ControllerBase
             ],
         };
 
-    private async Task<List<string>> FetchModelsFromProvidersAsync(
+    private async Task<Dictionary<string, List<string>>> FetchModelsFromProvidersAsync(
         string authorityBase,
         string bearerToken,
         List<NyxIdLlmProviderStatus> readyProviders,
@@ -249,7 +284,7 @@ public sealed class UserConfigController : ControllerBase
                             .ToArray();
 
                         if (models.Length > 0)
-                            return models;
+                            return new KeyValuePair<string, List<string>>(slug, [.. models]);
                     }
 
                     _logger.LogDebug("Provider {Slug} /models returned {Status}, using fallback", slug, response.StatusCode);
@@ -260,11 +295,29 @@ public sealed class UserConfigController : ControllerBase
                 }
 
                 // Fallback for providers with non-standard /models endpoint
-                return FallbackModels.TryGetValue(slug, out var fallback) ? fallback : Array.Empty<string>();
+                var fallback = FallbackModels.TryGetValue(slug, out var fallbackModels)
+                    ? fallbackModels.ToList()
+                    : new List<string>();
+                return new KeyValuePair<string, List<string>>(slug, fallback);
             });
 
         var results = await Task.WhenAll(tasks);
-        return results.SelectMany(r => r).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var modelsByProvider = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var result in results)
+        {
+            var slug = result.Key;
+            var models = result.Value;
+            if (string.IsNullOrWhiteSpace(slug))
+                continue;
+
+            modelsByProvider[slug] = models
+                .Where(model => !string.IsNullOrWhiteSpace(model))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        return modelsByProvider;
     }
 
     /// <summary>
@@ -331,6 +384,9 @@ public sealed class NyxIdLlmStatusResponse
 
     [JsonPropertyName("supported_models")]
     public List<string>? SupportedModels { get; set; }
+
+    [JsonPropertyName("models_by_provider")]
+    public Dictionary<string, List<string>>? ModelsByProvider { get; set; }
 }
 
 public sealed class NyxIdLlmProviderStatus
@@ -346,6 +402,15 @@ public sealed class NyxIdLlmProviderStatus
 
     [JsonPropertyName("proxy_url")]
     public string? ProxyUrl { get; set; }
+
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+}
+
+public static class NyxIdLlmProviderSource
+{
+    public const string GatewayProvider = "gateway_provider";
+    public const string UserService = "user_service";
 }
 
 internal sealed class NyxIdKeysResponse

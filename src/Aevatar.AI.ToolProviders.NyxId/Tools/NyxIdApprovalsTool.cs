@@ -4,7 +4,7 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 
-/// <summary>Tool to manage NyxID approval requests.</summary>
+/// <summary>Tool to manage NyxID approval requests, grants, and settings.</summary>
 public sealed class NyxIdApprovalsTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
@@ -15,8 +15,7 @@ public sealed class NyxIdApprovalsTool : IAgentTool
 
     public string Description =>
         "Manage approval requests for proxied service calls. " +
-        "Use 'list' to see pending approvals, 'approve' or 'deny' to decide on a request, " +
-        "or 'configs' to view per-service approval settings.";
+        "Actions: list, show, approve, deny, configs, grants, revoke_grant, enable, disable, set_config.";
 
     public string ParametersSchema => """
         {
@@ -24,15 +23,23 @@ public sealed class NyxIdApprovalsTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "approve", "deny", "configs"],
-              "description": "Action: 'list' pending approvals, 'approve'/'deny' a request, or 'configs' for service approval settings"
+              "enum": ["list", "show", "approve", "deny", "configs", "grants", "revoke_grant", "enable", "disable", "set_config"],
+              "description": "Action to perform (default: list)"
             },
             "id": {
               "type": "string",
-              "description": "Approval request ID (required for 'approve' and 'deny')"
+              "description": "Request/grant/service-config ID"
+            },
+            "require_approval": {
+              "type": "boolean",
+              "description": "For set_config: require approval"
+            },
+            "approval_mode": {
+              "type": "string",
+              "enum": ["per_request", "grant"],
+              "description": "For set_config: approval mode"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -40,30 +47,43 @@ public sealed class NyxIdApprovalsTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? id = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("id", out var i))
-                id = i.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "list");
+        var id = args.Str("id");
 
         return action switch
         {
+            "show" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetApprovalAsync(token, id, ct),
             "approve" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DecideApprovalAsync(token, id, """{"decision":"approve"}""", ct),
             "deny" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DecideApprovalAsync(token, id, """{"decision":"deny"}""", ct),
-            "approve" or "deny" => $"Error: 'id' is required for {action} action.",
+            "revoke_grant" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.RevokeApprovalGrantAsync(token, id, ct),
+            "set_config" when !string.IsNullOrWhiteSpace(id) =>
+                await SetConfigAsync(token, id, args, ct),
+
+            "show" or "approve" or "deny" or "revoke_grant" or "set_config" =>
+                $"{{\"error\":\"'id' is required for {action}\"}}",
+
+            "grants" => await _client.ListApprovalGrantsAsync(token, ct),
             "configs" => await _client.ListApprovalServiceConfigsAsync(token, ct),
+            "enable" => await _client.SetGlobalApprovalAsync(token, true, ct),
+            "disable" => await _client.SetGlobalApprovalAsync(token, false, ct),
             _ => await _client.ListApprovalsAsync(token, ct),
         };
+    }
+
+    private async Task<string> SetConfigAsync(string token, string id, ToolArgs args, CancellationToken ct)
+    {
+        var p = new Dictionary<string, object?>();
+        var ra = args.Bool("require_approval");
+        if (ra.HasValue) p["require_approval"] = ra.Value;
+        var mode = args.Str("approval_mode");
+        if (mode != null) p["approval_mode"] = mode;
+        return await _client.SetApprovalConfigAsync(token, id, JsonSerializer.Serialize(p), ct);
     }
 }

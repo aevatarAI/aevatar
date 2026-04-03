@@ -1,13 +1,17 @@
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Presentation.AGUI;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgentService.Hosting.Endpoints;
 
@@ -307,7 +311,7 @@ public static class ScopeWorkflowEndpoints
                     AgentId = workflow.ActorId,
                     SessionId = sessionId,
                     ScopeId = NormalizeRequired(scopeId, nameof(scopeId)),
-                    Metadata = BuildScopedHeaders(scopeId, headers, http),
+                    Metadata = await BuildScopedHeadersAsync(scopeId, headers, http, ct),
                 },
                 chatRunService,
                 ct);
@@ -320,7 +324,7 @@ public static class ScopeWorkflowEndpoints
             workflow,
             prompt,
             sessionId,
-            BuildScopedHeaders(scopeId, headers, http),
+            await BuildScopedHeadersAsync(scopeId, headers, http, ct),
             chatRunService,
             ct);
     }
@@ -419,7 +423,7 @@ public static class ScopeWorkflowEndpoints
                 workflow.ActorId,
                 sessionId,
                 WorkflowYamls: null,
-                Metadata: BuildScopedHeaders(scopeId, headers, http),
+                Metadata: await BuildScopedHeadersAsync(scopeId, headers, http, ct),
                 ScopeId: NormalizeRequired(scopeId, nameof(scopeId))),
             chatRunService,
             ct);
@@ -505,10 +509,11 @@ public static class ScopeWorkflowEndpoints
         return false;
     }
 
-    private static Dictionary<string, string> BuildScopedHeaders(
+    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null)
+        HttpContext? http = null,
+        CancellationToken cancellationToken = default)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -519,7 +524,28 @@ public static class ScopeWorkflowEndpoints
         {
             var auth = http.Request.Headers.Authorization.FirstOrDefault();
             if (auth != null && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-                scopedHeaders["nyxid.access_token"] = auth["Bearer ".Length..].Trim();
+            {
+                var bearerToken = auth["Bearer ".Length..].Trim();
+                scopedHeaders["nyxid.access_token"] = bearerToken;
+                scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+            }
+
+            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            if (userConfigStore != null)
+            {
+                try
+                {
+                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                    if (!string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
+                }
+                catch
+                {
+                    // Best-effort; fall back to provider default if config unavailable.
+                }
+            }
         }
 
         return scopedHeaders;

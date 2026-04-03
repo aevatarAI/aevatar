@@ -104,7 +104,6 @@ export default function GAgentPage() {
       await api.scope.bindGAgent(
         scopeId,
         `${selectedType.fullName}, ${selectedType.assemblyName}`,
-        effectiveActorId || undefined,
         selectedType.typeName,
         serviceId,
       );
@@ -201,7 +200,7 @@ export default function GAgentPage() {
       </header>
 
       {/* Body — split: left type list, right detail/actions */}
-      <div className="flex-1 min-h-0 flex bg-[#F2F1EE]">
+      <div className="gagent-page flex-1 min-h-0 flex bg-[#F2F1EE]">
 
         {/* ─── Left: Type Catalog ─── */}
         <aside className="w-[320px] flex-shrink-0 border-r border-[#E6E3DE] bg-white flex flex-col">
@@ -267,14 +266,14 @@ export default function GAgentPage() {
           ) : (
             <>
               {/* Selected type info */}
-              <div className="rounded-xl border border-[#E6E3DE] bg-white p-5">
+              <div className="workspace-card p-5">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Selected Type</div>
                 <div className="text-[16px] font-bold text-gray-800">{selectedType.typeName}</div>
                 <div className="text-[12px] text-gray-500 mt-0.5 font-mono">{selectedType.fullName}</div>
               </div>
 
               {/* Actor selection */}
-              <div className="rounded-xl border border-[#E6E3DE] bg-white p-5 space-y-3">
+              <div className="workspace-card p-5 space-y-3">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Actor</div>
                 <div className="flex gap-4 items-center">
                   <label className="flex items-center gap-1.5 text-[13px] text-gray-700 cursor-pointer">
@@ -297,7 +296,7 @@ export default function GAgentPage() {
                   <div className="space-y-2">
                     {currentActorIds.length > 0 ? (
                       <select
-                        className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        className="panel-input font-mono text-[13px]"
                         value={selectedActorId}
                         onChange={e => setSelectedActorId(e.target.value)}
                       >
@@ -308,7 +307,7 @@ export default function GAgentPage() {
                       </select>
                     ) : null}
                     <input
-                      className="w-full rounded-lg border border-[#E6E3DE] bg-white px-3 py-2 text-[13px] font-mono focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      className="panel-input font-mono text-[13px]"
                       value={manualActorId}
                       onChange={e => setManualActorId(e.target.value)}
                       placeholder="Or enter actor ID manually..."
@@ -318,7 +317,7 @@ export default function GAgentPage() {
               </div>
 
               {/* Actions: Bind / Draft-Run */}
-              <div className="rounded-xl border border-[#E6E3DE] bg-white p-5 space-y-4">
+              <div className="workspace-card p-5 space-y-4">
                 {/* Bind as Service */}
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Bind as Scope Service</div>
@@ -356,13 +355,13 @@ export default function GAgentPage() {
                       <div className="rounded-lg border border-[#E6E3DE] bg-[#FAFAF9] p-3 space-y-2">
                         <div className="grid grid-cols-2 gap-2">
                           <input
-                            className="rounded border border-[#E6E3DE] bg-white px-2 py-1 text-[12px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="panel-input !min-h-[34px] !rounded-md px-2 font-mono text-[12px]"
                             placeholder="endpoint-id *"
                             value={newEp.endpointId}
                             onChange={e => setNewEp(v => ({ ...v, endpointId: e.target.value }))}
                           />
                           <select
-                            className="rounded border border-[#E6E3DE] bg-white px-2 py-1 text-[12px] focus:outline-none focus:ring-1 focus:ring-blue-400"
+                            className="panel-input !min-h-[34px] !rounded-md px-2 text-[12px]"
                             value={newEp.kind}
                             onChange={e => setNewEp(v => ({ ...v, kind: e.target.value as 'chat' | 'command' }))}
                           >
@@ -371,13 +370,13 @@ export default function GAgentPage() {
                           </select>
                         </div>
                         <input
-                          className="w-full rounded border border-[#E6E3DE] bg-white px-2 py-1 text-[12px] font-mono focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          className="panel-input !min-h-[34px] !rounded-md px-2 font-mono text-[12px]"
                           placeholder="requestTypeUrl (optional)"
                           value={newEp.requestTypeUrl}
                           onChange={e => setNewEp(v => ({ ...v, requestTypeUrl: e.target.value }))}
                         />
                         <input
-                          className="w-full rounded border border-[#E6E3DE] bg-white px-2 py-1 text-[12px] focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          className="panel-input !min-h-[34px] !rounded-md px-2 text-[12px]"
                           placeholder="description (optional)"
                           value={newEp.description}
                           onChange={e => setNewEp(v => ({ ...v, description: e.target.value }))}
@@ -386,11 +385,11 @@ export default function GAgentPage() {
                           <button
                             onClick={handleAddEndpoint}
                             disabled={!newEp.endpointId.trim()}
-                            className="rounded bg-blue-600 px-3 py-1 text-[12px] font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+                            className="solid-action !min-h-[32px] !rounded-md !px-3 disabled:opacity-40"
                           >Add</button>
                           <button
                             onClick={() => setShowAddEp(false)}
-                            className="rounded border border-[#E6E3DE] px-3 py-1 text-[12px] text-gray-500 hover:bg-gray-50"
+                            className="ghost-action !min-h-[32px] !rounded-md !px-3"
                           >Cancel</button>
                         </div>
                       </div>
@@ -405,7 +404,7 @@ export default function GAgentPage() {
                   <div className="space-y-2">
                     <label className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Service ID</label>
                     <input
-                      className="w-full rounded-lg border border-[#E6E3DE] bg-[#FAFAF9] px-3 py-2 text-[12px] font-mono text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      className="panel-input font-mono text-[12px]"
                       placeholder={selectedType?.typeName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'my-service'}
                       value={bindServiceId}
                       onChange={e => setBindServiceId(e.target.value)}
@@ -419,7 +418,7 @@ export default function GAgentPage() {
                     <button
                       onClick={handleBind}
                       disabled={binding || !scopeId}
-                      className="rounded-lg bg-[#18181B] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#333] disabled:opacity-40"
+                      className="solid-action disabled:opacity-40"
                     >
                       {binding ? 'Binding...' : 'Bind as Service'}
                     </button>
@@ -439,7 +438,7 @@ export default function GAgentPage() {
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">Draft Run</div>
                   <textarea
                     rows={3}
-                    className="w-full rounded-lg border border-[#E6E3DE] bg-[#FAFAF9] px-3 py-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-blue-400 mb-2"
+                    className="panel-textarea !min-h-[96px] mb-2"
                     value={prompt}
                     onChange={e => setPrompt(e.target.value)}
                     placeholder="Enter your prompt to test this GAgent..."
@@ -448,12 +447,12 @@ export default function GAgentPage() {
                     <button
                       onClick={handleDraftRun}
                       disabled={running || !prompt.trim() || !scopeId}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
+                      className="solid-action disabled:opacity-40"
                     >
                       {running ? 'Running...' : 'Draft Run'}
                     </button>
                     {running && (
-                      <button onClick={handleStop} className="rounded-lg border border-red-300 px-4 py-2 text-[13px] text-red-600 hover:bg-red-50">
+                      <button onClick={handleStop} className="ghost-action text-red-600 hover:text-red-700">
                         Stop
                       </button>
                     )}
@@ -479,7 +478,7 @@ export default function GAgentPage() {
 
               {/* Run output */}
               {(runError || runId || streamText) && (
-                <div className="rounded-xl border border-[#E6E3DE] bg-white p-5 space-y-3">
+                <div className="workspace-card p-5 space-y-3">
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Run Output</div>
 
                   {runError && (
@@ -504,7 +503,7 @@ export default function GAgentPage() {
 
               {/* Saved Actors */}
               {currentActorIds.length > 0 && (
-                <div className="rounded-xl border border-[#E6E3DE] bg-white p-5 space-y-3">
+                <div className="workspace-card p-5 space-y-3">
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
                     Saved Actors for {selectedType.typeName} ({currentActorIds.length})
                   </div>
@@ -529,7 +528,7 @@ export default function GAgentPage() {
 
               {/* All Actor Groups */}
               {actorGroups.length > 1 && (
-                <details className="rounded-xl border border-[#E6E3DE] bg-white overflow-hidden">
+                <details className="workspace-card overflow-hidden">
                   <summary className="px-5 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:bg-gray-50">
                     All Saved Actors ({actorGroups.reduce((n, g) => n + g.actorIds.length, 0)} total)
                   </summary>

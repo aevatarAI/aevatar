@@ -41,7 +41,8 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<IScopeWorkflowCommandPort>(),
             sp.GetService<Aevatar.Workflow.Application.Abstractions.Runs.IWorkflowActorBindingReader>(),
             sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceRevisionArtifactStore>(),
-            sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>()));
+            sp.GetService<Aevatar.GAgentService.Abstractions.Ports.IServiceLifecycleQueryPort>(),
+            sp.GetService<IWorkflowStoragePort>()));
         services.AddSingleton(sp => new AppScopedScriptService(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetService<IScopeScriptQueryPort>(),
@@ -51,7 +52,8 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptCatalogQueryPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptEvolutionDecisionReadPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptingActorAddressResolver>(),
-            sp.GetService<Aevatar.Scripting.Application.Queries.IScriptReadModelQueryApplicationService>()));
+            sp.GetService<Aevatar.Scripting.Application.Queries.IScriptReadModelQueryApplicationService>(),
+            sp.GetService<IScriptStoragePort>()));
         return services;
     }
 

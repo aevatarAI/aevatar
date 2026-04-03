@@ -262,7 +262,6 @@ describe("ChatPage", () => {
       expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith(
         expect.objectContaining({
           actorTypeName: "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent",
-          preferredActorId: "NyxIdChat:scope-a",
           scopeId: "scope-a",
           serviceId: "nyxid-chat",
         })

@@ -163,6 +163,8 @@ public sealed class ConnectorService
                 throw new InvalidOperationException($"Connector '{connector.Name}' has an invalid http.baseUrl.");
             }
 
+            EnsureAuthConfig(connector.Name, "http.auth", connector.Http?.Auth);
+
             return;
         }
 
@@ -183,10 +185,23 @@ public sealed class ConnectorService
         }
 
         var mcpCommand = connector.Mcp?.Command?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(mcpCommand))
+        var mcpUrl = connector.Mcp?.Url?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(mcpCommand) && string.IsNullOrWhiteSpace(mcpUrl))
         {
-            throw new InvalidOperationException($"Connector '{connector.Name}' requires mcp.command.");
+            throw new InvalidOperationException($"Connector '{connector.Name}' requires mcp.command or mcp.url.");
         }
+
+        if (!string.IsNullOrWhiteSpace(mcpUrl) && !Uri.TryCreate(mcpUrl, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException($"Connector '{connector.Name}' has an invalid mcp.url.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(connector.Mcp?.Auth?.Type) && string.IsNullOrWhiteSpace(mcpUrl))
+        {
+            throw new InvalidOperationException($"Connector '{connector.Name}' mcp.auth requires mcp.url.");
+        }
+
+        EnsureAuthConfig(connector.Name, "mcp.auth", connector.Mcp?.Auth);
     }
 
     private static StoredConnectorDefinition ToStoredConnector(ConnectorDefinitionDto connector) =>
@@ -205,7 +220,8 @@ public sealed class ConnectorService
                     .ToList(),
                 AllowedPaths: NormalizeList(connector.Http.AllowedPaths),
                 AllowedInputKeys: NormalizeList(connector.Http.AllowedInputKeys),
-                DefaultHeaders: NormalizeMap(connector.Http.DefaultHeaders)),
+                DefaultHeaders: NormalizeMap(connector.Http.DefaultHeaders),
+                Auth: ToStoredAuth(connector.Http.Auth)),
             Cli: new StoredCliConnectorConfig(
                 Command: connector.Cli.Command?.Trim() ?? string.Empty,
                 FixedArguments: NormalizeList(connector.Cli.FixedArguments),
@@ -216,8 +232,11 @@ public sealed class ConnectorService
             Mcp: new StoredMcpConnectorConfig(
                 ServerName: connector.Mcp.ServerName?.Trim() ?? string.Empty,
                 Command: connector.Mcp.Command?.Trim() ?? string.Empty,
+                Url: connector.Mcp.Url?.Trim() ?? string.Empty,
                 Arguments: NormalizeList(connector.Mcp.Arguments),
                 Environment: NormalizeMap(connector.Mcp.Environment),
+                AdditionalHeaders: NormalizeMap(connector.Mcp.AdditionalHeaders),
+                Auth: ToStoredAuth(connector.Mcp.Auth),
                 DefaultTool: connector.Mcp.DefaultTool?.Trim() ?? string.Empty,
                 AllowedTools: NormalizeList(connector.Mcp.AllowedTools),
                 AllowedInputKeys: NormalizeList(connector.Mcp.AllowedInputKeys)));
@@ -234,7 +253,8 @@ public sealed class ConnectorService
                 AllowedMethods: NormalizeList(connector.Http.AllowedMethods),
                 AllowedPaths: NormalizeList(connector.Http.AllowedPaths),
                 AllowedInputKeys: NormalizeList(connector.Http.AllowedInputKeys),
-                DefaultHeaders: NormalizeMap(connector.Http.DefaultHeaders)),
+                DefaultHeaders: NormalizeMap(connector.Http.DefaultHeaders),
+                Auth: ToStoredAuth(connector.Http.Auth)),
             Cli: new StoredCliConnectorConfig(
                 Command: connector.Cli.Command?.Trim() ?? string.Empty,
                 FixedArguments: NormalizeList(connector.Cli.FixedArguments),
@@ -245,8 +265,11 @@ public sealed class ConnectorService
             Mcp: new StoredMcpConnectorConfig(
                 ServerName: connector.Mcp.ServerName?.Trim() ?? string.Empty,
                 Command: connector.Mcp.Command?.Trim() ?? string.Empty,
+                Url: connector.Mcp.Url?.Trim() ?? string.Empty,
                 Arguments: NormalizeList(connector.Mcp.Arguments),
                 Environment: NormalizeMap(connector.Mcp.Environment),
+                AdditionalHeaders: NormalizeMap(connector.Mcp.AdditionalHeaders),
+                Auth: ToStoredAuth(connector.Mcp.Auth),
                 DefaultTool: connector.Mcp.DefaultTool?.Trim() ?? string.Empty,
                 AllowedTools: NormalizeList(connector.Mcp.AllowedTools),
                 AllowedInputKeys: NormalizeList(connector.Mcp.AllowedInputKeys)));
@@ -288,7 +311,8 @@ public sealed class ConnectorService
                 connector.Http.AllowedMethods.ToList(),
                 connector.Http.AllowedPaths.ToList(),
                 connector.Http.AllowedInputKeys.ToList(),
-                connector.Http.DefaultHeaders.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase)),
+                connector.Http.DefaultHeaders.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase),
+                ToDto(connector.Http.Auth)),
             new CliConnectorDefinitionDto(
                 connector.Cli.Command,
                 connector.Cli.FixedArguments.ToList(),
@@ -299,11 +323,57 @@ public sealed class ConnectorService
             new McpConnectorDefinitionDto(
                 connector.Mcp.ServerName,
                 connector.Mcp.Command,
+                connector.Mcp.Url,
                 connector.Mcp.Arguments.ToList(),
                 connector.Mcp.Environment.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase),
+                connector.Mcp.AdditionalHeaders.ToDictionary(item => item.Key, item => item.Value, StringComparer.OrdinalIgnoreCase),
+                ToDto(connector.Mcp.Auth),
                 connector.Mcp.DefaultTool,
                 connector.Mcp.AllowedTools.ToList(),
                 connector.Mcp.AllowedInputKeys.ToList()));
+
+    private static void EnsureAuthConfig(string connectorName, string fieldName, ConnectorAuthDefinitionDto? auth)
+    {
+        var authType = auth?.Type?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(authType))
+            return;
+
+        if (!string.Equals(authType, "client_credentials", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' has unsupported {fieldName}.type '{authType}'.");
+        }
+
+        var tokenUrl = auth?.TokenUrl?.Trim() ?? string.Empty;
+        var clientId = auth?.ClientId?.Trim() ?? string.Empty;
+        var clientSecret = auth?.ClientSecret?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(tokenUrl) ||
+            string.IsNullOrWhiteSpace(clientId) ||
+            string.IsNullOrWhiteSpace(clientSecret))
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' requires complete {fieldName} client_credentials settings.");
+        }
+
+        if (!Uri.TryCreate(tokenUrl, UriKind.Absolute, out _))
+        {
+            throw new InvalidOperationException($"Connector '{connectorName}' has an invalid {fieldName}.tokenUrl.");
+        }
+    }
+
+    private static StoredConnectorAuthConfig ToStoredAuth(ConnectorAuthDefinitionDto? auth) =>
+        new(
+            auth?.Type?.Trim() ?? string.Empty,
+            auth?.TokenUrl?.Trim() ?? string.Empty,
+            auth?.ClientId?.Trim() ?? string.Empty,
+            auth?.ClientSecret?.Trim() ?? string.Empty,
+            auth?.Scope?.Trim() ?? string.Empty);
+
+    private static ConnectorAuthDefinitionDto ToDto(StoredConnectorAuthConfig auth) =>
+        new(
+            auth.Type,
+            auth.TokenUrl,
+            auth.ClientId,
+            auth.ClientSecret,
+            auth.Scope);
 
     private static IReadOnlyList<string> NormalizeList(IEnumerable<string> values) =>
         values

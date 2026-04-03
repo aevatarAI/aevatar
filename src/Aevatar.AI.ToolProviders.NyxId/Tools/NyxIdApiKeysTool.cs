@@ -14,8 +14,8 @@ public sealed class NyxIdApiKeysTool : IAgentTool
     public string Name => "nyxid_api_keys";
 
     public string Description =>
-        "Manage NyxID API keys for programmatic access. " +
-        "Use 'list' to see existing keys, or 'create' to generate a new key with specified scopes.";
+        "Manage NyxID API keys. " +
+        "Actions: list, show, create, rotate, delete, update.";
 
     public string ParametersSchema => """
         {
@@ -23,19 +23,42 @@ public sealed class NyxIdApiKeysTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "create"],
-              "description": "Action: 'list' existing keys or 'create' a new key"
+              "enum": ["list", "show", "create", "rotate", "delete", "update"],
+              "description": "Action to perform (default: list)"
+            },
+            "id": {
+              "type": "string",
+              "description": "API key ID (for show/rotate/delete/update)"
             },
             "name": {
               "type": "string",
-              "description": "Name for the new key (required for 'create')"
+              "description": "Key name (required for create)"
             },
             "scopes": {
               "type": "string",
-              "description": "Space-separated scopes for the new key (e.g. 'proxy read')"
+              "description": "Space-separated scopes (e.g. 'proxy read write')"
+            },
+            "allowed_services": {
+              "type": "string",
+              "description": "Comma-separated service IDs"
+            },
+            "allowed_nodes": {
+              "type": "string",
+              "description": "Comma-separated node IDs"
+            },
+            "allow_all_services": {
+              "type": "boolean",
+              "description": "Allow all services"
+            },
+            "allow_all_nodes": {
+              "type": "boolean",
+              "description": "Allow all nodes"
+            },
+            "callback_url": {
+              "type": "string",
+              "description": "Webhook callback URL for channel bot relay (for create or update)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -43,33 +66,57 @@ public sealed class NyxIdApiKeysTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? name = null;
-        string? scopes = null;
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "list");
+        var id = args.Str("id");
 
-        try
+        return action switch
         {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("name", out var n))
-                name = n.GetString();
-            if (doc.RootElement.TryGetProperty("scopes", out var s))
-                scopes = s.GetString();
-        }
-        catch { /* use defaults */ }
+            "show" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.GetApiKeyAsync(token, id, ct),
+            "rotate" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.RotateApiKeyAsync(token, id, ct),
+            "delete" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.DeleteApiKeyAsync(token, id, ct),
+            "update" when !string.IsNullOrWhiteSpace(id) =>
+                await UpdateKeyAsync(token, id, args, ct),
+            "create" => await CreateKeyAsync(token, args, ct),
 
-        if (action == "create")
-        {
-            if (string.IsNullOrWhiteSpace(name))
-                return "Error: 'name' is required for create action.";
+            "show" or "rotate" or "delete" or "update" =>
+                $"{{\"error\":\"'id' is required for {action}\"}}",
+            _ => await _client.ListApiKeysAsync(token, ct),
+        };
+    }
 
-            var body = JsonSerializer.Serialize(new { name, scopes = scopes ?? "proxy read" });
-            return await _client.CreateApiKeyAsync(token, body, ct);
-        }
+    private async Task<string> CreateKeyAsync(string token, ToolArgs args, CancellationToken ct)
+    {
+        var name = args.Str("name");
+        if (string.IsNullOrWhiteSpace(name))
+            return """{"error":"'name' is required for create"}""";
+        return await _client.CreateApiKeyAsync(token, JsonSerializer.Serialize(BuildPayload(args, name)), ct);
+    }
 
-        return await _client.ListApiKeysAsync(token, ct);
+    private async Task<string> UpdateKeyAsync(string token, string id, ToolArgs args, CancellationToken ct) =>
+        await _client.UpdateApiKeyAsync(token, id, JsonSerializer.Serialize(BuildPayload(args, args.Str("name"))), ct);
+
+    private static Dictionary<string, object?> BuildPayload(ToolArgs args, string? name)
+    {
+        var p = new Dictionary<string, object?>();
+        if (name != null) p["name"] = name;
+        var scopes = args.Str("scopes");
+        if (scopes != null) p["scopes"] = scopes;
+        var svc = args.Str("allowed_services");
+        if (svc != null) p["allowed_service_ids"] = svc.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var nodes = args.Str("allowed_nodes");
+        if (nodes != null) p["allowed_node_ids"] = nodes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var aas = args.Bool("allow_all_services");
+        if (aas.HasValue) p["allow_all_services"] = aas.Value;
+        var aan = args.Bool("allow_all_nodes");
+        if (aan.HasValue) p["allow_all_nodes"] = aan.Value;
+        var callbackUrl = args.Str("callback_url");
+        if (callbackUrl != null) p["callback_url"] = callbackUrl;
+        return p;
     }
 }

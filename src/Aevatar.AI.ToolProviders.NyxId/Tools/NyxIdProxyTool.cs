@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -23,8 +22,17 @@ public sealed class NyxIdProxyTool : IAgentTool
     public string Description =>
         "Make HTTP requests to downstream services through NyxID's credential-injecting proxy. " +
         "NyxID automatically injects the user's stored credentials. " +
-        "Use nyxid_services first to discover available service slugs. " +
-        "Paths are relative to the service's base URL.";
+        "Omit slug to discover all proxyable services. " +
+        "Provide slug + path to send a proxied request.";
+
+    /// <summary>
+    /// No Aevatar-side approval needed. NyxID's proxy layer handles approval
+    /// enforcement server-side: when a service has approval enabled, NyxID
+    /// blocks the proxy request, sends a push notification (Telegram/FCM/APNs),
+    /// and waits for the user to approve before completing the request.
+    /// The proxy response may take 30+ seconds during approval wait.
+    /// </summary>
+    public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
 
     public string ParametersSchema => """
         {
@@ -32,11 +40,11 @@ public sealed class NyxIdProxyTool : IAgentTool
           "properties": {
             "slug": {
               "type": "string",
-              "description": "Service slug (e.g. 'llm-openai', 'api-github')"
+              "description": "Service slug (e.g. 'llm-openai', 'api-github'). Omit to list all proxyable services."
             },
             "path": {
               "type": "string",
-              "description": "API path relative to the service's base URL (e.g. '/chat/completions', '/user/repos')"
+              "description": "API path relative to the service's base URL (e.g. '/chat/completions', '/getMe')"
             },
             "method": {
               "type": "string",
@@ -45,15 +53,14 @@ public sealed class NyxIdProxyTool : IAgentTool
             },
             "body": {
               "type": "string",
-              "description": "Request body (JSON string, for POST/PUT/PATCH)"
+              "description": "Request body as JSON string (for POST/PUT/PATCH)"
             },
             "headers": {
               "type": "object",
               "additionalProperties": { "type": "string" },
               "description": "Additional HTTP headers"
             }
-          },
-          "required": ["slug", "path"]
+          }
         }
         """;
 
@@ -61,47 +68,71 @@ public sealed class NyxIdProxyTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        _logger.LogInformation("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
+        _logger.LogDebug("[nyxid_proxy] Raw arguments: {Args}", argumentsJson);
 
-        string? slug = null;
-        string? path = null;
-        string method = "GET";
-        string? body = null;
-        Dictionary<string, string>? headers = null;
+        var args = ToolArgs.Parse(argumentsJson);
+        if (args.HasParseError)
+        {
+            _logger.LogWarning("[nyxid_proxy] Argument parse failed: {Error}, raw={Raw}", args.ParseError, args.Raw);
+            return $"{{\"error\":\"Failed to parse tool arguments\",\"detail\":{System.Text.Json.JsonSerializer.Serialize(args.ParseError)},\"received\":{System.Text.Json.JsonSerializer.Serialize(args.Raw)}}}";
+        }
 
+        var slug = args.Str("slug") ?? args.Str("service");
+        var path = args.Str("path");
+        var method = args.Str("method", "GET");
+        var body = args.RawOrStr("body");
+        var headers = args.Headers();
+
+        // No slug → discover mode
+        if (string.IsNullOrWhiteSpace(slug))
+        {
+            _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery. raw={Raw}", args.Raw);
+            return await _client.DiscoverProxyServicesAsync(token, ct);
+        }
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _logger.LogWarning("[nyxid_proxy] Missing path. slug={Slug}, raw={Raw}", slug, args.Raw);
+            return $"{{\"error\":\"'path' is required when 'slug' is provided\",\"received\":{args.Raw}}}";
+        }
+
+        _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} path={Path}", method, slug, path);
+        var result = await _client.ProxyRequestAsync(token, slug, path, method, body, headers, ct);
+
+        // Detect NyxID approval-related responses and provide actionable context to the LLM.
+        // NyxID proxy blocks the request during approval wait (up to 30s). If the user
+        // doesn't approve in time, NyxID returns an error with code 7000 or 7001.
+        if (IsApprovalError(result, out var approvalCode, out var approvalRequestId))
+        {
+            _logger.LogInformation(
+                "[nyxid_proxy] Approval response: code={Code} requestId={RequestId}",
+                approvalCode, approvalRequestId);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Detect NyxID approval error codes (7000 = approval_required, 7001 = approval_failed).
+    /// </summary>
+    private static bool IsApprovalError(string result, out int code, out string? requestId)
+    {
+        code = 0;
+        requestId = null;
         try
         {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("slug", out var s))
-                slug = s.GetString();
-            if (doc.RootElement.TryGetProperty("path", out var p))
-                path = p.GetString();
-            if (doc.RootElement.TryGetProperty("method", out var m))
-                method = m.GetString() ?? "GET";
-            if (doc.RootElement.TryGetProperty("body", out var b))
-                body = b.ValueKind == JsonValueKind.String ? b.GetString() : b.GetRawText();
-            if (doc.RootElement.TryGetProperty("headers", out var h) && h.ValueKind == JsonValueKind.Object)
-            {
-                headers = new Dictionary<string, string>();
-                foreach (var prop in h.EnumerateObject())
-                    headers[prop.Name] = prop.Value.GetString() ?? "";
-            }
+            using var doc = System.Text.Json.JsonDocument.Parse(result);
+            if (doc.RootElement.TryGetProperty("code", out var c) && c.ValueKind == System.Text.Json.JsonValueKind.Number)
+                code = c.GetInt32();
+            if (doc.RootElement.TryGetProperty("approval_request_id", out var rid))
+                requestId = rid.GetString();
+            return code is 7000 or 7001;
         }
-        catch (Exception ex)
+        catch
         {
-            _logger.LogWarning(ex, "[nyxid_proxy] Failed to parse arguments: {Args}", argumentsJson);
-            return $"Error: Failed to parse arguments. Raw input: {argumentsJson}";
+            return false;
         }
-
-        _logger.LogInformation("[nyxid_proxy] Parsed: slug={Slug}, path={Path}, method={Method}", slug, path, method);
-
-        if (string.IsNullOrWhiteSpace(slug))
-            return $"Error: 'slug' is required. Received arguments: {argumentsJson}";
-        if (string.IsNullOrWhiteSpace(path))
-            return $"Error: 'path' is required. Received arguments: {argumentsJson}";
-
-        return await _client.ProxyRequestAsync(token, slug, path, method, body, headers, ct);
     }
 }

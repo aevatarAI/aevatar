@@ -460,11 +460,6 @@ function decodeScopeServiceRevision(
         "staticActorTypeName",
         "StaticActorTypeName",
       ]) || "",
-    staticPreferredActorId:
-      readOptionalString(record, [
-        "staticPreferredActorId",
-        "StaticPreferredActorId",
-      ]) || "",
   };
 }
 

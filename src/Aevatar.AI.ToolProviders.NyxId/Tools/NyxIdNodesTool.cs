@@ -14,8 +14,8 @@ public sealed class NyxIdNodesTool : IAgentTool
     public string Name => "nyxid_nodes";
 
     public string Description =>
-        "Manage on-premise node agents. Nodes hold credentials locally and proxy requests through NyxID. " +
-        "Use 'list' to see all nodes, 'show' for details, or 'delete' to remove a node.";
+        "Manage on-premise node agents. " +
+        "Actions: list, show, delete, register_token, rotate_token.";
 
     public string ParametersSchema => """
         {
@@ -23,15 +23,18 @@ public sealed class NyxIdNodesTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "show", "delete"],
-              "description": "Action: 'list' all nodes, 'show' node details, or 'delete' a node"
+              "enum": ["list", "show", "delete", "register_token", "rotate_token"],
+              "description": "Action to perform (default: list)"
             },
             "id": {
               "type": "string",
-              "description": "Node ID or name (required for 'show' and 'delete')"
+              "description": "Node ID (for show/delete/rotate_token)"
+            },
+            "name": {
+              "type": "string",
+              "description": "Node name (for register_token)"
             }
-          },
-          "required": ["action"]
+          }
         }
         """;
 
@@ -39,20 +42,11 @@ public sealed class NyxIdNodesTool : IAgentTool
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
         if (string.IsNullOrWhiteSpace(token))
-            return "Error: No NyxID access token available. User must be authenticated.";
+            return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
-        string action = "list";
-        string? id = null;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(argumentsJson);
-            if (doc.RootElement.TryGetProperty("action", out var a))
-                action = a.GetString() ?? "list";
-            if (doc.RootElement.TryGetProperty("id", out var i))
-                id = i.GetString();
-        }
-        catch { /* use defaults */ }
+        var args = ToolArgs.Parse(argumentsJson);
+        var action = args.Str("action", "list");
+        var id = args.Str("id");
 
         return action switch
         {
@@ -60,8 +54,22 @@ public sealed class NyxIdNodesTool : IAgentTool
                 await _client.GetNodeAsync(token, id, ct),
             "delete" when !string.IsNullOrWhiteSpace(id) =>
                 await _client.DeleteNodeAsync(token, id, ct),
-            "show" or "delete" => $"Error: 'id' is required for {action} action.",
+            "rotate_token" when !string.IsNullOrWhiteSpace(id) =>
+                await _client.RotateNodeTokenAsync(token, id, ct),
+            "register_token" => await RegisterTokenAsync(token, args, ct),
+
+            "show" or "delete" or "rotate_token" =>
+                $"{{\"error\":\"'id' is required for {action}\"}}",
             _ => await _client.ListNodesAsync(token, ct),
         };
+    }
+
+    private async Task<string> RegisterTokenAsync(string token, ToolArgs args, CancellationToken ct)
+    {
+        var name = args.Str("name");
+        if (string.IsNullOrWhiteSpace(name))
+            return """{"error":"'name' is required for register_token"}""";
+        return await _client.GenerateNodeRegistrationTokenAsync(token,
+            JsonSerializer.Serialize(new { name }), ct);
     }
 }

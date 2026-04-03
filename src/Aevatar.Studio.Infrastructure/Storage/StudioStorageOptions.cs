@@ -1,3 +1,5 @@
+using Aevatar.Studio.Application.Studio.Abstractions;
+
 namespace Aevatar.Studio.Infrastructure.Storage;
 
 public sealed class StudioStorageOptions
@@ -5,7 +7,12 @@ public sealed class StudioStorageOptions
     public string RootDirectory { get; set; } =
         Path.Combine(StudioStoragePathHelpers.ResolveDefaultAevatarHomeDirectory(), "studio");
 
-    public string DefaultRuntimeBaseUrl { get; set; } = "https://aevatar-console-backend-api.aevatar.ai";
+    // Legacy alias: retained so existing config keeps working.
+    public string DefaultRuntimeBaseUrl { get; set; } = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl;
+
+    public string DefaultLocalRuntimeBaseUrl { get; set; } = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl;
+
+    public string DefaultRemoteRuntimeBaseUrl { get; set; } = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl;
 
     public bool ForceLocalRuntime { get; set; }
 }
@@ -22,8 +29,31 @@ internal static class StudioStorageOptionsExtensions
         {
             RootDirectory = rootDirectory,
             DefaultRuntimeBaseUrl = options.DefaultRuntimeBaseUrl,
+            DefaultLocalRuntimeBaseUrl = options.DefaultLocalRuntimeBaseUrl,
+            DefaultRemoteRuntimeBaseUrl = options.DefaultRemoteRuntimeBaseUrl,
             ForceLocalRuntime = options.ForceLocalRuntime,
         };
+    }
+
+    public static string ResolveDefaultLocalRuntimeBaseUrl(this StudioStorageOptions options)
+    {
+        var candidate = string.IsNullOrWhiteSpace(options.DefaultLocalRuntimeBaseUrl)
+            ? options.DefaultRuntimeBaseUrl
+            : options.DefaultLocalRuntimeBaseUrl;
+        return NormalizeRuntimeBaseUrl(candidate, UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
+    }
+
+    public static string ResolveDefaultRemoteRuntimeBaseUrl(this StudioStorageOptions options)
+    {
+        return NormalizeRuntimeBaseUrl(options.DefaultRemoteRuntimeBaseUrl, UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
+    }
+
+    private static string NormalizeRuntimeBaseUrl(string? value, string fallback)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value)
+            ? fallback
+            : value.Trim();
+        return normalized.TrimEnd('/');
     }
 }
 

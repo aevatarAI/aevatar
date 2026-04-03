@@ -15,7 +15,14 @@
     <ProjectReference Include="..\Aevatar.AI.LLMProviders.Tornado\Aevatar.AI.LLMProviders.Tornado.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.MCP\Aevatar.AI.ToolProviders.MCP.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Ornn\Aevatar.AI.ToolProviders.Ornn.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Scripting\Aevatar.AI.ToolProviders.Scripting.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.ServiceInvoke\Aevatar.AI.ToolProviders.ServiceInvoke.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Skills\Aevatar.AI.ToolProviders.Skills.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Binding\Aevatar.AI.ToolProviders.Binding.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
+    <ProjectReference Include="..\Aevatar.AI.Infrastructure.Local\Aevatar.AI.Infrastructure.Local.csproj" />
+    <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>
   <ItemGroup>

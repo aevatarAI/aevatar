@@ -111,26 +111,37 @@ static class LLMProviderResolver
                 return null;
 
             using var doc = JsonDocument.Parse(File.ReadAllText(AevatarPaths.ConfigJson));
-            if (!TryGetString(doc.RootElement, out var authority, "Cli", "App", "NyxId", "Authority") ||
-                string.IsNullOrWhiteSpace(authority))
-            {
+            if (TryGetString(doc.RootElement, out var configuredEndpoint, "Aevatar", "NyxId", "GatewayEndpoint") &&
+                !string.IsNullOrWhiteSpace(configuredEndpoint))
+                return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+
+            if (TryGetString(doc.RootElement, out configuredEndpoint, "Cli", "App", "NyxId", "GatewayEndpoint") &&
+                !string.IsNullOrWhiteSpace(configuredEndpoint))
+                return NormalizeNyxIdGatewayEndpoint(configuredEndpoint);
+
+            if (!TryGetString(doc.RootElement, out var authority, "Cli", "App", "NyxId", "Authority") &&
+                !TryGetString(doc.RootElement, out authority, "Aevatar", "NyxId", "Authority"))
                 return null;
-            }
 
-            var trimmed = authority.Trim().TrimEnd('/');
-            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
-                return null;
-
-            var absolute = uri.ToString().TrimEnd('/');
-            if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
-                return absolute;
-
-            return $"{absolute}/api/v1/llm/gateway/v1";
+            return NormalizeNyxIdGatewayEndpoint(authority);
         }
         catch
         {
             return null;
         }
+    }
+
+    private static string? NormalizeNyxIdGatewayEndpoint(string? value)
+    {
+        var trimmed = value?.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(trimmed) || !Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+            return null;
+
+        var absolute = uri.ToString().TrimEnd('/');
+        if (absolute.EndsWith("/api/v1/llm/gateway/v1", StringComparison.OrdinalIgnoreCase))
+            return absolute;
+
+        return $"{absolute}/api/v1/llm/gateway/v1";
     }
 
     private static bool TryGetString(JsonElement element, out string value, params string[] path)

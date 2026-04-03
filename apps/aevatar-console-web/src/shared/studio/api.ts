@@ -510,11 +510,6 @@ function decodeStudioScopeBindingRevision(
         "staticActorTypeName",
         "StaticActorTypeName",
       ]) || "",
-    staticPreferredActorId:
-      readOptionalString(record, [
-        "staticPreferredActorId",
-        "StaticPreferredActorId",
-      ]) || "",
   };
 }
 
@@ -641,10 +636,6 @@ function decodeStudioScopeBindingResult(
         ? readOptionalString(scriptRecord ?? {}, ["scriptId", "ScriptId"])
         : targetKind === "gagent"
           ? readOptionalString(gAgentRecord ?? {}, [
-              "preferredActorId",
-              "PreferredActorId",
-            ]) ||
-            readOptionalString(gAgentRecord ?? {}, [
               "actorTypeName",
               "ActorTypeName",
             ])
@@ -708,11 +699,6 @@ function decodeStudioScopeBindingResult(
             readOptionalString(gAgentRecord, [
               "actorTypeName",
               "ActorTypeName",
-            ]) || "",
-          preferredActorId:
-            readOptionalString(gAgentRecord, [
-              "preferredActorId",
-              "PreferredActorId",
             ]) || "",
         }
       : null,
@@ -961,7 +947,6 @@ export const studioApi = {
             displayName: trimOptional(input.displayName),
             gagent: compactObject({
               actorTypeName: input.actorTypeName.trim(),
-              preferredActorId: trimOptional(input.preferredActorId),
               endpoints: input.endpoints.map((endpoint) =>
                 compactObject({
                   endpointId: endpoint.endpointId.trim(),

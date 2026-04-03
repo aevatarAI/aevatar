@@ -1,6 +1,9 @@
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
+using Aevatar.Studio.Infrastructure.Middleware;
 using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.Extensions.Configuration;
@@ -28,8 +31,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConnectorCatalogStore, ChronoStorageConnectorCatalogStore>();
         services.AddSingleton<IRoleCatalogStore, ChronoStorageRoleCatalogStore>();
         services.AddSingleton<IUserConfigStore, ChronoStorageUserConfigStore>();
+        services.AddSingleton<INyxIdUserLlmPreferencesStore, ChronoStorageNyxIdUserLlmPreferencesStore>();
+        services.AddSingleton<IUserMemoryStore, ChronoStorageUserMemoryStore>();
+        services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
+        services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         services.AddSingleton<IGAgentActorStore, ChronoStorageGAgentActorStore>();
         services.AddSingleton<IChatHistoryStore, ChronoStorageChatHistoryStore>();
+        services.AddSingleton<IWorkflowStoragePort, ChronoStorageWorkflowStoragePort>();
+        services.AddSingleton<IScriptStoragePort, ChronoStorageScriptStoragePort>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }

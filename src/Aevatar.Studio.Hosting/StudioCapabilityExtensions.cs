@@ -60,6 +60,7 @@ public static class StudioCapabilityExtensions
                 app.MapControllers();
                 StudioEndpoints.Map(app, embeddedWorkflowMode: true);
                 Controllers.ChatHistoryEndpoints.MapChatHistoryEndpoints(app);
+                app.MapExplorerEndpoints();
             });
     }
 }

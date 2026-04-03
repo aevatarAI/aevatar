@@ -229,7 +229,6 @@ export interface StudioScopeBindingResult {
   } | null;
   readonly gAgent?: {
     readonly actorTypeName: string;
-    readonly preferredActorId: string;
   } | null;
 }
 
@@ -258,7 +257,6 @@ export interface StudioScopeBindingRevision {
   readonly scriptDefinitionActorId: string;
   readonly scriptSourceHash: string;
   readonly staticActorTypeName: string;
-  readonly staticPreferredActorId: string;
 }
 
 export interface StudioScopeBindingStatus {
@@ -331,7 +329,7 @@ export function describeStudioScopeBindingRevisionContext(
       }
       return revision.scriptRevision || revision.scriptSourceHash || '';
     case 'gagent':
-      return revision.staticPreferredActorId || '';
+      return '';
     default:
       return '';
   }
@@ -379,7 +377,6 @@ export interface StudioScopeGAgentBindingInput {
   readonly serviceId?: string | null;
   readonly displayName?: string | null;
   readonly actorTypeName: string;
-  readonly preferredActorId?: string | null;
   readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
   readonly revisionId?: string | null;
 }

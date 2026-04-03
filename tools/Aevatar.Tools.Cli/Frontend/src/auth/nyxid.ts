@@ -4,6 +4,8 @@
  */
 
 const NYXID_BASE_URL = (import.meta as any).env?.VITE_NYXID_BASE_URL?.trim() || 'https://nyx.chrono-ai.fun';
+/** NyxID REST API base URL (service management, proxy, etc.) */
+export const NYXID_API_URL = (import.meta as any).env?.VITE_NYXID_API_URL?.trim() || 'https://nyx-api.chrono-ai.fun';
 const NYXID_CLIENT_ID = (import.meta as any).env?.VITE_NYXID_CLIENT_ID?.trim() || '37a93189-2734-406e-bca1-7dbdf25c5a53';
 const NYXID_SCOPE = (import.meta as any).env?.VITE_NYXID_SCOPE?.trim() || 'openid profile email proxy';
 const SESSION_KEY = 'aevatar-cli:nyxid:session';

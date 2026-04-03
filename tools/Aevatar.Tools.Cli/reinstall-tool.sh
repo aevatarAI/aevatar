@@ -12,7 +12,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PROJECT_PATH="${REPO_ROOT}/tools/Aevatar.Tools.Cli/Aevatar.Tools.Cli.csproj"
 PACKAGE_SOURCE_DIR="${REPO_ROOT}/tools/Aevatar.Tools.Cli/bin/${CONFIGURATION}"
-APP_RESTART_NEEDED=0
 
 echo "==> Tool package: ${TOOL_PACKAGE_ID}"
 echo "==> Build configuration: ${CONFIGURATION}"
@@ -96,7 +95,6 @@ echo "==> Cleaning up previous aevatar processes..."
 
 # Kill any process listening on APP_PORT
 if kill_processes_on_port "${APP_PORT}"; then
-  APP_RESTART_NEEDED=1
   echo "==> Port ${APP_PORT} has been released."
 fi
 
@@ -116,15 +114,12 @@ if [[ -n "${AEVATAR_PIDS}" ]]; then
       kill -9 "${pid}" 2>/dev/null || true
     fi
   done
-  APP_RESTART_NEEDED=1
   echo "==> Lingering aevatar app processes cleaned up."
 else
   echo "==> No lingering aevatar app processes found."
 fi
 
-if [[ "${APP_RESTART_NEEDED}" -eq 0 ]]; then
-  echo "==> Port ${APP_PORT} is free, no previous app running."
-fi
+echo "==> Port ${APP_PORT} is ready for a fresh app launch."
 
 if dotnet tool list --global | awk -v tool="${TOOL_PACKAGE_ID}" '
   NR > 2 && $1 == tool { found = 1 }
@@ -181,8 +176,8 @@ fi
 echo "==> Tool verified at: ${TOOL_PATH}"
 
 RESTART_APP="${AEVATAR_REINSTALL_RESTART_APP:-1}"
-if [[ "${RESTART_APP}" == "1" && "${APP_RESTART_NEEDED}" -eq 1 ]]; then
-  echo "==> Restarting ${TOOL_PACKAGE_ID} app on port ${APP_PORT}..."
+if [[ "${RESTART_APP}" == "1" ]]; then
+  echo "==> Starting ${TOOL_PACKAGE_ID} app on port ${APP_PORT}..."
   nohup "${TOOL_PATH}" app --no-browser --port "${APP_PORT}" > "${APP_LOG_FILE}" 2>&1 &
   APP_PID=$!
   # Wait up to 5 seconds for the app to bind the port
@@ -195,13 +190,13 @@ if [[ "${RESTART_APP}" == "1" && "${APP_RESTART_NEEDED}" -eq 1 ]]; then
     i=$((i + 1))
   done
   if ! kill -0 "${APP_PID}" 2>/dev/null; then
-    echo "Failed to restart ${TOOL_PACKAGE_ID} app. Check logs: ${APP_LOG_FILE}" >&2
+    echo "Failed to start ${TOOL_PACKAGE_ID} app. Check logs: ${APP_LOG_FILE}" >&2
     tail -20 "${APP_LOG_FILE}" >&2 || true
     exit 1
   fi
-  echo "==> Restarted ${TOOL_PACKAGE_ID} app (pid=${APP_PID}). Logs: ${APP_LOG_FILE}"
+  echo "==> Started ${TOOL_PACKAGE_ID} app (pid=${APP_PID}). Logs: ${APP_LOG_FILE}"
 else
-  echo "==> Auto-restart skipped. Start manually: ${TOOL_PACKAGE_ID} app --port ${APP_PORT}"
+  echo "==> Auto-start skipped. Start manually: ${TOOL_PACKAGE_ID} app --port ${APP_PORT}"
 fi
 
 echo "==> Done. You can run:"

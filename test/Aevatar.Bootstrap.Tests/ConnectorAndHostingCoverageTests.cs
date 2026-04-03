@@ -289,6 +289,42 @@ public class ConnectorAndHostingCoverageTests
     }
 
     [Fact]
+    public async Task HttpConnector_ShouldPreferPathParameter_MatchWildcardAllowlist_AndApplyAuthorization()
+    {
+        var handler = new StubHttpMessageHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            });
+        var connector = new HttpConnector(
+            "nyxid-http",
+            "https://example.com/api/v1/proxy/s/chrono-graph",
+            allowedMethods: ["GET"],
+            allowedPaths: ["/api/v1/proxy/s/chrono-graph/*"],
+            authorizationProvider: new StaticAuthorizationProvider("Bearer", "token-123"),
+            client: new HttpClient(handler));
+
+        var response = await connector.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "get_snapshot",
+            Parameters = new Dictionary<string, string>
+            {
+                ["method"] = "GET",
+                ["path"] = "/snapshot",
+            },
+        });
+
+        response.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.RequestUri.Should().NotBeNull();
+        handler.LastRequest.RequestUri!.AbsoluteUri.Should().Be("https://example.com/api/v1/proxy/s/chrono-graph/snapshot");
+        handler.LastRequest.Headers.Authorization.Should().NotBeNull();
+        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("token-123");
+    }
+
+    [Fact]
     public async Task CliConnector_ShouldCoverConstructorValidationFailureAndExceptionBranches()
     {
         Action missingName = () => _ = new CliConnector("", "dotnet");
@@ -572,6 +608,67 @@ public class ConnectorAndHostingCoverageTests
             .Which.Should().Be("aevatar.connector.http.telegram-main");
     }
 
+    [Fact]
+    public async Task HttpConnectorBuilder_WithClientCredentialsAuth_ShouldApplyBearerToken()
+    {
+        var handler = new StubHttpMessageHandler(request =>
+        {
+            if (request.RequestUri?.AbsoluteUri == "https://auth.example.com/oauth/token")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"access_token":"demo-token","token_type":"Bearer","expires_in":3600}""",
+                        Encoding.UTF8,
+                        "application/json"),
+                    ReasonPhrase = "OK",
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json"),
+                ReasonPhrase = "OK",
+            };
+        });
+        var factory = new RecordingHttpClientFactory(_ => new HttpClient(handler));
+        var builder = new HttpConnectorBuilder(factory);
+        var entry = new ConnectorConfigEntry
+        {
+            Name = "nyxid-main",
+            Type = "http",
+            Http = new HttpConnectorConfig
+            {
+                BaseUrl = "https://example.com",
+                Auth = new ConnectorAuthConfig
+                {
+                    Type = "client_credentials",
+                    TokenUrl = "https://auth.example.com/oauth/token",
+                    ClientId = "svc-client",
+                    ClientSecret = "svc-secret",
+                    Scope = "proxy:*",
+                },
+            },
+        };
+
+        var built = builder.TryBuild(entry, NullLogger.Instance, out var connector);
+        built.Should().BeTrue();
+        connector.Should().NotBeNull();
+
+        var result = await connector!.ExecuteAsync(new ConnectorRequest
+        {
+            Operation = "/snapshot",
+            Parameters = new Dictionary<string, string> { ["method"] = "POST" },
+        });
+
+        result.Success.Should().BeTrue();
+        handler.LastRequest.Should().NotBeNull();
+        handler.LastRequest!.Headers.Authorization.Should().NotBeNull();
+        handler.LastRequest.Headers.Authorization!.Scheme.Should().Be("Bearer");
+        handler.LastRequest.Headers.Authorization.Parameter.Should().Be("demo-token");
+        factory.RequestedNames.Should().Contain("aevatar.connector.http.nyxid-main");
+    }
+
     private sealed class StubHttpMessageHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
@@ -624,6 +721,16 @@ public class ConnectorAndHostingCoverageTests
             _ = request;
             _ = cancellationToken;
             throw _exception;
+        }
+    }
+
+    private sealed class StaticAuthorizationProvider(string scheme, string token) : IConnectorRequestAuthorizationProvider
+    {
+        public Task ApplyAsync(HttpRequestMessage request, CancellationToken cancellationToken = default)
+        {
+            _ = cancellationToken;
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(scheme, token);
+            return Task.CompletedTask;
         }
     }
 

@@ -1,198 +1,171 @@
-import { Settings2, UserCircle, ArrowRightLeft, Code2, FolderOpen, MessageSquare, ChevronRight, ChevronDown, FileText } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import type { ConfigFile, WorkflowEntry, ScriptEntry } from './types';
-import type { ConversationMeta } from '../runtime/chatTypes';
+import { Settings2, Code2, FolderOpen, MessageSquare, ChevronRight, ChevronDown, FileText } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import type { ManifestEntry } from './types';
 
 type Props = {
-  scopeId: string;
-  selectedFile: ConfigFile;
-  onSelect: (file: ConfigFile) => void;
-  isDirty: (file: ConfigFile) => boolean;
-  chatConversations: ConversationMeta[];
-  workflows: WorkflowEntry[];
-  scripts: ScriptEntry[];
-  onOpenWorkflowInStudio?: (workflowId: string) => void;
-  onOpenScriptInStudio?: (scriptId: string) => void;
+  manifest: ManifestEntry[];
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
+  onOpenInStudio?: (type: string, key: string) => void;
   initialFolder?: string | null;
 };
 
-const FILES: { file: ConfigFile; label: string; icon: typeof Settings2 }[] = [
-  { file: 'config.json', label: 'config.json', icon: Settings2 },
-  { file: 'roles.json', label: 'roles.json', icon: UserCircle },
-  { file: 'connectors.json', label: 'connectors.json', icon: ArrowRightLeft },
-];
-
-const FILE_COLORS: Record<string, string> = {
-  'config.json': 'text-blue-500',
-  'roles.json': 'text-violet-500',
-  'connectors.json': 'text-emerald-500',
+type FolderGroup = {
+  prefix: string;
+  label: string;
+  entries: ManifestEntry[];
 };
 
-export default function FileTree({ scopeId, selectedFile, onSelect, isDirty, chatConversations, workflows, scripts, onOpenWorkflowInStudio, onOpenScriptInStudio, initialFolder }: Props) {
-  const shortScope = scopeId.length > 24 ? scopeId.slice(0, 10) + '...' + scopeId.slice(-10) : scopeId;
-  const [chatFolderOpen, setChatFolderOpen] = useState(false);
-  const [workflowsFolderOpen, setWorkflowsFolderOpen] = useState(false);
-  const [scriptsFolderOpen, setScriptsFolderOpen] = useState(false);
+const FILE_ICON_MAP: Record<string, { icon: typeof Settings2; color: string }> = {
+  config: { icon: Settings2, color: 'text-blue-500' },
+  roles: { icon: Settings2, color: 'text-violet-500' },
+  connectors: { icon: Settings2, color: 'text-emerald-500' },
+  workflow: { icon: FileText, color: 'text-indigo-500' },
+  script: { icon: Code2, color: 'text-green-500' },
+  'chat-history': { icon: MessageSquare, color: 'text-sky-500' },
+};
 
+function getFileIcon(type: string) {
+  return FILE_ICON_MAP[type] ?? { icon: FileText, color: 'text-gray-400' };
+}
+
+function getDisplayName(entry: ManifestEntry): string {
+  if (entry.name) return entry.name;
+  const lastSegment = entry.key.split('/').pop() || entry.key;
+  return lastSegment;
+}
+
+export default function FileTree({ manifest, selectedKey, onSelect, onOpenInStudio, initialFolder }: Props) {
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+
+  // Group manifest entries into folders and top-level files
+  const { topLevel, folders } = useMemo(() => {
+    const topLevel: ManifestEntry[] = [];
+    const folderMap = new Map<string, ManifestEntry[]>();
+
+    for (const entry of manifest) {
+      const slashIdx = entry.key.indexOf('/');
+      if (slashIdx > 0) {
+        const prefix = entry.key.slice(0, slashIdx);
+        if (!folderMap.has(prefix)) folderMap.set(prefix, []);
+        folderMap.get(prefix)!.push(entry);
+      } else {
+        topLevel.push(entry);
+      }
+    }
+
+    const folders: FolderGroup[] = [];
+    for (const [prefix, entries] of folderMap) {
+      folders.push({ prefix, label: `${prefix}/`, entries });
+    }
+    // Sort folders alphabetically
+    folders.sort((a, b) => a.prefix.localeCompare(b.prefix));
+
+    return { topLevel, folders };
+  }, [manifest]);
+
+  // Auto-expand folder specified by initialFolder
   useEffect(() => {
-    if (initialFolder === 'workflows') {
-      setWorkflowsFolderOpen(true);
+    if (initialFolder) {
+      setOpenFolders(prev => {
+        const next = new Set(prev);
+        next.add(initialFolder);
+        return next;
+      });
     }
   }, [initialFolder]);
+
+  function toggleFolder(prefix: string) {
+    setOpenFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(prefix)) next.delete(prefix);
+      else next.add(prefix);
+      return next;
+    });
+  }
+
+  function handleDoubleClick(entry: ManifestEntry) {
+    if ((entry.type === 'workflow' || entry.type === 'script') && onOpenInStudio) {
+      onOpenInStudio(entry.type, entry.key);
+    }
+  }
 
   return (
     <div className="space-y-1 select-none">
       {/* Folder header */}
       <div className="flex items-center gap-2 px-3 py-2 text-[12px] font-semibold text-gray-500">
         <FolderOpen size={14} className="text-amber-500 flex-shrink-0" />
-        <span className="truncate" title={scopeId}>{shortScope || 'scope'}/</span>
+        <span className="truncate">storage/</span>
       </div>
 
-      {/* workflows/ folder */}
-      <button
-        onClick={() => setWorkflowsFolderOpen(!workflowsFolderOpen)}
-        className="w-full flex items-center gap-2 pl-7 pr-3 py-2.5 rounded-[14px] text-[13px] text-gray-600 hover:bg-[#FAF8F4] transition-all duration-150"
-      >
-        {workflowsFolderOpen
-          ? <ChevronDown size={12} className="flex-shrink-0 text-gray-400" />
-          : <ChevronRight size={12} className="flex-shrink-0 text-gray-400" />
-        }
-        <FolderOpen size={14} className="flex-shrink-0 text-amber-500" />
-        <span className="flex-1 text-left truncate">workflows/</span>
-        {workflows.length > 0 && (
-          <span className="text-[11px] text-gray-400 font-mono">{workflows.length}</span>
-        )}
-      </button>
-
-      {workflowsFolderOpen && workflows.map(wf => {
-        const fileKey: ConfigFile = `workflow:${wf.workflowId}`;
-        const active = selectedFile === fileKey;
+      {/* Folder groups */}
+      {folders.map(folder => {
+        const isOpen = openFolders.has(folder.prefix);
         return (
-          <button
-            key={wf.workflowId}
-            onClick={() => onSelect(fileKey)}
-            onDoubleClick={() => onOpenWorkflowInStudio?.(wf.workflowId)}
-            className={`w-full flex items-center gap-2.5 pl-[52px] pr-3 py-2 rounded-[14px] text-[12px] transition-all duration-150 ${
-              active
-                ? 'bg-[var(--accent-icon-surface,#EBF0FF)] font-semibold text-gray-800'
-                : 'text-gray-600 hover:bg-[#FAF8F4]'
-            }`}
-            title={`${wf.name} (${wf.stepCount} steps)`}
-          >
-            <FileText size={12} className="flex-shrink-0 text-indigo-500" />
-            <span className="flex-1 text-left truncate">{wf.name || wf.workflowId}.yaml</span>
-          </button>
+          <div key={folder.prefix}>
+            <button
+              onClick={() => toggleFolder(folder.prefix)}
+              className="w-full flex items-center gap-2 pl-7 pr-3 py-2.5 rounded-[14px] text-[13px] text-gray-600 hover:bg-[#FAF8F4] transition-all duration-150"
+            >
+              {isOpen
+                ? <ChevronDown size={12} className="flex-shrink-0 text-gray-400" />
+                : <ChevronRight size={12} className="flex-shrink-0 text-gray-400" />
+              }
+              <FolderOpen size={14} className="flex-shrink-0 text-amber-500" />
+              <span className="flex-1 text-left truncate">{folder.label}</span>
+              {folder.entries.length > 0 && (
+                <span className="text-[11px] text-gray-400 font-mono">{folder.entries.length}</span>
+              )}
+            </button>
+
+            {isOpen && folder.entries.map(entry => {
+              const active = selectedKey === entry.key;
+              const { icon: Icon, color } = getFileIcon(entry.type);
+              return (
+                <button
+                  key={entry.key}
+                  onClick={() => onSelect(entry.key)}
+                  onDoubleClick={() => handleDoubleClick(entry)}
+                  className={`w-full flex items-center gap-2.5 pl-[52px] pr-3 py-2 rounded-[14px] text-[12px] transition-all duration-150 ${
+                    active
+                      ? 'bg-[var(--accent-icon-surface,#EBF0FF)] font-semibold text-gray-800'
+                      : 'text-gray-600 hover:bg-[#FAF8F4]'
+                  }`}
+                  title={entry.key}
+                >
+                  <Icon size={12} className={`flex-shrink-0 ${color}`} />
+                  <span className="flex-1 text-left truncate">{getDisplayName(entry)}</span>
+                </button>
+              );
+            })}
+
+            {isOpen && folder.entries.length === 0 && (
+              <div className="pl-[52px] pr-3 py-2 text-[11px] text-gray-400 italic">Empty</div>
+            )}
+          </div>
         );
       })}
 
-      {workflowsFolderOpen && workflows.length === 0 && (
-        <div className="pl-[52px] pr-3 py-2 text-[11px] text-gray-400 italic">No workflows</div>
-      )}
-
-      {/* scripts/ folder */}
-      <button
-        onClick={() => setScriptsFolderOpen(!scriptsFolderOpen)}
-        className="w-full flex items-center gap-2 pl-7 pr-3 py-2.5 rounded-[14px] text-[13px] text-gray-600 hover:bg-[#FAF8F4] transition-all duration-150"
-      >
-        {scriptsFolderOpen
-          ? <ChevronDown size={12} className="flex-shrink-0 text-gray-400" />
-          : <ChevronRight size={12} className="flex-shrink-0 text-gray-400" />
-        }
-        <FolderOpen size={14} className="flex-shrink-0 text-amber-500" />
-        <span className="flex-1 text-left truncate">scripts/</span>
-        {scripts.length > 0 && (
-          <span className="text-[11px] text-gray-400 font-mono">{scripts.length}</span>
-        )}
-      </button>
-
-      {scriptsFolderOpen && scripts.map(s => {
-        const fileKey: ConfigFile = `script:${s.scriptId}`;
-        const active = selectedFile === fileKey;
+      {/* Top-level files */}
+      {topLevel.map(entry => {
+        const active = selectedKey === entry.key;
+        const { icon: Icon, color } = getFileIcon(entry.type);
         return (
           <button
-            key={s.scriptId}
-            onClick={() => onSelect(fileKey)}
-            onDoubleClick={() => onOpenScriptInStudio?.(s.scriptId)}
-            className={`w-full flex items-center gap-2.5 pl-[52px] pr-3 py-2 rounded-[14px] text-[12px] transition-all duration-150 ${
-              active
-                ? 'bg-[var(--accent-icon-surface,#EBF0FF)] font-semibold text-gray-800'
-                : 'text-gray-600 hover:bg-[#FAF8F4]'
-            }`}
-            title={`${s.scriptId} (rev: ${s.activeRevision})`}
-          >
-            <Code2 size={12} className="flex-shrink-0 text-green-500" />
-            <span className="flex-1 text-left truncate">{s.scriptId}.cs</span>
-          </button>
-        );
-      })}
-
-      {scriptsFolderOpen && scripts.length === 0 && (
-        <div className="pl-[52px] pr-3 py-2 text-[11px] text-gray-400 italic">No scripts</div>
-      )}
-
-      {/* Static config files */}
-      {FILES.map(({ file, label, icon: Icon }) => {
-        const active = selectedFile === file;
-        const dirty = isDirty(file);
-        return (
-          <button
-            key={file}
-            onClick={() => onSelect(file)}
+            key={entry.key}
+            onClick={() => onSelect(entry.key)}
+            onDoubleClick={() => handleDoubleClick(entry)}
             className={`w-full flex items-center gap-2.5 pl-7 pr-3 py-2.5 rounded-[14px] text-[13px] transition-all duration-150 ${
               active
                 ? 'bg-[var(--accent-icon-surface,#EBF0FF)] font-semibold text-gray-800'
                 : 'text-gray-600 hover:bg-[#FAF8F4]'
             }`}
           >
-            <Icon size={14} className={`flex-shrink-0 ${FILE_COLORS[file]}`} />
-            <span className="flex-1 text-left truncate">{label}</span>
-            {dirty && (
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-            )}
+            <Icon size={14} className={`flex-shrink-0 ${color}`} />
+            <span className="flex-1 text-left truncate">{getDisplayName(entry)}</span>
           </button>
         );
       })}
-
-      {/* chat-histories folder */}
-      <button
-        onClick={() => setChatFolderOpen(!chatFolderOpen)}
-        className="w-full flex items-center gap-2 pl-7 pr-3 py-2.5 rounded-[14px] text-[13px] text-gray-600 hover:bg-[#FAF8F4] transition-all duration-150"
-      >
-        {chatFolderOpen
-          ? <ChevronDown size={12} className="flex-shrink-0 text-gray-400" />
-          : <ChevronRight size={12} className="flex-shrink-0 text-gray-400" />
-        }
-        <FolderOpen size={14} className="flex-shrink-0 text-amber-500" />
-        <span className="flex-1 text-left truncate">chat-histories/</span>
-        {chatConversations.length > 0 && (
-          <span className="text-[11px] text-gray-400 font-mono">{chatConversations.length}</span>
-        )}
-      </button>
-
-      {chatFolderOpen && chatConversations.map(conv => {
-        const fileKey: ConfigFile = `chat-history:${conv.id}`;
-        const active = selectedFile === fileKey;
-        const fileName = conv.actorId || conv.id;
-        return (
-          <button
-            key={conv.id}
-            onClick={() => onSelect(fileKey)}
-            className={`w-full flex items-center gap-2.5 pl-[52px] pr-3 py-2 rounded-[14px] text-[12px] transition-all duration-150 ${
-              active
-                ? 'bg-[var(--accent-icon-surface,#EBF0FF)] font-semibold text-gray-800'
-                : 'text-gray-600 hover:bg-[#FAF8F4]'
-            }`}
-            title={`${conv.title || 'Untitled'} (${conv.messageCount} messages)`}
-          >
-            <MessageSquare size={12} className="flex-shrink-0 text-sky-500" />
-            <span className="flex-1 text-left truncate">{fileName}</span>
-          </button>
-        );
-      })}
-
-      {chatFolderOpen && chatConversations.length === 0 && (
-        <div className="pl-[52px] pr-3 py-2 text-[11px] text-gray-400 italic">No conversations</div>
-      )}
     </div>
   );
 }

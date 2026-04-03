@@ -404,7 +404,6 @@ const ProjectAssetsPage: React.FC = () => {
   );
   const currentBindingActor =
     currentBindingRevision?.primaryActorId ||
-    currentBindingRevision?.staticPreferredActorId ||
     bindingQuery.data?.primaryActorId ||
     "";
 
@@ -697,7 +696,7 @@ const ProjectAssetsPage: React.FC = () => {
             history.push(
               buildRuntimeGAgentsHref({
                 scopeId: activeDraft.scopeId.trim(),
-                actorId: currentBindingRevision?.staticPreferredActorId || undefined,
+                actorId: currentBindingRevision?.primaryActorId || undefined,
                 actorTypeName: currentBindingRevision?.staticActorTypeName || undefined,
               }),
             )
