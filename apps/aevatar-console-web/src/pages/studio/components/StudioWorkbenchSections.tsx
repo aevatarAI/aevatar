@@ -44,8 +44,6 @@ import React from 'react';
 import type { Edge, Node } from '@xyflow/react';
 import ReactDOM from 'react-dom';
 import GraphCanvas from '@/shared/graphs/GraphCanvas';
-import { history } from '@/shared/navigation/history';
-import { buildRuntimeGAgentsHref } from '@/shared/navigation/runtimeRoutes';
 import type { PlaygroundPromptHistoryEntry } from '@/shared/playground/promptHistory';
 import {
   buildRuntimeGAgentAssemblyQualifiedName,
@@ -2507,19 +2505,6 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         </div>
         <Space wrap size={[8, 8]}>
           <Tag color="processing">{scopeId}</Tag>
-          <Button
-            onClick={() =>
-              history.push(
-                buildRuntimeGAgentsHref({
-                  scopeId,
-                  actorId: currentRevision?.primaryActorId || undefined,
-                  actorTypeName: currentRevision?.staticActorTypeName || undefined,
-                }),
-              )
-            }
-          >
-            Open GAgents
-          </Button>
           <Button
             type="text"
             size="small"
