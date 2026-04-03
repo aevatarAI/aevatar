@@ -40,9 +40,11 @@ NYXID_BASE_URL=http://127.0.0.1:3001
 NYXID_CLIENT_ID=your-public-client-id
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
 NYXID_SCOPE="openid profile email"
+ORNN_BASE_URL=https://ornn.chrono-ai.fun
 ```
 
 `NYXID_REDIRECT_URI` must exactly match the public client registration in NyxID.
+`ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 
 ## Available scripts
@@ -80,6 +82,7 @@ env Cli__App__NyxId__Enabled=true Cli__App__ScopeId=aevatar \
 cd apps/aevatar-console-web
 AEVATAR_API_TARGET=http://127.0.0.1:5080 \
 AEVATAR_STUDIO_API_TARGET=http://127.0.0.1:6690 \
+ORNN_BASE_URL=https://ornn.chrono-ai.fun \
 pnpm dev
 ```
 

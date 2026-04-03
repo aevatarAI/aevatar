@@ -35,6 +35,12 @@ export default [
     menuBadgeKey: "build.assets",
   },
   {
+    path: "/scopes/files",
+    name: "Files",
+    component: "./scopes/files",
+    menuGroupKey: "build",
+  },
+  {
     path: "/studio",
     name: "Studio",
     component: "./studio",

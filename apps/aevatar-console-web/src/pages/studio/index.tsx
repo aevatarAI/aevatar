@@ -8,6 +8,7 @@ import {
 import type { Node } from '@xyflow/react';
 import {
   Button,
+  message,
   Modal,
   Space,
 } from 'antd';
@@ -22,6 +23,7 @@ import React, {
 import { ensureActiveAuthSession } from '@/shared/auth/client';
 import { getNyxIDRuntimeConfig } from '@/shared/auth/config';
 import { sanitizeReturnTo } from '@/shared/auth/session';
+import { servicesApi } from '@/shared/api/servicesApi';
 import {
   clearPlaygroundPromptHistory,
   loadPlaygroundPromptHistory,
@@ -69,6 +71,14 @@ import {
   type StudioTab,
 } from '@/shared/studio/navigation';
 import type {
+  ServiceCatalogSnapshot,
+  ServiceEndpointSnapshot,
+} from '@/shared/models/services';
+import {
+  getStudioScopeBindingCurrentRevision,
+  normalizeStudioScopeBindingImplementationKind,
+} from '@/shared/studio/models';
+import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
 import { runtimeGAgentApi } from '@/shared/api/runtimeGAgentApi';
@@ -77,11 +87,14 @@ import type {
   StudioConnectorDefinition,
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioOrnnHealthResult,
+  StudioOrnnSkillSearchResult,
   StudioProviderSettings,
   StudioProviderType,
   StudioRoleDefinition,
   StudioScopeGAgentEndpointInput,
   StudioRuntimeTestResult,
+  StudioUserConfig,
   StudioValidationFinding,
   StudioWorkflowDocument,
   StudioWorkflowDirectory,
@@ -94,6 +107,7 @@ import StudioShell, {
   type StudioShellNavItem,
   type StudioWorkspacePage,
 } from './components/StudioShell';
+import StudioFilesPage from './components/StudioFilesPage';
 import ScriptsWorkbenchPage from '@/modules/studio/scripts/ScriptsWorkbenchPage';
 import {
   type StudioCatalogDraftMeta,
@@ -161,6 +175,8 @@ type StudioSettingsDraft = {
   readonly providers: StudioProviderSettings[];
 };
 
+type StudioUserConfigDraft = StudioUserConfig;
+
 type StudioAppearanceTheme = 'blue' | 'coral' | 'forest';
 type StudioColorMode = 'light' | 'dark';
 
@@ -177,11 +193,25 @@ const defaultStudioAppearance: StudioAppearancePreferences = {
 let studioLocalKeyCounter = 0;
 const STUDIO_AUTO_RELOGIN_ATTEMPT_KEY =
   'aevatar-console:studio:auto-relogin:';
+const scopeServiceAppId = 'default';
+const scopeServiceNamespace = 'default';
 
 function hasValidationError(findings: StudioValidationFinding[]): boolean {
   return findings.some((item) =>
     String(item.level ?? '').toLowerCase().includes('error'),
   );
+}
+
+function isChatEndpoint(endpoint: ServiceEndpointSnapshot | undefined): boolean {
+  if (!endpoint) {
+    return false;
+  }
+
+  return endpoint.kind === 'chat' || endpoint.endpointId.trim() === 'chat';
+}
+
+function serviceSupportsChat(service: ServiceCatalogSnapshot | undefined): boolean {
+  return service?.endpoints.some(isChatEndpoint) ?? false;
 }
 
 function trimOptional(value: string | null | undefined): string {
@@ -291,6 +321,7 @@ function readWorkflowCallTargets(
 
 function parseStudioTab(value: string | null): StudioTab {
   switch (value) {
+    case 'files':
     case 'studio':
     case 'scripts':
     case 'executions':
@@ -751,6 +782,19 @@ function normalizeSettingsDraftForHostMode(
   return settings;
 }
 
+function createUserConfigDraft(
+  config: StudioUserConfigDraft | null | undefined,
+): StudioUserConfigDraft | null {
+  if (!config) {
+    return null;
+  }
+
+  return {
+    defaultModel: trimOptional(config.defaultModel),
+    runtimeBaseUrl: trimOptional(config.runtimeBaseUrl),
+  };
+}
+
 function createProviderDraft(
   providerTypes: StudioProviderType[],
   existingProviders: StudioProviderSettings[],
@@ -832,6 +876,8 @@ function readInitialStudioRouteState(): StudioRouteState {
 
 function readInitialWorkspacePage(state: StudioRouteState): StudioWorkspacePage {
   switch (state.tab) {
+    case 'files':
+      return 'files';
     case 'scripts':
       return 'scripts';
     case 'roles':
@@ -906,6 +952,7 @@ function readValidationSummary(
 }
 
 const StudioPage: React.FC = () => {
+  const [messageApi, messageContextHolder] = message.useMessage();
   const initialState = useMemo(() => readInitialStudioRouteState(), []);
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
@@ -954,6 +1001,12 @@ const StudioPage: React.FC = () => {
   const [workflowImportPending, setWorkflowImportPending] = useState(false);
   const [workflowImportNotice, setWorkflowImportNotice] =
     useState<StudioNotice | null>(null);
+  const successToastKeysRef = useRef({
+    save: '',
+    run: '',
+    publish: '',
+    workflowImport: '',
+  });
   const [askAiPrompt, setAskAiPrompt] = useState('');
   const [askAiPending, setAskAiPending] = useState(false);
   const [askAiNotice, setAskAiNotice] = useState<StudioNotice | null>(null);
@@ -999,6 +1052,11 @@ const StudioPage: React.FC = () => {
   const [selectedProviderName, setSelectedProviderName] = useState('');
   const [settingsPending, setSettingsPending] = useState(false);
   const [settingsNotice, setSettingsNotice] = useState<StudioNotice | null>(null);
+  const [userConfigDraft, setUserConfigDraft] =
+    useState<StudioUserConfigDraft | null>(null);
+  const [userConfigPending, setUserConfigPending] = useState(false);
+  const [userConfigNotice, setUserConfigNotice] =
+    useState<StudioNotice | null>(null);
   const [runtimeTestPending, setRuntimeTestPending] = useState(false);
   const [runtimeTestResult, setRuntimeTestResult] =
     useState<StudioRuntimeTestResult | null>(null);
@@ -1030,6 +1088,8 @@ const StudioPage: React.FC = () => {
     Boolean(authSessionQuery.data?.authenticated);
   const studioHostReady =
     studioHostAccessResolved && studioHostAuthenticated;
+  const settingsPageEnabled =
+    studioHostReady && studioHostAuthenticated && workspacePage === 'settings';
   const studioAppearance = defaultStudioAppearance;
 
   useEffect(() => {
@@ -1142,6 +1202,26 @@ const StudioPage: React.FC = () => {
     enabled: studioHostReady,
     queryFn: () => studioApi.getSettings(),
   });
+  const userConfigQuery = useQuery({
+    queryKey: ['studio-user-config'],
+    enabled: settingsPageEnabled,
+    queryFn: () => studioApi.getUserConfig(),
+  });
+  const userConfigModelsQuery = useQuery({
+    queryKey: ['studio-user-config-models'],
+    enabled: settingsPageEnabled,
+    queryFn: () => studioApi.getUserConfigModels(),
+  });
+  const ornnHealthQuery = useQuery({
+    queryKey: ['studio-ornn-health'],
+    enabled: settingsPageEnabled,
+    queryFn: () => studioApi.getSkillsHealth(),
+  });
+  const ornnSkillsQuery = useQuery({
+    queryKey: ['studio-ornn-skills'],
+    enabled: settingsPageEnabled,
+    queryFn: () => studioApi.searchSkills({ pageSize: 100 }),
+  });
   const selectedWorkflowQuery = useQuery({
     queryKey: ['studio-workflow', selectedWorkflowId],
     enabled: studioHostReady && Boolean(selectedWorkflowId),
@@ -1156,6 +1236,19 @@ const StudioPage: React.FC = () => {
     queryKey: ['studio-scope-binding', resolvedStudioScopeId],
     enabled: studioHostReady && Boolean(resolvedStudioScopeId),
     queryFn: () => studioApi.getScopeBinding(resolvedStudioScopeId),
+  });
+  const scopeServicesQuery = useQuery({
+    queryKey: ['studio-scope-services', resolvedStudioScopeId],
+    enabled:
+      studioHostReady &&
+      Boolean(resolvedStudioScopeId) &&
+      Boolean(scopeBindingQuery.data?.available),
+    queryFn: () =>
+      servicesApi.listServices({
+        appId: scopeServiceAppId,
+        namespace: scopeServiceNamespace,
+        tenantId: resolvedStudioScopeId,
+      }),
   });
   const gAgentTypesQuery = useQuery({
     queryKey: ['studio-runtime-gagent-types'],
@@ -1175,6 +1268,21 @@ const StudioPage: React.FC = () => {
       null,
     [templateWorkflow, workflowsQuery.data],
   );
+  const publishedEntrySurface = useMemo<'chat' | 'invoke'>(() => {
+    if (!scopeBindingQuery.data?.available) {
+      return 'invoke';
+    }
+
+    const boundService = (scopeServicesQuery.data ?? []).find(
+      (service) => service.serviceId === scopeBindingQuery.data?.serviceId,
+    );
+
+    return serviceSupportsChat(boundService) ? 'chat' : 'invoke';
+  }, [
+    scopeBindingQuery.data?.available,
+    scopeBindingQuery.data?.serviceId,
+    scopeServicesQuery.data,
+  ]);
   const templateWorkflowQuery = useQuery({
     queryKey: ['studio-template-workflow', templateWorkflow],
     enabled:
@@ -1370,8 +1478,16 @@ const StudioPage: React.FC = () => {
       )?.providerName ||
         nextDraft?.providers[0]?.providerName ||
         '',
-    );
+      );
   }, [selectedProviderName, settingsQuery.data]);
+
+  useEffect(() => {
+    if (!userConfigQuery.data) {
+      return;
+    }
+
+    setUserConfigDraft(createUserConfigDraft(userConfigQuery.data));
+  }, [userConfigQuery.data]);
 
   useEffect(() => {
     if (!activeWorkflowSourceKey) {
@@ -1496,6 +1612,34 @@ const StudioPage: React.FC = () => {
   ]);
 
   const activeWorkflowName = draftWorkflowName || sourceWorkflowName;
+  const projectEntryReadyForCurrentWorkflow = useMemo(() => {
+    const normalizedActiveWorkflowName = trimOptional(activeWorkflowName).toLowerCase();
+    if (!normalizedActiveWorkflowName) {
+      return false;
+    }
+
+    const currentBindingRevision = getStudioScopeBindingCurrentRevision(
+      scopeBindingQuery.data,
+    );
+    if (!currentBindingRevision) {
+      return false;
+    }
+
+    if (
+      normalizeStudioScopeBindingImplementationKind(
+        currentBindingRevision.implementationKind,
+      ) !== 'workflow'
+    ) {
+      return false;
+    }
+
+    const publishedWorkflowName = (
+      trimOptional(currentBindingRevision.workflowName) ||
+      trimOptional(scopeBindingQuery.data?.displayName)
+    ).toLowerCase();
+
+    return publishedWorkflowName === normalizedActiveWorkflowName;
+  }, [activeWorkflowName, scopeBindingQuery.data]);
   const activeDirectoryLabel =
     workspaceSettingsQuery.data?.directories.find(
       (item) => item.directoryId === draftDirectoryId,
@@ -1818,6 +1962,12 @@ const StudioPage: React.FC = () => {
       ),
     [settingsDraft, settingsQuery.data, studioHostMode],
   );
+  const userConfigDirty = useMemo(
+    () =>
+      JSON.stringify(createUserConfigDraft(userConfigDraft)) !==
+      JSON.stringify(createUserConfigDraft(userConfigQuery.data)),
+    [userConfigDraft, userConfigQuery.data],
+  );
   const executionCanStop = isExecutionStopAllowed(selectedExecutionQuery.data?.status);
 
   useEffect(() => {
@@ -1841,6 +1991,17 @@ const StudioPage: React.FC = () => {
     }, 3200);
     return () => window.clearTimeout(timeoutId);
   }, [connectorCatalogNotice]);
+
+  useEffect(() => {
+    if (!userConfigNotice) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setUserConfigNotice(null);
+    }, 3200);
+    return () => window.clearTimeout(timeoutId);
+  }, [userConfigNotice]);
 
   useEffect(() => {
     if (selectedGraphStep) {
@@ -1994,7 +2155,7 @@ const StudioPage: React.FC = () => {
     if (!directoryId) {
       setSaveNotice({
         type: 'error',
-        message: 'Add a workflow directory in Config before saving.',
+        message: 'Add a workflow directory in Settings before saving.',
       });
       return;
     }
@@ -2492,6 +2653,84 @@ const StudioPage: React.FC = () => {
       setBindingRetirementRevisionId('');
     }
   };
+
+  useEffect(() => {
+    if (saveNotice?.type !== 'success') {
+      successToastKeysRef.current.save = '';
+      return;
+    }
+
+    if (successToastKeysRef.current.save === saveNotice.message) {
+      return;
+    }
+
+    successToastKeysRef.current.save = saveNotice.message;
+    void messageApi.open({
+      key: 'studio-save-success',
+      type: 'success',
+      content: saveNotice.message,
+      duration: 3,
+    });
+  }, [messageApi, saveNotice?.message, saveNotice?.type]);
+
+  useEffect(() => {
+    if (runNotice?.type !== 'success') {
+      successToastKeysRef.current.run = '';
+      return;
+    }
+
+    if (successToastKeysRef.current.run === runNotice.message) {
+      return;
+    }
+
+    successToastKeysRef.current.run = runNotice.message;
+    void messageApi.open({
+      key: 'studio-run-success',
+      type: 'success',
+      content: runNotice.message,
+      duration: 3,
+    });
+  }, [messageApi, runNotice?.message, runNotice?.type]);
+
+  useEffect(() => {
+    if (publishNotice?.type !== 'success') {
+      successToastKeysRef.current.publish = '';
+      return;
+    }
+
+    if (successToastKeysRef.current.publish === publishNotice.message) {
+      return;
+    }
+
+    successToastKeysRef.current.publish = publishNotice.message;
+    void messageApi.open({
+      key: 'studio-publish-success',
+      type: 'success',
+      content: publishNotice.message,
+      duration: 3,
+    });
+  }, [messageApi, publishNotice?.message, publishNotice?.type]);
+
+  useEffect(() => {
+    if (workflowImportNotice?.type !== 'success') {
+      successToastKeysRef.current.workflowImport = '';
+      return;
+    }
+
+    if (
+      successToastKeysRef.current.workflowImport === workflowImportNotice.message
+    ) {
+      return;
+    }
+
+    successToastKeysRef.current.workflowImport = workflowImportNotice.message;
+    void messageApi.open({
+      key: 'studio-workflow-import-success',
+      type: 'success',
+      content: workflowImportNotice.message,
+      duration: 3,
+    });
+  }, [messageApi, workflowImportNotice?.message, workflowImportNotice?.type]);
 
   const handlePopOutExecutionLogs = () => {
     if (!selectedExecutionId || typeof window === 'undefined') {
@@ -3241,6 +3480,35 @@ const StudioPage: React.FC = () => {
       });
     } finally {
       setSettingsPending(false);
+    }
+  };
+
+  const handleSaveUserConfig = async () => {
+    if (!userConfigDraft) {
+      return;
+    }
+
+    setUserConfigPending(true);
+    setUserConfigNotice(null);
+    try {
+      const response = await studioApi.saveUserConfig({
+        defaultModel: userConfigDraft.defaultModel,
+        runtimeBaseUrl: userConfigDraft.runtimeBaseUrl,
+      });
+      queryClient.setQueryData(['studio-user-config'], response);
+      setUserConfigDraft(createUserConfigDraft(response));
+      setUserConfigNotice({
+        type: 'success',
+        message: 'Saved LLM config.',
+      });
+    } catch (error) {
+      setUserConfigNotice({
+        type: 'error',
+        message:
+          error instanceof Error ? error.message : 'Failed to save the LLM config.',
+      });
+    } finally {
+      setUserConfigPending(false);
     }
   };
 
@@ -4018,9 +4286,8 @@ const StudioPage: React.FC = () => {
     },
     {
       key: 'settings',
-      label: 'Workspace settings',
-      description: 'Manage AI providers and review runtime and workflow setup.',
-      count: workspaceSettingsQuery.data?.directories.length ?? 0,
+      label: 'Settings',
+      description: 'Configure runtime, LLM, and skills.',
     },
   ];
   if (appContextQuery.data?.features.scripts) {
@@ -4053,6 +4320,8 @@ const StudioPage: React.FC = () => {
   const pageTitle =
     workspacePage === 'workflows'
       ? 'Workflows'
+      : workspacePage === 'files'
+        ? 'Files'
       : workspacePage === 'scripts'
         ? 'Scripts Studio'
       : workspacePage === 'studio'
@@ -4063,7 +4332,7 @@ const StudioPage: React.FC = () => {
           ? 'Role catalog'
           : workspacePage === 'connectors'
             ? 'Connector catalog'
-            : 'Workspace settings';
+            : 'Settings';
 
   const pageToolbar =
     workspacePage === 'studio' ? (
@@ -4176,6 +4445,7 @@ const StudioPage: React.FC = () => {
           selectedDirectoryId={draftDirectoryId || defaultDirectoryId}
           templateWorkflow={templateWorkflow}
           draftMode={draftMode}
+          legacySource={legacySource}
           activeWorkflowName={activeWorkflowName}
           activeWorkflowDescription={activeWorkflowDescription}
           activeWorkflowSourceKey={activeWorkflowSourceKey}
@@ -4187,11 +4457,6 @@ const StudioPage: React.FC = () => {
           workflowImportInputRef={workflowImportInputRef}
           onOpenWorkflow={openWorkspaceWorkflow}
           onStartBlankDraft={startBlankDraft}
-          onOpenCurrentDraft={() => {
-            ensureActiveWorkflowDraftLoaded();
-            setWorkspacePage('studio');
-            setStudioView('editor');
-          }}
           onSelectDirectoryId={setDraftDirectoryId}
           onSetWorkflowSearch={setWorkflowSearch}
           onToggleDirectoryForm={() =>
@@ -4203,6 +4468,35 @@ const StudioPage: React.FC = () => {
           onRemoveDirectory={(directoryId) => void handleRemoveDirectory(directoryId)}
           onWorkflowImportClick={() => workflowImportInputRef.current?.click()}
           onWorkflowImportChange={handleWorkflowImport}
+        />
+      </div>
+    ) : workspacePage === 'files' ? (
+      <div
+        data-testid="studio-files-viewport"
+        style={{
+          display: 'flex',
+          flex: 1,
+          flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
+        }}
+      >
+        <StudioFilesPage
+          workflows={workflowsQuery}
+          workspaceSettings={workspaceSettingsQuery}
+          roles={rolesQuery}
+          connectors={connectorsQuery}
+          settings={settingsQuery}
+          scopeId={resolvedStudioScopeId}
+          workflowStorageMode={
+            appContextQuery.data?.workflowStorageMode || 'workspace'
+          }
+          scriptsEnabled={Boolean(appContextQuery.data?.features.scripts)}
+          onOpenWorkflowInStudio={openWorkspaceWorkflow}
+          onOpenScriptInStudio={(scriptId) => {
+            setSelectedScriptId(scriptId);
+            setWorkspacePage('scripts');
+          }}
         />
       </div>
     ) : workspacePage === 'studio' ? (
@@ -4289,6 +4583,8 @@ const StudioPage: React.FC = () => {
           scopeBinding={scopeBindingQuery.data}
           scopeBindingLoading={scopeBindingQuery.isLoading}
           scopeBindingError={scopeBindingQuery.isError ? scopeBindingQuery.error : null}
+          projectEntrySurface={publishedEntrySurface}
+          projectEntryReadyForCurrentWorkflow={projectEntryReadyForCurrentWorkflow}
           gAgentTypes={gAgentTypesQuery.data ?? []}
           gAgentTypesLoading={gAgentTypesQuery.isLoading}
           gAgentTypesError={gAgentTypesQuery.isError ? gAgentTypesQuery.error : null}
@@ -4409,6 +4705,20 @@ const StudioPage: React.FC = () => {
             );
           }}
           onOpenProjectInvoke={() => {
+            if (publishedEntrySurface === 'chat') {
+              const searchParams = new URLSearchParams();
+              if (resolvedStudioScopeId) {
+                searchParams.set('scopeId', resolvedStudioScopeId);
+              }
+              if (scopeBindingQuery.data?.serviceId) {
+                searchParams.set('serviceId', scopeBindingQuery.data.serviceId);
+              }
+
+              const search = searchParams.toString();
+              history.push(search ? `/chat?${search}` : '/chat');
+              return;
+            }
+
             history.push(
               resolvedStudioScopeId
                 ? `/scopes/invoke?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
@@ -4539,6 +4849,9 @@ const StudioPage: React.FC = () => {
           workspaceSettings={workspaceSettingsQuery}
           settings={settingsQuery}
           settingsDraft={settingsDraft}
+          userConfig={userConfigQuery}
+          userConfigModels={userConfigModelsQuery}
+          userConfigDraft={userConfigDraft}
           selectedProvider={selectedProvider}
           hostMode={studioHostMode}
           workflowStorageMode={
@@ -4546,14 +4859,28 @@ const StudioPage: React.FC = () => {
           }
           settingsDirty={settingsDirty}
           settingsPending={settingsPending}
+          userConfigDirty={userConfigDirty}
+          userConfigPending={userConfigPending}
           runtimeTestPending={runtimeTestPending}
           settingsNotice={settingsNotice}
+          userConfigNotice={userConfigNotice}
           runtimeTestResult={runtimeTestResult}
+          ornnHealth={ornnHealthQuery}
+          ornnSkills={ornnSkillsQuery}
+          onCloseSettingsPage={() => applyWorkspacePageSelection('studio')}
           directoryPath={directoryPath}
           directoryLabel={directoryLabel}
           onSaveSettings={() => void handleSaveSettings()}
+          onSaveUserConfig={() => void handleSaveUserConfig()}
           onTestRuntime={() => void handleTestRuntime()}
           onSetSettingsDraft={setSettingsDraft}
+          onSetUserConfigDraft={setUserConfigDraft}
+          onRefreshOrnnHealth={() => {
+            void ornnHealthQuery.refetch();
+          }}
+          onRefreshOrnnSkills={() => {
+            void ornnSkillsQuery.refetch();
+          }}
           onAddProvider={() => {
             if (!settingsDraft) {
               return;
@@ -4617,6 +4944,7 @@ const StudioPage: React.FC = () => {
 
   return (
     <PageContainer title={pageContainerTitle}>
+      {messageContextHolder}
       <StudioBootstrapGate
         appContextLoading={appContextQuery.isLoading}
         appContextError={appContextQuery.isError ? appContextQuery.error : null}

@@ -97,6 +97,25 @@ type InvokeDockTab = 'chat' | 'events' | 'output';
 
 type InvokeContextSurface = 'service' | null;
 
+type InvokeEndpointOption = {
+  description: string;
+  displayName: string;
+  endpointId: string;
+  kind: string;
+  requestTypeUrl: string;
+  responseTypeUrl: string;
+};
+
+type InvokeServiceOption = {
+  deploymentStatus?: string;
+  displayName: string;
+  endpoints: InvokeEndpointOption[];
+  kind: 'nyxid-chat' | 'service';
+  namespace: string;
+  primaryActorId?: string;
+  serviceId: string;
+};
+
 type MonacoEditorComponentProps = {
   ariaLabel?: string;
   defaultLanguage?: string;
@@ -113,6 +132,10 @@ type MonacoEditorComponentProps = {
 const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = 'default';
 const scopeServiceNamespace = 'default';
+const nyxIdChatActorTypeName = 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent';
+const nyxIdChatConversationPrefix = 'NyxIdChat:';
+const nyxIdChatServiceId = 'nyxid-chat';
+const nyxIdChatLabel = 'NyxID Chat';
 const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
 const viewportShellStyle: React.CSSProperties = {
@@ -331,6 +354,73 @@ function createClientId(): string {
 function buildServiceOptions(
   services: readonly ServiceCatalogSnapshot[],
   defaultServiceId?: string,
+): InvokeServiceOption[] {
+  const builtInNyxIdService: InvokeServiceOption = {
+    displayName: nyxIdChatLabel,
+    endpoints: [
+      {
+        description:
+          'Chat with NyxID about services, credentials, and configuration.',
+        displayName: 'Chat',
+        endpointId: 'chat',
+        kind: 'chat',
+        requestTypeUrl: '',
+        responseTypeUrl: '',
+      },
+    ],
+    kind: 'nyxid-chat',
+    namespace: scopeServiceNamespace,
+    serviceId: nyxIdChatServiceId,
+  };
+  const publishedServices = [...services]
+    .filter((service) => service.serviceId !== builtInNyxIdService.serviceId)
+    .map((service) => ({
+      deploymentStatus: service.deploymentStatus,
+      displayName: service.displayName || service.serviceId,
+      endpoints: service.endpoints.map((endpoint) => ({
+        description: endpoint.description,
+        displayName: endpoint.displayName,
+        endpointId: endpoint.endpointId,
+        kind: endpoint.kind,
+        requestTypeUrl: endpoint.requestTypeUrl,
+        responseTypeUrl: endpoint.responseTypeUrl,
+      })),
+      kind: 'service' as const,
+      namespace: service.namespace,
+      primaryActorId: service.primaryActorId,
+      serviceId: service.serviceId,
+    }))
+    .sort((left, right) => {
+      const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
+      const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+
+      if (leftIsDefault !== rightIsDefault) {
+        return rightIsDefault - leftIsDefault;
+      }
+
+      return left.serviceId.localeCompare(right.serviceId);
+    });
+
+  return [builtInNyxIdService, ...publishedServices];
+}
+
+function getPreferredServiceId(
+  services: readonly InvokeServiceOption[],
+  defaultServiceId?: string,
+): string {
+  return (
+    services.find((service) => service.serviceId === defaultServiceId)
+      ?.serviceId ||
+    services.find((service) => service.serviceId === nyxIdChatServiceId)
+      ?.serviceId ||
+    services[0]?.serviceId ||
+    ''
+  );
+}
+
+function buildPublishedServiceCatalog(
+  services: readonly ServiceCatalogSnapshot[],
+  defaultServiceId?: string,
 ): ServiceCatalogSnapshot[] {
   return [...services].sort((left, right) => {
     const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
@@ -406,12 +496,17 @@ function resolveMonacoEditorComponent(): React.ComponentType<MonacoEditorCompone
 
 const ScopeInvokePage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nyxIdChatBoundRef = useRef(false);
   const previousChatBindingKeyRef = useRef('');
+  const initialSelectedServiceId = readQueryValue('serviceId');
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const serviceSelectionSourceRef = useRef<'auto' | 'manual'>(
+    initialSelectedServiceId ? 'manual' : 'auto',
+  );
   const [draft, setDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [selectedServiceId, setSelectedServiceId] = useState(
-    readQueryValue('serviceId'),
+    initialSelectedServiceId,
   );
   const [selectedEndpointId, setSelectedEndpointId] = useState(
     readQueryValue('endpointId'),
@@ -490,9 +585,13 @@ const ScopeInvokePage: React.FC = () => {
       }),
   });
 
-  const services = useMemo(
+  useEffect(() => {
+    nyxIdChatBoundRef.current = false;
+  }, [scopeId]);
+
+  const publishedServices = useMemo(
     () =>
-      buildServiceOptions(
+      buildPublishedServiceCatalog(
         scopeServicesQuery.data ?? [],
         bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
       ),
@@ -502,32 +601,58 @@ const ScopeInvokePage: React.FC = () => {
       scopeServicesQuery.data,
     ],
   );
+  const services = useMemo(
+    () =>
+      scopeId
+        ? buildServiceOptions(
+            publishedServices,
+            bindingQuery.data?.available
+              ? bindingQuery.data.serviceId
+              : undefined,
+          )
+        : [],
+    [
+      bindingQuery.data?.available,
+      bindingQuery.data?.serviceId,
+      publishedServices,
+      scopeId,
+    ],
+  );
 
   useEffect(() => {
     if (!services.length) {
+      serviceSelectionSourceRef.current = 'auto';
       setSelectedServiceId('');
+      return;
+    }
+
+    const preferredServiceId = getPreferredServiceId(
+      services,
+      bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
+    );
+    const hasSelectedService =
+      selectedServiceId &&
+      services.some((service) => service.serviceId === selectedServiceId);
+
+    if (!hasSelectedService) {
+      if (preserveEmptySelection) {
+        serviceSelectionSourceRef.current = 'auto';
+        setSelectedServiceId('');
+        return;
+      }
+
+      serviceSelectionSourceRef.current = 'auto';
+      setSelectedServiceId(preferredServiceId);
       return;
     }
 
     if (
-      selectedServiceId &&
-      services.some((service) => service.serviceId === selectedServiceId)
+      serviceSelectionSourceRef.current === 'auto' &&
+      preferredServiceId &&
+      selectedServiceId !== preferredServiceId
     ) {
-      return;
+      setSelectedServiceId(preferredServiceId);
     }
-
-    if (preserveEmptySelection) {
-      setSelectedServiceId('');
-      return;
-    }
-
-    setSelectedServiceId(
-      services.find(
-        (service) => service.serviceId === bindingQuery.data?.serviceId,
-      )?.serviceId ||
-        services[0]?.serviceId ||
-        '',
-    );
   }, [
     bindingQuery.data?.serviceId,
     preserveEmptySelection,
@@ -617,6 +742,30 @@ const ScopeInvokePage: React.FC = () => {
     label: service.displayName || service.serviceId,
     value: service.serviceId,
   }));
+
+  const ensureNyxIdChatBound = useCallback(async () => {
+    if (!scopeId || nyxIdChatBoundRef.current) {
+      return;
+    }
+
+    await studioApi.bindScopeGAgent({
+      actorTypeName: nyxIdChatActorTypeName,
+      displayName: nyxIdChatLabel,
+      endpoints: [
+        {
+          description:
+            'Chat with NyxID about services, credentials, and configuration.',
+          displayName: 'Chat',
+          endpointId: 'chat',
+          kind: 'chat',
+        },
+      ],
+      preferredActorId: `${nyxIdChatConversationPrefix}${scopeId}`,
+      scopeId,
+      serviceId: nyxIdChatServiceId,
+    });
+    nyxIdChatBoundRef.current = true;
+  }, [scopeId]);
   const endpointOptions = (selectedService?.endpoints ?? []).map(
     (endpoint) => ({
       label: endpoint.displayName || endpoint.endpointId,
@@ -679,6 +828,10 @@ const ScopeInvokePage: React.FC = () => {
       });
 
       try {
+        if (selectedService.kind === 'nyxid-chat') {
+          await ensureNyxIdChatBound();
+        }
+
         const response = await runtimeRunsApi.streamChat(
           scopeId,
           {
@@ -903,13 +1056,13 @@ const ScopeInvokePage: React.FC = () => {
     }
 
     const observedDraftKey =
-      invokeResult.events.length > 0
+      observedEvents.length > 0
         ? saveObservedRunSessionPayload({
             actorId: invokeResult.actorId || undefined,
             commandId: invokeResult.commandId || undefined,
             endpointId:
               invokeResult.endpointId || selectedEndpoint?.endpointId || 'chat',
-            events: invokeResult.events,
+            events: observedEvents,
             payloadBase64:
               selectedEndpoint && !isChatEndpoint(selectedEndpoint)
                 ? payloadBase64 || undefined
@@ -1038,6 +1191,24 @@ const ScopeInvokePage: React.FC = () => {
       ),
     [invokeResult.responseJson],
   );
+  const latestChatObservedEvents = useMemo(() => {
+    const latestAssistantMessage = [...chatMessages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'assistant' && (message.events?.length ?? 0) > 0,
+      );
+
+    return latestAssistantMessage?.events ?? [];
+  }, [chatMessages]);
+  const observedEvents = useMemo(
+    () =>
+      invokeResult.events.length > 0
+        ? invokeResult.events
+        : latestChatObservedEvents,
+    [invokeResult.events, latestChatObservedEvents],
+  );
+  const observedEventCount = observedEvents.length;
 
   const bindingStatus =
     bindingQuery.data?.deploymentStatus ||
@@ -1331,7 +1502,7 @@ const ScopeInvokePage: React.FC = () => {
                           <div ref={scrollAnchorRef} />
                         </div>
                       }
-                      events={invokeResult.events}
+                      events={observedEvents}
                       fillHeight
                       hasChatContent={chatMessages.length > 0}
                       onClear={handleClearConsole}
@@ -1420,7 +1591,7 @@ const ScopeInvokePage: React.FC = () => {
                     <InvokeLabConsole
                       activeTab={dockTab}
                       chatPanel={null}
-                      events={invokeResult.events}
+                      events={observedEvents}
                       hasChatContent={false}
                       onClear={handleClearConsole}
                       onTabChange={setDockTab}
@@ -1453,6 +1624,7 @@ const ScopeInvokePage: React.FC = () => {
                   <Select
                     onChange={(value) => {
                       setPreserveEmptySelection(false);
+                      serviceSelectionSourceRef.current = 'manual';
                       setSelectedServiceId(value);
                     }}
                     options={serviceOptions}
@@ -1590,7 +1762,7 @@ const ScopeInvokePage: React.FC = () => {
                             {recommendedNextStep.actionLabel}
                           </Button>
                           <Typography.Text type="secondary">
-                            {invokeResult.eventCount} observed events
+                            {observedEventCount} observed events
                           </Typography.Text>
                         </Space>
                       </div>
@@ -1620,17 +1792,19 @@ const ScopeInvokePage: React.FC = () => {
             <ScopeServiceRuntimeWorkbench
               onSelectService={(serviceId) => {
                 setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
                 setSelectedServiceId(serviceId);
               }}
               onUseEndpoint={(serviceId, endpointId) => {
                 setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
                 setSelectedServiceId(serviceId);
                 setSelectedEndpointId(endpointId);
               }}
               scopeId={scopeId}
               selectedEndpointId={selectedEndpointId}
               selectedServiceId={selectedServiceId}
-              services={services}
+              services={publishedServices}
             />
           </AevatarContextDrawer>
         ) : null}

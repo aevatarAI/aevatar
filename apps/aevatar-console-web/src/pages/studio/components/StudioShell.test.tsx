@@ -38,6 +38,7 @@ describe("StudioShell", () => {
 
     expect(container.firstChild).toHaveStyle({
       flex: "1",
+      height: "calc(100vh - 176px)",
       minHeight: "calc(100vh - 176px)",
     });
     expect(container.querySelector(".ant-row")).toHaveStyle({
@@ -45,10 +46,17 @@ describe("StudioShell", () => {
       minHeight: "0",
     });
     expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+      display: "flex",
+      flex: "1",
+      flexDirection: "column",
+      minHeight: "0",
+      overflow: "hidden",
+    });
+    expect(screen.getByText("Studio content").parentElement?.parentElement).toHaveStyle({
       flex: "1",
       minHeight: "0",
       overflowX: "hidden",
-      overflowY: "auto",
+      overflowY: "hidden",
     });
 
     expect(screen.getByLabelText("Workbench")).toHaveStyle({ width: "64px" });

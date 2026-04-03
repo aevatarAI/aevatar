@@ -1,5 +1,6 @@
 export type StudioTab =
   | 'workflows'
+  | 'files'
   | 'studio'
   | 'scripts'
   | 'executions'
@@ -83,6 +84,12 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
 export function buildStudioWorkflowWorkspaceRoute(): string {
   return buildStudioRoute({
     tab: 'workflows',
+  });
+}
+
+export function buildStudioFilesWorkspaceRoute(): string {
+  return buildStudioRoute({
+    tab: 'files',
   });
 }
 
