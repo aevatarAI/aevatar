@@ -4,11 +4,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { history } from "@/shared/navigation/history";
 import type {
   ServiceCatalogSnapshot,
   ServiceEndpointSnapshot,
 } from "@/shared/models/services";
 import { studioApi } from "@/shared/studio/api";
+import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
 import { resolveStudioScopeContext } from "../scopes/components/resolvedScope";
 import { chatHistoryApi } from "./chatHistoryApi";
@@ -51,6 +53,13 @@ const nyxIdChatActorTypeName = "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent";
 const nyxIdChatConversationPrefix = "NyxIdChat:";
 const nyxIdChatServiceId = "nyxid-chat";
 const nyxIdChatLabel = "NyxID Chat";
+
+function readChatQueryValue(
+  key: string,
+  search = typeof window === "undefined" ? "" : window.location.search
+): string {
+  return new URLSearchParams(search).get(key)?.trim() ?? "";
+}
 
 function createClientId(): string {
   return globalThis.crypto?.randomUUID?.()
@@ -217,11 +226,17 @@ const ChatPage: React.FC = () => {
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
+  const routeSearch = typeof window === "undefined" ? "" : window.location.search;
+  const routeScopeId = useMemo(() => readChatQueryValue("scopeId", routeSearch), [routeSearch]);
+  const routeServiceId = useMemo(
+    () => readChatQueryValue("serviceId", routeSearch),
+    [routeSearch]
+  );
   const resolvedScope = useMemo(
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data]
   );
-  const scopeId = resolvedScope?.scopeId || "";
+  const scopeId = routeScopeId || resolvedScope?.scopeId || "";
 
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -343,7 +358,12 @@ const ChatPage: React.FC = () => {
       return;
     }
 
+    const routePreferredServiceId =
+      routeServiceId && services.some((service) => service.id === routeServiceId)
+        ? routeServiceId
+        : "";
     const preferredServiceId =
+      routePreferredServiceId ||
       (bindingQuery.data?.available ? bindingQuery.data.serviceId : "") ||
       services.find((service) => service.id === nyxIdChatServiceId)?.id ||
       services[0]?.id ||
@@ -366,7 +386,13 @@ const ChatPage: React.FC = () => {
     ) {
       setSelectedServiceId(preferredServiceId);
     }
-  }, [bindingQuery.data?.available, bindingQuery.data?.serviceId, selectedServiceId, services]);
+  }, [
+    bindingQuery.data?.available,
+    bindingQuery.data?.serviceId,
+    routeServiceId,
+    selectedServiceId,
+    services,
+  ]);
 
   useEffect(() => {
     if (!selectedServiceId) {
@@ -489,6 +515,14 @@ const ChatPage: React.FC = () => {
     setSession(createIdleSession(scopeId, selectedServiceId));
     nyxIdChatBoundRef.current = false;
   }, [scopeId, selectedServiceId]);
+
+  const handleCreate = useCallback(() => {
+    history.push(
+      buildStudioWorkflowEditorRoute({
+        draftMode: "new",
+      })
+    );
+  }, []);
 
   const handleSelectConversation = useCallback(
     async (conversationId: string) => {
@@ -910,7 +944,10 @@ const ChatPage: React.FC = () => {
             backdropFilter: "blur(10px)",
             borderBottom: "1px solid #e7e5e4",
             flexShrink: 0,
+            overflow: "visible",
             padding: "0 20px",
+            position: "relative",
+            zIndex: 4,
           }}
         >
           <div
@@ -941,6 +978,7 @@ const ChatPage: React.FC = () => {
               </div>
               {scopeId && services.length > 0 ? (
                 <ServiceSelector
+                  onCreate={handleCreate}
                   onSelect={(serviceId) => {
                     serviceSelectionSourceRef.current = "manual";
                     setSelectedServiceId(serviceId);

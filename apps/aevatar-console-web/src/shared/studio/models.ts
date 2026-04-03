@@ -526,3 +526,44 @@ export interface StudioRuntimeTestResult {
   readonly statusCode: number | null;
   readonly message: string;
 }
+
+export interface StudioUserConfig {
+  readonly defaultModel: string;
+  readonly runtimeBaseUrl: string;
+}
+
+export interface StudioUserConfigProviderStatus {
+  readonly providerSlug: string;
+  readonly providerName: string;
+  readonly status: string;
+  readonly proxyUrl: string;
+}
+
+export interface StudioUserConfigModelsResponse {
+  readonly providers: StudioUserConfigProviderStatus[];
+  readonly gatewayUrl: string;
+  readonly supportedModels: string[];
+}
+
+export interface StudioOrnnSkillSummary {
+  readonly guid: string;
+  readonly name: string;
+  readonly description: string;
+  readonly isPrivate: boolean;
+}
+
+export interface StudioOrnnSkillSearchResult {
+  readonly baseUrl: string;
+  readonly total: number;
+  readonly totalPages: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly items: StudioOrnnSkillSummary[];
+  readonly message?: string;
+}
+
+export interface StudioOrnnHealthResult {
+  readonly baseUrl: string;
+  readonly reachable: boolean;
+  readonly message: string;
+}

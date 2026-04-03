@@ -3,6 +3,7 @@ import {
   BuildOutlined,
   CodeOutlined,
   DoubleRightOutlined,
+  FolderOpenOutlined,
   NodeIndexOutlined,
   SettingOutlined,
   TeamOutlined,
@@ -13,6 +14,7 @@ import { cardStackStyle, stretchColumnStyle } from '@/shared/ui/proComponents';
 
 export type StudioWorkspacePage =
   | 'workflows'
+  | 'files'
   | 'studio'
   | 'scripts'
   | 'roles'
@@ -121,7 +123,9 @@ const workbenchFooterStyle: React.CSSProperties = {
 const shellRootStyle: React.CSSProperties = {
   ...cardStackStyle,
   flex: 1,
+  height: 'calc(100vh - 176px)',
   minHeight: 'calc(100vh - 176px)',
+  overflow: 'hidden',
 };
 
 const shellRowStyle: React.CSSProperties = {
@@ -139,11 +143,20 @@ const shellContentStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowX: 'hidden',
-  overflowY: 'auto',
+  overflowY: 'hidden',
+};
+
+const shellPageBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  minHeight: 0,
+  overflow: 'hidden',
 };
 
 const navItemIconByKey: Record<StudioWorkspacePage, React.ReactNode> = {
   workflows: <NodeIndexOutlined />,
+  files: <FolderOpenOutlined />,
   studio: <BuildOutlined />,
   scripts: <CodeOutlined />,
   roles: <TeamOutlined />,
@@ -170,7 +183,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
   return (
     <div style={shellRootStyle}>
       {alerts}
-      <Row gutter={[16, 16]} align="stretch" wrap={false} style={shellRowStyle}>
+      <Row gutter={[12, 12]} align="stretch" wrap={false} style={shellRowStyle}>
         <Col
           flex={`${sidebarWidth}px`}
           style={{
@@ -304,7 +317,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
-                  gap: 16,
+                  gap: 12,
                 }}
               >
                 <Typography.Title level={4} style={{ margin: 0 }}>
@@ -313,7 +326,7 @@ const StudioShell: React.FC<StudioShellProps> = ({
                 {pageToolbar}
               </div>
             ) : null}
-            {children}
+            <div style={shellPageBodyStyle}>{children}</div>
           </div>
         </Col>
       </Row>

@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useState } from "react";
 import { Empty } from "antd";
 import { RuntimeEventPreviewPanel } from "@/shared/agui/runtimeConversationPresentation";
+import { AevatarHeaderSelect } from "@/shared/ui/AevatarHeaderSelect";
 import type {
   ChatMessage,
   ConversationMeta,
@@ -655,36 +656,42 @@ export function ChatMessageBubble({
 }
 
 export function ServiceSelector({
+  onCreate,
   onSelect,
   selected,
   services,
 }: {
+  onCreate?: () => void;
   onSelect: (serviceId: string) => void;
   selected: string;
   services: readonly ServiceOption[];
 }): React.ReactElement {
   return (
-    <select
-      aria-label="Chat service"
-      className="chat-service-select"
-      onChange={(event) => onSelect(event.target.value)}
-      style={{
-        background: "#ffffff",
-        border: "1px solid #e7e5e4",
-        borderRadius: 10,
-        color: "#374151",
-        fontSize: 13,
-        outline: "none",
-        padding: "8px 12px",
-      }}
+    <AevatarHeaderSelect
+      ariaLabel="Chat service"
+      maxWidth={220}
+      menuAction={
+        onCreate
+          ? {
+              label: "Create",
+              onClick: onCreate,
+            }
+          : undefined
+      }
+      menuTitle="Services"
+      minWidth={168}
+      onChange={onSelect}
+      options={services.map((service) => ({
+        badge: service.kind === "nyxid-chat" ? "Built-in" : "Service",
+        description:
+          service.kind === "nyxid-chat"
+            ? "Built-in console assistant"
+            : `${service.id}${service.deploymentStatus ? ` · ${service.deploymentStatus}` : ""}`,
+        label: service.label,
+        value: service.id,
+      }))}
       value={selected}
-    >
-      {services.map((service) => (
-        <option key={service.id} value={service.id}>
-          {service.label}
-        </option>
-      ))}
-    </select>
+    />
   );
 }
 
@@ -1168,32 +1175,25 @@ export function EmptyChatState({
     >
       <div
         style={{
-          alignItems: "center",
-          background: "linear-gradient(135deg, #8b5cf6 0%, #4f46e5 100%)",
           borderRadius: 18,
-          boxShadow: "0 18px 36px rgba(99, 102, 241, 0.18)",
-          color: "#ffffff",
+          boxShadow: "0 18px 36px rgba(15, 23, 42, 0.12)",
           display: "flex",
           height: 48,
           justifyContent: "center",
           marginBottom: 16,
+          overflow: "hidden",
           width: 48,
         }}
       >
-        <svg
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.6}
-          height="24"
-          viewBox="0 0 24 24"
-          width="24"
-        >
-          <path
-            d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <img
+          alt="NyxID"
+          src="/nyxid-logo.png"
+          style={{
+            display: "block",
+            height: "100%",
+            width: "100%",
+          }}
+        />
       </div>
       <div
         style={{
