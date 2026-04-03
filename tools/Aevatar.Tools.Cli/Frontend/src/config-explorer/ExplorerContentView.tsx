@@ -1,15 +1,28 @@
 import { useMemo, useState } from 'react';
 import { parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from '../runtime/chatContent';
-import { buildExplorerContentModel, type ExplorerChatMessage, type ExplorerScriptFile } from './contentFormatting';
+import { buildExplorerContentModel, detectMediaKind, type ExplorerChatMessage, type ExplorerScriptFile } from './contentFormatting';
+import type { MediaInfo } from './useConfigStore';
 
 type Props = {
   fileType: string;
   content: string | null;
+  mediaInfo?: MediaInfo | null;
+  fileKey?: string | null;
 };
 
 type RenderTone = 'assistant' | 'user';
 
-export default function ExplorerContentView({ fileType, content }: Props) {
+export default function ExplorerContentView({ fileType, content, mediaInfo, fileKey }: Props) {
+  // Media files (image, audio, video, pdf)
+  if (mediaInfo) {
+    return <MediaPreview mediaInfo={mediaInfo} />;
+  }
+
+  // Markdown files — render as formatted markdown
+  if (fileKey && detectMediaKind(fileKey) === 'markdown' && content !== null) {
+    return <MarkdownPreview content={content} />;
+  }
+
   const model = useMemo(
     () => buildExplorerContentModel(fileType, content ?? ''),
     [content, fileType],
@@ -42,6 +55,57 @@ export default function ExplorerContentView({ fileType, content }: Props) {
           Empty file.
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─── Media Preview ─── */
+
+function MediaPreview({ mediaInfo }: { mediaInfo: MediaInfo }) {
+  const { mediaKind, blobUrl, mimeType } = mediaInfo;
+
+  return (
+    <div className="max-h-[70vh] overflow-y-auto p-4">
+      <div className="flex min-h-[300px] items-center justify-center rounded-2xl bg-[#FAF8F4] p-4">
+        {mediaKind === 'image' && (
+          <img
+            src={blobUrl}
+            alt="Preview"
+            className="max-h-[60vh] max-w-full rounded-xl object-contain"
+          />
+        )}
+        {mediaKind === 'audio' && (
+          <audio controls className="w-full max-w-[500px]">
+            <source src={blobUrl} type={mimeType} />
+            Your browser does not support audio playback.
+          </audio>
+        )}
+        {mediaKind === 'video' && (
+          <video controls className="max-h-[60vh] max-w-full rounded-xl">
+            <source src={blobUrl} type={mimeType} />
+            Your browser does not support video playback.
+          </video>
+        )}
+        {mediaKind === 'pdf' && (
+          <iframe
+            src={blobUrl}
+            title="PDF Preview"
+            className="h-[65vh] w-full rounded-xl border-0"
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Markdown Preview ─── */
+
+function MarkdownPreview({ content }: { content: string }) {
+  return (
+    <div className="max-h-[70vh] overflow-y-auto p-4">
+      <div className="rounded-2xl bg-[#FAF8F4] px-6 py-5 text-[14px] leading-relaxed text-gray-800">
+        {renderMarkdownContent(content, 'assistant')}
+      </div>
     </div>
   );
 }

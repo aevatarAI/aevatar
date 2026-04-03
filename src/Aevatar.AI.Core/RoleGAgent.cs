@@ -559,9 +559,15 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
         var contentParts = new List<ContentPart>();
-        IReadOnlyDictionary<string, string>? metadata = request.Headers.Count == 0
-            ? null
-            : new Dictionary<string, string>(request.Headers, StringComparer.Ordinal);
+        IReadOnlyDictionary<string, string>? metadata = null;
+        if (request.Headers.Count > 0 || request.Metadata.Count > 0)
+        {
+            var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kv in request.Headers) merged[kv.Key] = kv.Value;
+            // Metadata takes precedence (contains NyxID token, model override, etc.)
+            foreach (var kv in request.Metadata) merged[kv.Key] = kv.Value;
+            metadata = merged;
+        }
         var inputParts = ResolveRequestInputParts(request);
 
         await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, metadata, streamCt))
@@ -980,7 +986,14 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private static IReadOnlyList<ContentPart> ResolveRequestInputParts(ChatRequestEvent request)
     {
         if (request.InputParts.Count > 0)
-            return ContentPartProtoMapper.FromProtoList(request.InputParts);
+        {
+            var parts = new List<ContentPart>();
+            // Include the text prompt as a TextPart alongside media parts
+            if (!string.IsNullOrWhiteSpace(request.Prompt))
+                parts.Add(ContentPart.TextPart(request.Prompt));
+            parts.AddRange(ContentPartProtoMapper.FromProtoList(request.InputParts));
+            return parts;
+        }
 
         return [ContentPart.TextPart(request.Prompt ?? string.Empty)];
     }

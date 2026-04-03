@@ -10,7 +10,7 @@
 
 更完整的设计说明见：
 
-- `docs/design/2026-03-19-workflow-call-actor-to-actor-refactor-plan.md`
+- `docs/design/WORKFLOW_CALL_REFACTOR.md`
 
 ## 当前运行语义
 

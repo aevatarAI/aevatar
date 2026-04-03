@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Loader2, ExternalLink, Pencil, Save, X, Trash2 } from 'lucide-react';
 import type { ManifestEntry } from './types';
+import type { MediaInfo } from './useConfigStore';
+import { detectMediaKind } from './contentFormatting';
 import RolesCatalogEditor from './editors/RolesCatalogEditor';
 import ConnectorsCatalogEditor from './editors/ConnectorsCatalogEditor';
 import UserConfigEditor from './editors/UserConfigEditor';
@@ -9,6 +11,7 @@ import ExplorerContentView from './ExplorerContentView';
 type Props = {
   selectedKey: string | null;
   content: string | null;
+  mediaInfo?: MediaInfo | null;
   loading: boolean;
   manifest: ManifestEntry[];
   onOpenInStudio?: (type: string, key: string) => void;
@@ -17,7 +20,7 @@ type Props = {
   flash: (msg: string, type: 'success' | 'error') => void;
 };
 
-export default function EditorPanel({ selectedKey, content, loading, manifest, onOpenInStudio, onSave, onDelete, flash }: Props) {
+export default function EditorPanel({ selectedKey, content, mediaInfo, loading, manifest, onOpenInStudio, onSave, onDelete, flash }: Props) {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -42,7 +45,8 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
 
   const entry = manifest.find(f => f.key === selectedKey);
   const fileType = entry?.type ?? 'file';
-  const isReadOnly = fileType === 'workflow' || fileType === 'script';
+  const isMediaFile = !!mediaInfo || (selectedKey ? detectMediaKind(selectedKey) !== null && detectMediaKind(selectedKey) !== 'markdown' : false);
+  const isReadOnly = fileType === 'workflow' || fileType === 'script' || isMediaFile;
 
   // Rich editors for specific file types
   if (fileType === 'roles') return <RolesCatalogEditor flash={flash} />;
@@ -111,6 +115,24 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
               <ExternalLink size={12} /> Open in Studio
             </button>
           )}
+          {isMediaFile && onDelete && (
+            confirmDelete ? (
+              <button
+                onClick={handleDelete}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {saving ? <Loader2 size={12} className="animate-spin" /> : null} Confirm Delete
+              </button>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[12px] font-semibold text-red-600 hover:bg-red-50"
+              >
+                <Trash2 size={12} /> Delete
+              </button>
+            )
+          )}
           {!isReadOnly && !editing ? (
             <button
               onClick={startEditing}
@@ -166,7 +188,7 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
             spellCheck={false}
           />
         ) : (
-          <ExplorerContentView fileType={fileType} content={content} />
+          <ExplorerContentView fileType={fileType} content={content} mediaInfo={mediaInfo} fileKey={selectedKey} />
         )}
       </div>
     </div>

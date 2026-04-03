@@ -112,6 +112,38 @@ function trimOptional(value: string | undefined) {
   return trimmed || undefined;
 }
 
+/**
+ * Parse numbered/lettered choices from a prompt string.
+ * Detects patterns like: "1. Option" / "1) Option" / "A. Option" / "a) Option"
+ * Also handles indented variants (leading whitespace).
+ */
+function parseChoicesFromPrompt(prompt: string): { questionText: string; choices: { key: string; label: string }[] } {
+  const lines = prompt.split('\n');
+  const choicePattern = /^\s*([0-9]+|[A-Za-z])[.)]\s+(.+)$/;
+  const choices: { key: string; label: string }[] = [];
+  let firstChoiceIndex = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(choicePattern);
+    if (match) {
+      if (firstChoiceIndex < 0) firstChoiceIndex = i;
+      choices.push({ key: match[1], label: match[2].trim() });
+    } else if (choices.length > 0 && lines[i].trim() === '') {
+      // Allow blank lines between choices
+    } else if (choices.length > 0) {
+      // Non-choice, non-blank line after choices started — stop parsing
+      break;
+    }
+  }
+
+  if (choices.length < 2) {
+    return { questionText: prompt, choices: [] };
+  }
+
+  const questionText = lines.slice(0, firstChoiceIndex).join('\n').trim();
+  return { questionText, choices };
+}
+
 function buildConversationHeaders(
   llmRoute: string | undefined,
   llmModel: string | undefined,
@@ -722,6 +754,7 @@ function ChatBubble({
   onEdit,
   onDelete,
   onApprove,
+  onResumeHumanInput,
 }: {
   msg: ChatMessage;
   canRegenerate: boolean;
@@ -733,6 +766,7 @@ function ChatBubble({
   onEdit: () => void;
   onDelete: () => void;
   onApprove?: (requestId: string, approved: boolean) => void;
+  onResumeHumanInput?: (msg: ChatMessage, userInput: string) => void;
 }) {
   const isUser = msg.role === 'user';
   const [stepsOpen, setStepsOpen] = useState(false);
@@ -1001,11 +1035,51 @@ function ChatBubble({
         </div>
       )}
 
-      {msg.pendingHumanInput && (
-        <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
-          <span className="text-[12px] text-blue-600">Waiting for your input...</span>
-        </div>
-      )}
+      {msg.pendingHumanInput && (() => {
+        // Resolve choices: prefer structured options, fall back to prompt parsing
+        const structuredOptions = msg.pendingHumanInput.options;
+        const parsed = structuredOptions && structuredOptions.length >= 2
+          ? { questionText: msg.pendingHumanInput.prompt, choices: structuredOptions.map((o, i) => ({ key: String(i + 1), label: o })) }
+          : parseChoicesFromPrompt(msg.pendingHumanInput.prompt);
+        const hasChoices = parsed.choices.length >= 2;
+
+        return hasChoices ? (
+          <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+            <div className="flex items-center gap-2 mb-2.5">
+              <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-[13px] font-medium text-blue-700">Choose an option</span>
+            </div>
+            {parsed.questionText && (
+              <div className="text-[13px] text-blue-600 mb-3 whitespace-pre-wrap">{parsed.questionText}</div>
+            )}
+            <div className="flex flex-col gap-1.5">
+              {parsed.choices.map((choice) => (
+                <button
+                  key={choice.key}
+                  onClick={() => onResumeHumanInput?.(msg, choice.key)}
+                  className="w-full text-left px-3 py-2 rounded-xl border border-blue-200 bg-white text-[13px] text-gray-700 hover:bg-blue-100 hover:border-blue-300 transition-colors flex items-center gap-2.5"
+                >
+                  <span className="flex-shrink-0 w-6 h-6 rounded-lg bg-blue-100 text-blue-600 text-[12px] font-semibold flex items-center justify-center">
+                    {choice.key}
+                  </span>
+                  <span>{choice.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <svg className="h-4 w-4 text-blue-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+              </svg>
+              <span className="text-[13px] text-blue-600">Waiting for your input — type your answer below</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {msg.pendingApproval && (
         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
@@ -2122,6 +2196,8 @@ export default function ScopePage() {
 
         case 'HUMAN_INPUT_REQUEST': {
           const prompt = String(evt.prompt || '');
+          const rawOpts = evt.options;
+          const options = Array.isArray(rawOpts) ? rawOpts.filter((o): o is string => typeof o === 'string') : undefined;
           setIsStreaming(false);
           updateAssistant({
             content: prompt || 'Waiting for your input...',
@@ -2132,6 +2208,7 @@ export default function ScopePage() {
               prompt,
               serviceId: activeService.id,
               actorId: trimOptional(activeConvId ?? undefined) || undefined,
+              ...(options && options.length > 0 ? { options } : {}),
             },
           });
           break;
@@ -2167,6 +2244,8 @@ export default function ScopePage() {
             const raw = (evt.payload ?? evt.value ?? {}) as any;
             const p = (raw?.value ?? raw) as any;
             const prompt = String(p?.prompt ?? p?.Prompt ?? '');
+            const rawOpts = p?.options ?? p?.Options;
+            const options = Array.isArray(rawOpts) ? rawOpts.filter((o: unknown): o is string => typeof o === 'string') : undefined;
             setIsStreaming(false);
             updateAssistant({
               content: prompt || 'Waiting for your input...',
@@ -2177,6 +2256,7 @@ export default function ScopePage() {
                 prompt,
                 serviceId: activeService.id,
                 actorId: trimOptional(activeConvId ?? undefined) || undefined,
+                ...(options && options.length > 0 ? { options } : {}),
               },
             });
             break;
@@ -2278,14 +2358,78 @@ export default function ScopePage() {
     });
   }, []);
 
+  const handleResumeHumanInput = useCallback(async (targetMsg: ChatMessage, userInput: string) => {
+    if (!scopeId || isStreaming) return;
+    const hi = targetMsg.pendingHumanInput;
+    if (!hi) return;
+
+    const serviceId = hi.serviceId || services.find(s => s.id === selectedService)?.id;
+    if (!serviceId || !hi.runId) return;
+
+    // Add user message and clear pending state
+    const userMsg: ChatMessage = {
+      id: genId(), role: 'user', content: userInput,
+      timestamp: Date.now(), status: 'complete',
+    };
+    const assistantMsg: ChatMessage = {
+      id: genId(), role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming',
+    };
+
+    setMessages(prev => {
+      const updated = prev.map(m =>
+        m.id === targetMsg.id ? { ...m, pendingHumanInput: undefined } : m,
+      );
+      return [...updated, userMsg, assistantMsg];
+    });
+    setIsStreaming(true);
+    setDebugEvents([]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const updateAssistant = (patch: Partial<ChatMessage>) => {
+      setMessages(prev => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === 'assistant') {
+          updated[updated.length - 1] = { ...last, ...patch };
+        }
+        return updated;
+      });
+    };
+
+    try {
+      await api.scope.resumeRun(
+        scopeId,
+        serviceId,
+        hi.runId,
+        {
+          stepId: hi.stepId,
+          userInput,
+          approved: true,
+          actorId: hi.actorId,
+        },
+      );
+
+      // resumeRun is a POST (not SSE) — continuation comes via the existing SSE stream
+      updateAssistant({ status: 'complete' });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Resume failed';
+      updateAssistant({ status: 'error', error: errorMsg });
+    } finally {
+      setIsStreaming(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+    }
+  }, [scopeId, isStreaming, services, selectedService]);
+
   const handleSend = useCallback(async (text: string, attachments?: AttachmentInfo[]) => {
     setComposerText('');
     const atts = attachments || pendingAttachments;
-    // Revoke all object URLs before clearing (prevent memory leak)
-    setPendingAttachments(prev => {
-      prev.forEach(a => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl); });
-      return [];
-    });
+    // Don't revoke object URLs — they're still needed for display in sent messages.
+    // Cleanup happens on conversation switch or component unmount.
+    setPendingAttachments([]);
 
     // ── Onboarding state machine ──
     if (onboardingState && selectedService === 'onboarding') {
@@ -2392,6 +2536,13 @@ export default function ScopePage() {
       }
     }
 
+    // ── Resume suspended workflow if pendingHumanInput is active ──
+    const lastAssistant = [...messages].reverse().find((m: ChatMessage) => m.role === 'assistant');
+    if (lastAssistant?.pendingHumanInput) {
+      void handleResumeHumanInput(lastAssistant, text);
+      return;
+    }
+
     // Build inputParts from attachments
     const inputParts: ContentPartDto[] = [];
     if (atts.length > 0) {
@@ -2428,7 +2579,7 @@ export default function ScopePage() {
     }
 
     void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true, attachments: atts, inputParts: inputParts.length > 0 ? inputParts : undefined });
-  }, [messages, streamChatTurn, scopeId, onboardingState, selectedService, pendingAttachments]);
+  }, [messages, streamChatTurn, handleResumeHumanInput, scopeId, onboardingState, selectedService, pendingAttachments]);
 
   const handleRegenerate = useCallback((messageIndex: number) => {
     if (isStreaming) return;
@@ -3233,6 +3384,7 @@ export default function ScopePage() {
               onEdit={() => handleEditMessage(index)}
               onDelete={() => { void handleDeleteMessage(index); }}
               onApprove={handleToolApproval}
+              onResumeHumanInput={handleResumeHumanInput}
             />
           ))}
           <div ref={scrollRef} />

@@ -906,6 +906,7 @@ public static class ScopeServiceEndpoints
                         request.SessionId,
                         scopeId,
                         scopedHeaders,
+                        request.InputParts,
                         actorRuntime,
                         subscriptionProvider,
                         ct);
@@ -957,6 +958,7 @@ public static class ScopeServiceEndpoints
         string? sessionId,
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
+        IReadOnlyList<StreamContentPartHttpRequest>? inputParts,
         IActorRuntime actorRuntime,
         IActorEventSubscriptionProvider subscriptionProvider,
         CancellationToken ct)
@@ -1029,6 +1031,28 @@ public static class ScopeServiceEndpoints
             ScopeId = scopeId,
         };
         CopyHeaders(headers, chatRequest.Metadata);
+        if (inputParts is { Count: > 0 })
+        {
+            foreach (var p in inputParts)
+            {
+                chatRequest.InputParts.Add(new ChatContentPart
+                {
+                    Kind = p.Type?.ToLowerInvariant() switch
+                    {
+                        "image" => ChatContentPartKind.Image,
+                        "audio" => ChatContentPartKind.Audio,
+                        "video" => ChatContentPartKind.Video,
+                        "text" => ChatContentPartKind.Text,
+                        _ => ChatContentPartKind.Unspecified,
+                    },
+                    Text = p.Text ?? string.Empty,
+                    DataBase64 = p.DataBase64 ?? string.Empty,
+                    MediaType = p.MediaType ?? string.Empty,
+                    Uri = p.Uri ?? string.Empty,
+                    Name = p.Name ?? string.Empty,
+                });
+            }
+        }
 
         var envelope = new EventEnvelope
         {
@@ -2111,11 +2135,20 @@ public static class ScopeServiceEndpoints
         IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints);
 
     public sealed record StreamScopeServiceHttpRequest(
-        string Prompt,
+        string? Prompt,
         string? ActorId = null,
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
-        string? RevisionId = null);
+        string? RevisionId = null,
+        IReadOnlyList<StreamContentPartHttpRequest>? InputParts = null);
+
+    public sealed record StreamContentPartHttpRequest(
+        string Type,
+        string? Text = null,
+        string? DataBase64 = null,
+        string? MediaType = null,
+        string? Uri = null,
+        string? Name = null);
 
     public sealed record ResumeScopeServiceRunHttpRequest(
         string? StepId,

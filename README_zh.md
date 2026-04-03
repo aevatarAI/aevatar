@@ -430,8 +430,8 @@ bash tools/ci/architecture_guards.sh
 
 ### 设计提案
 
-- [外部链接框架](docs/design/2026-03-31-external-link-framework.md) — WebSocket/gRPC/MQTT 外部连接
-- [多 Agent 演进](docs/design/2026-04-01-workflow-actor-multi-agent-evolution.md) — TaskBoard、原生消息、Agent 协调 RFC
+- [外部链接框架](docs/design/EXTERNAL_LINK_FRAMEWORK.md) — WebSocket/gRPC/MQTT 外部连接
+- [多 Agent 演进](docs/design/WORKFLOW_MULTIAGENT_EVOLUTION.md) — TaskBoard、原生消息、Agent 协调 RFC
 
 ### 投影与读模型
 

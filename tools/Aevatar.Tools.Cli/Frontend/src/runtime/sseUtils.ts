@@ -182,11 +182,14 @@ export function normalizeBackendSseFrame(raw: unknown): RuntimeEvent | null {
       }
       case 'HUMAN_INPUT_REQUEST': {
         const d = nested;
+        const rawOptions = d ? (d.options as unknown) : undefined;
+        const options = Array.isArray(rawOptions) ? rawOptions.filter((o): o is string => typeof o === 'string') : undefined;
         return {
           type: 'HUMAN_INPUT_REQUEST', timestamp,
           stepId: d ? str(d, 'stepId') : '',
           runId: d ? str(d, 'runId') : '',
           prompt: d ? str(d, 'prompt') : '',
+          ...(options && options.length > 0 ? { options } : {}),
         };
       }
       case 'MEDIA_CONTENT': {

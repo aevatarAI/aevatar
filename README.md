@@ -430,8 +430,8 @@ bash tools/ci/architecture_guards.sh
 
 ### Design Proposals
 
-- [External Link Framework](docs/design/2026-03-31-external-link-framework.md) — WebSocket/gRPC/MQTT external connectivity
-- [Multi-Agent Evolution](docs/design/2026-04-01-workflow-actor-multi-agent-evolution.md) — TaskBoard, native messaging, agent coordination RFC
+- [External Link Framework](docs/design/EXTERNAL_LINK_FRAMEWORK.md) — WebSocket/gRPC/MQTT external connectivity
+- [Multi-Agent Evolution](docs/design/WORKFLOW_MULTIAGENT_EVOLUTION.md) — TaskBoard, native messaging, agent coordination RFC
 
 ### Projection & Read Models
 

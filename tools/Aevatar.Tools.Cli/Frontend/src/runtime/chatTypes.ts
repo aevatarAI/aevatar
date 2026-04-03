@@ -59,6 +59,8 @@ export type PendingHumanInputInfo = {
   prompt: string;
   serviceId?: string;
   actorId?: string;
+  /** Structured options from backend (if provided) */
+  options?: string[];
 };
 
 export type StepInfo = {
