@@ -116,10 +116,21 @@
 - 外部协议必须 JSON 时，仅在 Host/Adapter 边界做协议转换；进入应用/领域/运行时层后恢复为 Protobuf。
 - 新增状态/事件/持久化载荷：先定义 `.proto` 并生成类型，再接入实现；禁止先写临时结构后补 Protobuf。
 
+## 文档系统（强制）
+- `docs/canon/` 是唯一权威参考；一个 topic 一个文件，不可有重复。
+- `docs/decisions/` 是 ADR（Architecture Decision Records），不可变，只可被新决策 supersede。
+- `docs/history/` 存放已归档的思考快照，按月份组织，明确标记非权威。
+- AI 生成的设计文档在会话结束后默认不保留到 `docs/`；需要保留的必须添加 frontmatter（title/status/owner）并放入对应目录。
+- 所有 `docs/canon/` 和 `docs/decisions/` 文件必须有 YAML frontmatter，包含 `title`、`status`、`owner` 字段。
+- Lint 操作由 `tools/docs/lint.sh` 执行，已集成到 CI 门禁。
+- 根目录允许的 `.md` 文件：`CLAUDE.md`、`README.md`、`CHANGELOG.md`、`LICENSE`、`AGENTS.md`。`src/` 下各项目允许自身 `README.md`。
+- `docs/README.md` 由 `tools/docs/build-index.sh` 自动生成，不手动编辑。
+
 ## 项目结构
 - `src/`：生产代码（`Aevatar.Foundation.*`、`Aevatar.AI.*`、`Aevatar.CQRS.Projection.Core.Abstractions/Runtime/Stores.Abstractions`、`src/workflow/Aevatar.Workflow.*`、`Aevatar.Host.*`）。
 - `test/`：对应测试项目（单元、集成、API）。
-- `docs/`：架构文档；`workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
+- `docs/`：架构文档（`canon/` 权威参考、`decisions/` ADR、`history/` 归档、`audit-scorecard/` 审计）。
+- `workflows/`：YAML 工作流定义；`tools/`：开发工具；`demos/`：示例程序。
 - **CLI 项目**：`tools/Aevatar.Tools.Cli`——提到"CLI 项目"或"cli 项目"时，均指此路径。
 
 ## 构建与运行
@@ -212,3 +223,23 @@ Available skills:
 - `/guard` — Full safety mode (careful + freeze)
 - `/unfreeze` — Remove edit restrictions
 - `/gstack-upgrade` — Upgrade gstack to latest version
+
+## Skill routing
+
+When the user's request matches an available skill, ALWAYS invoke it using the Skill
+tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
+The skill has specialized workflows that produce better results than ad-hoc answers.
+
+Key routing rules:
+- Product ideas, "is this worth building", brainstorming → invoke office-hours
+- Bugs, errors, "why is this broken", 500 errors → invoke investigate
+- Ship, deploy, push, create PR → invoke ship
+- QA, test the site, find bugs → invoke qa
+- Code review, check my diff → invoke review
+- Update docs after shipping → invoke document-release
+- Weekly retro → invoke retro
+- Design system, brand → invoke design-consultation
+- Visual audit, design polish → invoke design-review
+- Architecture review → invoke plan-eng-review
+- Save progress, checkpoint, resume → invoke checkpoint
+- Code quality, health check → invoke health

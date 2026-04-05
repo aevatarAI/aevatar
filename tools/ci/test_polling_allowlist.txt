@@ -6,3 +6,7 @@ test/Aevatar.Integration.Tests/ScriptReadModelVisibilityTestHelper.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/DistributedMixedVersionClusterIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansMassTransitRuntimeIntegrationTests.cs
 test/Aevatar.Foundation.Runtime.Hosting.Tests/OrleansKafkaProviderRuntimeIntegrationTests.cs
+# Short delays for timestamp distinctness, async settling, and TTL verification
+test/Aevatar.Tools.Cli.Tests/ChronoStorageUserMemoryStoreTests.cs
+test/Aevatar.Tools.Cli.Tests/ChronoStorageChatHistoryStoreTests.cs
+test/Aevatar.AI.Tests/StreamingToolExecutorTests.cs

@@ -387,7 +387,7 @@ if [ -n "${legacy_runtime_port_hits}" ]; then
 fi
 
 if rg -n "IActorMessagingPort|IActorMessagingSession|IActorMessagingSessionFactory|RuntimeActorMessagingPort|RuntimeActorMessagingSessionFactory" \
-  src test docs/FOUNDATION.md docs/SCRIPTING_ARCHITECTURE.md src/workflow/README.md \
+  src test docs/canon/architecture.md docs/canon/scripting.md src/workflow/README.md \
   -g '!docs/architecture/*'
 then
   echo "Public actor messaging port/session abstractions are forbidden. Use IActorRuntime + IActorDispatchPort + IEventContext/IEventPublisher or subsystem-local typed adapters."
@@ -395,7 +395,7 @@ then
 fi
 
 if rg -n "\bgagent_query\b|GAgentQueryState|GAgentQueryResultState|GAgentDispatchState|\bgagent_send\b" \
-  src test docs/FOUNDATION.md docs/SCRIPTING_ARCHITECTURE.md src/workflow/README.md \
+  src test docs/canon/architecture.md docs/canon/scripting.md src/workflow/README.md \
   -g '!docs/architecture/*'
 then
   echo "Legacy gagent_* generic communication modules/states are forbidden. Use actor_send plus protocol-specific typed query/reply paths."
@@ -918,5 +918,8 @@ bash tools/ci/scripting_runtime_snapshot_guard.sh
 
 echo "Running runtime callback guards..."
 bash tools/ci/runtime_callback_guards.sh
+
+echo "Running docs lint guard..."
+bash tools/docs/lint.sh
 
 echo "Architecture guards passed."
