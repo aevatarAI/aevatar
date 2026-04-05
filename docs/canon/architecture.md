@@ -249,4 +249,4 @@ await ((GAgentBase)parent.Agent).EventPublisher
 
 ## 当前状态说明
 
-仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档；涉及 Runtime provider 语义时，同步更新 `docs/PROJECT_ARCHITECTURE.md` 与 `docs/CQRS_ARCHITECTURE.md`。
+仓库处于持续迭代阶段，接口与目录会按架构约束逐步收敛。变更 Foundation 相关接口前，请同步更新 README、测试与本文档；涉及 Runtime provider 语义时，同步更新 `docs/canon/overview.md` 与 `docs/canon/cqrs-projection.md`。

@@ -419,8 +419,8 @@ Agent actor 发布 `ProgressEvent` 作为 committed event → 现有 projection 
 
 | 资料 | 路径 |
 |------|------|
-| Workflow 原语文档 | `docs/WORKFLOW_PRIMITIVES.md` |
-| CQRS 架构 | `docs/CQRS_ARCHITECTURE.md` |
-| Event Sourcing | `docs/EVENT_SOURCING.md` |
+| Workflow 原语文档 | `docs/canon/workflow-primitives.md` |
+| CQRS 架构 | `docs/canon/cqrs-projection.md` |
+| Event Sourcing | `docs/canon/event-sourcing.md` |
 | Claude Code 多智能体源码 | `~/Code/claude-code/src/utils/swarm/` |
 | 架构约束 | `CLAUDE.md`（仓库根目录） |

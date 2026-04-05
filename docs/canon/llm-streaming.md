@@ -35,9 +35,9 @@ owner: eanzhao
 
 相关架构基线：
 
-1. `docs/CQRS_ARCHITECTURE.md:43`
-2. `docs/CQRS_ARCHITECTURE.md:46`
-3. `docs/PROJECT_ARCHITECTURE.md:79`
+1. `docs/canon/cqrs-projection.md:43`
+2. `docs/canon/cqrs-projection.md:46`
+3. `docs/canon/overview.md:79`
 
 ## 3. 组件与分层
 
