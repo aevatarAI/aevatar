@@ -828,4 +828,89 @@ public class AIComponentCoverageTests
         field.Should().NotBeNull($"Field {fieldName} should exist on {target.GetType().Name}");
         return (T)field!.GetValue(target)!;
     }
+
+    /// <summary>
+    /// Verifies that AgentToolAIFunction correctly propagates tool Name to the
+    /// MEAI ChatOptions.Tools serialization layer. This catches regressions where
+    /// the OpenAI API rejects tools with missing 'name' field (HTTP 400:
+    /// "Missing required parameter: tools[0].name").
+    /// </summary>
+    [Fact]
+    public async Task AgentToolAIFunction_ShouldSerializeToolNameInChatOptions()
+    {
+        ChatOptions? capturedOptions = null;
+
+        var client = new StubChatClient
+        {
+            OnGetStreamingResponse = (_, options, _) =>
+            {
+                capturedOptions = options;
+                return Stream(["ok"]);
+            },
+        };
+
+        var provider = new MEAILLMProvider("test", client);
+        var tool = new StubTool("my_test_tool");
+
+        var chunks = new List<LLMStreamChunk>();
+        await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+            Tools = [tool],
+        }))
+        {
+            chunks.Add(chunk);
+        }
+
+        // The captured ChatOptions must contain a tool with the correct name
+        capturedOptions.Should().NotBeNull();
+        capturedOptions!.Tools.Should().ContainSingle();
+
+        var aiFunction = capturedOptions.Tools![0] as AIFunction;
+        aiFunction.Should().NotBeNull("tool should be wrapped as AIFunction");
+        aiFunction!.Name.Should().Be("my_test_tool", "tool name must survive MEAI wrapping");
+
+        // Verify the name is also accessible via the JsonSchema/metadata path
+        // that the OpenAI SDK adapter uses for serialization
+        aiFunction.Name.Should().NotBeNullOrWhiteSpace(
+            "name must be non-empty to avoid OpenAI API 400: 'Missing required parameter: tools[0].name'");
+    }
+
+    [Fact]
+    public async Task AgentToolAIFunction_ShouldSerializeMultipleToolNames()
+    {
+        ChatOptions? capturedOptions = null;
+
+        var client = new StubChatClient
+        {
+            OnGetStreamingResponse = (_, options, _) =>
+            {
+                capturedOptions = options;
+                return Stream(["ok"]);
+            },
+        };
+
+        var provider = new MEAILLMProvider("test", client);
+        var tools = new IAgentTool[]
+        {
+            new StubTool("nyxid_services"),
+            new StubTool("web_search"),
+            new StubTool("chrono_file_read"),
+        };
+
+        await foreach (var _ in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+            Tools = tools,
+        }))
+        { }
+
+        capturedOptions.Should().NotBeNull();
+        capturedOptions!.Tools.Should().HaveCount(3);
+
+        var names = capturedOptions.Tools!.OfType<AIFunction>().Select(f => f.Name).ToList();
+        names.Should().ContainInOrder("nyxid_services", "web_search", "chrono_file_read");
+        names.Should().OnlyContain(n => !string.IsNullOrWhiteSpace(n),
+            "all tool names must be non-empty for OpenAI API compatibility");
+    }
 }

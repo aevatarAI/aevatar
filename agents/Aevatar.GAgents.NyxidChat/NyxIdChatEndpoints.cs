@@ -799,10 +799,17 @@ public static class NyxIdChatEndpoints
                 ct);
 
             // ─── Dispatch to actor ───
+            // SessionId = per-message unique ID (for idempotent retry),
+            // NOT conversationId (which is per-chat and would collide across messages).
+            var relayMessageId = message.MessageId;
+            var sessionId = !string.IsNullOrWhiteSpace(relayMessageId)
+                ? $"{conversationId}-{relayMessageId}"
+                : $"{conversationId}-{Guid.NewGuid():N}";
+
             var chatRequest = new ChatRequestEvent
             {
                 Prompt = message.Content.Text,
-                SessionId = conversationId,
+                SessionId = sessionId,
                 ScopeId = scopeId,
             };
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
