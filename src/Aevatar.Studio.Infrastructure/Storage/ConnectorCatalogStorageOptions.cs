@@ -14,7 +14,7 @@ public sealed class ConnectorCatalogStorageOptions
 
     public string BaseUrl { get; set; } = string.Empty;
 
-    public string Bucket { get; set; } = string.Empty;
+    public string Bucket { get; set; } = "chrono-platform-aevatar-studio";
 
     public string Prefix { get; set; } = string.Empty;
 

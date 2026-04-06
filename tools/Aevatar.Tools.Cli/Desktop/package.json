@@ -1,0 +1,50 @@
+{
+  "name": "aevatar-desktop",
+  "version": "0.1.0",
+  "description": "Aevatar Desktop — Electron shell for the CLI frontend",
+  "main": "dist/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "tsc && electron dist/main.js --dev",
+    "build": "tsc && electron-builder",
+    "build:dir": "tsc && electron-builder --dir",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "~5.5.0"
+  },
+  "build": {
+    "appId": "ai.aevatar.desktop",
+    "productName": "Aevatar",
+    "files": [
+      "dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../Frontend/dist",
+        "to": "frontend",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}
