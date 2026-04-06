@@ -385,6 +385,24 @@ public sealed class MEAILLMProvider : ILLMProvider
             hasOptions = true;
         }
 
+        // ResponseFormat 映射
+        if (request.ResponseFormat is not null)
+        {
+            options.ResponseFormat = request.ResponseFormat.Kind switch
+            {
+                LLMResponseFormatKind.Text => ChatResponseFormat.Text,
+                LLMResponseFormatKind.JsonObject => ChatResponseFormat.Json,
+                LLMResponseFormatKind.JsonSchema when request.ResponseFormat is LLMResponseFormatJsonSchema jsonSchema =>
+                    ChatResponseFormat.ForJsonSchema(
+                        jsonSchema.Schema,
+                        jsonSchema.SchemaName,
+                        jsonSchema.SchemaDescription),
+                _ => null,
+            };
+            if (options.ResponseFormat != null)
+                hasOptions = true;
+        }
+
         // 注册 Tools — 使用工具自身的 ParametersSchema，让 LLM 看到真实参数结构
         if (request.Tools is { Count: > 0 })
         {

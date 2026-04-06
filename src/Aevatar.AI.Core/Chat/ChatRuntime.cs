@@ -293,6 +293,7 @@ public sealed class ChatRuntime
                             Model = baseRequest.Model,
                             Temperature = baseRequest.Temperature,
                             MaxTokens = baseRequest.MaxTokens,
+                            ResponseFormat = baseRequest.ResponseFormat,
                         };
                         var roundResult = await StreamLlmRoundAsync(
                             provider,
@@ -470,6 +471,7 @@ public sealed class ChatRuntime
                             Model = baseRequest.Model,
                             Temperature = baseRequest.Temperature,
                             MaxTokens = baseRequest.MaxTokens,
+                            ResponseFormat = baseRequest.ResponseFormat,
                         };
                         var finalRound = await StreamLlmRoundAsync(
                             provider,
@@ -520,6 +522,7 @@ public sealed class ChatRuntime
                                 Model = finalRequest.Model,
                                 Temperature = finalRequest.Temperature,
                                 MaxTokens = finalRequest.MaxTokens,
+                                ResponseFormat = finalRequest.ResponseFormat,
                             };
                             var summaryRound = await StreamLlmRoundAsync(
                                 provider, summaryRequest, channel.Writer, runToken,
@@ -748,6 +751,7 @@ public sealed class ChatRuntime
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
+            ResponseFormat = baseRequest.ResponseFormat,
         };
     }
 

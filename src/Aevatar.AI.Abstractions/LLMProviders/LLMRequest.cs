@@ -31,6 +31,9 @@ public sealed class LLMRequest
     /// <summary>可选最大生成 Token 数。</summary>
     public int? MaxTokens { get; init; }
 
+    /// <summary>可选响应格式约束（Text / JsonObject / JsonSchema）。</summary>
+    public LLMResponseFormat? ResponseFormat { get; init; }
+
     public IReadOnlySet<ContentPartKind> GetRequestedInputModalities()
     {
         var modalities = new HashSet<ContentPartKind>();
