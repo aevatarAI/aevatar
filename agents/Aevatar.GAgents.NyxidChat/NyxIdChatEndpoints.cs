@@ -666,7 +666,6 @@ public static class NyxIdChatEndpoints
         [FromServices] NyxIdChatActorStore actorStore,
         [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
-        [FromServices] IConfiguration configuration,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Relay");
@@ -827,7 +826,8 @@ public static class NyxIdChatEndpoints
                     conversationId, errorMessage);
 
                 // Surface config + error details in reply for debugging
-                var configSummary = BuildConfigDiagnostic(chatRequest.Metadata, configuration);
+                var config = http.RequestServices.GetService<IConfiguration>();
+                var configSummary = BuildConfigDiagnostic(chatRequest.Metadata, config);
                 replyText = ClassifyError(errorMessage, configSummary);
             }
             else if (string.IsNullOrWhiteSpace(replyText))
@@ -881,14 +881,13 @@ public static class NyxIdChatEndpoints
 
     private static string BuildConfigDiagnostic(
         Google.Protobuf.Collections.MapField<string, string> metadata,
-        IConfiguration configuration)
+        IConfiguration? configuration)
     {
         var modelOverride = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : null;
-        var serverDefaultModel = configuration["Aevatar:NyxId:DefaultModel"] ?? "(fallback to OpenAIModel option)";
+        var serverDefaultModel = configuration?["Aevatar:NyxId:DefaultModel"] ?? "(fallback to OpenAIModel option)";
         var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r) && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
         var hasToken = metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
-        var hasAuth = metadata.TryGetValue("scope_id", out _); // just for structure
 
         var modelDisplay = !string.IsNullOrWhiteSpace(modelOverride)
             ? $"{modelOverride} (from config.json)"
