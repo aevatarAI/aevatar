@@ -364,7 +364,7 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt)),
         RequestId = null,
         Metadata = null,
-        Tools = Tools.HasTools ? Tools.GetAll() : null,
+        Tools = Tools.HasTools ? Tools.GetAll().Where(t => !string.IsNullOrWhiteSpace(t.Name)).ToList() : null,
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,
         MaxTokens = EffectiveConfig.MaxTokens,

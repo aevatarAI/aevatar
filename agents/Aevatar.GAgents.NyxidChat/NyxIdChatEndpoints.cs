@@ -38,6 +38,36 @@ public static class NyxIdChatEndpoints
             last_check = DateTimeOffset.UtcNow,
         })).WithTags("NyxIdRelay");
 
+        // Temporary diagnostic: test NyxID gateway connectivity from this server
+        app.MapPost("/api/webhooks/nyxid-relay/diag", async (HttpContext http, CancellationToken ct) =>
+        {
+            var token = http.Request.Headers["X-Test-Token"].FirstOrDefault()
+                ?? http.Request.Headers.Authorization.FirstOrDefault()?.Replace("Bearer ", "");
+            if (string.IsNullOrWhiteSpace(token))
+                return Results.Json(new { error = "Provide token via X-Test-Token header" });
+
+            var gateway = "https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1/chat/completions";
+            var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
+
+            using var client = new System.Net.Http.HttpClient();
+            var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, gateway);
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            req.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            // Clear default User-Agent to mimic clean request
+            client.DefaultRequestHeaders.UserAgent.Clear();
+
+            var resp = await client.SendAsync(req, ct);
+            var respBody = await resp.Content.ReadAsStringAsync(ct);
+
+            return Results.Json(new
+            {
+                status = (int)resp.StatusCode,
+                statusText = resp.StatusCode.ToString(),
+                responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
+                serverOutboundIp = "check response headers",
+            });
+        }).WithTags("NyxIdRelay");
+
         // Access control for relay is handled by NyxID's route configuration.
 
         return app;
