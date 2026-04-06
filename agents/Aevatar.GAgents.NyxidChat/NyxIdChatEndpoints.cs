@@ -862,10 +862,14 @@ public static class NyxIdChatEndpoints
                 logger.LogWarning("Relay LLM error: conversation={ConversationId}, error={Error}",
                     conversationId, errorMessage);
 
-                // Surface config + error details in reply for debugging
-                var config = http.RequestServices.GetService<IConfiguration>();
-                var configSummary = BuildConfigDiagnostic(chatRequest.Metadata, config);
-                replyText = ClassifyError(errorMessage, configSummary);
+                replyText = ClassifyError(errorMessage);
+
+                if (relayOptions.EnableDebugDiagnostics)
+                {
+                    var config = http.RequestServices.GetService<IConfiguration>();
+                    var diagnostic = BuildRelayDiagnostic(chatRequest.Metadata, config, errorMessage);
+                    replyText += $"\n\n[Debug]\n{diagnostic}";
+                }
             }
             else if (string.IsNullOrWhiteSpace(replyText))
             {
@@ -886,55 +890,57 @@ public static class NyxIdChatEndpoints
         }
     }
 
-    /// <summary>Classify a technical LLM error into a user-friendly message with diagnostic details.</summary>
-    private static string ClassifyError(string error, string? configDiagnostic = null)
+    /// <summary>Classify a technical LLM error into a user-friendly message.</summary>
+    private static string ClassifyError(string error)
     {
-        string friendly;
-
         if (error.Contains("403", StringComparison.Ordinal) ||
             error.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
-            friendly = "Sorry, I can't reach the AI service right now (403 Forbidden).";
-        else if (error.Contains("401", StringComparison.Ordinal) ||
+            return "Sorry, I can't reach the AI service right now (403 Forbidden).";
+
+        if (error.Contains("401", StringComparison.Ordinal) ||
             error.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
             error.Contains("authentication", StringComparison.OrdinalIgnoreCase))
-            friendly = "Sorry, authentication with the AI service failed (401).";
-        else if (error.Contains("429", StringComparison.Ordinal) ||
+            return "Sorry, authentication with the AI service failed (401).";
+
+        if (error.Contains("429", StringComparison.Ordinal) ||
             error.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
             error.Contains("too many", StringComparison.OrdinalIgnoreCase))
-            friendly = "Sorry, the AI service is busy right now (429). Please wait a moment and try again.";
-        else if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
-            friendly = "Sorry, the AI service took too long to respond. Please try again.";
-        else if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
+            return "Sorry, the AI service is busy right now (429). Please wait a moment and try again.";
+
+        if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+            return "Sorry, the AI service took too long to respond. Please try again.";
+
+        if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
             error.Contains("not found", StringComparison.OrdinalIgnoreCase))
-            friendly = "Sorry, the configured AI model is not available.";
-        else
-            friendly = "Sorry, something went wrong while generating a response.";
+            return "Sorry, the configured AI model is not available.";
 
-        if (!string.IsNullOrWhiteSpace(configDiagnostic))
-            friendly += $"\n\n[Debug]\n{configDiagnostic}\nError: {Truncate(error, 200)}";
-
-        return friendly;
+        return "Sorry, something went wrong while generating a response.";
     }
 
-    private static string BuildConfigDiagnostic(
+    /// <summary>
+    /// Build diagnostic block for relay error replies. Only included when
+    /// <see cref="NyxIdRelayOptions.EnableDebugDiagnostics"/> is true.
+    /// </summary>
+    private static string BuildRelayDiagnostic(
         Google.Protobuf.Collections.MapField<string, string> metadata,
-        IConfiguration? configuration)
+        IConfiguration? configuration,
+        string errorMessage)
     {
         var modelOverride = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : null;
-        var serverDefaultModel = configuration?["Aevatar:NyxId:DefaultModel"] ?? "(fallback to OpenAIModel option)";
-        var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r) && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
+        var serverDefault = configuration?["Aevatar:NyxId:DefaultModel"] ?? "(OpenAIModel option)";
+        var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r)
+            && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
         var hasToken = metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
 
-        var modelDisplay = !string.IsNullOrWhiteSpace(modelOverride)
+        var model = !string.IsNullOrWhiteSpace(modelOverride)
             ? $"{modelOverride} (from config.json)"
-            : $"server-default={serverDefaultModel}";
+            : $"server-default={serverDefault}";
 
-        return $"Model: {modelDisplay}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}";
+        var error = errorMessage.Length > 300 ? errorMessage[..300] + "..." : errorMessage;
+
+        return $"Model: {model}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}\nError: {error}";
     }
-
-    private static string Truncate(string value, int maxLength) =>
-        value.Length <= maxLength ? value : value[..maxLength] + "...";
 
     private static IResult FriendlyReply(string text) =>
         Results.Json(new { reply = new { text } });

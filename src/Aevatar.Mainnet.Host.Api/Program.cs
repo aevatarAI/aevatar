@@ -36,7 +36,7 @@ builder.AddStudioCapability();
 // Authentication: config-driven, provider-agnostic
 builder.Services.AddNyxIdAuthentication();
 builder.AddAevatarAuthentication();
-builder.Services.AddNyxIdChat();
+builder.Services.AddNyxIdChat(builder.Configuration);
 builder.Services.AddStreamingProxy();
 builder.Services.AddChatbotClassifier();
 builder.Services.AddNyxIdTools(o =>
