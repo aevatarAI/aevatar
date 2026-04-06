@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Aevatar.Interop.A2A.Abstractions.Models;
@@ -94,30 +95,37 @@ public sealed class Artifact
     public Dictionary<string, string>? Metadata { get; init; }
 }
 
-/// <summary>A2A Part — 消息/制品中的内容分片。</summary>
-[JsonDerivedType(typeof(TextPart), "text")]
-[JsonDerivedType(typeof(FilePart), "file")]
-[JsonDerivedType(typeof(DataPart), "data")]
+/// <summary>A2A Part — 消息/制品中的内容分片。按 A2A 协议用 "type" 字段区分。</summary>
+[JsonConverter(typeof(PartJsonConverter))]
 public abstract class Part
 {
+    [JsonPropertyName("type")]
+    public abstract string Type { get; }
+
     [JsonPropertyName("metadata")]
     public Dictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed class TextPart : Part
 {
+    public override string Type => "text";
+
     [JsonPropertyName("text")]
     public required string Text { get; init; }
 }
 
 public sealed class FilePart : Part
 {
+    public override string Type => "file";
+
     [JsonPropertyName("file")]
     public required FileContent File { get; init; }
 }
 
 public sealed class DataPart : Part
 {
+    public override string Type => "data";
+
     [JsonPropertyName("data")]
     public required Dictionary<string, object?> Data { get; init; }
 }
@@ -135,4 +143,79 @@ public sealed class FileContent
 
     [JsonPropertyName("uri")]
     public string? Uri { get; init; }
+}
+
+/// <summary>A2A Part 的自定义 JSON 转换器，按 "type" 字段路由到具体子类。</summary>
+internal sealed class PartJsonConverter : JsonConverter<Part>
+{
+    public override Part? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var root = doc.RootElement;
+
+        var type = root.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : null;
+
+        return type switch
+        {
+            "text" => new TextPart
+            {
+                Text = root.GetProperty("text").GetString() ?? "",
+                Metadata = DeserializeMetadata(root),
+            },
+            "file" => new FilePart
+            {
+                File = JsonSerializer.Deserialize<FileContent>(root.GetProperty("file").GetRawText(), options)!,
+                Metadata = DeserializeMetadata(root),
+            },
+            "data" => new DataPart
+            {
+                Data = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+                    root.GetProperty("data").GetRawText(), options) ?? [],
+                Metadata = DeserializeMetadata(root),
+            },
+            // 对于未知 type，尝试按内容推断
+            _ when root.TryGetProperty("text", out _) => new TextPart
+            {
+                Text = root.GetProperty("text").GetString() ?? "",
+                Metadata = DeserializeMetadata(root),
+            },
+            _ => throw new JsonException($"Unknown part type: '{type}'"),
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, Part value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("type", value.Type);
+
+        switch (value)
+        {
+            case TextPart textPart:
+                writer.WriteString("text", textPart.Text);
+                break;
+            case FilePart filePart:
+                writer.WritePropertyName("file");
+                JsonSerializer.Serialize(writer, filePart.File, options);
+                break;
+            case DataPart dataPart:
+                writer.WritePropertyName("data");
+                JsonSerializer.Serialize(writer, dataPart.Data, options);
+                break;
+        }
+
+        if (value.Metadata is { Count: > 0 })
+        {
+            writer.WritePropertyName("metadata");
+            JsonSerializer.Serialize(writer, value.Metadata, options);
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static Dictionary<string, string>? DeserializeMetadata(JsonElement root)
+    {
+        if (!root.TryGetProperty("metadata", out var metaProp) || metaProp.ValueKind == JsonValueKind.Null)
+            return null;
+        return JsonSerializer.Deserialize<Dictionary<string, string>>(metaProp.GetRawText());
+    }
 }

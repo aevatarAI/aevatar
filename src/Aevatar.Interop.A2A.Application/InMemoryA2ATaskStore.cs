@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Abstractions.Models;
 
@@ -8,6 +9,7 @@ namespace Aevatar.Interop.A2A.Application;
 public sealed class InMemoryA2ATaskStore : IA2ATaskStore
 {
     private readonly ConcurrentDictionary<string, A2ATask> _tasks = new();
+    private readonly ConcurrentDictionary<string, List<Channel<TaskStateUpdate>>> _subscribers = new();
 
     public Task<A2ATask> CreateTaskAsync(string taskId, string? sessionId, Message message, CancellationToken ct = default)
     {
@@ -53,6 +55,14 @@ public sealed class InMemoryA2ATaskStore : IA2ATaskStore
             task.History.Add(message);
         }
 
+        // Notify subscribers
+        var isFinal = state is TaskState.Completed or TaskState.Failed or TaskState.Canceled;
+        NotifySubscribers(taskId, new TaskStateUpdate
+        {
+            Status = task.Status,
+            IsFinal = isFinal,
+        });
+
         return Task.FromResult(task);
     }
 
@@ -63,11 +73,60 @@ public sealed class InMemoryA2ATaskStore : IA2ATaskStore
 
         task.Artifacts ??= [];
         task.Artifacts.Add(artifact);
+
+        NotifySubscribers(taskId, new TaskStateUpdate
+        {
+            Status = task.Status,
+            Artifact = artifact,
+        });
+
         return Task.FromResult(task);
     }
 
     public Task<bool> DeleteTaskAsync(string taskId, CancellationToken ct = default)
     {
         return Task.FromResult(_tasks.TryRemove(taskId, out _));
+    }
+
+    public ChannelReader<TaskStateUpdate> SubscribeAsync(string taskId)
+    {
+        var channel = Channel.CreateBounded<TaskStateUpdate>(new BoundedChannelOptions(64)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+        var subscribers = _subscribers.GetOrAdd(taskId, _ => []);
+        lock (subscribers)
+        {
+            subscribers.Add(channel);
+        }
+
+        return channel.Reader;
+    }
+
+    private void NotifySubscribers(string taskId, TaskStateUpdate update)
+    {
+        if (!_subscribers.TryGetValue(taskId, out var subscribers))
+            return;
+
+        lock (subscribers)
+        {
+            for (var i = subscribers.Count - 1; i >= 0; i--)
+            {
+                if (!subscribers[i].Writer.TryWrite(update))
+                {
+                    subscribers[i].Writer.TryComplete();
+                    subscribers.RemoveAt(i);
+                }
+
+                if (update.IsFinal)
+                {
+                    subscribers[i].Writer.TryComplete();
+                }
+            }
+
+            if (update.IsFinal)
+                subscribers.Clear();
+        }
     }
 }
