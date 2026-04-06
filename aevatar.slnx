@@ -146,6 +146,7 @@
     <Project Path="test\Aevatar.Workflow.Host.Api.Tests\Aevatar.Workflow.Host.Api.Tests.csproj" />
     <Project Path="test\Aevatar.Workflow.Sdk.Tests\Aevatar.Workflow.Sdk.Tests.csproj" />
     <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
+    <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
