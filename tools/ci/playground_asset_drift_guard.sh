@@ -67,6 +67,11 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 
 CLI_PLAYGROUND_DIR="${tmp_dir}/cli-playground"
 
+if ! command -v pnpm &>/dev/null; then
+  echo "Playground asset drift guard: pnpm not found, skipping (install pnpm to enable this guard)"
+  exit 0
+fi
+
 echo "Building CLI playground assets into temporary directory..."
 pnpm -C "${CLI_FRONTEND_DIR}" exec tsc -b >/dev/null
 pnpm -C "${CLI_FRONTEND_DIR}" exec vite build --outDir "${CLI_PLAYGROUND_DIR}" >/dev/null
