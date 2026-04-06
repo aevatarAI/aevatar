@@ -109,9 +109,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                         "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
                         status, route.RouteName, route.Endpoint, body);
 
-                    var detail = !string.IsNullOrWhiteSpace(body)
-                        ? $"{ex.Message} | NyxID response: {body}"
-                        : ex.Message;
+                    var detail = $"{ex.Message} | endpoint={route.Endpoint}, model={route.Request.Model}, route={route.RouteName}";
+                    if (!string.IsNullOrWhiteSpace(body))
+                        detail += $" | NyxID response: {body}";
                     throw new InvalidOperationException(detail, ex);
                 }
 
