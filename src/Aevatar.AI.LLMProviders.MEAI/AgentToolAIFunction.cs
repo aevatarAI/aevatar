@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────
 // AgentToolAIFunction — bridges IAgentTool to MEAI AIFunction
 //
-// Exposes the tool's real ParametersSchema (with slug, path, etc.)
-// instead of wrapping in a single (string input) delegate that
-// collapses all parameters into one string argument.
+// Uses AIFunctionFactory.CreateDeclaration for the tool declaration
+// (ensuring Name/Description/Schema are properly initialized for
+// OpenAI SDK serialization), then wraps with a delegating AIFunction
+// for actual invocation.
 // ─────────────────────────────────────────────────────────────
 
 using System.Text.Json;
@@ -13,30 +14,29 @@ using Microsoft.Extensions.AI;
 namespace Aevatar.AI.LLMProviders.MEAI;
 
 /// <summary>
-/// Custom <see cref="AIFunction"/> that preserves the tool's real JSON schema
-/// so the LLM sees individual parameters (slug, path, method, body, etc.)
-/// instead of a single "input" string parameter.
+/// Bridges <see cref="IAgentTool"/> to MEAI's <see cref="AIFunction"/>.
+/// Uses <see cref="AIFunctionFactory.CreateDeclaration"/> to build a properly
+/// initialized declaration, then wraps invocation to route through <see cref="IAgentTool.ExecuteAsync"/>.
 /// </summary>
 internal sealed class AgentToolAIFunction : AIFunction
 {
     private readonly IAgentTool _tool;
-    private readonly JsonElement _jsonSchema;
+    private readonly AIFunctionDeclaration _declaration;
 
-    public AgentToolAIFunction(IAgentTool tool)
+    private AgentToolAIFunction(IAgentTool tool, AIFunctionDeclaration declaration)
     {
         _tool = tool;
-        _jsonSchema = ParseSchema(tool.ParametersSchema);
+        _declaration = declaration;
     }
 
-    public override string Name => _tool.Name;
-    public override string Description => _tool.Description;
-    public override JsonElement JsonSchema => _jsonSchema;
+    public override string Name => _declaration.Name;
+    public override string Description => _declaration.Description;
+    public override JsonElement JsonSchema => _declaration.JsonSchema;
 
     protected override async ValueTask<object?> InvokeCoreAsync(
         AIFunctionArguments arguments,
         CancellationToken cancellationToken)
     {
-        // Serialize the arguments dictionary back to JSON for ExecuteAsync.
         var argsJson = arguments.Count > 0
             ? JsonSerializer.Serialize(arguments.ToDictionary(
                 kvp => kvp.Key,
@@ -44,6 +44,21 @@ internal sealed class AgentToolAIFunction : AIFunction
             : "{}";
 
         return await _tool.ExecuteAsync(argsJson, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates an <see cref="AIFunction"/> from an <see cref="IAgentTool"/>.
+    /// The underlying declaration is built via <see cref="AIFunctionFactory.CreateDeclaration"/>
+    /// to ensure proper serialization of Name/Description/Schema by the OpenAI SDK.
+    /// </summary>
+    public static AIFunction CreateFrom(IAgentTool tool)
+    {
+        var schema = ParseSchema(tool.ParametersSchema);
+        var declaration = AIFunctionFactory.CreateDeclaration(
+            tool.Name,
+            tool.Description,
+            schema);
+        return new AgentToolAIFunction(tool, declaration);
     }
 
     private static JsonElement ParseSchema(string? schema)

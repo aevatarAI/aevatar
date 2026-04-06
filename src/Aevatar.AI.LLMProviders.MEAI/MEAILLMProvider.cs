@@ -385,13 +385,14 @@ public sealed class MEAILLMProvider : ILLMProvider
             hasOptions = true;
         }
 
-        // 注册 Tools — 使用工具自身的 ParametersSchema，让 LLM 看到真实参数结构
+        // 注册 Tools — 使用 AIFunctionFactory.CreateDeclaration 确保 Name 正确序列化
         if (request.Tools is { Count: > 0 })
         {
             options.Tools = [];
             foreach (var tool in request.Tools)
             {
-                options.Tools.Add(new AgentToolAIFunction(tool));
+                if (string.IsNullOrWhiteSpace(tool.Name)) continue;
+                options.Tools.Add(AgentToolAIFunction.CreateFrom(tool));
             }
             hasOptions = true;
         }
