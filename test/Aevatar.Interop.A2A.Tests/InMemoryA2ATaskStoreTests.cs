@@ -1,3 +1,4 @@
+using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Abstractions.Models;
 using Aevatar.Interop.A2A.Application;
 using FluentAssertions;
@@ -106,5 +107,56 @@ public class InMemoryA2ATaskStoreTests
     {
         var deleted = await _store.DeleteTaskAsync("missing");
         deleted.Should().BeFalse();
+    }
+
+    // ─── Subscription tests ───
+
+    [Fact]
+    public async Task Subscribe_ReceivesUpdates()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        var reader = _store.SubscribeAsync("t1");
+
+        await _store.UpdateTaskStateAsync("t1", TaskState.Working);
+
+        var canRead = reader.TryRead(out var update);
+        canRead.Should().BeTrue();
+        update!.Status.State.Should().Be(TaskState.Working);
+        update.IsFinal.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Subscribe_FinalUpdate_CompletesChannel()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        var reader = _store.SubscribeAsync("t1");
+
+        await _store.UpdateTaskStateAsync("t1", TaskState.Completed);
+
+        var updates = new List<TaskStateUpdate>();
+        await foreach (var u in reader.ReadAllAsync())
+            updates.Add(u);
+
+        updates.Should().HaveCount(1);
+        updates[0].Status.State.Should().Be(TaskState.Completed);
+        updates[0].IsFinal.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Subscribe_AfterTerminalState_ImmediatelyCompletes()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        await _store.UpdateTaskStateAsync("t1", TaskState.Completed);
+
+        // Subscribe AFTER task is already completed
+        var reader = _store.SubscribeAsync("t1");
+
+        var updates = new List<TaskStateUpdate>();
+        await foreach (var u in reader.ReadAllAsync())
+            updates.Add(u);
+
+        updates.Should().HaveCount(1);
+        updates[0].Status.State.Should().Be(TaskState.Completed);
+        updates[0].IsFinal.Should().BeTrue();
     }
 }

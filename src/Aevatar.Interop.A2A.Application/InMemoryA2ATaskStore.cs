@@ -55,7 +55,6 @@ public sealed class InMemoryA2ATaskStore : IA2ATaskStore
             task.History.Add(message);
         }
 
-        // Notify subscribers
         var isFinal = state is TaskState.Completed or TaskState.Failed or TaskState.Canceled;
         NotifySubscribers(taskId, new TaskStateUpdate
         {
@@ -95,9 +94,23 @@ public sealed class InMemoryA2ATaskStore : IA2ATaskStore
             FullMode = BoundedChannelFullMode.DropOldest,
         });
 
+        // Check current state under subscriber lock to avoid race with UpdateTaskStateAsync.
+        // If task is already terminal, send the final status and complete immediately.
         var subscribers = _subscribers.GetOrAdd(taskId, _ => []);
         lock (subscribers)
         {
+            if (_tasks.TryGetValue(taskId, out var task) &&
+                task.Status.State is TaskState.Completed or TaskState.Failed or TaskState.Canceled)
+            {
+                channel.Writer.TryWrite(new TaskStateUpdate
+                {
+                    Status = task.Status,
+                    IsFinal = true,
+                });
+                channel.Writer.TryComplete();
+                return channel.Reader;
+            }
+
             subscribers.Add(channel);
         }
 
@@ -113,20 +126,26 @@ public sealed class InMemoryA2ATaskStore : IA2ATaskStore
         {
             for (var i = subscribers.Count - 1; i >= 0; i--)
             {
-                if (!subscribers[i].Writer.TryWrite(update))
+                var wrote = subscribers[i].Writer.TryWrite(update);
+                if (!wrote)
                 {
+                    // Channel full or completed — drop this subscriber
                     subscribers[i].Writer.TryComplete();
                     subscribers.RemoveAt(i);
+                    continue;
                 }
 
                 if (update.IsFinal)
                 {
+                    // Successfully wrote the final update — now complete the channel
                     subscribers[i].Writer.TryComplete();
                 }
             }
 
             if (update.IsFinal)
+            {
                 subscribers.Clear();
+            }
         }
     }
 }
