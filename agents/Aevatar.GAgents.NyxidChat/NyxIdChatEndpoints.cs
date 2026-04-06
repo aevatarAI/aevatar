@@ -409,13 +409,25 @@ public static class NyxIdChatEndpoints
         IDictionary<string, string> metadata,
         CancellationToken ct)
     {
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.UserConfig");
+
         var preferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
         if (preferencesStore == null)
+        {
+            logger?.LogWarning("INyxIdUserLlmPreferencesStore not registered — skipping user config injection");
             return;
+        }
 
         try
         {
             var preferences = await preferencesStore.GetAsync(ct);
+            logger?.LogInformation(
+                "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
+                preferences.DefaultModel ?? "<empty>",
+                preferences.PreferredRoute ?? "<empty>",
+                preferences.MaxToolRounds);
+
             if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
                 metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
             if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
@@ -423,9 +435,9 @@ public static class NyxIdChatEndpoints
             if (preferences.MaxToolRounds > 0)
                 metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort
+            logger?.LogWarning(ex, "Failed to load user config from chrono-storage — falling back to server defaults");
         }
     }
 
@@ -807,7 +819,9 @@ public static class NyxIdChatEndpoints
                 logger.LogWarning("Relay LLM error: conversation={ConversationId}, error={Error}",
                     conversationId, errorMessage);
 
-                replyText = ClassifyError(errorMessage);
+                // Surface config + error details in reply for debugging
+                var configSummary = BuildConfigDiagnostic(chatRequest.Metadata);
+                replyText = ClassifyError(errorMessage, configSummary);
             }
             else if (string.IsNullOrWhiteSpace(replyText))
             {
@@ -828,35 +842,48 @@ public static class NyxIdChatEndpoints
         }
     }
 
-    /// <summary>Classify a technical LLM error into a user-friendly message.</summary>
-    private static string ClassifyError(string error)
+    /// <summary>Classify a technical LLM error into a user-friendly message with diagnostic details.</summary>
+    private static string ClassifyError(string error, string? configDiagnostic = null)
     {
+        string friendly;
+
         if (error.Contains("403", StringComparison.Ordinal) ||
             error.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, I can't reach the AI service right now. " +
-                   "The bot owner may need to check their NyxID LLM provider settings.";
-
-        if (error.Contains("401", StringComparison.Ordinal) ||
+            friendly = "Sorry, I can't reach the AI service right now (403 Forbidden).";
+        else if (error.Contains("401", StringComparison.Ordinal) ||
             error.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
             error.Contains("authentication", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, authentication with the AI service failed. " +
-                   "The bot owner may need to reconnect their LLM provider in NyxID.";
-
-        if (error.Contains("429", StringComparison.Ordinal) ||
+            friendly = "Sorry, authentication with the AI service failed (401).";
+        else if (error.Contains("429", StringComparison.Ordinal) ||
             error.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
             error.Contains("too many", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the AI service is busy right now. Please wait a moment and try again.";
-
-        if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the AI service took too long to respond. Please try again.";
-
-        if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
+            friendly = "Sorry, the AI service is busy right now (429). Please wait a moment and try again.";
+        else if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+            friendly = "Sorry, the AI service took too long to respond. Please try again.";
+        else if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
             error.Contains("not found", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the configured AI model is not available. " +
-                   "The bot owner may need to update their model settings.";
+            friendly = "Sorry, the configured AI model is not available.";
+        else
+            friendly = "Sorry, something went wrong while generating a response.";
 
-        return "Sorry, something went wrong while generating a response. Please try again later.";
+        if (!string.IsNullOrWhiteSpace(configDiagnostic))
+            friendly += $"\n\n[Debug]\n{configDiagnostic}\nError: {Truncate(error, 200)}";
+
+        return friendly;
     }
+
+    private static string BuildConfigDiagnostic(Google.Protobuf.Collections.MapField<string, string> metadata)
+    {
+        var model = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : "<server-default>";
+        var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r) && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
+        var hasToken = metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
+
+        return $"Model: {model}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}";
+    }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength] + "...";
 
     private static IResult FriendlyReply(string text) =>
         Results.Json(new { reply = new { text } });

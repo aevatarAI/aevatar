@@ -26,6 +26,10 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
         AppendMetadata(chatRequest.Headers, command.Metadata);
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
         chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
+        // Preserve caller metadata in the Metadata map so that downstream consumers
+        // (WorkflowRunGAgent.PropagateRequestMetadataToExecutionItems, connector auth)
+        // can read it from the canonical field.
+        AppendMetadata(chatRequest.Metadata, command.Metadata);
 
         var envelope = new EventEnvelope
         {

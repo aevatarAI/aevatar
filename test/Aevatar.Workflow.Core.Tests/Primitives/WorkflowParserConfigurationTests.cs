@@ -54,7 +54,7 @@ public class WorkflowParserConfigurationTests
               - id: planner
                 system_prompt: "You are planner"
                 provider: openai
-                model: gpt-4o-mini
+                model: gpt-5.4
                 temperature: 0.1
                 max_tokens: 512
                 max_tool_rounds: 3
@@ -79,7 +79,7 @@ public class WorkflowParserConfigurationTests
         role.Id.Should().Be("planner");
         role.Name.Should().Be("planner");
         role.Provider.Should().Be("openai");
-        role.Model.Should().Be("gpt-4o-mini");
+        role.Model.Should().Be("gpt-5.4");
         role.SystemPrompt.Should().Be("You are planner");
         role.Temperature.Should().Be(0.1);
         role.MaxTokens.Should().Be(512);

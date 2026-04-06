@@ -164,7 +164,7 @@ public class WorkflowGAgentCoverageTests
             .Should().BeOfType<FakeRoleAgent>().Subject.LastInitializeEvent!;
         initializeEvent.RoleName.Should().Be("RoleA");
         initializeEvent.ProviderName.Should().Be("openai");
-        initializeEvent.Model.Should().Be("gpt-4o-mini");
+        initializeEvent.Model.Should().Be("gpt-5.4");
         initializeEvent.SystemPrompt.Should().Be("helpful role");
         initializeEvent.HasTemperature.Should().BeTrue();
         initializeEvent.Temperature.Should().BeApproximately(0.2f, 0.0001f);
@@ -1413,7 +1413,7 @@ public class WorkflowGAgentCoverageTests
                    name: RoleA
                    system_prompt: "helpful role"
                    provider: openai
-                   model: gpt-4o-mini
+                   model: gpt-5.4
                    temperature: 0.2
                    max_tokens: 256
                    max_tool_rounds: 4

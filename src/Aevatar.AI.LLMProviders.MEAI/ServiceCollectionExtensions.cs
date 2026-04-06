@@ -16,7 +16,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <example>
     /// services.AddMEAIProviders(factory => factory
-    ///     .RegisterOpenAI("openai", "gpt-4o-mini", openaiKey)
+    ///     .RegisterOpenAI("openai", "gpt-5.4", openaiKey)
     ///     .RegisterOpenAI("deepseek", "deepseek-chat", deepseekKey,
     ///         baseUrl: "https://api.deepseek.com/v1")
     ///     .SetDefault("deepseek"));

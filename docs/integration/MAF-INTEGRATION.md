@@ -270,7 +270,7 @@ Aevatar 已有 YAML-driven workflow，但可考虑在上层增加 **C# fluent bu
 var definition = new AevatarWorkflowBuilder()
     .WithRole("planner", cfg => cfg
         .SystemPrompt("You are a planning assistant.")
-        .Provider("openai").Model("gpt-4o-mini"))
+        .Provider("openai").Model("gpt-5.4"))
     .WithStep("plan", step => step
         .Type(StepType.LLMCall)
         .Role("planner")

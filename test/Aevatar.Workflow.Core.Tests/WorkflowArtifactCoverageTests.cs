@@ -207,7 +207,7 @@ public sealed class WorkflowArtifactCoverageTests
                 Id = "planner",
                 Name = "Planner",
                 Provider = "openai",
-                Model = "gpt-4o-mini",
+                Model = "gpt-5.4",
                 SystemPrompt = "You are helpful.",
                 Temperature = 0.25,
                 MaxTokens = 256,
@@ -226,7 +226,7 @@ public sealed class WorkflowArtifactCoverageTests
 
         withTemperaturePayload.RoleName.Should().Be("Planner");
         withTemperaturePayload.ProviderName.Should().Be("openai");
-        withTemperaturePayload.Model.Should().Be("gpt-4o-mini");
+        withTemperaturePayload.Model.Should().Be("gpt-5.4");
         withTemperaturePayload.SystemPrompt.Should().Be("You are helpful.");
         withTemperaturePayload.HasTemperature.Should().BeTrue();
         withTemperaturePayload.Temperature.Should().BeApproximately(0.25f, 0.0001f);

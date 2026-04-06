@@ -80,7 +80,7 @@ public sealed class NyxIdLLMProviderRoutingTests
 
         var route = await provider.ResolveRouteAsync(request);
 
-        route.Request.Model.Should().Be("gpt-4o-mini");
+        route.Request.Model.Should().Be("gpt-5.4");
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public sealed class NyxIdLLMProviderRoutingTests
     private static NyxIdLLMProvider CreateProvider() =>
         new(
             name: "nyxid",
-            defaultModel: "gpt-4o-mini",
+            defaultModel: "gpt-5.4",
             nyxEndpoint: "https://nyx.example.com/api/v1/llm/gateway/v1",
             accessTokenAccessor: static () => null);
 

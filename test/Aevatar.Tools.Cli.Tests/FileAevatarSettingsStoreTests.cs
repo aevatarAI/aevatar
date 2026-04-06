@@ -32,7 +32,7 @@ public sealed class FileAevatarSettingsStoreTests
         var nyxId = settings.ProviderTypes.Single(provider => provider.Id == "nyxid");
         nyxId.DisplayName.Should().Be("NyxID Gateway");
         nyxId.DefaultEndpoint.Should().Be("https://nyx.example.com/api/v1/llm/gateway/v1");
-        nyxId.DefaultModel.Should().Be("gpt-4o-mini");
+        nyxId.DefaultModel.Should().Be("gpt-5.4");
     }
 
     [Fact]
