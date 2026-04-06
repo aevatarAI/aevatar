@@ -503,13 +503,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 EffectiveConfig.ProviderName,
                 EffectiveConfig.Model ?? "<default>",
                 request.Metadata.Count > 0 ? string.Join(",", request.Metadata.Keys) : "<none>");
-            var toolDiag = Tools.HasTools
-                ? $" | tools=[{string.Join(",", Tools.GetAll().Select(t => $"{t.Name ?? "<null>"}({t.GetType().Name})"))}]"
-                : "";
+            var toolNames = Tools.HasTools
+                ? string.Join(",", Tools.GetAll().Select(t => t.Name ?? "<null>"))
+                : "none";
             replayRecord = SessionReplayRecord.FromFailure(
                 useWorkflowFailureMarker
-                    ? BuildLlmFailureContent(ex.Message + toolDiag)
-                    : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}{toolDiag}");
+                    ? BuildLlmFailureContent(ex.Message)
+                    : $"LLM request failed [tools={toolNames}]: {SanitizeFailureMessage(ex.Message)}");
         }
 
         // ─── Detect approval-pending tool result and set up continuation ───
