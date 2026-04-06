@@ -707,10 +707,10 @@ public static class NyxIdChatEndpoints
                 http.User = new System.Security.Claims.ClaimsPrincipal(identity);
             }
 
-            // Populate Authorization header so downstream services (chrono-storage via NyxProxy)
-            // can authenticate using the relay user's token. The relay callback delivers the token
-            // in X-NyxID-User-Token, but ChronoStorageCatalogBlobClient reads from Authorization.
-            http.Request.Headers.Authorization = $"Bearer {userToken}";
+            // Note: config.json in chrono-storage cannot be read in relay flow because
+            // ChronoStorageCatalogBlobClient reads the Bearer token from Authorization header,
+            // which is not present on relay callbacks (token is in X-NyxID-User-Token instead).
+            // InjectUserConfigMetadataAsync will silently fall back to server defaults.
 
             // ─── Resolve conversation ───
             var platform = message.Platform ?? "unknown";
