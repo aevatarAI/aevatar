@@ -165,8 +165,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             Endpoint = endpoint,
         };
 
-        if (ShouldSuppressDefaultUserAgent(endpoint))
-            options.Transport = new NyxIdProxyTransport();
+        // Always suppress the OpenAI SDK default User-Agent (e.g. "openai-dotnet/2.0.0")
+        // for all NyxID routes. The gateway and proxy both reject requests that look like
+        // direct OpenAI SDK connections.
+        options.Transport = new NyxIdProxyTransport();
 
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(request.Model!).AsIChatClient();
