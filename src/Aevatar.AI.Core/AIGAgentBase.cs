@@ -364,11 +364,31 @@ public abstract class AIGAgentBase<TState> : GAgentBase<TState, AIAgentConfig>
         Messages = History.BuildMessages(DecorateSystemPrompt(EffectiveConfig.SystemPrompt)),
         RequestId = null,
         Metadata = null,
-        Tools = Tools.HasTools ? Tools.GetAll().Where(t => !string.IsNullOrWhiteSpace(t.Name)).ToList() : null,
+        Tools = BuildValidTools(),
         Model = EffectiveConfig.Model,
         Temperature = EffectiveConfig.Temperature,
         MaxTokens = EffectiveConfig.MaxTokens,
     };
+
+    private IReadOnlyList<IAgentTool>? BuildValidTools()
+    {
+        if (!Tools.HasTools) return null;
+
+        var all = Tools.GetAll();
+        var valid = all.Where(t => !string.IsNullOrWhiteSpace(t.Name)).ToList();
+
+        if (valid.Count < all.Count)
+        {
+            var invalidCount = all.Count - valid.Count;
+            Logger.LogWarning(
+                "[{Role}] Filtered {InvalidCount} tool(s) with empty Name. Registered tools: [{ToolNames}]",
+                Id ?? "?",
+                invalidCount,
+                string.Join(", ", all.Select(t => string.IsNullOrWhiteSpace(t.Name) ? $"<EMPTY:{t.GetType().Name}>" : t.Name)));
+        }
+
+        return valid.Count > 0 ? valid : null;
+    }
 
     private void EnsureRuntime()
     {

@@ -830,74 +830,49 @@ public class AIComponentCoverageTests
     }
 
     /// <summary>
-    /// Verifies that AgentToolAIFunction correctly propagates tool Name to the
-    /// MEAI ChatOptions.Tools serialization layer. This catches regressions where
-    /// the OpenAI API rejects tools with missing 'name' field (HTTP 400:
-    /// "Missing required parameter: tools[0].name").
+    /// End-to-end test: verifies that tool names survive the full serialization
+    /// pipeline from IAgentTool → AgentToolAIFunction → MEAI OpenAIChatClient → HTTP JSON body.
+    /// Captures the actual HTTP request body that would be sent to the OpenAI API.
+    /// This catches the exact bug: "Missing required parameter: tools[0].name".
     /// </summary>
     [Fact]
-    public async Task AgentToolAIFunction_ShouldSerializeToolNameInChatOptions()
+    public async Task AgentToolAIFunction_ShouldSerializeToolNameInOpenAIWireFormat()
     {
-        ChatOptions? capturedOptions = null;
+        string? capturedRequestBody = null;
 
-        var client = new StubChatClient
+        // Create a mock HTTP transport that captures the request body
+        var handler = new CapturingHttpHandler(request =>
         {
-            OnGetStreamingResponse = (_, options, _) =>
+            capturedRequestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            // Return a minimal valid streaming response so the SDK doesn't throw
+            var responseContent = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"test\"," +
+                                  "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                capturedOptions = options;
-                return Stream(["ok"]);
-            },
+                Content = new StringContent(responseContent, System.Text.Encoding.UTF8, "text/event-stream"),
+            };
+            return Task.FromResult(response);
+        });
+
+        // Build the same pipeline as NyxIdLLMProvider: OpenAIClient → IChatClient → MEAILLMProvider
+        var clientOptions = new OpenAI.OpenAIClientOptions
+        {
+            Endpoint = new Uri("https://test.example.com/v1/"),
+            Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(new HttpClient(handler)),
         };
+        var openAiClient = new OpenAI.OpenAIClient(
+            new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
+        var chatClient = openAiClient.GetChatClient("gpt-5.4").AsIChatClient();
+        var provider = new MEAILLMProvider("test", chatClient);
 
-        var provider = new MEAILLMProvider("test", client);
-        var tool = new StubTool("my_test_tool");
-
-        var chunks = new List<LLMStreamChunk>();
-        await foreach (var chunk in provider.ChatStreamAsync(new LLMRequest
-        {
-            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
-            Tools = [tool],
-        }))
-        {
-            chunks.Add(chunk);
-        }
-
-        // The captured ChatOptions must contain a tool with the correct name
-        capturedOptions.Should().NotBeNull();
-        capturedOptions!.Tools.Should().ContainSingle();
-
-        var aiFunction = capturedOptions.Tools![0] as AIFunction;
-        aiFunction.Should().NotBeNull("tool should be wrapped as AIFunction");
-        aiFunction!.Name.Should().Be("my_test_tool", "tool name must survive MEAI wrapping");
-
-        // Verify the name is also accessible via the JsonSchema/metadata path
-        // that the OpenAI SDK adapter uses for serialization
-        aiFunction.Name.Should().NotBeNullOrWhiteSpace(
-            "name must be non-empty to avoid OpenAI API 400: 'Missing required parameter: tools[0].name'");
-    }
-
-    [Fact]
-    public async Task AgentToolAIFunction_ShouldSerializeMultipleToolNames()
-    {
-        ChatOptions? capturedOptions = null;
-
-        var client = new StubChatClient
-        {
-            OnGetStreamingResponse = (_, options, _) =>
-            {
-                capturedOptions = options;
-                return Stream(["ok"]);
-            },
-        };
-
-        var provider = new MEAILLMProvider("test", client);
         var tools = new IAgentTool[]
         {
             new StubTool("nyxid_services"),
             new StubTool("web_search"),
-            new StubTool("chrono_file_read"),
         };
 
+        // Stream through the full pipeline
         await foreach (var _ in provider.ChatStreamAsync(new LLMRequest
         {
             Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
@@ -905,12 +880,39 @@ public class AIComponentCoverageTests
         }))
         { }
 
-        capturedOptions.Should().NotBeNull();
-        capturedOptions!.Tools.Should().HaveCount(3);
+        // Verify the captured HTTP body contains tool names
+        capturedRequestBody.Should().NotBeNullOrWhiteSpace("request body must be captured");
 
-        var names = capturedOptions.Tools!.OfType<AIFunction>().Select(f => f.Name).ToList();
-        names.Should().ContainInOrder("nyxid_services", "web_search", "chrono_file_read");
-        names.Should().OnlyContain(n => !string.IsNullOrWhiteSpace(n),
-            "all tool names must be non-empty for OpenAI API compatibility");
+        using var doc = System.Text.Json.JsonDocument.Parse(capturedRequestBody!);
+        var root = doc.RootElement;
+
+        root.TryGetProperty("tools", out var toolsArray).Should().BeTrue("request must contain 'tools' array");
+        toolsArray.GetArrayLength().Should().Be(2);
+
+        for (var i = 0; i < toolsArray.GetArrayLength(); i++)
+        {
+            var toolElement = toolsArray[i];
+            toolElement.TryGetProperty("function", out var function).Should().BeTrue(
+                $"tools[{i}] must have 'function' property");
+            function.TryGetProperty("name", out var nameElement).Should().BeTrue(
+                $"tools[{i}].function must have 'name' property — " +
+                $"this is the exact field the OpenAI API rejects as missing");
+            nameElement.GetString().Should().NotBeNullOrWhiteSpace(
+                $"tools[{i}].function.name must be non-empty");
+        }
+
+        // Verify specific names
+        var toolNames = Enumerable.Range(0, toolsArray.GetArrayLength())
+            .Select(i => toolsArray[i].GetProperty("function").GetProperty("name").GetString())
+            .ToList();
+        toolNames.Should().ContainInOrder("nyxid_services", "web_search");
+    }
+
+    private sealed class CapturingHttpHandler(
+        Func<HttpRequestMessage, Task<HttpResponseMessage>> onSend) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            onSend(request);
     }
 }
