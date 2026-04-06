@@ -6,6 +6,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Abstractions.LLMProviders;
@@ -32,11 +33,22 @@ public class LLMResponseFormat
         string? schemaDescription = null) =>
         new LLMResponseFormatJsonSchema(
             AgentToolSchemaGenerator.GenerateSchema<T>(),
-            schemaName ?? typeof(T).Name,
+            schemaName ?? SanitizeTypeName(typeof(T)),
             schemaDescription);
 
     /// <summary>格式类型。</summary>
     public LLMResponseFormatKind Kind { get; protected init; } = LLMResponseFormatKind.Text;
+
+    /// <summary>将 CLR 类型名清理为 provider 安全的 schema 名称。</summary>
+    internal static string SanitizeTypeName(Type type)
+    {
+        var name = type.Name;
+        // 移除泛型后缀如 `1, `2 etc.
+        var idx = name.IndexOf('`');
+        if (idx >= 0) name = name[..idx];
+        // 替换非字母数字字符
+        return Regex.Replace(name, @"[^a-zA-Z0-9_]", "_");
+    }
 }
 
 /// <summary>响应格式类型枚举。</summary>
@@ -61,7 +73,8 @@ public sealed class LLMResponseFormatJsonSchema : LLMResponseFormat
         string? schemaDescription = null)
     {
         Kind = LLMResponseFormatKind.JsonSchema;
-        Schema = schema;
+        // Clone to decouple from caller's JsonDocument lifetime
+        Schema = schema.Clone();
         SchemaName = schemaName;
         SchemaDescription = schemaDescription;
     }
