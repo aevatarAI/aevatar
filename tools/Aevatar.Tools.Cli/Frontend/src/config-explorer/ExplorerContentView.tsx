@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from '../runtime/chatContent';
-import { buildExplorerContentModel, detectMediaKind, type ExplorerChatMessage, type ExplorerScriptFile } from './contentFormatting';
+import { buildExplorerContentModel, detectMediaKind, type ExplorerAttachment, type ExplorerChatMessage, type ExplorerMediaPart, type ExplorerScriptFile } from './contentFormatting';
+import { estimateMessageHeight } from '../runtime/usePretextEstimator';
 import type { MediaInfo } from './useConfigStore';
+import * as api from '../api';
 
 type Props = {
   fileType: string;
@@ -110,9 +113,155 @@ function MarkdownPreview({ content }: { content: string }) {
   );
 }
 
-function ChatHistoryPreview({ messages }: { messages: ExplorerChatMessage[] }) {
+/* ─── Chat Attachment Renderer (fetches from chrono-storage) ─── */
+
+function ChatAttachmentRenderer({ attachment, isUser }: { attachment: ExplorerAttachment; isUser: boolean }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [deleted, setDeleted] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    setLoading(true);
+    setDeleted(false);
+    api.explorer.getFileBlob(attachment.storageKey)
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setBlobUrl(url);
+      })
+      .catch(() => {
+        setDeleted(true);
+      })
+      .finally(() => setLoading(false));
+    return () => { if (revoke) URL.revokeObjectURL(revoke); };
+  }, [attachment.storageKey]);
+
+  if (loading) {
+    return (
+      <div className={`my-1.5 text-[12px] ${isUser ? 'text-white/60' : 'text-gray-400'}`}>
+        Loading {attachment.name}…
+      </div>
+    );
+  }
+
+  if (deleted) {
+    return (
+      <div className={`my-1.5 flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12px] ${
+        isUser
+          ? 'border-white/15 bg-white/10 text-white/70'
+          : 'border-amber-200 bg-amber-50 text-amber-700'
+      }`}>
+        <span>📎</span>
+        <span className="line-through">{attachment.name}</span>
+        <span className="ml-1 opacity-75">（媒体已删除）</span>
+      </div>
+    );
+  }
+
+  const isImage = attachment.mediaType.startsWith('image/');
+  const isAudio = attachment.mediaType.startsWith('audio/');
+  const isVideo = attachment.mediaType.startsWith('video/');
+
+  if (isImage && blobUrl) {
+    return (
+      <div className="my-2">
+        <img src={blobUrl} alt={attachment.name} className="max-w-full max-h-[300px] rounded-lg" />
+        <div className={`text-[11px] mt-1 ${isUser ? 'text-white/60' : 'text-gray-400'}`}>{attachment.name}</div>
+      </div>
+    );
+  }
+
+  if (isAudio && blobUrl) {
+    return (
+      <div className="my-2">
+        <audio controls src={blobUrl} className="max-w-full" />
+        <div className={`text-[11px] mt-1 ${isUser ? 'text-white/60' : 'text-gray-400'}`}>{attachment.name}</div>
+      </div>
+    );
+  }
+
+  if (isVideo && blobUrl) {
+    return (
+      <div className="my-2">
+        <video controls src={blobUrl} className="max-w-full max-h-[300px] rounded-lg" />
+        <div className={`text-[11px] mt-1 ${isUser ? 'text-white/60' : 'text-gray-400'}`}>{attachment.name}</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-h-[70vh] overflow-y-auto px-4 py-4">
+    <div className={`my-1.5 inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] ${
+      isUser ? 'border-white/15 bg-white/10 text-white/80' : 'border-gray-200 bg-gray-50 text-gray-600'
+    }`}>
+      <span>📎</span> {attachment.name} <span className="opacity-60">({Math.round(attachment.size / 1024)}KB)</span>
+    </div>
+  );
+}
+
+/* ─── Chat Media Part Renderer (inline base64 / URI from LLM) ─── */
+
+function ChatMediaPartRenderer({ part }: { part: ExplorerMediaPart }) {
+  const src = (() => {
+    if (part.uri) {
+      const lower = part.uri.toLowerCase();
+      if (lower.startsWith('https://') || lower.startsWith('http://') || lower.startsWith('data:'))
+        return part.uri;
+      return undefined;
+    }
+    if (part.dataBase64 && part.mediaType) return `data:${part.mediaType};base64,${part.dataBase64}`;
+    if (part.dataBase64) return `data:application/octet-stream;base64,${part.dataBase64}`;
+    return undefined;
+  })();
+
+  if (!src) return null;
+
+  switch (part.type) {
+    case 'image':
+      return (
+        <div className="my-2">
+          <img src={src} alt={part.name || 'image'} className="max-w-full max-h-[400px] rounded-lg border border-[#E5DED3]" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    case 'audio':
+      return (
+        <div className="my-2">
+          <audio controls src={src} className="max-w-full" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    case 'video':
+      return (
+        <div className="my-2">
+          <video controls src={src} className="max-w-full max-h-[400px] rounded-lg" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+function ChatHistoryPreview({ messages }: { messages: ExplorerChatMessage[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => {
+      const msg = messages[index];
+      return estimateMessageHeight(
+        { id: msg.id, content: msg.content, role: msg.role, thinking: msg.thinking, error: msg.error },
+        680, // approximate content width inside the explorer panel
+      );
+    },
+    overscan: 5,
+    getItemKey: (index) => messages[index].id || `${messages[index].timestamp}-${index}`,
+  });
+
+  return (
+    <div ref={scrollRef} className="max-h-[70vh] overflow-y-auto px-4 py-4">
       <div className="mb-4 rounded-2xl border border-[#F0ECE5] bg-[#FAF8F4] px-4 py-3">
         <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Conversation</div>
         <div className="mt-1 text-[14px] font-semibold text-gray-800">
@@ -125,13 +274,28 @@ function ChatHistoryPreview({ messages }: { messages: ExplorerChatMessage[] }) {
           Empty conversation.
         </div>
       ) : (
-        <div className="space-y-4">
-          {messages.map((message, index) => (
-            <ChatHistoryBubble
-              key={message.id || `${message.timestamp}-${index}`}
-              message={message}
-            />
-          ))}
+        <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+          {virtualizer.getVirtualItems().map((virtualRow) => {
+            const message = messages[virtualRow.index];
+            return (
+              <div
+                key={message.id || `${message.timestamp}-${virtualRow.index}`}
+                data-index={virtualRow.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <div className="pb-4">
+                  <ChatHistoryBubble message={message} />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -170,9 +334,19 @@ function ChatHistoryBubble({ message }: { message: ExplorerChatMessage }) {
           <ChatThinkingBlock text={message.thinking} />
         )}
 
+        {/* User attachments */}
+        {message.attachments?.map(att => (
+          <ChatAttachmentRenderer key={att.id || att.storageKey} attachment={att} isUser={isUser} />
+        ))}
+
         <div className="break-words text-[14px] leading-relaxed">
           {renderMarkdownContent(sanitizedContent, isUser ? 'user' : 'assistant')}
         </div>
+
+        {/* Assistant media parts */}
+        {message.mediaParts?.map((part, i) => (
+          <ChatMediaPartRenderer key={`media-${i}`} part={part} />
+        ))}
 
         {message.error && (
           <div className={`mt-3 rounded-xl border px-3 py-2 text-[12px] ${

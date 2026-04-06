@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { usePretextEstimator, estimateTextareaHeight } from './usePretextEstimator';
 import {
   AlignLeft,
   Brain,
@@ -876,6 +878,9 @@ function ChatBubble({
       return null;
     }
 
+    // Portal into .studio-shell (not document.body) to preserve CSS variable scope
+    const portalTarget = document.querySelector('.studio-shell') || document.body;
+
     return createPortal(
       <div
         ref={menuRef}
@@ -912,7 +917,7 @@ function ChatBubble({
           />
         </div>
       </div>,
-      document.body,
+      portalTarget,
     );
   }
 
@@ -1455,11 +1460,14 @@ function ChatInput({
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   }, [value, canSend, onSend, pendingAttachments]);
 
+  // Pretext-powered textarea height (no DOM reflow)
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    // Use content width for estimation (minus px-4 = 32px padding)
+    const widthPx = el.clientWidth || 600;
+    const estimated = estimateTextareaHeight(value, widthPx);
+    el.style.height = estimated + 'px';
   }, [value]);
 
   useEffect(() => {
@@ -1477,8 +1485,9 @@ function ChatInput({
   const handleInput = () => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    const widthPx = el.clientWidth || 600;
+    const estimated = estimateTextareaHeight(value, widthPx);
+    el.style.height = estimated + 'px';
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1758,7 +1767,10 @@ export default function ScopePage() {
   const [composerFocusToken, setComposerFocusToken] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<AttachmentInfo[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollParentRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+  const [chatContainerWidth, setChatContainerWidth] = useState(700);
+  const pretextEstimate = usePretextEstimator();
 
   // Chat history persistence
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
@@ -1834,10 +1846,43 @@ export default function ScopePage() {
     };
   }, [scopeId]);
 
-  // Auto-scroll on new messages
+  // ── Virtualizer for chat messages ──
+  const chatVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: (index) => pretextEstimate(messages[index], chatContainerWidth),
+    overscan: 5,
+    getItemKey: (index) => messages[index].id,
+  });
+
+  // Track container width for Pretext estimation
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const el = scrollParentRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // max-w-3xl = 768px, minus px-4 (32px) padding
+        const w = Math.min(entry.contentRect.width, 768) - 32;
+        if (w > 0) setChatContainerWidth(w);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Stick-to-bottom: auto-scroll when at bottom
+  const handleChatScroll = useCallback(() => {
+    const el = scrollParentRef.current;
+    if (!el) return;
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
+
+  // Auto-scroll on new messages or content changes (streaming)
+  useLayoutEffect(() => {
+    if (messages.length > 0 && isAtBottomRef.current) {
+      chatVirtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'smooth' });
+    }
+  }, [messages, messages.length > 0 ? messages[messages.length - 1].content.length : 0]);
 
   const activeService = services.find(s => s.id === selectedService) || services[0];
   const readyProviders = useMemo(
@@ -1954,6 +1999,8 @@ export default function ScopePage() {
         status: m.status === 'streaming' ? 'complete' : m.status,
         ...(m.error ? { error: m.error } : {}),
         ...(m.thinking ? { thinking: m.thinking } : {}),
+        ...(m.attachments?.length ? { attachments: m.attachments.map(({ file, previewUrl, ...rest }) => rest) } : {}),
+        ...(m.mediaParts?.length ? { mediaParts: m.mediaParts } : {}),
       }));
     const meta: ConversationMeta = {
       id: convId,
@@ -2002,6 +2049,8 @@ export default function ScopePage() {
         status: message.status === 'streaming' ? 'complete' : message.status,
         ...(message.error ? { error: message.error } : {}),
         ...(message.thinking ? { thinking: message.thinking } : {}),
+        ...(message.attachments?.length ? { attachments: message.attachments.map(({ file, previewUrl, ...rest }) => rest) } : {}),
+        ...(message.mediaParts?.length ? { mediaParts: message.mediaParts } : {}),
       }));
     const meta: ConversationMeta = {
       id: activeConvId,
@@ -3345,10 +3394,14 @@ export default function ScopePage() {
         {/* Chat Column */}
         <div className="flex-1 min-h-0 flex flex-col">
 
-      {/* Chat Area */}
-      <div className="flex-1 min-h-0 overflow-auto bg-[#FAFAF8]">
-        <div className="max-w-3xl mx-auto py-6 px-4 space-y-5">
-          {messages.length === 0 && (
+      {/* Chat Area — virtualized with Pretext height estimation */}
+      <div
+        ref={scrollParentRef}
+        className="flex-1 min-h-0 overflow-auto bg-[#FAFAF8]"
+        onScroll={handleChatScroll}
+      >
+        {messages.length === 0 ? (
+          <div className="max-w-3xl mx-auto py-6 px-4">
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <div
                 className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4 shadow-lg"
@@ -3370,25 +3423,49 @@ export default function ScopePage() {
                   : `Invoke the "${activeService.label}" service with a chat message.`}
               </div>
             </div>
-          )}
-          {messages.map((msg, index) => (
-            <ChatBubble
-              key={msg.id}
-              msg={msg}
-              canRegenerate={!isStreaming && (msg.role === 'user' || findPreviousUserMessageIndex(messages, index) >= 0)}
-              canEdit={msg.role === 'user'}
-              onCopy={handleCopyMessage}
-              onCopyMarkdown={handleCopyMessageMarkdown}
-              onCopyPlainText={handleCopyMessagePlainText}
-              onRegenerate={() => handleRegenerate(index)}
-              onEdit={() => handleEditMessage(index)}
-              onDelete={() => { void handleDeleteMessage(index); }}
-              onApprove={handleToolApproval}
-              onResumeHumanInput={handleResumeHumanInput}
-            />
-          ))}
-          <div ref={scrollRef} />
-        </div>
+          </div>
+        ) : (
+          <div
+            style={{ height: chatVirtualizer.getTotalSize() + 48, position: 'relative' }}
+          >
+            <div className="max-w-3xl mx-auto px-4">
+              {chatVirtualizer.getVirtualItems().map((virtualRow) => {
+                const msg = messages[virtualRow.index];
+                const index = virtualRow.index;
+                return (
+                  <div
+                    key={msg.id}
+                    data-index={virtualRow.index}
+                    ref={chatVirtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start + 24}px)`,
+                    }}
+                  >
+                    <div className="pb-5 max-w-3xl mx-auto px-4">
+                      <ChatBubble
+                        msg={msg}
+                        canRegenerate={!isStreaming && (msg.role === 'user' || findPreviousUserMessageIndex(messages, index) >= 0)}
+                        canEdit={msg.role === 'user'}
+                        onCopy={handleCopyMessage}
+                        onCopyMarkdown={handleCopyMessageMarkdown}
+                        onCopyPlainText={handleCopyMessagePlainText}
+                        onRegenerate={() => handleRegenerate(index)}
+                        onEdit={() => handleEditMessage(index)}
+                        onDelete={() => { void handleDeleteMessage(index); }}
+                        onApprove={handleToolApproval}
+                        onResumeHumanInput={handleResumeHumanInput}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Debug Panel (collapsible) */}

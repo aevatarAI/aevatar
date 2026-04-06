@@ -812,6 +812,7 @@ public sealed class ChatRuntime
 
         if (string.IsNullOrEmpty(chunk.DeltaContent) &&
             string.IsNullOrEmpty(chunk.DeltaReasoningContent) &&
+            chunk.DeltaContentPart == null &&
             normalizedToolCall == null &&
             !chunk.IsLast &&
             chunk.Usage == null)
@@ -822,6 +823,7 @@ public sealed class ChatRuntime
         return new LLMStreamChunk
         {
             DeltaContent = chunk.DeltaContent,
+            DeltaContentPart = chunk.DeltaContentPart,
             DeltaReasoningContent = chunk.DeltaReasoningContent,
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,

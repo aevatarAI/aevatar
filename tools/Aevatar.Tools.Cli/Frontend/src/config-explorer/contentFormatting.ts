@@ -1,5 +1,22 @@
 const SCRIPT_PACKAGE_FORMAT = 'aevatar.scripting.package.v1';
 
+export type ExplorerAttachment = {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  storageKey: string;
+};
+
+export type ExplorerMediaPart = {
+  type: 'text' | 'image' | 'audio' | 'video';
+  text?: string;
+  dataBase64?: string;
+  mediaType?: string;
+  uri?: string;
+  name?: string;
+};
+
 export type ExplorerChatMessage = {
   id: string;
   role: string;
@@ -8,6 +25,8 @@ export type ExplorerChatMessage = {
   status: string;
   error?: string;
   thinking?: string;
+  attachments?: ExplorerAttachment[];
+  mediaParts?: ExplorerMediaPart[];
 };
 
 export type ExplorerScriptFile = {
@@ -134,6 +153,34 @@ function normalizeChatMessage(value: unknown): ExplorerChatMessage | null {
     return null;
   }
 
+  const rawAttachments = readValue(value, ['attachments', 'Attachments']);
+  const attachments = Array.isArray(rawAttachments)
+    ? rawAttachments
+        .filter(isRecord)
+        .map(a => ({
+          id: readString(a, ['id', 'Id']) ?? '',
+          name: readString(a, ['name', 'Name']) ?? '',
+          mediaType: readString(a, ['mediaType', 'MediaType']) ?? 'application/octet-stream',
+          size: readNumber(a, ['size', 'Size']),
+          storageKey: readString(a, ['storageKey', 'StorageKey']) ?? '',
+        }))
+        .filter(a => a.storageKey)
+    : undefined;
+
+  const rawMediaParts = readValue(value, ['mediaParts', 'MediaParts']);
+  const mediaParts = Array.isArray(rawMediaParts)
+    ? rawMediaParts
+        .filter(isRecord)
+        .map(p => ({
+          type: (readString(p, ['type', 'Type']) ?? 'text') as ExplorerMediaPart['type'],
+          text: readString(p, ['text', 'Text']) ?? undefined,
+          dataBase64: readString(p, ['dataBase64', 'DataBase64']) ?? undefined,
+          mediaType: readString(p, ['mediaType', 'MediaType']) ?? undefined,
+          uri: readString(p, ['uri', 'Uri']) ?? undefined,
+          name: readString(p, ['name', 'Name']) ?? undefined,
+        }))
+    : undefined;
+
   return {
     id: readString(value, ['id', 'Id']) ?? '',
     role,
@@ -142,6 +189,8 @@ function normalizeChatMessage(value: unknown): ExplorerChatMessage | null {
     status: readString(value, ['status', 'Status']) ?? 'complete',
     error: readString(value, ['error', 'Error']) ?? undefined,
     thinking: readString(value, ['thinking', 'Thinking']) ?? undefined,
+    ...(attachments?.length ? { attachments } : {}),
+    ...(mediaParts?.length ? { mediaParts } : {}),
   };
 }
 

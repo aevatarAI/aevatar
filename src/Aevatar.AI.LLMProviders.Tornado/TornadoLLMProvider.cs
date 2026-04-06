@@ -117,11 +117,21 @@ public sealed class TornadoLLMProvider : ILLMProvider
 
     private LlmTornado.Chat.ChatRequest MapRequest(LLMRequest request)
     {
-        var requestedModalities = request.GetRequestedInputModalities();
-        if (requestedModalities.Any(modality => modality is not (ContentPartKind.Unspecified or ContentPartKind.Text)))
+        // Graceful multimodal fallback: strip non-text content parts instead of throwing.
+        var hasNonText = request.Messages.Any(m =>
+            m.ContentParts?.Any(p => p.Kind is not (ContentPartKind.Unspecified or ContentPartKind.Text)) == true);
+        if (hasNonText)
         {
-            throw new NotSupportedException(
-                $"Tornado provider '{Name}' only supports text input. Requested: {string.Join(", ", requestedModalities)}");
+            request = new LLMRequest
+            {
+                Messages = request.Messages.Select(StripNonTextContentParts).ToList(),
+                RequestId = request.RequestId,
+                Metadata = request.Metadata,
+                Tools = request.Tools,
+                Model = request.Model,
+                Temperature = request.Temperature,
+                MaxTokens = request.MaxTokens,
+            };
         }
 
         var messages = request.Messages.Select(m => new TornadoChatMessage(
@@ -243,6 +253,43 @@ public sealed class TornadoLLMProvider : ILLMProvider
             Id = toolCall.Id ?? string.Empty,
             Name = toolCall.FunctionCall?.Name ?? string.Empty,
             ArgumentsJson = toolCall.FunctionCall?.Arguments ?? string.Empty,
+        };
+    }
+
+    private static Aevatar.AI.Abstractions.LLMProviders.ChatMessage StripNonTextContentParts(
+        Aevatar.AI.Abstractions.LLMProviders.ChatMessage m)
+    {
+        if (m.ContentParts is not { Count: > 0 })
+            return m;
+
+        var textParts = m.ContentParts
+            .Where(p => p.Kind is ContentPartKind.Text or ContentPartKind.Unspecified)
+            .ToList();
+        var strippedKinds = m.ContentParts
+            .Where(p => p.Kind is not (ContentPartKind.Text or ContentPartKind.Unspecified))
+            .Select(p => p.Kind.ToString().ToLowerInvariant())
+            .Distinct()
+            .ToList();
+
+        if (strippedKinds.Count > 0)
+            textParts.Add(ContentPart.TextPart(
+                $"[Note: {string.Join(", ", strippedKinds)} content was attached but this model only supports text]"));
+
+        // Tornado's MapRequest reads m.Content, so materialize all text parts into Content.
+        var mergedText = string.Join("\n", textParts
+            .Where(p => !string.IsNullOrWhiteSpace(p.Text))
+            .Select(p => p.Text));
+        var fallbackContent = !string.IsNullOrWhiteSpace(mergedText) ? mergedText
+            : !string.IsNullOrWhiteSpace(m.Content) ? m.Content
+            : "";
+
+        return new Aevatar.AI.Abstractions.LLMProviders.ChatMessage
+        {
+            Role = m.Role,
+            Content = fallbackContent,
+            ContentParts = null, // Tornado doesn't use ContentParts
+            ToolCallId = m.ToolCallId,
+            ToolCalls = m.ToolCalls,
         };
     }
 }

@@ -517,6 +517,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
+            var chatInputParts = MapInputParts(request.InputParts);
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: request.Prompt?.Trim() ?? string.Empty,
                 WorkflowName: null,
@@ -531,6 +532,7 @@ public static class ScopeServiceEndpoints
                 new ChatInput
                 {
                     Prompt = chatRequest.Prompt,
+                    InputParts = chatInputParts,
                     WorkflowYamls = chatRequest.WorkflowYamls,
                     SessionId = chatRequest.SessionId,
                     ScopeId = scopeId,
@@ -888,6 +890,7 @@ public static class ScopeServiceEndpoints
                         new ChatInput
                         {
                             Prompt = normalizedPrompt,
+                            InputParts = MapInputParts(request.InputParts),
                             AgentId = target.Service.PrimaryActorId,
                             SessionId = request.SessionId,
                             ScopeId = scopeId,
@@ -1924,6 +1927,25 @@ public static class ScopeServiceEndpoints
         {
             target[key] = value;
         }
+    }
+
+    private static IReadOnlyList<ChatInputContentPart>? MapInputParts(
+        IReadOnlyList<StreamContentPartHttpRequest>? parts)
+    {
+        if (parts is not { Count: > 0 })
+            return null;
+
+        return parts
+            .Where(p => p != null)
+            .Select(p => new ChatInputContentPart
+            {
+                Type = p.Type,
+                Text = p.Text,
+                DataBase64 = p.DataBase64,
+                MediaType = p.MediaType,
+                Uri = p.Uri,
+                Name = p.Name,
+            }).ToList();
     }
 
     private static bool IsRunBoundToScopeService(
