@@ -223,8 +223,15 @@ wait_elasticsearch_health() {
   local try=0
 
   while (( try < attempts )); do
+    local health_payload
     local status
-    status="$(curl --max-time 2 -s "${endpoint}/_cluster/health" | rg -o "\"status\":\"[^\"]+\"" || true)"
+    health_payload="$(curl --max-time 2 -s "${endpoint}/_cluster/health" || true)"
+    if command -v rg >/dev/null 2>&1; then
+      status="$(printf '%s' "${health_payload}" | rg -o "\"status\":\"[^\"]+\"" || true)"
+    else
+      status="$(printf '%s' "${health_payload}" | grep -E -o "\"status\":\"[^\"]+\"" || true)"
+    fi
+
     if [[ "${status}" == "\"status\":\"green\"" || "${status}" == "\"status\":\"yellow\"" ]]; then
       echo "Elasticsearch is ready: ${status}"
       return 0
