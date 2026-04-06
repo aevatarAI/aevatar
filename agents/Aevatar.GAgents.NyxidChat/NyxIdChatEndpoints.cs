@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -665,6 +666,7 @@ public static class NyxIdChatEndpoints
         [FromServices] NyxIdChatActorStore actorStore,
         [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
+        [FromServices] IConfiguration configuration,
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.NyxId.Chat.Relay");
@@ -825,7 +827,7 @@ public static class NyxIdChatEndpoints
                     conversationId, errorMessage);
 
                 // Surface config + error details in reply for debugging
-                var configSummary = BuildConfigDiagnostic(chatRequest.Metadata);
+                var configSummary = BuildConfigDiagnostic(chatRequest.Metadata, configuration);
                 replyText = ClassifyError(errorMessage, configSummary);
             }
             else if (string.IsNullOrWhiteSpace(replyText))
@@ -877,14 +879,22 @@ public static class NyxIdChatEndpoints
         return friendly;
     }
 
-    private static string BuildConfigDiagnostic(Google.Protobuf.Collections.MapField<string, string> metadata)
+    private static string BuildConfigDiagnostic(
+        Google.Protobuf.Collections.MapField<string, string> metadata,
+        IConfiguration configuration)
     {
-        var model = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : "<server-default>";
+        var modelOverride = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : null;
+        var serverDefaultModel = configuration["Aevatar:NyxId:DefaultModel"] ?? "(fallback to OpenAIModel option)";
         var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r) && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
         var hasToken = metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdAccessToken);
         var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
+        var hasAuth = metadata.TryGetValue("scope_id", out _); // just for structure
 
-        return $"Model: {model}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}";
+        var modelDisplay = !string.IsNullOrWhiteSpace(modelOverride)
+            ? $"{modelOverride} (from config.json)"
+            : $"server-default={serverDefaultModel}";
+
+        return $"Model: {modelDisplay}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}";
     }
 
     private static string Truncate(string value, int maxLength) =>
