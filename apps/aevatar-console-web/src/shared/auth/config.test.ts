@@ -44,17 +44,19 @@ describe('NyxID runtime config', () => {
     });
   });
 
-  it('falls back to defaults when env values are the string undefined', () => {
+  it('disables NyxID auth when required env values are missing', () => {
     process.env.NYXID_BASE_URL = 'undefined';
+    process.env.NYXID_CLIENT_ID = 'undefined';
     process.env.NYXID_REDIRECT_URI = 'undefined';
 
     expect(getNyxIDRuntimeConfig()).toEqual({
-      enabled: true,
-      baseUrl: 'https://nyx.chrono-ai.fun',
-      clientId: 'client-1',
+      enabled: false,
+      baseUrl: '',
+      clientId: '',
       redirectUri: `${window.location.origin}/auth/callback`,
       scope: 'openid profile email',
-      configurationError: undefined,
+      configurationError:
+        'NYXID_CLIENT_ID must be configured to enable NyxID login.',
     });
   });
 

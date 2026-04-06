@@ -254,10 +254,55 @@ public sealed class WorkflowApplicationRegistrationAndExecutionTests
         request.Prompt.Should().Be("hello");
         request.SessionId.Should().Be("session-42");
         request.ScopeId.Should().Be("u-1001");
-        request.Metadata[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
-        request.Metadata["source"].Should().Be("headers");
-        request.Metadata.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
-        request.Metadata.Should().NotContainKey("scope_id");
+        request.Headers[WorkflowRunCommandMetadataKeys.ChannelId].Should().Be("slack#request");
+        request.Headers["source"].Should().Be("headers");
+        request.Headers.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        request.Headers.Should().NotContainKey("scope_id");
+    }
+
+    [Fact]
+    public void EnvelopeFactory_ShouldCarryInputParts_AlongsideTypedScopeId()
+    {
+        var services = new ServiceCollection();
+        services.AddWorkflowApplication();
+        using var provider = services.BuildServiceProvider();
+        var factory = provider.GetRequiredService<ICommandEnvelopeFactory<WorkflowChatRunRequest>>();
+        var command = new WorkflowChatRunRequest(
+            "describe this",
+            null,
+            "actor-1",
+            InputParts:
+            [
+                new WorkflowChatInputPart
+                {
+                    Kind = WorkflowChatInputPartKind.Text,
+                    Text = "describe this",
+                },
+                new WorkflowChatInputPart
+                {
+                    Kind = WorkflowChatInputPartKind.Image,
+                    Uri = "https://example.com/cat.png",
+                    MediaType = "image/png",
+                    Name = "cat",
+                },
+            ],
+            ScopeId: "scope-7");
+
+        var envelope = factory.CreateEnvelope(command, new CommandContext(
+            "actor-1",
+            "cmd-1",
+            "corr-1",
+            new Dictionary<string, string>()));
+        var request = envelope.Payload.Unpack<ChatRequestEvent>();
+
+        request.ScopeId.Should().Be("scope-7");
+        request.InputParts.Should().HaveCount(2);
+        request.InputParts[0].Kind.Should().Be(ChatContentPartKind.Text);
+        request.InputParts[0].Text.Should().Be("describe this");
+        request.InputParts[1].Kind.Should().Be(ChatContentPartKind.Image);
+        request.InputParts[1].Uri.Should().Be("https://example.com/cat.png");
+        request.InputParts[1].MediaType.Should().Be("image/png");
+        request.InputParts[1].Name.Should().Be("cat");
     }
 
     [Fact]

@@ -68,6 +68,31 @@ internal sealed class NyxIdChatSseWriter
     public ValueTask WriteRunErrorAsync(string message, CancellationToken ct) =>
         WriteFrameAsync(new { type = "RUN_ERROR", runError = new { message } }, ct);
 
+    public ValueTask WriteMediaContentAsync(Aevatar.AI.Abstractions.MediaContentEvent evt, CancellationToken ct)
+    {
+        if (evt.Part == null) return ValueTask.CompletedTask;
+        return WriteFrameAsync(new
+        {
+            type = "MEDIA_CONTENT",
+            mediaContent = new
+            {
+                kind = evt.Part?.Kind switch
+                {
+                    Aevatar.AI.Abstractions.ChatContentPartKind.Image => "image",
+                    Aevatar.AI.Abstractions.ChatContentPartKind.Audio => "audio",
+                    Aevatar.AI.Abstractions.ChatContentPartKind.Video => "video",
+                    Aevatar.AI.Abstractions.ChatContentPartKind.Text => "text",
+                    _ => "unknown",
+                },
+                dataBase64 = string.IsNullOrEmpty(evt.Part?.DataBase64) ? null : evt.Part.DataBase64,
+                mediaType = string.IsNullOrEmpty(evt.Part?.MediaType) ? null : evt.Part.MediaType,
+                uri = string.IsNullOrEmpty(evt.Part?.Uri) ? null : evt.Part.Uri,
+                name = string.IsNullOrEmpty(evt.Part?.Name) ? null : evt.Part.Name,
+                text = string.IsNullOrEmpty(evt.Part?.Text) ? null : evt.Part.Text,
+            }
+        }, ct);
+    }
+
     public ValueTask WriteToolApprovalRequestAsync(
         string requestId, string toolName, string toolCallId,
         string argumentsJson, bool isDestructive, int timeoutSeconds,

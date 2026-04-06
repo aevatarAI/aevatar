@@ -43,7 +43,7 @@ public sealed class AevatarAIFeatureOptions
     public string? ApiKey { get; set; }
     public NyxIdLlmEndpointSpec? NyxIdLlmEndpoint { get; set; }
     public string DefaultProvider { get; set; } = "openai";
-    public string OpenAIModel { get; set; } = "gpt-4o-mini";
+    public string OpenAIModel { get; set; } = "gpt-5.4";
     public string DeepSeekModel { get; set; } = "deepseek-chat";
     public List<string> SkillDirectories { get; } = [];
     public bool EnableServiceInvokeTools { get; set; }

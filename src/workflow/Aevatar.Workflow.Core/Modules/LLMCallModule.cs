@@ -352,7 +352,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
 
     private static void CopyParametersToChatMetadata(
         MapField<string, string> parameters,
-        MapField<string, string> metadata)
+        MapField<string, string> headers)
     {
         foreach (var (key, value) in parameters)
         {
@@ -364,7 +364,7 @@ public sealed class LLMCallModule : IEventModule<IWorkflowExecutionContext>
                 continue;
             }
 
-            metadata[key.Trim()] = value.Trim();
+            headers[key.Trim()] = value.Trim();
         }
     }
 

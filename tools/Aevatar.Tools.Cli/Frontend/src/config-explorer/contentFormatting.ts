@@ -1,5 +1,22 @@
 const SCRIPT_PACKAGE_FORMAT = 'aevatar.scripting.package.v1';
 
+export type ExplorerAttachment = {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  storageKey: string;
+};
+
+export type ExplorerMediaPart = {
+  type: 'text' | 'image' | 'audio' | 'video';
+  text?: string;
+  dataBase64?: string;
+  mediaType?: string;
+  uri?: string;
+  name?: string;
+};
+
 export type ExplorerChatMessage = {
   id: string;
   role: string;
@@ -8,6 +25,8 @@ export type ExplorerChatMessage = {
   status: string;
   error?: string;
   thinking?: string;
+  attachments?: ExplorerAttachment[];
+  mediaParts?: ExplorerMediaPart[];
 };
 
 export type ExplorerScriptFile = {
@@ -22,6 +41,8 @@ export type ExplorerScriptPackage = {
   csharpSources: ExplorerScriptFile[];
   protoFiles: ExplorerScriptFile[];
 };
+
+export type MediaFileKind = 'image' | 'audio' | 'video' | 'pdf' | 'markdown';
 
 export type ExplorerContentModel =
   | {
@@ -132,6 +153,34 @@ function normalizeChatMessage(value: unknown): ExplorerChatMessage | null {
     return null;
   }
 
+  const rawAttachments = readValue(value, ['attachments', 'Attachments']);
+  const attachments = Array.isArray(rawAttachments)
+    ? rawAttachments
+        .filter(isRecord)
+        .map(a => ({
+          id: readString(a, ['id', 'Id']) ?? '',
+          name: readString(a, ['name', 'Name']) ?? '',
+          mediaType: readString(a, ['mediaType', 'MediaType']) ?? 'application/octet-stream',
+          size: readNumber(a, ['size', 'Size']),
+          storageKey: readString(a, ['storageKey', 'StorageKey']) ?? '',
+        }))
+        .filter(a => a.storageKey)
+    : undefined;
+
+  const rawMediaParts = readValue(value, ['mediaParts', 'MediaParts']);
+  const mediaParts = Array.isArray(rawMediaParts)
+    ? rawMediaParts
+        .filter(isRecord)
+        .map(p => ({
+          type: (readString(p, ['type', 'Type']) ?? 'text') as ExplorerMediaPart['type'],
+          text: readString(p, ['text', 'Text']) ?? undefined,
+          dataBase64: readString(p, ['dataBase64', 'DataBase64']) ?? undefined,
+          mediaType: readString(p, ['mediaType', 'MediaType']) ?? undefined,
+          uri: readString(p, ['uri', 'Uri']) ?? undefined,
+          name: readString(p, ['name', 'Name']) ?? undefined,
+        }))
+    : undefined;
+
   return {
     id: readString(value, ['id', 'Id']) ?? '',
     role,
@@ -140,6 +189,8 @@ function normalizeChatMessage(value: unknown): ExplorerChatMessage | null {
     status: readString(value, ['status', 'Status']) ?? 'complete',
     error: readString(value, ['error', 'Error']) ?? undefined,
     thinking: readString(value, ['thinking', 'Thinking']) ?? undefined,
+    ...(attachments?.length ? { attachments } : {}),
+    ...(mediaParts?.length ? { mediaParts } : {}),
   };
 }
 
@@ -241,4 +292,39 @@ function readNumber(source: Record<string, unknown>, keys: string[]): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/* ─── Media file detection ─── */
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif']);
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'opus', 'webm']);
+const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'avi', 'mkv', 'ogv', 'm4v']);
+const PDF_EXTENSIONS = new Set(['pdf']);
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx']);
+
+export function detectMediaKind(fileKey: string): MediaFileKind | null {
+  const ext = fileKey.split('.').pop()?.toLowerCase();
+  if (!ext) return null;
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video';
+  if (PDF_EXTENSIONS.has(ext)) return 'pdf';
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown';
+  return null;
+}
+
+const MIME_MAP: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac',
+  aac: 'audio/aac', m4a: 'audio/mp4', wma: 'audio/x-ms-wma', opus: 'audio/opus',
+  mp4: 'video/mp4', mov: 'video/quicktime', avi: 'video/x-msvideo', mkv: 'video/x-matroska',
+  ogv: 'video/ogg', m4v: 'video/mp4',
+  pdf: 'application/pdf',
+  md: 'text/markdown', markdown: 'text/markdown', mdx: 'text/markdown',
+};
+
+export function getMimeType(fileKey: string): string {
+  const ext = fileKey.split('.').pop()?.toLowerCase() ?? '';
+  return MIME_MAP[ext] ?? 'application/octet-stream';
 }

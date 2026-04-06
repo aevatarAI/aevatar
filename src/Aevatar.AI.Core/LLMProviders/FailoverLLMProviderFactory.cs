@@ -172,6 +172,7 @@ public sealed class FailoverLLMProvider : ILLMProvider
     private readonly ILogger _logger;
 
     public string Name { get; }
+    public LLMProviderCapabilities Capabilities => LLMProviderCapabilities.Merge(_primary?.Capabilities, _fallback?.Capabilities);
 
     public FailoverLLMProvider(
         string name,
@@ -189,23 +190,26 @@ public sealed class FailoverLLMProvider : ILLMProvider
 
     public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
     {
-        if (_primary == null)
-            return await RequireFallback().ChatAsync(request, ct);
+        var primary = ResolveCompatiblePrimary(request);
+        var fallback = ResolveCompatibleFallback(request);
 
-        if (_fallback == null)
-            return await _primary.ChatAsync(request, ct);
+        if (primary == null)
+            return await RequireFallback(fallback).ChatAsync(request, ct);
+
+        if (fallback == null)
+            return await primary.ChatAsync(request, ct);
 
         try
         {
-            var response = await _primary.ChatAsync(request, ct);
+            var response = await primary.ChatAsync(request, ct);
             if (HasUsableOutput(response))
                 return response;
 
             _logger.LogWarning(
                 "Failover provider {Name}: primary provider {Primary} returned empty response, switching to fallback {Fallback}.",
                 Name,
-                _primary.Name,
-                _fallback.Name);
+                primary.Name,
+                fallback.Name);
         }
         catch (Exception ex) when (CanFailover(ex, ct))
         {
@@ -213,27 +217,30 @@ public sealed class FailoverLLMProvider : ILLMProvider
                 ex,
                 "Failover provider {Name}: primary provider {Primary} failed, switching to fallback {Fallback}.",
                 Name,
-                _primary.Name,
-                _fallback.Name);
+                primary.Name,
+                fallback.Name);
         }
 
-        return await _fallback.ChatAsync(request, ct);
+        return await fallback.ChatAsync(request, ct);
     }
 
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        if (_primary == null)
+        var primary = ResolveCompatiblePrimary(request);
+        var fallback = ResolveCompatibleFallback(request);
+
+        if (primary == null)
         {
-            await foreach (var chunk in RequireFallback().ChatStreamAsync(request, ct))
+            await foreach (var chunk in RequireFallback(fallback).ChatStreamAsync(request, ct))
                 yield return chunk;
             yield break;
         }
 
-        if (_fallback == null)
+        if (fallback == null)
         {
-            await foreach (var chunk in _primary.ChatStreamAsync(request, ct))
+            await foreach (var chunk in primary.ChatStreamAsync(request, ct))
                 yield return chunk;
             yield break;
         }
@@ -242,7 +249,7 @@ public sealed class FailoverLLMProvider : ILLMProvider
         var shouldFailover = false;
         var preludeChunks = new List<LLMStreamChunk>();
 
-        await using var primaryEnumerator = _primary.ChatStreamAsync(request, ct).GetAsyncEnumerator(ct);
+        await using var primaryEnumerator = primary.ChatStreamAsync(request, ct).GetAsyncEnumerator(ct);
         while (true)
         {
             LLMStreamChunk chunk;
@@ -262,7 +269,7 @@ public sealed class FailoverLLMProvider : ILLMProvider
                     ex,
                     "Failover provider {Name}: primary stream failed before meaningful output, switching to fallback {Fallback}.",
                     Name,
-                    _fallback.Name);
+                    fallback.Name);
                 shouldFailover = true;
                 break;
             }
@@ -294,15 +301,52 @@ public sealed class FailoverLLMProvider : ILLMProvider
             _logger.LogWarning(
                 "Failover provider {Name}: primary stream completed without meaningful content/tool chunks, switching to fallback {Fallback}.",
                 Name,
-                _fallback.Name);
+                fallback.Name);
         }
 
-        await foreach (var chunk in _fallback.ChatStreamAsync(request, ct))
+        await foreach (var chunk in fallback.ChatStreamAsync(request, ct))
             yield return chunk;
     }
 
-    private ILLMProvider RequireFallback() =>
-        _fallback ?? throw new InvalidOperationException("Fallback LLM provider is unavailable.");
+    private ILLMProvider RequireFallback(ILLMProvider? fallback) =>
+        fallback ?? throw BuildNoCompatibleProviderException();
+
+    private ILLMProvider? ResolveCompatiblePrimary(LLMRequest request)
+    {
+        if (_primary == null)
+            return null;
+
+        if (_primary.Capabilities.SupportsRequest(request))
+            return _primary;
+
+        _logger.LogWarning(
+            "Failover provider {Name}: primary provider {Primary} does not support requested modalities, skipping.",
+            Name,
+            _primary.Name);
+        return null;
+    }
+
+    private ILLMProvider? ResolveCompatibleFallback(LLMRequest request)
+    {
+        if (_fallback == null)
+            return null;
+
+        if (_fallback.Capabilities.SupportsRequest(request))
+            return _fallback;
+
+        _logger.LogWarning(
+            "Failover provider {Name}: fallback provider {Fallback} does not support requested modalities, skipping.",
+            Name,
+            _fallback.Name);
+        return null;
+    }
+
+    private InvalidOperationException BuildNoCompatibleProviderException()
+    {
+        var requested = string.Join(", ", Capabilities.SupportedInputModalities);
+        return new InvalidOperationException(
+            $"No compatible LLM provider is available for failover provider '{Name}'. Advertised modalities: {requested}.");
+    }
 
     private static bool HasUsableOutput(LLMResponse? response)
     {
@@ -310,11 +354,13 @@ public sealed class FailoverLLMProvider : ILLMProvider
             return false;
 
         return !string.IsNullOrWhiteSpace(response.Content)
+               || response.ContentParts is { Count: > 0 }
                || response.ToolCalls is { Count: > 0 };
     }
 
     private static bool IsMeaningfulChunk(LLMStreamChunk chunk) =>
         !string.IsNullOrEmpty(chunk.DeltaContent)
+        || chunk.DeltaContentPart != null
         || chunk.DeltaToolCall != null;
 
     private static bool CanFailover(Exception ex, CancellationToken ct) =>

@@ -615,7 +615,7 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
     {
         public static readonly IReadOnlyList<ProviderProfile> All =
         [
-            new("openai", "OpenAI", "tier1", "GPT-4o, o1, o3 series", "https://api.openai.com", "gpt-4o-mini", true),
+            new("openai", "OpenAI", "tier1", "GPT-4o, o1, o3 series", "https://api.openai.com", "gpt-5.4", true),
             new("anthropic", "Anthropic", "tier1", "Claude 3.5 Sonnet, Opus, Haiku", "https://api.anthropic.com", "claude-sonnet-4-20250514", true),
             new("google", "Google", "tier1", "Gemini 2.0, 1.5 Pro/Flash", "https://generativelanguage.googleapis.com", "gemini-2.0-flash"),
             new("azure", "Azure OpenAI", "tier1", "Enterprise OpenAI (requires deployment)", string.Empty, string.Empty),
@@ -625,13 +625,13 @@ public sealed class FileAevatarSettingsStore : IAevatarSettingsStore
             new("xai", "xAI", "tier2", "Grok", "https://api.x.ai", "grok-2-latest"),
             new("cohere", "Cohere", "tier2", "Command R+, Embed, Rerank", "https://api.cohere.com", "command-r-plus"),
             new("perplexity", "Perplexity", "tier2", "Sonar Pro", "https://api.perplexity.ai", "sonar-pro"),
-            new("openrouter", "OpenRouter", "aggregator", "200+ models, unified API", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini", true),
+            new("openrouter", "OpenRouter", "aggregator", "200+ models, unified API", "https://openrouter.ai/api/v1", "openai/gpt-5.4", true),
             new("deepinfra", "DeepInfra", "aggregator", "Open-source models, GPU inference", "https://api.deepinfra.com/v1/openai", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
             new("together", "Together AI", "aggregator", "Open-source models at scale", "https://api.together.xyz", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
             new("alibaba", "Alibaba (Qwen)", "regional", "Qwen via DashScope", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
             new("moonshot", "Moonshot AI", "regional", "Kimi series", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
             new("zhipu", "Zhipu AI", "regional", "GLM-4 series", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
-            new("nyxid", "NyxID Gateway", "identity", "Use LLM providers connected in NyxID through its OpenAI-compatible gateway", string.Empty, "gpt-4o-mini"),
+            new("nyxid", "NyxID Gateway", "identity", "Use LLM providers connected in NyxID through its OpenAI-compatible gateway", string.Empty, "gpt-5.4"),
             new("ollama", "Ollama", "local", "Local models", "http://localhost:11434/v1", "llama3.2"),
             new("lmstudio", "LM Studio", "local", "Local OpenAI-compatible server", "http://localhost:1234/v1", string.Empty),
         ];

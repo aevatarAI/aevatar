@@ -54,10 +54,6 @@ Point-in-time design snapshots. Not authoritative — for context only.
 
 ## Audit Scorecard
 
-- [2026-03-27-feature-app-services.md](audit-scorecard/2026-03-27-feature-app-services.md)
-- [2026-03-31-feature-app-services-vs-dev.md](audit-scorecard/2026-03-31-feature-app-services-vs-dev.md)
-- [2026-04-02-feature-app-services-vs-dev-feature-list.md](audit-scorecard/2026-04-02-feature-app-services-vs-dev-feature-list.md)
-- [2026-04-02-feature-app-services-vs-dev-review-and-fixes.md](audit-scorecard/2026-04-02-feature-app-services-vs-dev-review-and-fixes.md)
 - [TEMPLATE.md](audit-scorecard/TEMPLATE.md)
 
 ## Templates

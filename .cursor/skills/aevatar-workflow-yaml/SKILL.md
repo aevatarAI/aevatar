@@ -25,7 +25,7 @@ roles:                          # optional - formal RoleGAgent config
     system_prompt: |            # optional
       You are a systems analyst.
     provider: openai            # optional
-    model: gpt-4o-mini          # optional
+    model: gpt-5.4          # optional
     temperature: 0.2            # optional
     max_tokens: 512             # optional
     max_tool_rounds: 4          # optional
@@ -160,7 +160,7 @@ roles:
     name: Planner
     system_prompt: "You plan robust workflows."
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-5.4
     temperature: 0.2
     max_tokens: 512
     max_tool_rounds: 4

@@ -133,6 +133,37 @@ public sealed class ChatWebSocketCoordinatorAndProtocolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ShouldSendCommandError_WhenInputPartsAreUnsupported()
+    {
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var service = new FakeCommandInteractionService();
+
+        await ChatWebSocketRunCoordinator.ExecuteAsync(
+            socket,
+            new ChatWebSocketCommandEnvelope(
+                "req-unsupported",
+                new ChatInput
+                {
+                    InputParts =
+                    [
+                        new ChatInputContentPart
+                        {
+                            Type = "foo",
+                        },
+                    ],
+                },
+                WebSocketMessageType.Text),
+            service,
+            ApiRequestScope.BeginHttp(),
+            CancellationToken.None);
+
+        socket.SentTexts.Should().ContainSingle();
+        socket.SentTexts[0].Should().Contain("\"type\":\"command.error\"");
+        socket.SentTexts[0].Should().Contain("PROMPT_REQUIRED");
+        service.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ReceiveAsync_ShouldAssembleTextChunks()
     {
         var socket = new FakeWebSocket(WebSocketState.Open);

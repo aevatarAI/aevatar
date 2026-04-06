@@ -578,10 +578,12 @@ export const scope = {
     endpointId: string = 'chat',
     headers?: Record<string, string>,
     actorId?: string,
+    inputParts?: Array<{ type: string; text?: string; dataBase64?: string; mediaType?: string; uri?: string; name?: string }>,
   ) => {
     const body: any = { prompt };
     if (headers && Object.keys(headers).length > 0) body.headers = headers;
     if (actorId) body.actorId = actorId;
+    if (inputParts && inputParts.length > 0) body.inputParts = inputParts;
     return streamSse(
       `/scopes/${enc(scopeId)}/services/${enc(serviceId)}/invoke/${enc(endpointId)}:stream`,
       body, onFrame ?? (() => {}), signal,
@@ -779,11 +781,30 @@ const encodeExplorerKey = (key: string) => key.split('/').map(segment => encodeU
 export const explorer = {
   getManifest: () => request<{ version: number; files: Array<{ key: string; type: string; name?: string; updatedAt?: string }> }>('/explorer/manifest'),
   getFile: (key: string) => requestText(`/explorer/files/${encodeExplorerKey(key)}`),
+  getFileUrl: (key: string) => `${BASE}/explorer/files/${encodeExplorerKey(key)}`,
+  getFileBlob: async (key: string): Promise<Blob> => {
+    const resp = await fetch(`${BASE}/explorer/files/${encodeExplorerKey(key)}`, {
+      headers: getAuthHeaders(),
+    });
+    if (!resp.ok) throw new Error(`Failed to fetch file: ${resp.status}`);
+    return resp.blob();
+  },
   putFile: (key: string, content: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/plain' },
     body: content,
   }),
+  uploadFile: async (key: string, file: File): Promise<{ key: string; size: number; contentType: string }> => {
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch(`${BASE}/explorer/upload/${encodeExplorerKey(key)}`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: form,
+    });
+    if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
+    return resp.json();
+  },
   deleteFile: (key: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
     method: 'DELETE',
   }),

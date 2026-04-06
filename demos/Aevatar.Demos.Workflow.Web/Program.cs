@@ -1643,7 +1643,7 @@ static (string Model, string? Endpoint) InferProviderDefaults(string? providerHi
     if (isDeepSeek)
         return (config["Models:DeepSeekModel"] ?? config["Models:DefaultModel"] ?? "deepseek-chat", "https://api.deepseek.com/v1");
 
-    return (config["Models:OpenAIModel"] ?? config["Models:DefaultModel"] ?? "gpt-4o-mini", null);
+    return (config["Models:OpenAIModel"] ?? config["Models:DefaultModel"] ?? "gpt-5.4", null);
 }
 
 sealed record PlaygroundWorkflowSaveRequest(string Yaml, string? Filename, bool Overwrite);

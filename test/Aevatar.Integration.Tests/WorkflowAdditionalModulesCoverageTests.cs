@@ -1737,7 +1737,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Sent.Should().ContainSingle();
         ctx.Sent[0].targetActorId.Should().Be("bridge:telegram:prod");
         var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        chatRequest.Metadata["chat_id"].Should().Be("10001");
+        chatRequest.Headers["chat_id"].Should().Be("10001");
         runtime.Created.Should().ContainSingle(x => x.actorId == "bridge:telegram:prod");
 
         await module.HandleAsync(
@@ -1781,7 +1781,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         ctx.Sent.Should().ContainSingle(x => x.targetActorId == "agent:evaluate");
         var evaluateChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        evaluateChat.Metadata["chat_id"].Should().Be("chat-eval");
+        evaluateChat.Headers["chat_id"].Should().Be("chat-eval");
         ctx.Published.Clear();
 
         await evaluate.HandleAsync(
@@ -1813,7 +1813,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         ctx.Sent.Should().Contain(x => x.targetActorId == "agent:reflect");
         var reflectChat = ctx.Sent.Last().evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        reflectChat.Metadata["chat_id"].Should().Be("chat-reflect");
+        reflectChat.Headers["chat_id"].Should().Be("chat-reflect");
         ctx.Published.Clear();
 
         await reflect.HandleAsync(

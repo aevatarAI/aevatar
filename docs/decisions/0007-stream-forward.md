@@ -1,3 +1,6 @@
+<<<<<<<< HEAD:docs/history/2026-03/STREAM_FORWARD_ARCHITECTURE.md
+# Aevatar Stream Forward 架构说明
+========
 ---
 title: "Aevatar Stream Forward 架构说明（2026-02-22）"
 status: active
@@ -5,22 +8,27 @@ owner: eanzhao
 ---
 
 # Aevatar Stream Forward 架构说明（2026-02-22）
+>>>>>>>> c20fc87ec173e49be645ea287f4bb54ecd975935:docs/decisions/0007-stream-forward.md
 
-> Historical note: this document predates the 2026-03-19 removal of `MassTransitAdapter`. Any `MassTransit` mode mentioned below is legacy background only; current active paths are `InMemory` and Orleans with `KafkaProvider`. Some source-file anchors below reference implementation files that have since been deleted with the old runtime path.
+> Last updated: 2026-04-03. Active runtime paths: `InMemory` (dev/test) and `Orleans` with `KafkaProvider` (production).
 
 ## 1. 目标与范围
 
 本文档定义 `Stream Forward` 能力的架构边界与状态存储语义，覆盖以下内容：
 
 1. `Forward` 状态模型与职责分层。
-2. InMemory / legacy MassTransit / Orleans 三种运行模式下的状态落点。
+2. InMemory / Orleans 两种运行模式下的状态落点。
 3. Forward 的写入、读取、转发与清理链路。
 4. 与架构门禁的一致性约束。
 
 不包含内容：
 
 1. 业务域事件建模（由 Domain/Application 文档负责）。
+<<<<<<<< HEAD:docs/history/2026-03/STREAM_FORWARD_ARCHITECTURE.md
+2. CQRS 读模型投影细节（由 `docs/architecture/CQRS_ARCHITECTURE.md` 负责）。
+========
 2. CQRS 读模型投影细节（由 `docs/canon/cqrs-projection.md` 负责）。
+>>>>>>>> c20fc87ec173e49be645ea287f4bb54ecd975935:docs/decisions/0007-stream-forward.md
 
 ## 2. 设计原则
 
