@@ -7,6 +7,7 @@ using Aevatar.AI.ToolProviders.ChronoStorage;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.GAgents.NyxidChat;
 using Aevatar.GAgents.ChatbotClassifier;
+using Aevatar.GAgents.ChannelRuntime;
 using Aevatar.GAgents.StreamingProxy;
 using Aevatar.Studio.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
@@ -39,6 +40,7 @@ builder.AddAevatarAuthentication();
 builder.Services.AddNyxIdChat();
 builder.Services.AddStreamingProxy();
 builder.Services.AddChatbotClassifier();
+builder.Services.AddChannelRuntime();
 builder.Services.AddNyxIdTools(o =>
 {
     o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
@@ -57,5 +59,6 @@ var app = builder.Build();
 app.UseAevatarDefaultHost();
 app.MapNyxIdChatEndpoints();
 app.MapStreamingProxyEndpoints();
+app.MapChannelCallbackEndpoints();
 
 app.Run();

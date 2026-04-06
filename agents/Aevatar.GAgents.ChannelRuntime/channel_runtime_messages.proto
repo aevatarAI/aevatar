@@ -1,0 +1,21 @@
+syntax = "proto3";
+package aevatar.gagents.channelruntime;
+option csharp_namespace = "Aevatar.GAgents.ChannelRuntime";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Persistent State ───
+
+message ChannelBotRegistrationEntry {
+  string id = 1;
+  string platform = 2;
+  string nyx_provider_slug = 3;
+  string nyx_user_token = 4;
+  string verification_token = 5;
+  string scope_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ChannelBotRegistrationStoreState {
+  repeated ChannelBotRegistrationEntry registrations = 1;
+}
