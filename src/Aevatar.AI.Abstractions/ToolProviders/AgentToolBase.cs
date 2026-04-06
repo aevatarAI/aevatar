@@ -62,7 +62,7 @@ public abstract class AgentToolBase<TParams> : IAgentTool where TParams : class
         }
         catch (JsonException ex)
         {
-            return Task.FromResult($$"""{"error":"Invalid parameters: {{ex.Message}}"}""");
+            return Task.FromResult(JsonSerializer.Serialize(new { error = $"Invalid parameters: {ex.Message}" }));
         }
 
         if (parameters is null)

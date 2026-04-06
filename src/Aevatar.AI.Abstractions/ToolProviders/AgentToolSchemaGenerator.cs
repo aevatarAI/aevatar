@@ -5,6 +5,7 @@
 // 使用 System.Text.Json.Schema.JsonSchemaExporter（.NET 9+）。
 // ─────────────────────────────────────────────────────────────
 
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -32,27 +33,32 @@ public static class AgentToolSchemaGenerator
         TreatNullObliviousAsNonNullable = true,
     };
 
+    private static readonly ConcurrentDictionary<Type, string> StringCache = new();
+    private static readonly ConcurrentDictionary<Type, JsonElement> ElementCache = new();
+
     /// <summary>从类型参数生成 JSON Schema 字符串。</summary>
     public static string GenerateSchemaString<TParams>() =>
         GenerateSchemaString(typeof(TParams));
 
-    /// <summary>从 Type 生成 JSON Schema 字符串。</summary>
-    public static string GenerateSchemaString(Type paramsType)
-    {
-        var node = GenerateSchemaNode(paramsType);
-        return node.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
-    }
+    /// <summary>从 Type 生成 JSON Schema 字符串（结果按类型缓存）。</summary>
+    public static string GenerateSchemaString(Type paramsType) =>
+        StringCache.GetOrAdd(paramsType, static type =>
+        {
+            var node = GenerateSchemaNode(type);
+            return node.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+        });
 
     /// <summary>从类型参数生成 JSON Schema JsonElement。</summary>
     public static JsonElement GenerateSchema<TParams>() =>
         GenerateSchema(typeof(TParams));
 
-    /// <summary>从 Type 生成 JSON Schema JsonElement。</summary>
-    public static JsonElement GenerateSchema(Type paramsType)
-    {
-        var node = GenerateSchemaNode(paramsType);
-        return JsonSerializer.Deserialize<JsonElement>(node.ToJsonString());
-    }
+    /// <summary>从 Type 生成 JSON Schema JsonElement（结果按类型缓存）。</summary>
+    public static JsonElement GenerateSchema(Type paramsType) =>
+        ElementCache.GetOrAdd(paramsType, static type =>
+        {
+            var node = GenerateSchemaNode(type);
+            return JsonSerializer.Deserialize<JsonElement>(node.ToJsonString());
+        });
 
     private static JsonNode GenerateSchemaNode(Type paramsType)
     {
