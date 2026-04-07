@@ -243,3 +243,4 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+- 架构审计, architecture drift, code health audit → invoke arch-audit
