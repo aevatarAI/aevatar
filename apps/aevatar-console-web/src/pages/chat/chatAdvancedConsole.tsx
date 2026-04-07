@@ -1,5 +1,5 @@
 import { AGUIEventType, CustomEventName } from "@aevatar-react-sdk/types";
-import { Alert, Space, Typography } from "antd";
+import { Alert, Empty, Space, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { authFetch } from "@/shared/auth/fetch";
@@ -7,7 +7,10 @@ import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import type { ScopeServiceRunAuditSnapshot } from "@/shared/models/runtime/scopeServices";
 import { history } from "@/shared/navigation/history";
 import {
   buildRuntimeExplorerHref,
@@ -181,6 +184,37 @@ function createResultPanel(
   );
 }
 
+function renderAuditPreviewCard(
+  title: string,
+  description: string,
+  stamp?: string | null,
+  keySuffix?: string
+): React.ReactElement {
+  return (
+    <div
+      key={`${title}-${stamp || "nostamp"}-${keySuffix || "item"}`}
+      style={{
+        border: "1px solid #e7e5e4",
+        borderRadius: 12,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: 12,
+      }}
+    >
+      <Typography.Text strong>{title}</Typography.Text>
+      <Typography.Text type="secondary">
+        {description || "No detail"}
+      </Typography.Text>
+      {stamp ? (
+        <Typography.Text type="secondary">
+          {formatDateTime(stamp)}
+        </Typography.Text>
+      ) : null}
+    </div>
+  );
+}
+
 function createObservedExecutionEvents(context: {
   actorId?: string;
   commandId?: string;
@@ -252,6 +286,10 @@ export function ChatAdvancedConsole({
   const [executeCommandId, setExecuteCommandId] = useState("");
   const [executeCorrelationId, setExecuteCorrelationId] = useState("");
   const [executeRunId, setExecuteRunId] = useState("");
+  const [executeAuditSnapshot, setExecuteAuditSnapshot] =
+    useState<ScopeServiceRunAuditSnapshot | null>(null);
+  const [executeAuditLoading, setExecuteAuditLoading] = useState(false);
+  const [executeAuditError, setExecuteAuditError] = useState("");
   const [executeLaunchContext, setExecuteLaunchContext] =
     useState<ExecuteLaunchContext | null>(null);
   const [executeStatus, setExecuteStatus] = useState<
@@ -437,6 +475,9 @@ export function ChatAdvancedConsole({
 
     setExecuteAssistantText("");
     setExecuteActorId("");
+    setExecuteAuditError("");
+    setExecuteAuditLoading(false);
+    setExecuteAuditSnapshot(null);
     setExecuteCommandId("");
     setExecuteCorrelationId("");
     setExecuteError("");
@@ -623,6 +664,36 @@ export function ChatAdvancedConsole({
       })
     );
   }, [executeActorId, executeLaunchContext, executeRunId, scopeId]);
+
+  const handleLoadAudit = useCallback(async () => {
+    if (!scopeId || !executeLaunchContext?.serviceId || !executeRunId) {
+      return;
+    }
+
+    setExecuteAuditLoading(true);
+    setExecuteAuditError("");
+    try {
+      const snapshot = await scopeRuntimeApi.getServiceRunAudit(
+        scopeId,
+        executeLaunchContext.serviceId,
+        executeRunId,
+        {
+          actorId: executeActorId || undefined,
+        }
+      );
+      setExecuteAuditSnapshot(snapshot);
+    } catch (error) {
+      setExecuteAuditSnapshot(null);
+      setExecuteAuditError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExecuteAuditLoading(false);
+    }
+  }, [executeActorId, executeLaunchContext?.serviceId, executeRunId, scopeId]);
+
+  const executeAuditTimeline = executeAuditSnapshot?.audit.timeline ?? [];
+  const executeAuditSteps = executeAuditSnapshot?.audit.steps ?? [];
+  const executeAuditReplies = executeAuditSnapshot?.audit.roleReplies ?? [];
+  const executeAuditSummary = executeAuditSnapshot?.audit.summary;
 
   const handleRawSubmit = useCallback(async () => {
     const normalizedPath = rawPath.trim();
@@ -959,6 +1030,21 @@ export function ChatAdvancedConsole({
                     >
                       Open Explorer
                     </button>
+                    <button
+                      disabled={!executeRunId || executeAuditLoading}
+                      onClick={() => void handleLoadAudit()}
+                      style={actionButtonStyle(
+                        "secondary",
+                        !executeRunId || executeAuditLoading
+                      )}
+                      type="button"
+                    >
+                      {executeAuditLoading
+                        ? "Loading Audit..."
+                        : executeAuditSnapshot
+                          ? "Refresh Audit"
+                          : "Load Audit"}
+                    </button>
                   </Space>
                   <div
                     style={{
@@ -986,6 +1072,168 @@ export function ChatAdvancedConsole({
                         {executeRunId || "Unavailable"}
                       </div>
                     </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {executeAuditError ? (
+                <Alert showIcon title={executeAuditError} type="error" />
+              ) : null}
+
+              {executeAuditSnapshot ? (
+                <div style={drawerSectionStyle}>
+                  <Typography.Text strong>Run Audit</Typography.Text>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    }}
+                  >
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Completion</Typography.Text>
+                      <Typography.Text strong>
+                        {executeAuditSnapshot.audit.completionStatus}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Duration</Typography.Text>
+                      <Typography.Text strong>
+                        {Math.round(executeAuditSnapshot.audit.durationMs)} ms
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Steps</Typography.Text>
+                      <Typography.Text strong>
+                        {executeAuditSummary?.completedSteps ?? 0}/
+                        {executeAuditSummary?.totalSteps ?? 0}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Role replies</Typography.Text>
+                      <Typography.Text strong>
+                        {executeAuditSummary?.roleReplyCount ?? 0}
+                      </Typography.Text>
+                    </div>
+                  </div>
+
+                  {executeAuditSnapshot.audit.input ? (
+                    createResultPanel(
+                      "Audit Input",
+                      executeAuditSnapshot.audit.input,
+                      () => handleCopy(executeAuditSnapshot.audit.input)
+                    )
+                  ) : null}
+
+                  {executeAuditSnapshot.audit.finalOutput ? (
+                    <Alert
+                      description={executeAuditSnapshot.audit.finalOutput}
+                      showIcon
+                      title="Final output"
+                      type="success"
+                    />
+                  ) : null}
+
+                  {executeAuditSnapshot.audit.finalError ? (
+                    <Alert
+                      description={executeAuditSnapshot.audit.finalError}
+                      showIcon
+                      title="Final error"
+                      type="error"
+                    />
+                  ) : null}
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 16,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                    }}
+                  >
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text strong>Timeline Highlights</Typography.Text>
+                      {executeAuditTimeline.length > 0 ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 10,
+                          }}
+                        >
+                          {executeAuditTimeline
+                            .slice(0, 8)
+                            .map((event, index) =>
+                              renderAuditPreviewCard(
+                                event.stage || event.eventType || "event",
+                                event.message || "No message",
+                                event.timestamp,
+                                String(index)
+                              )
+                            )}
+                        </div>
+                      ) : (
+                        <Empty
+                          description="No timeline events were captured."
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
+                      )}
+                    </div>
+
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text strong>Step Highlights</Typography.Text>
+                      {executeAuditSteps.length > 0 ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 10,
+                          }}
+                        >
+                          {executeAuditSteps.slice(0, 6).map((step) =>
+                            renderAuditPreviewCard(
+                              step.stepId,
+                              `${step.stepType || "step"} · ${
+                                step.targetRole || "unassigned"
+                              }`,
+                              step.completedAt || step.requestedAt,
+                              step.stepId
+                            )
+                          )}
+                        </div>
+                      ) : (
+                        <Empty
+                          description="No step audit records were captured."
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={drawerSectionStyle}>
+                    <Typography.Text strong>Reply Highlights</Typography.Text>
+                    {executeAuditReplies.length > 0 ? (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 10,
+                        }}
+                      >
+                        {executeAuditReplies.slice(0, 4).map((reply, index) =>
+                          renderAuditPreviewCard(
+                            reply.roleId || `reply-${index + 1}`,
+                            reply.content || "No content",
+                            reply.timestamp,
+                            String(index)
+                          )
+                        )}
+                      </div>
+                    ) : (
+                      <Empty
+                        description="No role replies were captured."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    )}
                   </div>
                 </div>
               ) : null}

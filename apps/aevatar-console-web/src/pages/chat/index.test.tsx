@@ -151,6 +151,110 @@ jest.mock("@/shared/api/scopesApi", () => ({
   },
 }));
 
+jest.mock("@/shared/api/scopeRuntimeApi", () => ({
+  scopeRuntimeApi: {
+    getServiceRunAudit: jest.fn(async () => ({
+      summary: {
+        actorId: "actor://support-command",
+        bindingUpdatedAt: "2026-04-01T09:00:00Z",
+        boundAt: "2026-04-01T09:00:00Z",
+        completedSteps: 3,
+        completionStatus: "completed",
+        definitionActorId: "definition://support",
+        deploymentId: "deploy-1",
+        lastError: "",
+        lastEventId: "evt-1",
+        lastOutput: "Structured help is ready.",
+        lastSuccess: true,
+        lastUpdatedAt: "2026-04-01T09:00:10Z",
+        revisionId: "rev-1",
+        roleReplyCount: 2,
+        runId: "run-execute-command",
+        scopeId: "scope-a",
+        serviceId: "support-service",
+        stateVersion: 7,
+        totalSteps: 3,
+        workflowName: "support_flow",
+      },
+      audit: {
+        commandId: "cmd-execute",
+        completionStatus: "completed",
+        createdAt: "2026-04-01T09:00:00Z",
+        durationMs: 8200,
+        endedAt: "2026-04-01T09:00:10Z",
+        finalError: "",
+        finalOutput: "Structured help is ready.",
+        input: "Need structured help.",
+        lastEventId: "evt-1",
+        projectionScope: "actor_shared",
+        reportVersion: "1.0",
+        roleReplies: [
+          {
+            content: "Reply one",
+            contentLength: 9,
+            roleId: "support",
+            sessionId: "session-1",
+            timestamp: "2026-04-01T09:00:05Z",
+          },
+        ],
+        rootActorId: "actor://support-command",
+        startedAt: "2026-04-01T09:00:02Z",
+        stateVersion: 7,
+        steps: [
+          {
+            assignedValue: "",
+            assignedVariable: "",
+            branchKey: "",
+            completedAt: "2026-04-01T09:00:07Z",
+            completionAnnotations: {},
+            durationMs: 3500,
+            error: "",
+            nextStepId: "",
+            outputPreview: "done",
+            requestParameters: {},
+            requestedAt: "2026-04-01T09:00:04Z",
+            requestedVariableName: "",
+            stepId: "assist_step",
+            stepType: "llm_call",
+            success: true,
+            suspensionPrompt: "",
+            suspensionTimeoutSeconds: null,
+            suspensionType: "",
+            targetRole: "support",
+            workerId: "worker-1",
+          },
+        ],
+        success: true,
+        summary: {
+          completedSteps: 3,
+          requestedSteps: 3,
+          roleReplyCount: 2,
+          stepTypeCounts: {
+            llm_call: 3,
+          },
+          totalSteps: 3,
+        },
+        timeline: [
+          {
+            agentId: "support",
+            data: {},
+            eventType: "requested",
+            message: "Asked support agent",
+            stage: "step_requested",
+            stepId: "assist_step",
+            stepType: "llm_call",
+            timestamp: "2026-04-01T09:00:04Z",
+          },
+        ],
+        topology: [],
+        topologySource: "runtime_snapshot",
+        updatedAt: "2026-04-01T09:00:10Z",
+        workflowName: "support_flow",
+      },
+    })),
+  },
+}));
+
 jest.mock("@/shared/api/nyxIdChatApi", () => ({
   nyxIdChatApi: {
     approveToolCall: jest.fn(async () => ({
@@ -175,6 +279,7 @@ jest.mock("./chatHistoryApi", () => ({
 }));
 
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { studioApi } from "@/shared/studio/api";
@@ -598,6 +703,54 @@ describe("ChatPage", () => {
     expect(query.get("runId")).toBe("run-execute-command");
     expect(query.get("scopeId")).toBe("scope-a");
     expect(query.get("serviceId")).toBe("support-service");
+  });
+
+  it("loads run audit details inside the advanced console", async () => {
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    await waitFor(() => {
+      expect(serviceSelector.textContent).toContain("Support service");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    fireEvent.change(await screen.findByLabelText("Advanced execute service"), {
+      target: { value: "support-service" },
+    });
+    fireEvent.change(await screen.findByLabelText("Advanced execute endpoint"), {
+      target: { value: "assist" },
+    });
+    fireEvent.change(await screen.findByLabelText("Advanced execute prompt"), {
+      target: { value: "Need structured help." },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await screen.findByText((content) =>
+      content.includes('"targetActorId": "actor://support-command"')
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Load Audit" }));
+
+    await waitFor(() => {
+      expect(scopeRuntimeApi.getServiceRunAudit).toHaveBeenCalledWith(
+        "scope-a",
+        "support-service",
+        "run-execute-command",
+        {
+          actorId: "actor://support-command",
+        }
+      );
+    });
+
+    expect(await screen.findByText("Run Audit")).toBeTruthy();
+    expect(screen.getByText("Structured help is ready.")).toBeTruthy();
+    expect(screen.getByText("Timeline Highlights")).toBeTruthy();
+    expect(screen.getByText("Step Highlights")).toBeTruthy();
+    expect(screen.getByText("Reply Highlights")).toBeTruthy();
+    expect(screen.getByText("Asked support agent")).toBeTruthy();
+    expect(screen.getByText("Reply one")).toBeTruthy();
   });
 
   it("approves NyxID tool requests and streams the continuation", async () => {
