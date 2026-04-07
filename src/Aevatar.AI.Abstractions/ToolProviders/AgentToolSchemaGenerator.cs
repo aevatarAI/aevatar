@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// AgentToolSchemaGenerator — 从 C# 类型自动生成 JSON Schema
+// AgentToolSchemaGenerator — automatically generate JSON Schema from C# types
 //
-// 消除手写 ParametersSchema 的维护负担。
-// 使用 System.Text.Json.Schema.JsonSchemaExporter（.NET 9+）。
+// Eliminates the maintenance burden of handwritten ParametersSchema.
+// Uses System.Text.Json.Schema.JsonSchemaExporter (.NET 9+).
 // ─────────────────────────────────────────────────────────────
 
 using System.Collections.Concurrent;
@@ -15,8 +15,8 @@ using System.Text.Json.Serialization.Metadata;
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>
-/// 从 C# 类型自动生成 JSON Schema，用于 <see cref="IAgentTool.ParametersSchema"/>
-/// 和 <see cref="LLMProviders.LLMResponseFormat"/> 的 schema 生成。
+/// Automatically generates JSON Schema from C# types for <see cref="IAgentTool.ParametersSchema"/>
+/// and schema generation for <see cref="LLMProviders.LLMResponseFormat"/>.
 /// </summary>
 public static class AgentToolSchemaGenerator
 {
@@ -36,11 +36,11 @@ public static class AgentToolSchemaGenerator
     private static readonly ConcurrentDictionary<Type, string> StringCache = new();
     private static readonly ConcurrentDictionary<Type, JsonElement> ElementCache = new();
 
-    /// <summary>从类型参数生成 JSON Schema 字符串。</summary>
+    /// <summary>Generates a JSON Schema string from the type parameter.</summary>
     public static string GenerateSchemaString<TParams>() =>
         GenerateSchemaString(typeof(TParams));
 
-    /// <summary>从 Type 生成 JSON Schema 字符串（结果按类型缓存）。</summary>
+    /// <summary>Generates a JSON Schema string from a Type (results are cached by type).</summary>
     public static string GenerateSchemaString(Type paramsType) =>
         StringCache.GetOrAdd(paramsType, static type =>
         {
@@ -48,11 +48,11 @@ public static class AgentToolSchemaGenerator
             return node.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
         });
 
-    /// <summary>从类型参数生成 JSON Schema JsonElement。</summary>
+    /// <summary>Generates a JSON Schema JsonElement from the type parameter.</summary>
     public static JsonElement GenerateSchema<TParams>() =>
         GenerateSchema(typeof(TParams));
 
-    /// <summary>从 Type 生成 JSON Schema JsonElement（结果按类型缓存）。</summary>
+    /// <summary>Generates a JSON Schema JsonElement from a Type (results are cached by type).</summary>
     public static JsonElement GenerateSchema(Type paramsType) =>
         ElementCache.GetOrAdd(paramsType, static type =>
         {

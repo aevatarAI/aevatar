@@ -1,9 +1,9 @@
 // ─────────────────────────────────────────────────────────────
-// MEAILLMProvider — 基于 Microsoft.Extensions.AI 的 LLM 提供者
+// MEAILLMProvider — LLM provider based on Microsoft.Extensions.AI
 //
-// 将 MEAI 的 IChatClient 桥接到 Aevatar 的 ILLMProvider。
-// 支持 OpenAI / Azure OpenAI / 任何兼容 OpenAI API 的提供者
-// （DeepSeek、Moonshot、通义千问等通过 baseUrl 配置）。
+// Bridges MEAI's IChatClient to Aevatar's ILLMProvider.
+// Supports OpenAI / Azure OpenAI / any provider compatible with the OpenAI API
+// (DeepSeek, Moonshot, Tongyi Qianwen, etc. configured via baseUrl).
 // ─────────────────────────────────────────────────────────────
 
 using System.Runtime.CompilerServices;
@@ -17,8 +17,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Aevatar.AI.LLMProviders.MEAI;
 
 /// <summary>
-/// 基于 MEAI IChatClient 的 ILLMProvider 实现。
-/// 支持 OpenAI、Azure OpenAI、以及任何兼容 OpenAI API 的提供者。
+/// ILLMProvider implementation based on the MEAI IChatClient.
+/// Supports OpenAI, Azure OpenAI, and any provider compatible with the OpenAI API.
 /// </summary>
 public sealed class MEAILLMProvider : ILLMProvider
 {
@@ -46,17 +46,17 @@ public sealed class MEAILLMProvider : ILLMProvider
     private readonly IChatClient _client;
     private readonly ILogger _logger;
 
-    /// <summary>提供者名称。</summary>
+    /// <summary>Provider name.</summary>
     public string Name { get; }
 
     public LLMProviderCapabilities Capabilities => ProviderCapabilities;
 
     /// <summary>
-    /// 创建 MEAI LLM Provider。
+    /// Creates the MEAI LLM Provider.
     /// </summary>
-    /// <param name="name">提供者名称（如 "openai", "deepseek"）。</param>
-    /// <param name="client">MEAI 的 IChatClient 实例。</param>
-    /// <param name="logger">日志记录器。</param>
+    /// <param name="name">Provider name (for example "openai", "deepseek").</param>
+    /// <param name="client">MEAI IChatClient instance.</param>
+    /// <param name="logger">Logger.</param>
     public MEAILLMProvider(string name, IChatClient client, ILogger? logger = null)
     {
         Name = name;
@@ -66,13 +66,13 @@ public sealed class MEAILLMProvider : ILLMProvider
 
     // ─── ILLMProvider.ChatAsync ───
 
-    /// <summary>单轮 LLM 调用。将 Aevatar 的 LLMRequest 转为 MEAI 的 ChatMessage 列表。</summary>
+    /// <summary>Single-turn LLM call. Converts Aevatar's LLMRequest into a list of MEAI ChatMessage instances.</summary>
     public async Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
     {
         var messages = ConvertMessages(request.Messages);
         var options = BuildOptions(request);
 
-        _logger.LogDebug("MEAI ChatAsync: {MessageCount} 条消息, model={Model}",
+        _logger.LogDebug("MEAI ChatAsync: {MessageCount} messages, model={Model}",
             messages.Count, options?.ModelId);
 
         var response = await _client.GetResponseAsync(messages, options, ct);
@@ -82,7 +82,7 @@ public sealed class MEAILLMProvider : ILLMProvider
 
     // ─── ILLMProvider.ChatStreamAsync ───
 
-    /// <summary>流式 LLM 调用。返回异步枚举的流式 chunk。</summary>
+    /// <summary>Streaming LLM call. Returns an async-enumerable stream of chunks.</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         LLMRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -90,7 +90,7 @@ public sealed class MEAILLMProvider : ILLMProvider
         var messages = ConvertMessages(request.Messages);
         var options = BuildOptions(request);
 
-        _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} 条消息", messages.Count);
+        _logger.LogDebug("MEAI ChatStreamAsync: {MessageCount} messages", messages.Count);
         var emittedStreamChunk = false;
         string? lastFinishReason = null;
 
@@ -204,11 +204,11 @@ public sealed class MEAILLMProvider : ILLMProvider
             yield break;
         }
 
-        // 最后一个 chunk 标记结束
+        // The final chunk marks the end
         yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
     }
 
-    // ─── 转换：Aevatar → MEAI ───
+    // ─── Conversion: Aevatar -> MEAI ───
 
     private static List<Microsoft.Extensions.AI.ChatMessage> ConvertMessages(
         IEnumerable<Aevatar.AI.Abstractions.LLMProviders.ChatMessage> messages)
@@ -235,14 +235,14 @@ public sealed class MEAILLMProvider : ILLMProvider
                     meaiMsg.Contents.Add(new TextContent(msg.Content));
             }
 
-            // 处理 Tool Call 结果
+            // Handle tool call results
             if (msg.Role == "tool" && msg.ToolCallId != null)
             {
                 meaiMsg.Contents.Clear();
                 meaiMsg.Contents.Add(new FunctionResultContent(msg.ToolCallId, BuildToolResultPayload(msg)));
             }
 
-            // 处理 Assistant 的 Tool Calls
+            // Handle assistant tool calls
             if (msg.ToolCalls is { Count: > 0 })
             {
                 meaiMsg.Contents.Clear();
@@ -253,7 +253,7 @@ public sealed class MEAILLMProvider : ILLMProvider
 
                 foreach (var tc in msg.ToolCalls)
                 {
-                    // 解析 JSON 参数为字典
+                    // Parse JSON arguments into a dictionary
                     Dictionary<string, object?>? args = null;
                     if (!string.IsNullOrEmpty(tc.ArgumentsJson))
                     {
@@ -261,7 +261,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                         {
                             args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                         }
-                        catch { /* 解析失败则不传参数 */ }
+                        catch { /* If parsing fails, do not pass arguments */ }
                     }
 
                     meaiMsg.Contents.Add(new FunctionCallContent(tc.Id, tc.Name, args));
@@ -385,7 +385,7 @@ public sealed class MEAILLMProvider : ILLMProvider
             hasOptions = true;
         }
 
-        // ResponseFormat 映射
+        // Map ResponseFormat
         if (request.ResponseFormat is not null)
         {
             options.ResponseFormat = request.ResponseFormat.Kind switch
@@ -403,7 +403,7 @@ public sealed class MEAILLMProvider : ILLMProvider
                 hasOptions = true;
         }
 
-        // 注册 Tools — 使用工具自身的 ParametersSchema，让 LLM 看到真实参数结构
+        // Register tools — use each tool's own ParametersSchema so the LLM sees the real parameter structure
         if (request.Tools is { Count: > 0 })
         {
             options.Tools = [];
@@ -433,17 +433,17 @@ public sealed class MEAILLMProvider : ILLMProvider
         return new AdditionalPropertiesDictionary(properties);
     }
 
-    // ─── 转换：MEAI → Aevatar ───
+    // ─── Conversion: MEAI -> Aevatar ───
 
     private static LLMResponse ConvertResponse(Microsoft.Extensions.AI.ChatResponse response)
     {
-        // ChatResponse.Messages 包含所有回复消息
+        // ChatResponse.Messages contains all reply messages
         var lastMessage = response.Messages.LastOrDefault();
         var content = lastMessage?.Text;
         List<ToolCall>? toolCalls = null;
         List<ContentPart>? contentParts = null;
 
-        // 检查是否有 Tool Calls
+        // Check whether there are tool calls
         if (lastMessage != null)
         {
             foreach (var part in lastMessage.Contents)

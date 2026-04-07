@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Aevatar.Interop.A2A.Abstractions.Models;
 
-/// <summary>A2A Agent Card — 描述 agent 的能力，用于服务发现。</summary>
+/// <summary>A2A Agent Card — describes an agent's capabilities for service discovery.</summary>
 public sealed class AgentCard
 {
     [JsonPropertyName("name")]

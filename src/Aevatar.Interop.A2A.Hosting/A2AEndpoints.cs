@@ -1,9 +1,9 @@
 // ─────────────────────────────────────────────────────────────
-// A2AEndpoints — A2A 协议 HTTP 端点
+// A2AEndpoints — HTTP endpoints for the A2A protocol
 //
-// /.well-known/agent.json — Agent Card 发现
-// /a2a — JSON-RPC 2.0 dispatch（tasks/send、tasks/get、tasks/cancel）
-// /a2a/subscribe/{taskId} — SSE 流式推送（tasks/sendSubscribe）
+// /.well-known/agent.json — Agent Card discovery
+// /a2a — JSON-RPC 2.0 dispatch (tasks/send, tasks/get, tasks/cancel)
+// /a2a/subscribe/{taskId} — SSE streaming delivery (tasks/sendSubscribe)
 // ─────────────────────────────────────────────────────────────
 
 using System.Text;

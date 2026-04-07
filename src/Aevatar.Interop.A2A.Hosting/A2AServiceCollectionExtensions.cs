@@ -8,8 +8,8 @@ namespace Aevatar.Interop.A2A.Hosting;
 public static class A2AServiceCollectionExtensions
 {
     /// <summary>
-    /// 注册 A2A 协议适配层所需的服务。
-    /// 前置条件：宿主必须已注册 <c>IActorDispatchPort</c>（由 Foundation Runtime 提供）。
+    /// Registers the services required by the A2A protocol adapter layer.
+    /// Prerequisite: the host must have already registered <c>IActorDispatchPort</c> (provided by the Foundation Runtime).
     /// </summary>
     public static IServiceCollection AddA2AAdapter(this IServiceCollection services)
     {

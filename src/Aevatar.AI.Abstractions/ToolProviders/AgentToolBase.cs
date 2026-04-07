@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────
-// AgentToolBase<TParams> — 类型安全的 IAgentTool 基类
+// AgentToolBase<TParams> — type-safe base class for IAgentTool
 //
-// 从 TParams 自动推导 ParametersSchema，子类只需实现
+// Automatically derives ParametersSchema from TParams; subclasses only need to implement
 // Name / Description / ExecuteAsync(TParams, CancellationToken)。
 // ─────────────────────────────────────────────────────────────
 
@@ -11,10 +11,10 @@ using System.Text.Json.Serialization;
 namespace Aevatar.AI.Abstractions.ToolProviders;
 
 /// <summary>
-/// 类型安全的 <see cref="IAgentTool"/> 基类。
-/// <typeparamref name="TParams"/> 类型自动生成 <see cref="ParametersSchema"/>。
+/// Type-safe base class for <see cref="IAgentTool"/>.
+/// <see cref="ParametersSchema"/> is automatically generated from <typeparamref name="TParams"/>.
 /// </summary>
-/// <typeparam name="TParams">工具参数类型，用于自动生成 JSON Schema 和反序列化。</typeparam>
+/// <typeparam name="TParams">Tool parameter type used for automatic JSON Schema generation and deserialization.</typeparam>
 public abstract class AgentToolBase<TParams> : IAgentTool where TParams : class
 {
     private static readonly string CachedSchema = AgentToolSchemaGenerator.GenerateSchemaString<TParams>();
@@ -32,7 +32,7 @@ public abstract class AgentToolBase<TParams> : IAgentTool where TParams : class
     /// <inheritdoc />
     public abstract string Description { get; }
 
-    /// <summary>自动从 <typeparamref name="TParams"/> 生成的 JSON Schema。</summary>
+    /// <summary>The JSON Schema automatically generated from <typeparamref name="TParams"/>.</summary>
     public string ParametersSchema => CachedSchema;
 
     /// <inheritdoc />
@@ -47,7 +47,7 @@ public abstract class AgentToolBase<TParams> : IAgentTool where TParams : class
     /// <inheritdoc />
     public virtual bool? RequiresApproval(string argumentsJson) => null;
 
-    /// <summary>类型安全的执行方法。</summary>
+    /// <summary>Type-safe execution method.</summary>
     protected abstract Task<string> ExecuteAsync(TParams parameters, CancellationToken ct);
 
     /// <inheritdoc />

@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Aevatar.Interop.A2A.Abstractions.Models;
 
-/// <summary>A2A JSON-RPC 2.0 请求。</summary>
+/// <summary>A2A JSON-RPC 2.0 request.</summary>
 public sealed class JsonRpcRequest
 {
     [JsonPropertyName("jsonrpc")]
@@ -19,7 +19,7 @@ public sealed class JsonRpcRequest
     public JsonElement? Params { get; init; }
 }
 
-/// <summary>A2A JSON-RPC 2.0 响应。</summary>
+/// <summary>A2A JSON-RPC 2.0 response.</summary>
 public sealed class JsonRpcResponse
 {
     [JsonPropertyName("jsonrpc")]
@@ -62,7 +62,7 @@ public sealed class JsonRpcError
     public object? Data { get; init; }
 }
 
-/// <summary>A2A JSON-RPC 标准错误码。</summary>
+/// <summary>A2A JSON-RPC standard error codes.</summary>
 public static class A2AErrorCodes
 {
     public const int ParseError = -32700;

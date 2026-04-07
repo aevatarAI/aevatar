@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// LLMResponseFormat — 结构化输出约束
+// LLMResponseFormat — structured output constraints
 //
-// 三种模式：Text（默认自由文本）、JsonObject（JSON 模式）、
-// JsonSchema（带 schema 约束的严格 JSON）。
+// Three modes: Text (default free text), JsonObject (JSON mode),
+// and JsonSchema (strict JSON with schema constraints).
 // ─────────────────────────────────────────────────────────────
 
 using System.Text.Json;
@@ -11,23 +11,23 @@ using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Abstractions.LLMProviders;
 
-/// <summary>LLM 响应格式约束。</summary>
+/// <summary>LLM response format constraints.</summary>
 public class LLMResponseFormat
 {
-    /// <summary>自由文本（默认）。</summary>
+    /// <summary>Free text (default).</summary>
     public static LLMResponseFormat Text { get; } = new() { Kind = LLMResponseFormatKind.Text };
 
-    /// <summary>JSON 模式，不指定 schema。</summary>
+    /// <summary>JSON mode without a schema.</summary>
     public static LLMResponseFormat JsonObject { get; } = new() { Kind = LLMResponseFormatKind.JsonObject };
 
-    /// <summary>带 JSON Schema 约束的严格 JSON。</summary>
+    /// <summary>Strict JSON constrained by a JSON Schema.</summary>
     public static LLMResponseFormat ForJsonSchema(
         JsonElement schema,
         string? schemaName = null,
         string? schemaDescription = null) =>
         new LLMResponseFormatJsonSchema(schema, schemaName, schemaDescription);
 
-    /// <summary>从 C# 类型自动生成 JSON Schema 约束。</summary>
+    /// <summary>Automatically generates JSON Schema constraints from a C# type.</summary>
     public static LLMResponseFormat ForJsonSchema<T>(
         string? schemaName = null,
         string? schemaDescription = null) =>
@@ -36,35 +36,35 @@ public class LLMResponseFormat
             schemaName ?? SanitizeTypeName(typeof(T)),
             schemaDescription);
 
-    /// <summary>格式类型。</summary>
+    /// <summary>The format kind.</summary>
     public LLMResponseFormatKind Kind { get; protected init; } = LLMResponseFormatKind.Text;
 
-    /// <summary>将 CLR 类型名清理为 provider 安全的 schema 名称。</summary>
+    /// <summary>Sanitizes a CLR type name into a provider-safe schema name.</summary>
     internal static string SanitizeTypeName(Type type)
     {
         var name = type.Name;
-        // 移除泛型后缀如 `1, `2 etc.
+        // Remove generic suffixes such as `1, `2, etc.
         var idx = name.IndexOf('`');
         if (idx >= 0) name = name[..idx];
-        // 替换非字母数字字符
+        // Replace non-alphanumeric characters
         return Regex.Replace(name, @"[^a-zA-Z0-9_]", "_");
     }
 }
 
-/// <summary>响应格式类型枚举。</summary>
+/// <summary>Response format kind enumeration.</summary>
 public enum LLMResponseFormatKind
 {
-    /// <summary>自由文本（默认）。</summary>
+    /// <summary>Free text (default).</summary>
     Text = 0,
 
-    /// <summary>JSON 模式，无 schema 约束。</summary>
+    /// <summary>JSON mode without schema constraints.</summary>
     JsonObject = 1,
 
-    /// <summary>带 JSON Schema 的严格 JSON。</summary>
+    /// <summary>Strict JSON with a JSON Schema.</summary>
     JsonSchema = 2,
 }
 
-/// <summary>带 JSON Schema 的严格 JSON 格式约束。</summary>
+/// <summary>Strict JSON format constraints with a JSON Schema.</summary>
 public sealed class LLMResponseFormatJsonSchema : LLMResponseFormat
 {
     public LLMResponseFormatJsonSchema(
@@ -79,12 +79,12 @@ public sealed class LLMResponseFormatJsonSchema : LLMResponseFormat
         SchemaDescription = schemaDescription;
     }
 
-    /// <summary>JSON Schema。</summary>
+    /// <summary>The JSON Schema.</summary>
     public JsonElement Schema { get; }
 
-    /// <summary>Schema 名称（某些 provider 需要）。</summary>
+    /// <summary>The schema name (required by some providers).</summary>
     public string? SchemaName { get; }
 
-    /// <summary>Schema 描述。</summary>
+    /// <summary>The schema description.</summary>
     public string? SchemaDescription { get; }
 }

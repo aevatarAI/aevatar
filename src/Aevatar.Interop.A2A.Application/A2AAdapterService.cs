@@ -1,8 +1,8 @@
 // ─────────────────────────────────────────────────────────────
-// A2AAdapterService — A2A 协议 ↔ 内部 EventEnvelope 双向转换
+// A2AAdapterService — bidirectional conversion between the A2A protocol and internal EventEnvelope
 //
-// 将 A2A tasks/send 映射到 IActorDispatchPort.DispatchAsync，
-// 将内部 ChatRequestEvent 封装为 EventEnvelope 投递到目标 GAgent。
+// Maps A2A tasks/send to IActorDispatchPort.DispatchAsync,
+// wraps internal ChatRequestEvent as an EventEnvelope and dispatches it to the target GAgent.
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Foundation.Abstractions;
@@ -34,20 +34,20 @@ public sealed class A2AAdapterService : IA2AAdapterService
 
     public async Task<A2ATask> SendTaskAsync(TaskSendParams sendParams, CancellationToken ct = default)
     {
-        // 1. 从消息中提取文本 prompt
+        // 1. Extract the text prompt from the message
         var prompt = ExtractTextFromMessage(sendParams.Message);
         if (string.IsNullOrWhiteSpace(prompt))
             throw new ArgumentException("Message must contain at least one text part.");
 
-        // 2. 解析目标 actor ID（从 metadata 或 session 中获取）
+        // 2. Resolve the target actor ID (from metadata or session)
         var targetActorId = ResolveTargetActorId(sendParams);
         if (string.IsNullOrWhiteSpace(targetActorId))
             throw new ArgumentException("Target agent ID must be specified in metadata['agentId'] or sessionId.");
 
-        // 3. 创建 task 记录
+        // 3. Create the task record
         var task = await _taskStore.CreateTaskAsync(sendParams.Id, sendParams.SessionId, sendParams.Message, ct);
 
-        // 4. 构建 EventEnvelope 并投递
+        // 4. Build the EventEnvelope and dispatch it
         var chatRequest = BuildChatRequestEvent(prompt, sendParams);
         var envelope = BuildEnvelope(chatRequest, sendParams.Id, targetActorId);
 
@@ -76,7 +76,7 @@ public sealed class A2AAdapterService : IA2AAdapterService
         var task = await _taskStore.GetTaskAsync(queryParams.Id, ct);
         if (task == null) return null;
 
-        // 按 historyLength 截断
+        // Trim by historyLength
         if (queryParams.HistoryLength.HasValue && task.History != null)
         {
             var len = queryParams.HistoryLength.Value;
@@ -150,13 +150,13 @@ public sealed class A2AAdapterService : IA2AAdapterService
 
     private static IMessage BuildChatRequestEvent(string prompt, TaskSendParams sendParams)
     {
-        // 使用反射安全地创建 ChatRequestEvent（避免对 AI.Abstractions 的直接依赖）
-        // 实际 proto 类型为 Aevatar.AI.Abstractions.ChatRequestEvent
-        // 但此层通过 Foundation Abstractions 的 Any.Pack 通用投递
+        // Safely create ChatRequestEvent via reflection (avoiding a direct dependency on AI.Abstractions)
+        // The actual proto type is Aevatar.AI.Abstractions.ChatRequestEvent
+        // But this layer dispatches generically through Foundation Abstractions Any.Pack
         //
-        // 由于 Application 层不直接依赖 AI.Abstractions（保持分层清洁），
-        // 我们构建一个通用的 agent_messages.proto 中的消息。
-        // 调用方可以通过 AgentMessage 或直接构建 ChatRequestEvent。
+        // Because the Application layer does not directly depend on AI.Abstractions (to keep layering clean),
+        // we build a generic message from agent_messages.proto.
+        // Callers can use AgentMessage or build ChatRequestEvent directly.
         var agentMessage = new AgentMessage
         {
             Content = prompt,
