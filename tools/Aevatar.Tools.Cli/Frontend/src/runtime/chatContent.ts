@@ -1,9 +1,22 @@
+// Pattern for DSML-style function call blocks: < | DSML | function_calls>...</ | DSML | function_calls>
+// The pipe may be ASCII | (U+007C) or full-width ｜ (U+FF5C) — some LLMs emit full-width in CJK context.
+const PIPE = String.raw`[\|\uff5c]`;
 const DSML_FUNCTION_CALLS_BLOCK_PATTERN =
-  String.raw`<\s*\|\s*DSML\s*\|\s*function_calls\s*>[\s\S]*?<\/\s*\|\s*DSML\s*\|\s*function_calls\s*>`;
+  String.raw`<\s*` + PIPE + String.raw`\s*DSML\s*` + PIPE + String.raw`\s*function_calls\s*>[\s\S]*?<\/\s*` + PIPE + String.raw`\s*DSML\s*` + PIPE + String.raw`\s*function_calls\s*>`;
 const DSML_FUNCTION_CALLS_OPEN_PATTERN =
-  String.raw`<\s*\|\s*DSML\s*\|\s*function_calls\s*>`;
+  String.raw`<\s*` + PIPE + String.raw`\s*DSML\s*` + PIPE + String.raw`\s*function_calls\s*>`;
 const DSML_FUNCTION_CALLS_CLOSE_PATTERN =
-  String.raw`<\/\s*\|\s*DSML\s*\|\s*function_calls\s*>`;
+  String.raw`<\/\s*` + PIPE + String.raw`\s*DSML\s*` + PIPE + String.raw`\s*function_calls\s*>`;
+
+// Pattern for standard XML function call blocks: <function_calls>...</function_calls>
+// Allows optional whitespace before closing > to match backend tolerance
+const XML_FUNCTION_CALLS_BLOCK_PATTERN =
+  String.raw`<function_calls\s*>[\s\S]*?<\/function_calls\s*>`;
+const XML_FUNCTION_CALLS_OPEN_PATTERN =
+  String.raw`<function_calls\s*>`;
+const XML_FUNCTION_CALLS_CLOSE_PATTERN =
+  String.raw`<\/function_calls\s*>`;
+
 const MARKDOWN_OR_BARE_LINK_PATTERN =
   /(\[([^\]]+)\]\(((?:https?:\/\/|www\.)[^\s)]+)\))|((?:https?:\/\/|www\.)[^\s<]+[^<.,:;"')\]\s])/gi;
 
@@ -21,12 +34,25 @@ export type MarkdownBlock =
   | { kind: 'code'; lang: string; code: string }
   | { kind: 'thematic-break' };
 
+/** All block pattern pairs: [completeBlockRegex, openRegex, closeRegex] */
+const FUNCTION_CALL_PATTERNS: [string, string, string][] = [
+  [DSML_FUNCTION_CALLS_BLOCK_PATTERN, DSML_FUNCTION_CALLS_OPEN_PATTERN, DSML_FUNCTION_CALLS_CLOSE_PATTERN],
+  [XML_FUNCTION_CALLS_BLOCK_PATTERN, XML_FUNCTION_CALLS_OPEN_PATTERN, XML_FUNCTION_CALLS_CLOSE_PATTERN],
+];
+
 export function sanitizeAssistantMessageContent(content: string): string {
   if (!content) {
     return '';
   }
 
-  let sanitized = content.replace(new RegExp(DSML_FUNCTION_CALLS_BLOCK_PATTERN, 'gi'), '\n');
+  let sanitized = content;
+
+  // Strip all complete function call blocks (DSML + XML formats)
+  for (const [blockPattern] of FUNCTION_CALL_PATTERNS) {
+    sanitized = sanitized.replace(new RegExp(blockPattern, 'gi'), '\n');
+  }
+
+  // Hide any dangling (unclosed) blocks while streaming
   const danglingBlockStart = findDanglingFunctionCallBlockStart(sanitized);
   if (danglingBlockStart >= 0) {
     sanitized = sanitized.slice(0, danglingBlockStart);
@@ -39,17 +65,30 @@ export function sanitizeAssistantMessageContent(content: string): string {
 }
 
 function findDanglingFunctionCallBlockStart(content: string): number {
+  let earliest = -1;
+
+  for (const [, openPatternStr, closePatternStr] of FUNCTION_CALL_PATTERNS) {
+    const result = findDanglingStart(content, openPatternStr, closePatternStr);
+    if (result >= 0 && (earliest < 0 || result < earliest)) {
+      earliest = result;
+    }
+  }
+
+  return earliest;
+}
+
+function findDanglingStart(content: string, openPatternStr: string, closePatternStr: string): number {
   let searchIndex = 0;
 
   while (searchIndex < content.length) {
-    const openPattern = new RegExp(DSML_FUNCTION_CALLS_OPEN_PATTERN, 'gi');
+    const openPattern = new RegExp(openPatternStr, 'gi');
     openPattern.lastIndex = searchIndex;
     const openMatch = openPattern.exec(content);
     if (!openMatch) {
       return -1;
     }
 
-    const closePattern = new RegExp(DSML_FUNCTION_CALLS_CLOSE_PATTERN, 'gi');
+    const closePattern = new RegExp(closePatternStr, 'gi');
     closePattern.lastIndex = openMatch.index + openMatch[0].length;
     const closeMatch = closePattern.exec(content);
     if (!closeMatch) {
@@ -211,6 +250,19 @@ export function parseMarkdownBlocks(text: string): MarkdownBlock[] {
   return blocks;
 }
 
+export function markdownToPlainText(text: string): string {
+  if (!text) {
+    return '';
+  }
+
+  return parseMarkdownBlocks(text)
+    .map(block => markdownBlockToPlainText(block))
+    .filter(Boolean)
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function appendLinkifiedTokens(tokens: InlineContentToken[], text: string, bold: boolean): void {
   let lastIndex = 0;
   for (const match of text.matchAll(MARKDOWN_OR_BARE_LINK_PATTERN)) {
@@ -242,4 +294,48 @@ function normalizeExternalHref(rawHref: string): string {
   return rawHref.startsWith('www.')
     ? `https://${rawHref}`
     : rawHref;
+}
+
+function markdownBlockToPlainText(block: MarkdownBlock): string {
+  switch (block.kind) {
+    case 'code':
+      return block.code.trim();
+    case 'heading':
+      return inlineContentToPlainText(block.text);
+    case 'blockquote':
+      return markdownLinesToPlainText(block.lines);
+    case 'unordered-list':
+      return block.items
+        .map(item => `- ${inlineContentToPlainText(item)}`)
+        .join('\n');
+    case 'ordered-list':
+      return block.items
+        .map((item, index) => `${index + 1}. ${inlineContentToPlainText(item)}`)
+        .join('\n');
+    case 'thematic-break':
+      return '---';
+    case 'paragraph':
+    default:
+      return markdownLinesToPlainText(block.lines);
+  }
+}
+
+function markdownLinesToPlainText(lines: string[]): string {
+  return lines
+    .map(line => inlineContentToPlainText(line))
+    .join('\n');
+}
+
+function inlineContentToPlainText(text: string): string {
+  return tokenizeInlineContent(text)
+    .map(token => {
+      if (token.kind === 'link') {
+        return token.text === token.href
+          ? token.href
+          : `${token.text} (${token.href})`;
+      }
+
+      return token.text;
+    })
+    .join('');
 }

@@ -229,7 +229,6 @@ export interface StudioScopeBindingResult {
   } | null;
   readonly gAgent?: {
     readonly actorTypeName: string;
-    readonly preferredActorId: string;
   } | null;
 }
 
@@ -258,7 +257,6 @@ export interface StudioScopeBindingRevision {
   readonly scriptDefinitionActorId: string;
   readonly scriptSourceHash: string;
   readonly staticActorTypeName: string;
-  readonly staticPreferredActorId: string;
 }
 
 export interface StudioScopeBindingStatus {
@@ -331,7 +329,7 @@ export function describeStudioScopeBindingRevisionContext(
       }
       return revision.scriptRevision || revision.scriptSourceHash || '';
     case 'gagent':
-      return revision.staticPreferredActorId || '';
+      return '';
     default:
       return '';
   }
@@ -376,9 +374,9 @@ export interface StudioScopeGAgentEndpointInput {
 
 export interface StudioScopeGAgentBindingInput {
   readonly scopeId: string;
+  readonly serviceId?: string | null;
   readonly displayName?: string | null;
   readonly actorTypeName: string;
-  readonly preferredActorId?: string | null;
   readonly endpoints: readonly StudioScopeGAgentEndpointInput[];
   readonly revisionId?: string | null;
 }
@@ -523,5 +521,46 @@ export interface StudioRuntimeTestResult {
   readonly reachable: boolean;
   readonly checkedUrl: string;
   readonly statusCode: number | null;
+  readonly message: string;
+}
+
+export interface StudioUserConfig {
+  readonly defaultModel: string;
+  readonly runtimeBaseUrl: string;
+}
+
+export interface StudioUserConfigProviderStatus {
+  readonly providerSlug: string;
+  readonly providerName: string;
+  readonly status: string;
+  readonly proxyUrl: string;
+}
+
+export interface StudioUserConfigModelsResponse {
+  readonly providers: StudioUserConfigProviderStatus[];
+  readonly gatewayUrl: string;
+  readonly supportedModels: string[];
+}
+
+export interface StudioOrnnSkillSummary {
+  readonly guid: string;
+  readonly name: string;
+  readonly description: string;
+  readonly isPrivate: boolean;
+}
+
+export interface StudioOrnnSkillSearchResult {
+  readonly baseUrl: string;
+  readonly total: number;
+  readonly totalPages: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly items: StudioOrnnSkillSummary[];
+  readonly message?: string;
+}
+
+export interface StudioOrnnHealthResult {
+  readonly baseUrl: string;
+  readonly reachable: boolean;
   readonly message: string;
 }

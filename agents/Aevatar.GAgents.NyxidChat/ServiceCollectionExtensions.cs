@@ -8,11 +8,11 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddNyxIdChat(this IServiceCollection services)
     {
-        // Force-load the assembly so StaticServiceImplementationAdapter.ResolveType
-        // can find NyxIdChatGAgent by type name string at service binding time.
         RuntimeHelpers.RunClassConstructor(typeof(NyxIdChatGAgent).TypeHandle);
 
         services.TryAddSingleton<NyxIdChatActorStore>();
+        services.TryAddSingleton(new NyxIdRelayOptions());
+
         return services;
     }
 }

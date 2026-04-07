@@ -200,7 +200,7 @@ type ProviderDraft = {
 };
 
 type RuntimeMode = 'remote' | 'local';
-type UserLlmRoute = 'auto' | 'gateway' | string;
+type UserLlmRoute = string;
 
 type UserConfigProviderStatus = {
   provider_slug: string;
@@ -263,12 +263,13 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 const DEFAULT_REMOTE_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
 const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:5080';
 const DEFAULT_RUNTIME_BASE_URL = DEFAULT_LOCAL_RUNTIME_URL;
-const USER_LLM_ROUTE_AUTO = 'auto';
-const USER_LLM_ROUTE_GATEWAY = 'gateway';
+const USER_LLM_ROUTE_GATEWAY = '';
 const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
 const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
+const APPEARANCE_THEME_STORAGE_KEY = 'aevatar.app.appearance-theme';
+const COLOR_MODE_STORAGE_KEY = 'aevatar.app.color-mode';
 
 function normalizeRuntimeMode(value: unknown): RuntimeMode {
   return String(value || '').trim().toLowerCase() === 'remote' ? 'remote' : 'local';
@@ -280,8 +281,25 @@ function normalizeRuntimeUrl(value: unknown, fallback: string) {
 }
 
 function normalizeUserLlmRoute(value: unknown): UserLlmRoute {
-  const normalized = String(value || '').trim().toLowerCase();
-  return normalized || USER_LLM_ROUTE_AUTO;
+  const normalized = String(value || '').trim();
+  if (!normalized || /^auto$/i.test(normalized) || /^gateway$/i.test(normalized)) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.includes('://') || normalized.startsWith('//')) {
+    return USER_LLM_ROUTE_GATEWAY;
+  }
+
+  if (normalized.startsWith('/')) {
+    return normalized;
+  }
+
+  return `/api/v1/proxy/s/${normalized.replace(/^\/+|\/+$/g, '')}`;
+}
+
+function routePathFromProviderSlug(slug: string) {
+  const normalized = String(slug || '').trim();
+  return normalized ? `/api/v1/proxy/s/${normalized}` : USER_LLM_ROUTE_GATEWAY;
 }
 
 function resolveUserRuntimeConfig(userConfigData?: any) {
@@ -371,6 +389,18 @@ function summarizeBootstrapFailures(labels: string[]) {
   return `Loaded studio with defaults for ${visibleLabels.join(', ')}${suffix}.`;
 }
 
+function summarizeChronoStorageWarning(failures: Array<{ label: string; error: any }>) {
+  if (failures.length === 0) {
+    return null;
+  }
+
+  const labels = Array.from(new Set(failures.map(item => item.label)));
+  const affectedLabel = labels.length === 1
+    ? labels[0]
+    : `${labels.slice(0, 2).join(', ')}${labels.length > 2 ? `, +${labels.length - 2} more` : ''}`;
+  return `${api.getChronoStorageServiceErrorMessage(failures[0].error)} Affected: ${affectedLabel}.`;
+}
+
 type ExecutionLogsWindowState = {
   isPopout: boolean;
   executionId: string | null;
@@ -430,6 +460,31 @@ function readStoredPreviousWorkspacePage(): NonSettingsWorkspacePage {
     return isNonSettingsWorkspacePage(raw) ? raw : 'studio';
   } catch {
     return 'studio';
+  }
+}
+
+function readStoredAppearanceTheme() {
+  if (typeof window === 'undefined') {
+    return 'blue';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(APPEARANCE_THEME_STORAGE_KEY);
+    return APPEARANCE_OPTIONS.some(option => option.id === raw) ? raw! : 'blue';
+  } catch {
+    return 'blue';
+  }
+}
+
+function readStoredColorMode(): 'light' | 'dark' {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+
+  try {
+    return window.localStorage.getItem(COLOR_MODE_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
   }
 }
 
@@ -686,8 +741,8 @@ function createEmptyStudioSettings(): StudioSettingsState {
     localRuntimeUrl: DEFAULT_LOCAL_RUNTIME_URL,
     runtimeMode: 'local',
     ornnBaseUrl: DEFAULT_ORNN_BASE_URL,
-    appearanceTheme: 'blue',
-    colorMode: 'light',
+    appearanceTheme: readStoredAppearanceTheme(),
+    colorMode: readStoredColorMode(),
     secretsFilePath: '',
     defaultProviderName: '',
     providerTypes: [],
@@ -837,7 +892,7 @@ function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [userConfigState, setUserConfigState] = useState<UserConfigState>({
     defaultModel: '',
-    preferredLlmRoute: USER_LLM_ROUTE_AUTO,
+    preferredLlmRoute: USER_LLM_ROUTE_GATEWAY,
     loading: false,
     providers: [],
     supportedModels: [],
@@ -945,6 +1000,7 @@ function App() {
     text: string;
     type: 'success' | 'error' | 'info';
   } | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const reactFlowInstanceRef = useRef<any>(null);
   const syncSuppressedRef = useRef(true);
@@ -1087,6 +1143,29 @@ function App() {
       // Ignore storage errors in restricted browser contexts.
     }
   }, [previousWorkspacePage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(APPEARANCE_THEME_STORAGE_KEY, settingsState.appearanceTheme || 'blue');
+      window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, settingsState.colorMode || 'light');
+    } catch {
+      // Ignore storage errors in restricted browser contexts.
+    }
+  }, [settingsState.appearanceTheme, settingsState.colorMode]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    document.documentElement.style.colorScheme = settingsState.colorMode;
+    document.body.style.background = settingsState.colorMode === 'dark' ? '#0b1220' : '#f7f6f3';
+    document.body.style.color = settingsState.colorMode === 'dark' ? '#e5e7eb' : '#1f2328';
+  }, [settingsState.colorMode]);
 
   useEffect(() => {
     const workspaceReady = !authSession.loading && (!authSession.enabled || authSession.authenticated);
@@ -1451,6 +1530,7 @@ function App() {
 
       const authFailure = bootstrapFailures.find(item => isAuthResponseInvalid(item.error));
       if (authFailure) {
+        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1465,6 +1545,11 @@ function App() {
       bootstrapFailures.forEach(item => {
         console.warn(`[Aevatar App] Failed to load bootstrap resource: ${item.label}`, item.error);
       });
+
+      const chronoStorageFailures = bootstrapFailures.filter(item => api.isChronoStorageServiceError(item.error));
+      const nonChronoStorageFailures = bootstrapFailures.filter(item => !api.isChronoStorageServiceError(item.error));
+      const nextStorageWarning = summarizeChronoStorageWarning(chronoStorageFailures);
+      setStorageWarning(nextStorageWarning);
 
       const context = contextResult.status === 'fulfilled' ? contextResult.value : null;
       const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null;
@@ -1506,7 +1591,7 @@ function App() {
       hydrateSettings(settings, {
         ...runtimeConfig,
         defaultModel: userConfigData?.defaultModel || '',
-        preferredLlmRoute: userConfigData?.preferredLlmRoute || USER_LLM_ROUTE_AUTO,
+        preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
       });
       setUserConfigState(prev => ({
         ...prev,
@@ -1529,11 +1614,16 @@ function App() {
         directoryId: defaultDirectoryId,
       }));
 
-      if (bootstrapFailures.length > 0) {
-        flash(summarizeBootstrapFailures(bootstrapFailures.map(item => item.label)), 'info');
+      if (nextStorageWarning) {
+        flash(nextStorageWarning, 'error');
+      }
+
+      if (nonChronoStorageFailures.length > 0) {
+        flash(summarizeBootstrapFailures(nonChronoStorageFailures.map(item => item.label)), 'info');
       }
     } catch (error: any) {
       if (isAuthResponseInvalid(error)) {
+        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -1543,6 +1633,12 @@ function App() {
           errorMessage: error?.message || 'Sign in to continue.',
         }));
         return;
+      }
+
+      if (api.isChronoStorageServiceError(error)) {
+        const message = api.getChronoStorageServiceErrorMessage(error);
+        setStorageWarning(message);
+        flash(message, 'error');
       }
 
       setAuthSession(prev => ({
@@ -3247,7 +3343,12 @@ function App() {
 
 
   if (authSession.loading) {
-    return <AppLoadingScreen />;
+    return (
+      <AppLoadingScreen
+        appearanceTheme={settingsState.appearanceTheme}
+        colorMode={settingsState.colorMode}
+      />
+    );
   }
 
   if (authSession.enabled && !authSession.authenticated) {
@@ -3256,6 +3357,8 @@ function App() {
         providerDisplayName={authSession.providerDisplayName}
         loginUrl={authSession.loginUrl}
         errorMessage={authSession.errorMessage}
+        appearanceTheme={settingsState.appearanceTheme}
+        colorMode={settingsState.colorMode}
       />
     );
   }
@@ -3349,6 +3452,18 @@ function App() {
       </aside>
 
       <main className="flex-1 min-w-0 flex flex-col">
+        {storageWarning && workspacePage !== 'explorer' ? (
+          <div className="mx-6 mt-4 rounded-[24px] border border-[#F0D7A5] bg-[#FFF7E8] px-5 py-4 text-[#8A4B12] shadow-[0_14px_32px_rgba(180,125,44,0.12)]">
+            <div className="flex items-start gap-3">
+              <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#A55A17]">Chrono Storage</div>
+                <div className="mt-1 text-[14px] font-semibold">Some cloud-backed studio features are unavailable</div>
+                <div className="mt-1 text-[13px] leading-6">{storageWarning}</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {workspacePage === 'scripts' ? (
           <ScriptsStudio
             appContext={{
@@ -4971,23 +5086,11 @@ function CloudConfigSection(props: {
     [userConfigState.providers],
   );
 
-  const readyChronoLlmProvider = useMemo(
-    () => serviceProviders.find(p => p.provider_slug === 'chrono-llm' && p.status === 'ready') || null,
-    [serviceProviders],
-  );
-
   const preferredRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
-  const effectiveRoute = preferredRoute === USER_LLM_ROUTE_AUTO
-    ? (readyChronoLlmProvider ? readyChronoLlmProvider.provider_slug : USER_LLM_ROUTE_GATEWAY)
-    : preferredRoute;
+  const effectiveRoute = preferredRoute;
 
   const routeOptions = useMemo(() => {
     const options: Array<{ value: string; label: string; note?: string }> = [
-      {
-        value: USER_LLM_ROUTE_AUTO,
-        label: 'Auto',
-        note: readyChronoLlmProvider ? `Currently ${readyChronoLlmProvider.provider_name || 'chrono-llm'}` : 'Currently NyxID Gateway',
-      },
       {
         value: USER_LLM_ROUTE_GATEWAY,
         label: 'NyxID Gateway',
@@ -4997,16 +5100,17 @@ function CloudConfigSection(props: {
     const seen = new Set(options.map(option => option.value));
     for (const provider of serviceProviders) {
       const slug = provider.provider_slug;
-      if (!slug || seen.has(slug)) continue;
-      seen.add(slug);
+      const route = routePathFromProviderSlug(slug);
+      if (!slug || seen.has(route)) continue;
+      seen.add(route);
       options.push({
-        value: slug,
+        value: route,
         label: provider.provider_name || slug,
         note: provider.status === 'ready' ? 'Ready' : 'Unavailable',
       });
     }
 
-    if (!seen.has(preferredRoute) && preferredRoute !== USER_LLM_ROUTE_AUTO && preferredRoute !== USER_LLM_ROUTE_GATEWAY) {
+    if (!seen.has(preferredRoute) && preferredRoute !== USER_LLM_ROUTE_GATEWAY) {
       options.push({
         value: preferredRoute,
         label: preferredRoute,
@@ -5015,13 +5119,13 @@ function CloudConfigSection(props: {
     }
 
     return options;
-  }, [preferredRoute, readyChronoLlmProvider, serviceProviders]);
+  }, [preferredRoute, serviceProviders]);
 
   const groupedModels = useMemo(() => {
     const query = filterText.trim().toLowerCase();
     const providerOrder = effectiveRoute === USER_LLM_ROUTE_GATEWAY
       ? gatewayProviders
-      : userConfigState.providers.filter(provider => provider.provider_slug === effectiveRoute);
+      : userConfigState.providers.filter(provider => routePathFromProviderSlug(provider.provider_slug) === effectiveRoute);
 
     return providerOrder
       .map(provider => ({
@@ -5089,11 +5193,9 @@ function CloudConfigSection(props: {
           </select>
         </div>
         <div className="text-[11px] text-gray-400 leading-relaxed">
-          {preferredRoute === USER_LLM_ROUTE_AUTO
-            ? `Auto prefers chrono-llm when it is available and otherwise falls back to NyxID Gateway. It is currently using ${effectiveRouteLabel}.`
-            : preferredRoute === USER_LLM_ROUTE_GATEWAY
+          {preferredRoute === USER_LLM_ROUTE_GATEWAY
             ? 'All Aevatar chat requests will go through NyxID Gateway.'
-            : `${effectiveRouteLabel} will be used for Aevatar chat requests. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
+            : `${effectiveRouteLabel} will be used for Aevatar chat requests via ${preferredRoute}. If it is unavailable, Aevatar falls back to NyxID Gateway.`}
         </div>
       </div>
 
@@ -5200,9 +5302,16 @@ function CloudConfigSection(props: {
   );
 }
 
-function AppLoadingScreen() {
+function AppLoadingScreen(props: {
+  appearanceTheme: string;
+  colorMode: 'light' | 'dark';
+}) {
   return (
-    <div className="min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8">
+    <div
+      className="studio-shell min-h-screen bg-[#F2F1EE] text-gray-800 px-6 py-8"
+      data-appearance={props.appearanceTheme || 'blue'}
+      data-color-mode={props.colorMode || 'light'}
+    >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[960px] items-center justify-center">
         <div className="w-full max-w-[460px] rounded-[32px] border border-[#E6E3DE] bg-white/96 p-8 shadow-[0_28px_70px_rgba(15,23,42,0.08)]">
           <div className="panel-eyebrow">Aevatar App</div>
@@ -5223,12 +5332,14 @@ function AppAuthenticationGate(props: {
   providerDisplayName: string;
   loginUrl: string;
   errorMessage: string;
+  appearanceTheme: string;
+  colorMode: 'light' | 'dark';
 }) {
   return (
     <div
       className="studio-shell min-h-screen bg-[#F2F1EE] px-6 py-8 text-gray-800"
-      data-appearance="blue"
-      data-color-mode="light"
+      data-appearance={props.appearanceTheme || 'blue'}
+      data-color-mode={props.colorMode || 'light'}
     >
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-[1040px] items-center justify-center">
         <div className="grid w-full max-w-[920px] gap-6 rounded-[36px] border border-[#E6E3DE] bg-white/96 p-6 shadow-[0_30px_72px_rgba(15,23,42,0.08)] md:grid-cols-[minmax(0,1.1fr)_320px] md:p-8">

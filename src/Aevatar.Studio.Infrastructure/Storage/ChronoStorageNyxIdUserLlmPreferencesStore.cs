@@ -17,6 +17,7 @@ internal sealed class ChronoStorageNyxIdUserLlmPreferencesStore : INyxIdUserLlmP
         var config = await _userConfigStore.GetAsync(cancellationToken);
         return new NyxIdUserLlmPreferences(
             config.DefaultModel,
-            UserConfigLlmRoute.Normalize(config.PreferredLlmRoute));
+            UserConfigLlmRoute.Normalize(config.PreferredLlmRoute),
+            config.MaxToolRounds);
     }
 }

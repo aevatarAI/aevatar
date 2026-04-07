@@ -14,8 +14,9 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
     public string Name => "ornn_search_skills";
 
     public string Description =>
-        "Search for skills in your Ornn skill library. " +
-        "Returns skill names, descriptions, and IDs that can be loaded with ornn_use_skill.";
+        "Search for skills in the user's Ornn skill library. " +
+        "Proactively search when the user's request involves specialized tasks like translation, content generation, or analysis. " +
+        "Returns skill names and descriptions. Then use use_skill with the skill name to load and activate a matching skill.";
 
     public string ParametersSchema => """
         {
@@ -72,7 +73,7 @@ public sealed class OrnnSearchSkillsTool : IAgentTool
             lines.Add("");
         }
 
-        lines.Add("Use ornn_use_skill with the skill name to load and use a skill.");
+        lines.Add("Use use_skill with the skill name to load and activate a skill.");
         return string.Join("\n", lines);
     }
 }

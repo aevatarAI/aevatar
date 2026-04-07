@@ -1,4 +1,4 @@
-import { waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
@@ -32,9 +32,12 @@ describe("OverviewPage", () => {
     );
 
     expect(container.textContent).toContain("Overview");
-    expect(container.textContent).toContain(
-      "A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
-    );
+    expect(
+      screen.queryByText(
+        "A single command-center view from login to runtime: project-first actions on the left, ecosystem health in the center, and detail only when you ask for it."
+      )
+    ).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
     expect(container.textContent).toContain("Command Path");
     expect(container.textContent).toContain("Operator Shortcuts");
     expect(container.textContent).toContain(

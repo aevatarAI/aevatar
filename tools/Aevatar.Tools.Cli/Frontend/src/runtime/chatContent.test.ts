@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
+import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
 
 describe('sanitizeAssistantMessageContent', () => {
   it('removes completed DSML function call blocks from assistant text', () => {
@@ -22,6 +22,46 @@ describe('sanitizeAssistantMessageContent', () => {
     const sanitized = sanitizeAssistantMessageContent(content);
 
     expect(sanitized).toBe('让我先检查一下：');
+  });
+
+  it('removes standard XML function_calls blocks', () => {
+    const content = `让我调用工具：\n\n<function_calls>\n<invoke name="search">\n<parameter name="query">hello</parameter>\n</invoke>\n</function_calls>\n\n结果如下。`;
+
+    const sanitized = sanitizeAssistantMessageContent(content);
+
+    expect(sanitized).toBe('让我调用工具：\n\n结果如下。');
+  });
+
+  it('hides dangling XML function_calls blocks while streaming', () => {
+    const content = `正在检查：\n\n<function_calls>\n<invoke name="search">`;
+
+    const sanitized = sanitizeAssistantMessageContent(content);
+
+    expect(sanitized).toBe('正在检查：');
+  });
+
+  it('removes XML function_calls blocks with whitespace before closing bracket', () => {
+    const content = `调用工具：\n\n<function_calls >\n<invoke name="search" >\n<parameter name="query" >hello</parameter >\n</invoke >\n</function_calls >\n\n完成。`;
+
+    const sanitized = sanitizeAssistantMessageContent(content);
+
+    expect(sanitized).toBe('调用工具：\n\n完成。');
+  });
+
+  it('removes DSML blocks with full-width Unicode pipes (U+FF5C)', () => {
+    const content = `检查配置：\n\n<\uff5cDSML\uff5cfunction_calls>\n<\uff5cDSML\uff5cinvoke name="nyxid_approvals">\n<\uff5cDSML\uff5cparameter name="input" string="true">action=configs</\uff5cDSML\uff5cparameter>\n</\uff5cDSML\uff5cinvoke>\n</\uff5cDSML\uff5cfunction_calls>\n\n完成。`;
+
+    const sanitized = sanitizeAssistantMessageContent(content);
+
+    expect(sanitized).toBe('检查配置：\n\n完成。');
+  });
+
+  it('handles mixed DSML and XML blocks in one message', () => {
+    const content = `第一步\n\n<| DSML | function_calls>\n<| DSML | invoke name="a">\n</| DSML | invoke>\n</| DSML | function_calls>\n\n第二步\n\n<function_calls>\n<invoke name="b">\n</invoke>\n</function_calls>\n\n完成。`;
+
+    const sanitized = sanitizeAssistantMessageContent(content);
+
+    expect(sanitized).toBe('第一步\n\n第二步\n\n完成。');
   });
 
   it('tokenizes bare urls and markdown links into clickable link tokens', () => {
@@ -66,5 +106,39 @@ describe('sanitizeAssistantMessageContent', () => {
       { kind: 'thematic-break' },
       { kind: 'code', lang: 'json', code: '{"ok":true}' },
     ]);
+  });
+
+  it('converts markdown-rich chat content into readable plain text', () => {
+    const plainText = markdownToPlainText(`# 标题
+
+参考 [文档](https://aevatar.ai/docs) 和 \`aevatar chat\`
+
+- 第一项
+- 第二项
+
+1. 步骤一
+2. 步骤二
+
+> 引用
+> 第二行
+
+\`\`\`json
+{"ok":true}
+\`\`\``);
+
+    expect(plainText).toBe(`标题
+
+参考 文档 (https://aevatar.ai/docs) 和 aevatar chat
+
+- 第一项
+- 第二项
+
+1. 步骤一
+2. 步骤二
+
+引用
+第二行
+
+{"ok":true}`);
   });
 });

@@ -7,6 +7,9 @@
     <RootNamespace>Aevatar.AI.ToolProviders.NyxId</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.AI.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

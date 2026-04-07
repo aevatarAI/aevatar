@@ -207,7 +207,6 @@ const ScopeOverviewPage: React.FC = () => {
   const currentBindingContext = describeStudioScopeBindingRevisionContext(activeRevision);
   const currentBindingActor =
     activeRevision?.primaryActorId ||
-    activeRevision?.staticPreferredActorId ||
     binding?.primaryActorId ||
     "";
   const selectedServiceCard =
@@ -324,15 +323,18 @@ const ScopeOverviewPage: React.FC = () => {
 
   return (
     <AevatarPageShell
-      content="Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage."
+      layoutMode="document"
       title="Project Overview"
+      titleHelp="Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage."
     >
       <AevatarWorkbenchLayout
+        layoutMode="document"
         rail={
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
-              description="Everything downstream stays project-scoped once you load a scope."
+              layoutMode="document"
               title="Project Scope"
+              titleHelp="Everything downstream stays project-scoped once you load a scope."
             >
               <ScopeQueryCard
                 draft={draft}
@@ -382,7 +384,7 @@ const ScopeOverviewPage: React.FC = () => {
                     history.push(
                       buildRuntimeGAgentsHref({
                         scopeId,
-                        actorId: activeRevision?.staticPreferredActorId || undefined,
+                        actorId: activeRevision?.primaryActorId || undefined,
                         actorTypeName: activeRevision?.staticActorTypeName || undefined,
                       }),
                     )
@@ -425,8 +427,8 @@ const ScopeOverviewPage: React.FC = () => {
             {scopeId ? (
               <>
                 <AevatarPanel
-                  description="The command surface users actually care about: whether the project is bound, serving, and ready to invoke."
                   title="Scope Status Board"
+                  titleHelp="The command surface users actually care about: whether the project is bound, serving, and ready to invoke."
                 >
                   <div
                     style={{
@@ -467,8 +469,8 @@ const ScopeOverviewPage: React.FC = () => {
                 </AevatarPanel>
 
                 <AevatarPanel
-                  description="The current project binding should be legible without leaving the overview page."
                   title="Current Binding"
+                  titleHelp="The current project binding should be legible without leaving the overview page."
                 >
                   {!binding?.available || !activeRevision ? (
                     <Alert
@@ -511,7 +513,7 @@ const ScopeOverviewPage: React.FC = () => {
                               buildRuntimeGAgentsHref({
                                 scopeId,
                                 actorId:
-                                  activeRevision.staticPreferredActorId || undefined,
+                                  activeRevision.primaryActorId || undefined,
                                 actorTypeName:
                                   activeRevision.staticActorTypeName || undefined,
                               }),
@@ -538,8 +540,8 @@ const ScopeOverviewPage: React.FC = () => {
                 </AevatarPanel>
 
                 <AevatarPanel
-                  description="Binding revisions are treated as the project's runtime posture, not hidden on a secondary page."
                   title="Revision Rollout"
+                  titleHelp="Binding revisions are treated as the project's runtime posture, not hidden on a secondary page."
                 >
                   {revisions.length > 0 ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -588,8 +590,8 @@ const ScopeOverviewPage: React.FC = () => {
                   }}
                 >
                   <AevatarPanel
-                    description="Published services are the runtime surfaces users can actually invoke from this project."
                     title="Published Services"
+                    titleHelp="Published services are the runtime surfaces users can actually invoke from this project."
                   >
                     {scopeServicesQuery.error ? (
                       <Alert
@@ -698,8 +700,8 @@ const ScopeOverviewPage: React.FC = () => {
           <AevatarInspectorEmpty description="Choose a revision, workflow, or script to inspect its role in the current project." />
         ) : focus.kind === "revision" && focusedRevision ? (
           <AevatarPanel
-            description="Revision posture, rollout identity, and activation affordance stay in one place."
             title="Revision Snapshot"
+            titleHelp="Revision posture, rollout identity, and activation affordance stay in one place."
           >
             <div
               style={{
@@ -722,11 +724,7 @@ const ScopeOverviewPage: React.FC = () => {
               <MetricCard label="Serving state" value={focusedRevision.servingState || focusedRevision.status} />
               <MetricCard
                 label="Actor"
-                value={
-                  focusedRevision.primaryActorId ||
-                  focusedRevision.staticPreferredActorId ||
-                  "n/a"
-                }
+                value={focusedRevision.primaryActorId || "n/a"}
               />
             </div>
             {describeStudioScopeBindingRevisionContext(focusedRevision) ? (
@@ -765,7 +763,7 @@ const ScopeOverviewPage: React.FC = () => {
                     buildRuntimeGAgentsHref({
                       scopeId,
                       actorId:
-                        focusedRevision.staticPreferredActorId || undefined,
+                        focusedRevision.primaryActorId || undefined,
                       actorTypeName:
                         focusedRevision.staticActorTypeName || undefined,
                     }),
@@ -1009,7 +1007,7 @@ const RevisionCard: React.FC<{
         wordBreak: "break-word",
       }}
     >
-      Actor {revision.primaryActorId || revision.staticPreferredActorId || "n/a"} · Deployment{" "}
+      Actor {revision.primaryActorId || "n/a"} · Deployment{" "}
       {revision.deploymentId || "draft"}
     </Typography.Text>
     <Space wrap>

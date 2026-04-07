@@ -458,7 +458,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                 ScopeBindingImplementationKind.GAgent,
                 GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                "gagent-orders",
                 [
                     new ScopeBindingGAgentEndpoint(
                         "run",
@@ -472,20 +471,20 @@ public sealed class ScopeBindingCommandApplicationServiceTests
 
         commandPort.Calls.Should().HaveCount(6);
         var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
-        createCommand.Spec.Endpoints.Should().ContainSingle();
-        createCommand.Spec.Endpoints[0].EndpointId.Should().Be("run");
+        createCommand.Spec.Endpoints.Should().HaveCount(2);
+        createCommand.Spec.Endpoints.Select(x => x.EndpointId).Should().Contain(["chat", "run"]);
         var revisionCommand = commandPort.Calls[1].Command.Should().BeOfType<CreateServiceRevisionCommand>().Subject;
         revisionCommand.Spec.ImplementationKind.Should().Be(ServiceImplementationKind.Static);
         revisionCommand.Spec.StaticSpec.Should().NotBeNull();
         revisionCommand.Spec.StaticSpec!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
-        revisionCommand.Spec.StaticSpec.PreferredActorId.Should().Be("gagent-orders");
+        revisionCommand.Spec.StaticSpec.PreferredActorId.Should().BeEmpty();
         result.ImplementationKind.Should().Be(ScopeBindingImplementationKind.GAgent);
         result.GAgent.Should().NotBeNull();
-        result.GAgent!.PreferredActorId.Should().Be("gagent-orders");
+        result.GAgent!.ActorTypeName.Should().Be(typeof(TestStaticServiceAgent).AssemblyQualifiedName);
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldRejectGAgentBinding_WhenEndpointsAreMissing()
+    public async Task UpsertAsync_ShouldInsertDefaultChatEndpoint_WhenEndpointsAreMissing()
     {
         var commandPort = new RecordingServiceCommandPort();
         var lifecyclePort = new FakeServiceLifecycleQueryPort(getResult: null);
@@ -494,17 +493,17 @@ public sealed class ScopeBindingCommandApplicationServiceTests
         var actorPort = new FakeWorkflowRunActorPort();
         var service = CreateService(commandPort, lifecyclePort, scopeScriptQueryPort, scriptDefinitionSnapshotPort, actorPort);
 
-        var act = () => service.UpsertAsync(new ScopeBindingUpsertRequest(
+        await service.UpsertAsync(new ScopeBindingUpsertRequest(
             ScopeId,
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                "gagent-orders",
                 [])));
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("gagent endpoints are required.");
-        commandPort.Calls.Should().BeEmpty();
+        commandPort.Calls.Should().HaveCount(6);
+        var createCommand = commandPort.Calls[0].Command.Should().BeOfType<CreateServiceDefinitionCommand>().Subject;
+        createCommand.Spec.Endpoints.Should().ContainSingle();
+        createCommand.Spec.Endpoints[0].EndpointId.Should().Be("chat");
     }
 
     [Fact]
@@ -869,7 +868,6 @@ public sealed class ScopeBindingCommandApplicationServiceTests
             ScopeBindingImplementationKind.GAgent,
             GAgent: new ScopeBindingGAgentSpec(
                 typeof(TestStaticServiceAgent).AssemblyQualifiedName!,
-                "gagent-orders",
                 [
                     new ScopeBindingGAgentEndpoint(
                         "run",

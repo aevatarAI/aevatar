@@ -100,24 +100,40 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
                 parentState.VoteConfig.Parameters[key] = value;
 
             state.Parents[evt.StepId] = parentState;
-            await SaveStateAsync(state, ctx, ct);
+
+            if (state.Backpressure.MaxConcurrentWorkers == 0)
+                state.Backpressure = BackpressureHelper.Initialize(
+                    BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
             var inputPreview = evt.Input.Length > 150 ? evt.Input[..150] + "..." : evt.Input;
             ctx.Logger.LogInformation("ParallelFanOut: step={StepId} fanout to {Count} workers, vote={VoteType}, input=({Len} chars) {Preview}",
                 evt.StepId, count, string.IsNullOrWhiteSpace(voteStepType) ? "(none)" : voteStepType, evt.Input.Length, inputPreview);
 
+            var bpApplied = false;
             for (var i = 0; i < count; i++)
             {
                 var role = i < workerRoles.Count ? workerRoles[i] : evt.TargetRole;
-                await ctx.PublishAsync(new StepRequestEvent
+                var entry = BackpressureHelper.ToQueueEntry(
+                    $"{evt.StepId}_sub_{i}", "llm_call", runId, evt.Input, role ?? "", null);
+                if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {
-                    StepId = $"{evt.StepId}_sub_{i}",
-                    StepType = "llm_call",
-                    RunId = runId,
-                    Input = evt.Input,
-                    TargetRole = role ?? "",
-                }, TopologyAudience.Self, ct);
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(entry), TopologyAudience.Self, ct);
+                }
+                else if (!bpApplied)
+                {
+                    bpApplied = true;
+                    await ctx.PublishAsync(new BackpressureAppliedEvent
+                    {
+                        StepId = evt.StepId,
+                        RunId = runId,
+                        QueuedCount = state.Backpressure.Queue.Count,
+                        ActiveCount = state.Backpressure.ActiveWorkers,
+                        MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
+                    }, TopologyAudience.Self, ct);
+                }
             }
+            // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
+            await SaveStateAsync(state, ctx, ct);
         }
         else
         {
@@ -158,8 +174,13 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             var parent = evt.StepId.LastIndexOf("_sub_", StringComparison.Ordinal) is var idx and > 0 ? evt.StepId[..idx] : null;
             if (parent == null) return;
             if (!state.Parents.TryGetValue(parent, out var parentState)) return;
+            // Deduplicate: ignore if this sub-step was already collected
+            if (parentState.CollectedStepIds.Contains(evt.StepId))
+                return;
+            parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Collected.Add(evt.ToParallelItemResult());
             state.Parents[parent] = parentState;
+            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
                 evt.StepId, parentState.Collected.Count, parentState.Expected);
             if (parentState.Collected.Count >= parentState.Expected)
@@ -212,6 +233,9 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             {
                 await SaveStateAsync(state, ctx, ct);
             }
+
+            if (drained != null)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
         }
     }
 

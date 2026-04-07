@@ -59,11 +59,17 @@ public sealed class TornadoLLMProvider : ILLMProvider
         var chatRequest = MapRequest(request);
         _logger.LogDebug("Tornado ChatStreamAsync: {Model}", _modelName);
 
+        string? lastFinishReason = null;
+
         await foreach (var chunk in _api.Chat.StreamChatEnumerable(chatRequest).WithCancellation(ct))
         {
-            var delta = chunk.Choices?.FirstOrDefault()?.Delta;
+            var choice = chunk.Choices?.FirstOrDefault();
+            var delta = choice?.Delta;
             var usage = MapUsage(chunk.Usage);
             var emitted = false;
+
+            if (choice?.FinishReason != null)
+                lastFinishReason = choice.FinishReason.ToString();
 
             if (!string.IsNullOrEmpty(delta?.Content))
             {
@@ -94,7 +100,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
                 yield return new LLMStreamChunk { Usage = usage };
         }
 
-        yield return new LLMStreamChunk { IsLast = true };
+        yield return new LLMStreamChunk { IsLast = true, FinishReason = lastFinishReason };
     }
 
     // ─── 转换：Aevatar → LlmTornado ───

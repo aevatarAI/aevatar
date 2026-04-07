@@ -4,6 +4,80 @@ import { loadDraftRunPayload } from '@/shared/runs/draftRunSession';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ScopeInvokePage from './invoke';
 
+jest.mock('@ant-design/pro-components', () => {
+  const mockReact = require('react');
+
+  const ProCard = ({ children, extra, title }: any) =>
+    mockReact.createElement(
+      'section',
+      null,
+      title ? mockReact.createElement('div', null, title) : null,
+      extra ? mockReact.createElement('div', null, extra) : null,
+      children,
+    );
+
+  const PageContainer = ({
+    children,
+    content,
+    extra,
+    pageHeaderRender,
+    title,
+  }: any) =>
+    mockReact.createElement(
+      'section',
+      null,
+      pageHeaderRender === false
+        ? null
+        : title
+          ? mockReact.createElement('h1', null, title)
+          : null,
+      content ? mockReact.createElement('div', null, content) : null,
+      Array.isArray(extra) ? mockReact.createElement('div', null, extra) : null,
+      children,
+    );
+
+  return {
+    PageContainer,
+    ProCard,
+    ProConfigProvider: ({ children }: any) =>
+      mockReact.createElement(mockReact.Fragment, null, children),
+  };
+});
+
+jest.mock('@/shared/ui/aevatarPageShells', () => {
+  const mockReact = require('react');
+
+  return {
+    AevatarContextDrawer: ({ children, open }: any) =>
+      open ? mockReact.createElement('section', null, children) : null,
+    AevatarHelpTooltip: () =>
+      mockReact.createElement('button', {
+        'aria-label': 'Show help',
+        type: 'button',
+      }),
+    AevatarInspectorEmpty: ({ description, title }: any) =>
+      mockReact.createElement(
+        'section',
+        null,
+        title ? mockReact.createElement('div', null, title) : null,
+        description ? mockReact.createElement('div', null, description) : null,
+      ),
+    AevatarPanel: ({ children, description, extra, title }: any) =>
+      mockReact.createElement(
+        'section',
+        null,
+        title ? mockReact.createElement('div', null, title) : null,
+        description ? mockReact.createElement('div', null, description) : null,
+        extra ? mockReact.createElement('div', null, extra) : null,
+        children,
+      ),
+    AevatarPageShell: ({ children }: any) =>
+      mockReact.createElement('section', null, children),
+    AevatarStatusTag: ({ status }: any) =>
+      mockReact.createElement('span', null, status),
+  };
+});
+
 jest.mock('@/shared/api/servicesApi', () => ({
   servicesApi: {
     listServices: jest.fn(),
@@ -12,6 +86,22 @@ jest.mock('@/shared/api/servicesApi', () => ({
 
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
+    bindScopeGAgent: jest.fn(async () => ({
+      available: true,
+      scopeId: 'scope-a',
+      serviceId: 'nyxid-chat',
+      displayName: 'NyxID Chat',
+      revisionId: 'rev-nyxid',
+      targetKind: 'gagent',
+      implementationKind: 'gagent',
+      deploymentId: 'deploy-nyxid',
+      deploymentStatus: 'Active',
+      updatedAt: '2026-03-26T08:00:00Z',
+      gAgent: {
+        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        preferredActorId: 'NyxIdChat:scope-a',
+      },
+    })),
     getAuthSession: jest.fn(async () => ({
       enabled: false,
       scopeId: 'scope-a',
@@ -59,10 +149,91 @@ jest.mock('@/shared/agui/sseFrameNormalizer', () => ({
   parseBackendSSEStream: jest.fn(),
 }));
 
+jest.mock('./components/ScopeServiceRuntimeWorkbench', () => {
+  const mockReact = require('react');
+
+  const ScopeServiceRuntimeWorkbench = (props: any) => {
+    const [activeTab, setActiveTab] = mockReact.useState('overview');
+    const [auditOpen, setAuditOpen] = mockReact.useState(false);
+
+    return mockReact.createElement(
+      'section',
+      null,
+      mockReact.createElement('div', null, 'Published Services'),
+      mockReact.createElement(
+        'div',
+        {
+          role: 'tablist',
+        },
+        ['Bindings (1)', 'Revisions (1)', 'Runs (1)'].map((label) =>
+          mockReact.createElement(
+            'button',
+            {
+              'aria-selected':
+                activeTab === label.toLowerCase().split(' ')[0] ? 'true' : 'false',
+              key: label,
+              onClick: () => {
+                const nextTab = label.toLowerCase().split(' ')[0];
+                setActiveTab(nextTab);
+              },
+              role: 'tab',
+              type: 'button',
+            },
+            label,
+          ),
+        ),
+      ),
+      mockReact.createElement(
+        'div',
+        null,
+        props.selectedServiceId
+          ? `Selected service: ${props.selectedServiceId}`
+          : 'Selected service: none',
+      ),
+      activeTab === 'bindings'
+        ? mockReact.createElement('div', null, 'Knowledge base')
+        : null,
+      activeTab === 'revisions'
+        ? mockReact.createElement('div', null, 'rev-2')
+        : null,
+      activeTab === 'runs'
+        ? mockReact.createElement(
+            mockReact.Fragment,
+            null,
+            mockReact.createElement('div', null, 'run-42'),
+            mockReact.createElement(
+              'button',
+              {
+                onClick: () => setAuditOpen(true),
+                type: 'button',
+              },
+              'Load audit',
+            ),
+          )
+        : null,
+      auditOpen
+        ? mockReact.createElement(
+            'section',
+            null,
+            mockReact.createElement('div', null, 'Run Audit'),
+            mockReact.createElement('div', null, 'Resolved successfully'),
+            mockReact.createElement('div', null, 'Timeline Highlights'),
+          )
+        : null,
+    );
+  };
+
+  return {
+    __esModule: true,
+    default: ScopeServiceRuntimeWorkbench,
+  };
+});
+
 import { servicesApi } from '@/shared/api/servicesApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { studioApi } from '@/shared/studio/api';
 
 describe('ScopeInvokePage', () => {
   beforeEach(() => {
@@ -125,7 +296,6 @@ describe('ScopeInvokePage', () => {
           scriptDefinitionActorId: '',
           scriptSourceHash: '',
           staticActorTypeName: '',
-          staticPreferredActorId: '',
         },
       ],
     });
@@ -154,7 +324,6 @@ describe('ScopeInvokePage', () => {
       scriptDefinitionActorId: '',
       scriptSourceHash: '',
       staticActorTypeName: '',
-      staticPreferredActorId: '',
     });
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockResolvedValue({
       scopeId: 'scope-a',
@@ -300,15 +469,31 @@ describe('ScopeInvokePage', () => {
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
     expect(await screen.findByText('Invoke Lab')).toBeTruthy();
-    expect(await screen.findByRole('button', { name: 'Open operator brief' })).toBeTruthy();
-    expect(await screen.findByRole('button', { name: 'Invoke endpoint' })).toBeTruthy();
-    fireEvent.change(
-      screen.getByPlaceholderText('Prompt or payload text'),
-      {
-        target: { value: 'run the scope command' },
-      },
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Invoke endpoint' }));
+    expect(
+      screen.queryByText(
+        'Invoke Lab keeps parameters on the left, execution on the main stage, and deeper context in the drawer or lab console.',
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        'Load the current scope, then choose the published service and endpoint you want to probe.',
+      ),
+    ).toBeNull();
+    expect(await screen.findByText('Playground')).toBeTruthy();
+    expect(await screen.findByText('Inspector')).toBeTruthy();
+    expect(
+      screen.getAllByRole('button', { name: 'Browse services' }).length,
+    ).toBeGreaterThan(0);
+    const invokeButton = await screen.findByRole('button', {
+      name: 'Invoke endpoint',
+    });
+    await waitFor(() => {
+      expect(invokeButton).not.toBeDisabled();
+    });
+    fireEvent.change(screen.getByPlaceholderText('Prompt or payload text'), {
+      target: { value: 'run the scope command' },
+    });
+    fireEvent.click(invokeButton);
 
     await waitFor(() => {
       expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
@@ -394,14 +579,13 @@ describe('ScopeInvokePage', () => {
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
-    expect(await screen.findByRole('button', { name: 'Stream chat' })).toBeTruthy();
-    fireEvent.change(
-      screen.getByPlaceholderText('Prompt or payload text'),
-      {
-        target: { value: 'hello service' },
-      },
+    const promptInput = await screen.findByPlaceholderText(
+      'Describe the task, ask a question, or paste the next operator instruction.',
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Stream chat' }));
+    fireEvent.change(promptInput, {
+      target: { value: 'hello service' },
+    });
+    fireEvent.click(await screen.findByLabelText('Send'));
 
     await waitFor(() => {
       expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
@@ -416,15 +600,21 @@ describe('ScopeInvokePage', () => {
       );
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Output' }));
-
-    expect(await screen.findByText('Assistant Output')).toBeTruthy();
-    expect(screen.getByText('hello from scope service')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'Output' }),
+    ).toBeNull();
+    expect(await screen.findByText('hello from scope service')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Observed Events' }));
+    expect(await screen.findByText('Observed Events (3)')).toBeTruthy();
+    expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
     expect(screen.getByText('run-1')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Continue in Runs' }));
 
     expect(window.location.pathname).toBe('/runtime/runs');
-    const draftKey = new URLSearchParams(window.location.search).get('draftKey');
+    const draftKey = new URLSearchParams(window.location.search).get(
+      'draftKey',
+    );
     expect(draftKey).toBeTruthy();
     expect(loadDraftRunPayload(draftKey)).toEqual(
       expect.objectContaining({
@@ -450,6 +640,197 @@ describe('ScopeInvokePage', () => {
         ],
       }),
     );
+  });
+
+  it('defaults to NyxID Chat when no published service is listed for the scope', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([]);
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        type: 'RUN_STARTED',
+        runId: 'run-nyxid',
+        threadId: 'thread-nyxid',
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'TEXT_MESSAGE_CONTENT',
+        delta: 'hello from NyxID Chat',
+        messageId: 'msg-nyxid',
+        timestamp: Date.now(),
+      };
+    });
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    expect((await screen.findAllByText('NyxID Chat')).length).toBeGreaterThan(0);
+    expect(screen.getByText('/ Chat')).toBeTruthy();
+    expect(screen.queryByText('Prompt / Payload')).toBeNull();
+    expect(
+      screen.queryByText('No published project service is selected yet.'),
+    ).toBeNull();
+
+    const promptInput = await screen.findByPlaceholderText(
+      'Describe the task, ask a question, or paste the next operator instruction.',
+    );
+    fireEvent.change(promptInput, {
+      target: { value: 'hello nyxid' },
+    });
+    fireEvent.click(await screen.findByLabelText('Send'));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
+        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        displayName: 'NyxID Chat',
+        endpoints: [
+          {
+            description:
+              'Chat with NyxID about services, credentials, and configuration.',
+            displayName: 'Chat',
+            endpointId: 'chat',
+            kind: 'chat',
+          },
+        ],
+        preferredActorId: 'NyxIdChat:scope-a',
+        scopeId: 'scope-a',
+        serviceId: 'nyxid-chat',
+      });
+    });
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-a',
+        {
+          prompt: 'hello nyxid',
+        },
+        expect.any(Object),
+        {
+          serviceId: 'nyxid-chat',
+        },
+      );
+    });
+
+    expect(await screen.findByText('hello from NyxID Chat')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Observed Events' }));
+    expect(await screen.findByText('Observed Events (2)')).toBeTruthy();
+    expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
+  });
+
+  it('renders semantic chat output for reasoning, steps, and tool activity', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+      {
+        serviceKey: 'scope-a:default:default:default',
+        tenantId: 'scope-a',
+        appId: 'default',
+        namespace: 'default',
+        serviceId: 'default',
+        displayName: 'Workspace Demo',
+        defaultServingRevisionId: 'rev-2',
+        activeServingRevisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        primaryActorId: 'actor://scope-a/default',
+        deploymentStatus: 'Active',
+        endpoints: [
+          {
+            endpointId: 'chat',
+            displayName: 'chat',
+            kind: 'chat',
+            requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+            responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+            description: 'Chat with the published scope service.',
+          },
+        ],
+        policyIds: [],
+        updatedAt: '2026-03-26T08:00:00Z',
+      },
+    ]);
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        type: 'RUN_STARTED',
+        runId: 'run-semantic',
+        threadId: 'thread-semantic',
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'CUSTOM',
+        name: 'aevatar.llm.reasoning',
+        value: {
+          delta: 'Inspecting bindings and preparing the answer.',
+        },
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'CUSTOM',
+        name: 'aevatar.step.request',
+        value: {
+          stepId: 'Inspecting the request',
+          stepType: 'analysis',
+          input: 'hello service',
+        },
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'TOOL_CALL_START',
+        toolName: 'knowledge.search',
+        toolCallId: 'tool-1',
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'TOOL_CALL_END',
+        toolName: 'knowledge.search',
+        toolCallId: 'tool-1',
+        result: 'Found the binding details.',
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'CUSTOM',
+        name: 'aevatar.step.completed',
+        value: {
+          stepId: 'Inspecting the request',
+          success: true,
+          output: 'Binding looks healthy.',
+        },
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'TEXT_MESSAGE_CONTENT',
+        delta: 'Binding looks healthy.',
+        messageId: 'msg-semantic',
+        timestamp: Date.now(),
+      };
+    });
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    await waitFor(() => {
+      expect(servicesApi.listServices).toHaveBeenCalledWith({
+        tenantId: 'scope-a',
+        appId: 'default',
+        namespace: 'default',
+      });
+    });
+    const promptInput = await screen.findByPlaceholderText(
+      'Describe the task, ask a question, or paste the next operator instruction.',
+    );
+    fireEvent.change(promptInput, {
+      target: { value: 'hello service' },
+    });
+    fireEvent.click(await screen.findByLabelText('Send'));
+    expect(
+      await screen.findByText(/Binding looks healthy\./),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Thinking' })[0]);
+    expect(
+      await screen.findByText('Inspecting bindings and preparing the answer.'),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /2 actions/i })[0]);
+    expect(await screen.findByText('Inspecting the request')).toBeTruthy();
+    expect(await screen.findByText('knowledge.search')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'knowledge.search' })[0]);
+    expect(await screen.findByText('Found the binding details.')).toBeTruthy();
   });
 
   it('keeps the invoke lab empty after reset instead of auto-refilling a service', async () => {
@@ -483,7 +864,12 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    expect(await screen.findByRole('button', { name: 'Invoke endpoint' })).toBeTruthy();
+    const invokeButton = await screen.findByRole('button', {
+      name: 'Invoke endpoint',
+    });
+    await waitFor(() => {
+      expect(invokeButton).not.toBeDisabled();
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 
@@ -493,9 +879,15 @@ describe('ScopeInvokePage', () => {
       ).toBeTruthy();
     });
 
-    expect(screen.getByRole('button', { name: 'Invoke endpoint' })).toBeDisabled();
-    expect(new URLSearchParams(window.location.search).get('serviceId')).toBeNull();
-    expect(new URLSearchParams(window.location.search).get('endpointId')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Invoke endpoint' }),
+    ).toBeDisabled();
+    expect(
+      new URLSearchParams(window.location.search).get('serviceId'),
+    ).toBeNull();
+    expect(
+      new URLSearchParams(window.location.search).get('endpointId'),
+    ).toBeNull();
   });
 
   it('opens the service runtime workbench with bindings, revisions, and runs', async () => {
@@ -530,12 +922,20 @@ describe('ScopeInvokePage', () => {
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
     expect(await screen.findByText('Invoke Lab')).toBeTruthy();
-    fireEvent.click(await screen.findByRole('button', { name: 'Browse services' }));
+    fireEvent.click(
+      screen.getAllByRole('button', { name: 'Browse services' })[0],
+    );
 
     expect(await screen.findByText('Published Services')).toBeTruthy();
-    expect(await screen.findByRole('tab', { name: /Bindings \(1\)/i })).toBeTruthy();
-    expect(await screen.findByRole('tab', { name: /Revisions \(1\)/i })).toBeTruthy();
-    expect(await screen.findByRole('tab', { name: /Runs \(1\)/i })).toBeTruthy();
+    expect(
+      await screen.findByRole('tab', { name: /Bindings \(1\)/i }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByRole('tab', { name: /Revisions \(1\)/i }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByRole('tab', { name: /Runs \(1\)/i }),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('tab', { name: /Bindings \(1\)/i }));
     expect(await screen.findByText('Knowledge base')).toBeTruthy();
@@ -544,7 +944,9 @@ describe('ScopeInvokePage', () => {
     expect(await screen.findByText('run-42')).toBeTruthy();
     const auditButton = screen
       .getAllByRole('button')
-      .find((button) => /Load audit|Inspecting/i.test(button.textContent || ''));
+      .find((button) =>
+        /Load audit|Inspecting/i.test(button.textContent || ''),
+      );
     expect(auditButton).toBeTruthy();
     fireEvent.click(auditButton as HTMLElement);
 

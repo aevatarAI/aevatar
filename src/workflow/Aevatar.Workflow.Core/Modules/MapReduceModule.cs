@@ -81,21 +81,37 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 ReducePromptPrefix = reducePrefix,
             };
             state.Parents[parentKey.StepId] = parentState;
-            await SaveStateAsync(state, ctx, ct);
+
+            if (state.Backpressure.MaxConcurrentWorkers == 0)
+                state.Backpressure = BackpressureHelper.Initialize(
+                    BackpressureHelper.ResolveMaxConcurrent(request.Parameters));
 
             ctx.Logger.LogInformation("MapReduce {StepId}: map {Count} items via {Type}", request.StepId, items.Length, mapType);
 
+            var bpApplied = false;
             for (var i = 0; i < items.Length; i++)
             {
-                await ctx.PublishAsync(new StepRequestEvent
+                var entry = BackpressureHelper.ToQueueEntry(
+                    $"{request.StepId}_map_{i}", mapType, runId, items[i], mapRole ?? "", null);
+                if (BackpressureHelper.TryAdmit(state.Backpressure, entry))
                 {
-                    StepId = $"{request.StepId}_map_{i}",
-                    StepType = mapType,
-                    RunId = runId,
-                    Input = items[i],
-                    TargetRole = mapRole ?? "",
-                }, TopologyAudience.Self, ct);
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(entry), TopologyAudience.Self, ct);
+                }
+                else if (!bpApplied)
+                {
+                    bpApplied = true;
+                    await ctx.PublishAsync(new BackpressureAppliedEvent
+                    {
+                        StepId = request.StepId,
+                        RunId = runId,
+                        QueuedCount = state.Backpressure.Queue.Count,
+                        ActiveCount = state.Backpressure.ActiveWorkers,
+                        MaxConcurrent = state.Backpressure.MaxConcurrentWorkers,
+                    }, TopologyAudience.Self, ct);
+                }
             }
+            // Always save after loop — TryAdmit mutates ActiveWorkers even when no items are queued
+            await SaveStateAsync(state, ctx, ct);
         }
         else if (payload.Is(StepCompletedEvent.Descriptor))
         {
@@ -121,11 +137,19 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
             if (parent == null) return;
             if (!state.Parents.TryGetValue(parent, out var parentState)) return;
 
+            // Deduplicate: ignore if this map step was already collected
+            if (parentState.CollectedStepIds.Contains(evt.StepId))
+                return;
+            parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Results.Add(evt.ToMapReduceItemResult());
             state.Parents[parent] = parentState;
+            var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
+
             if (parentState.Results.Count < parentState.MapCount)
             {
                 await SaveStateAsync(state, ctx, ct);
+                if (drained != null)
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
                 return;
             }
 
@@ -141,6 +165,8 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                     StepId = parent, RunId = runId, Success = allSuccess, Output = merged,
                     Error = allSuccess ? "" : "one or more map steps failed",
                 }, TopologyAudience.Self, ct);
+                if (drained != null)
+                    await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
                 return;
             }
 
@@ -162,6 +188,9 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 Input = reduceInput,
                 TargetRole = parentState.ReduceRole,
             }, TopologyAudience.Self, ct);
+
+            if (drained != null)
+                await ctx.PublishAsync(BackpressureHelper.ToStepRequest(drained), TopologyAudience.Self, ct);
         }
     }
 

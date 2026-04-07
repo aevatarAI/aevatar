@@ -170,6 +170,9 @@ public sealed class NyxIdApiClient
 
     // ─── Approvals (additions) ───
 
+    public Task<string> CreateApprovalRequestAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/approvals/requests", body, ct);
+
     public Task<string> GetApprovalAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/approvals/requests/{Uri.EscapeDataString(id)}", ct);
 
@@ -181,6 +184,13 @@ public sealed class NyxIdApiClient
 
     public Task<string> SetApprovalConfigAsync(string token, string id, string body, CancellationToken ct) =>
         PutAsync(token, $"/api/v1/approvals/service-configs/{Uri.EscapeDataString(id)}", body, ct);
+
+    // ─── Global Approval ───
+
+    /// <summary>Enable or disable global approval protection via notification settings.</summary>
+    public Task<string> SetGlobalApprovalAsync(string token, bool enabled, CancellationToken ct) =>
+        PutAsync(token, "/api/v1/notifications/settings",
+            enabled ? """{"approval_required":true}""" : """{"approval_required":false}""", ct);
 
     // ─── Endpoints ───
 
@@ -259,6 +269,38 @@ public sealed class NyxIdApiClient
 
     public Task<string> DeleteUserCredentialsAsync(string token, string providerId, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/providers/{Uri.EscapeDataString(providerId)}/credentials", ct);
+
+    // ─── Channel Bot Relay ───
+
+    public Task<string> ListChannelBotsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/channel-bots", ct);
+
+    public Task<string> GetChannelBotAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> RegisterChannelBotAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/channel-bots", body, ct);
+
+    public Task<string> DeleteChannelBotAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> VerifyChannelBotAsync(string token, string id, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}/verify", "{}", ct);
+
+    public Task<string> ListConversationRoutesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/channel-conversations", ct);
+
+    public Task<string> GetConversationRouteAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> CreateConversationRouteAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/channel-conversations", body, ct);
+
+    public Task<string> UpdateConversationRouteAsync(string token, string id, string body, CancellationToken ct) =>
+        PutAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", body, ct);
+
+    public Task<string> DeleteConversationRouteAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
 
     // ─── HTTP helpers ───
 

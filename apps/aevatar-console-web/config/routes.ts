@@ -35,6 +35,12 @@ export default [
     menuBadgeKey: "build.assets",
   },
   {
+    path: "/scopes/files",
+    name: "Files",
+    component: "./scopes/files",
+    menuGroupKey: "build",
+  },
+  {
     path: "/studio",
     name: "Studio",
     component: "./studio",
@@ -51,6 +57,12 @@ export default [
     name: "Capabilities",
     component: "./primitives",
     menuGroupKey: "build",
+  },
+  {
+    path: "/chat",
+    name: "Chat",
+    component: "./chat",
+    menuGroupKey: "chat",
   },
   {
     path: "/scopes/invoke",

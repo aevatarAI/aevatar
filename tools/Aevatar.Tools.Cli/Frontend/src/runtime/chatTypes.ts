@@ -16,6 +16,27 @@ export type ChatMessage = {
   thinking?: string;
   /** Tool calls */
   toolCalls?: ToolCallInfo[];
+  /** Pending tool approval request from the agent */
+  pendingApproval?: PendingApprovalInfo;
+  /** Pending human_input request from a workflow */
+  pendingHumanInput?: PendingHumanInputInfo;
+};
+
+export type PendingApprovalInfo = {
+  requestId: string;
+  toolName: string;
+  toolCallId: string;
+  argumentsJson: string;
+  isDestructive: boolean;
+  timeoutSeconds: number;
+};
+
+export type PendingHumanInputInfo = {
+  stepId: string;
+  runId: string;
+  prompt: string;
+  serviceId?: string;
+  actorId?: string;
 };
 
 export type StepInfo = {
@@ -42,7 +63,7 @@ export type ServiceEndpoint = {
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: 'nyxid-chat' | 'streaming-proxy' | 'service';
+  kind: 'nyxid-chat' | 'onboarding' | 'streaming-proxy' | 'service';
   endpoints: ServiceEndpoint[];
 };
 
@@ -57,6 +78,8 @@ export type ConversationMeta = {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  llmRoute?: string;
+  llmModel?: string;
 };
 
 export type StoredChatMessage = {

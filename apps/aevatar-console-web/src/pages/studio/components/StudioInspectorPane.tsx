@@ -26,6 +26,7 @@ import {
   summaryMetricStyle,
   summaryMetricValueStyle,
 } from '@/shared/ui/proComponents';
+import { AevatarHelpTooltip } from '@/shared/ui/aevatarPageShells';
 
 type StudioInspectorTab = 'node' | 'roles' | 'yaml';
 
@@ -99,6 +100,7 @@ type SummaryMetricProps = {
 type SectionHeaderProps = {
   action?: React.ReactNode;
   description?: React.ReactNode;
+  help?: React.ReactNode;
   title: string;
 };
 
@@ -262,11 +264,23 @@ const SummaryMetric: React.FC<SummaryMetricProps> = ({
 const SectionHeader: React.FC<SectionHeaderProps> = ({
   action,
   description,
+  help,
   title,
 }) => (
   <div style={sectionHeaderStyle}>
     <div style={{ minWidth: 0 }}>
-      <Typography.Text strong>{title}</Typography.Text>
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'inline-flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          maxWidth: '100%',
+        }}
+      >
+        <Typography.Text strong>{title}</Typography.Text>
+        {help ? <AevatarHelpTooltip content={help} /> : null}
+      </div>
       {description ? (
         <Typography.Paragraph style={{ margin: '4px 0 0' }} type="secondary">
           {description}
@@ -571,7 +585,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Step summary"
-            description="A compact view of the currently selected step before you edit fields."
+            help="A compact view of the currently selected step before you edit fields."
           />
           <div style={summaryMetricGridStyle}>
             <SummaryMetric label="Primitive" tone="info" value={selectedGraphStep.type} />
@@ -616,7 +630,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Identity and routing"
-            description="Update the step name, primitive type, and graph links."
+            help="Update the step name, primitive type, and graph links."
           />
           <div style={formGridStyle}>
             <div style={cardStackStyle}>
@@ -709,7 +723,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Parameters"
-            description="Keep runtime inputs readable and wire connector calls explicitly."
+            help="Keep runtime inputs readable and wire connector calls explicitly."
           />
           {nodeInspectorDraft.type === 'connector_call' ? (
             <div style={cardStackStyle}>
@@ -773,7 +787,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Outgoing connections"
-            description="Inspect and remove the graph links owned by this step."
+            help="Inspect and remove the graph links owned by this step."
           />
           {selectedStepConnections.length > 0 ? (
             <div style={cardListStyle}>
@@ -817,7 +831,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Step actions"
-            description="Apply the edited draft or update the workflow graph around this step."
+            help="Apply the edited draft or update the workflow graph around this step."
           />
           <div style={cardListActionStyle}>
             <Button
@@ -842,7 +856,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Role summary"
-            description="Review the selected role before editing provider, model, or prompt details."
+            help="Review the selected role before editing provider, model, or prompt details."
           />
           <div style={summaryMetricGridStyle}>
             <SummaryMetric
@@ -877,7 +891,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Role details"
-            description="Keep role identity, model configuration, and prompt text in one place."
+            help="Keep role identity, model configuration, and prompt text in one place."
           />
           <div style={formGridStyle}>
             <div style={cardStackStyle}>
@@ -971,7 +985,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Role actions"
-            description="Apply the updated role fields back into the workflow draft."
+            help="Apply the updated role fields back into the workflow draft."
           />
           <div style={cardListActionStyle}>
             <Button
@@ -998,7 +1012,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Role library"
-            description="Search saved roles, add new workflow roles, and expand the ones that need edits."
+            help="Search saved roles, add new workflow roles, and expand the ones that need edits."
             action={<Button onClick={onAddWorkflowRole}>Add role</Button>}
           />
           <div style={summaryMetricGridStyle}>
@@ -1025,7 +1039,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Saved roles"
-            description="Promote a catalog role into the active workflow when you want a reusable starting point."
+            help="Promote a catalog role into the active workflow when you want a reusable starting point."
           />
           {filteredSavedRoles.length > 0 ? (
             <div style={cardListStyle}>
@@ -1063,7 +1077,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
         <div style={sectionPanelStyle}>
           <SectionHeader
             title="Workflow roles"
-            description="Expand a role to edit its ID, model, system prompt, and connector allow-list."
+            help="Expand a role to edit its ID, model, system prompt, and connector allow-list."
           />
           {filteredWorkflowRoles.length > 0 ? (
             <div style={cardListStyle}>
@@ -1227,7 +1241,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={sectionPanelStyle}>
         <SectionHeader
           title="YAML workspace"
-          description="Edit the source document directly, then validate it before saving or running."
+          help="Edit the source document directly, then validate it before saving or running."
           action={
             <Space wrap size={[8, 8]}>
               <Button onClick={onValidateDraft}>Validate</Button>
@@ -1303,7 +1317,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={sectionPanelStyle}>
         <SectionHeader
           title="Workflow YAML"
-          description="Direct source editing stays available here, but validation and summary stay separated above and below."
+          help="Direct source editing stays available here, but validation and summary stay separated above and below."
         />
         <Input.TextArea
           aria-label="Studio workflow yaml panel"
@@ -1318,7 +1332,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={sectionPanelStyle}>
         <SectionHeader
           title="Validation digest"
-          description="Studio keeps the most important parsing feedback visible without taking over the whole inspector."
+          help="Studio keeps the most important parsing feedback visible without taking over the whole inspector."
         />
         {renderValidationState(
           draftYaml,
@@ -1348,7 +1362,7 @@ const StudioInspectorPane: React.FC<StudioInspectorPaneProps> = ({
       <div style={sectionPanelStyle}>
         <SectionHeader
           title="Inspector views"
-          description="Switch between node edits, reusable roles, and the underlying YAML without leaving the current drawer."
+          help="Switch between node edits, reusable roles, and the underlying YAML without leaving the current drawer."
         />
         <Space wrap size={[8, 8]}>
           <Button

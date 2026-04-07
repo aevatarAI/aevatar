@@ -90,17 +90,17 @@ export default function RolesCatalogEditor({ flash }: Props) {
     <div className="space-y-4 max-w-[780px]">
       {/* Tabs + actions */}
       <div className="flex items-center justify-between">
-        <div className="flex gap-1 rounded-lg bg-[#F2F1EE] p-0.5">
-          <button onClick={() => setTab('catalog')} className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-colors ${tab === 'catalog' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Catalog</button>
-          <button onClick={() => setTab('raw')} className={`px-3 py-1 rounded-md text-[12px] font-semibold transition-colors ${tab === 'raw' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>Raw</button>
+        <div className="workspace-segmented-control">
+          <button onClick={() => setTab('catalog')} className={`workspace-segmented-button ${tab === 'catalog' ? 'active' : ''}`}>Catalog</button>
+          <button onClick={() => setTab('raw')} className={`workspace-segmented-button ${tab === 'raw' ? 'active' : ''}`}>Raw</button>
         </div>
         <div className="flex items-center gap-2">
           {tab === 'catalog' && (
-            <button onClick={addRole} className="inline-flex items-center gap-1 rounded-lg border border-[#EEEAE4] bg-white px-3 py-1.5 text-[12px] font-semibold text-gray-700 hover:bg-[#FAF8F4]">
+            <button onClick={addRole} className="ghost-action !min-h-[34px]">
               <Plus size={12} /> Add
             </button>
           )}
-          <button onClick={tab === 'catalog' ? saveCatalog : saveRaw} disabled={saving} className="inline-flex items-center gap-1 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] disabled:opacity-50">
+          <button onClick={tab === 'catalog' ? saveCatalog : saveRaw} disabled={saving} className="solid-action !min-h-[34px] disabled:opacity-50">
             {saving ? <Loader2 size={12} className="animate-spin" /> : null}
             Save
           </button>
@@ -108,11 +108,11 @@ export default function RolesCatalogEditor({ flash }: Props) {
       </div>
 
       {tab === 'raw' ? (
-        <div className="rounded-2xl border border-[#EEEAE4] bg-white p-1">
+        <div className="workspace-editor-frame">
           <textarea
             value={rawJson}
             onChange={e => setRawJson(e.target.value)}
-            className="w-full min-h-[400px] max-h-[70vh] p-4 text-[13px] font-mono leading-relaxed text-gray-700 resize-y outline-none"
+            className="panel-textarea !min-h-[400px] !max-h-[70vh] !border-0 !bg-transparent !shadow-none p-4"
             spellCheck={false}
           />
         </div>
@@ -124,7 +124,7 @@ export default function RolesCatalogEditor({ flash }: Props) {
           {roles.map(role => {
             const expanded = expandedKey === role.key;
             return (
-              <div key={role.key} className="rounded-2xl border border-[#EEEAE4] bg-white overflow-hidden">
+              <div key={role.key} className="workspace-card overflow-hidden">
                 <button
                   onClick={() => setExpandedKey(expanded ? null : role.key)}
                   className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-[#FAFAF9]"
@@ -150,7 +150,7 @@ export default function RolesCatalogEditor({ flash }: Props) {
                         value={role.systemPrompt}
                         onChange={e => updateRole(role.key, { systemPrompt: e.target.value })}
                         rows={4}
-                        className="w-full rounded-lg border border-[#EEEAE4] px-3 py-2 text-[13px] text-gray-700 resize-y outline-none focus:border-gray-400"
+                        className="panel-textarea !min-h-[112px]"
                       />
                     </div>
                     <div>
@@ -159,7 +159,7 @@ export default function RolesCatalogEditor({ flash }: Props) {
                         value={role.connectorsText}
                         onChange={e => updateRole(role.key, { connectorsText: e.target.value })}
                         rows={2}
-                        className="w-full rounded-lg border border-[#EEEAE4] px-3 py-2 text-[13px] text-gray-700 resize-y outline-none focus:border-gray-400"
+                        className="panel-textarea !min-h-[88px]"
                       />
                     </div>
                     <div className="flex justify-end">
@@ -185,7 +185,7 @@ function Field({ label, value, onChange }: { label: string; value: string; onCha
       <input
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="w-full rounded-lg border border-[#EEEAE4] px-3 py-1.5 text-[13px] text-gray-700 outline-none focus:border-gray-400"
+        className="panel-input"
       />
     </div>
   );

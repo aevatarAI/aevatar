@@ -83,7 +83,7 @@ public static class ScopeServiceEndpoints
             if (request.WorkflowYamls == null || request.WorkflowYamls.Count == 0)
                 throw new InvalidOperationException("workflowYamls is required.");
 
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
             if (!ScopeWorkflowEndpoints.TryParseEventFormat(request.EventFormat, out var eventFormat))
             {
                 await WriteJsonErrorResponseAsync(
@@ -164,7 +164,6 @@ public static class ScopeServiceEndpoints
                         ? null
                         : new ScopeBindingGAgentSpec(
                             request.GAgent.ActorTypeName,
-                            request.GAgent.PreferredActorId,
                             (request.GAgent.Endpoints ?? [])
                             .Select(endpoint => new ScopeBindingGAgentEndpoint(
                                 endpoint.EndpointId,
@@ -517,7 +516,7 @@ public static class ScopeServiceEndpoints
             if (await ScopeEndpointAccess.TryWriteScopeAccessDeniedAsync(http, scopeId, ct))
                 return;
 
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
             var chatRequest = new WorkflowChatRunRequest(
                 Prompt: request.Prompt?.Trim() ?? string.Empty,
                 WorkflowName: null,
@@ -861,7 +860,7 @@ public static class ScopeServiceEndpoints
                 return;
 
             var normalizedPrompt = request.Prompt?.Trim() ?? string.Empty;
-            var scopedHeaders = BuildScopedHeaders(scopeId, request.Headers, http);
+            var scopedHeaders = await BuildScopedHeadersAsync(scopeId, request.Headers, http, ct);
             var invocationRequest = BuildStreamInvocationRequest(
                 options.Value,
                 scopeId,
@@ -903,8 +902,23 @@ public static class ScopeServiceEndpoints
                         http,
                         target,
                         normalizedPrompt,
+                        request.ActorId,
                         request.SessionId,
                         scopeId,
+                        scopedHeaders,
+                        actorRuntime,
+                        subscriptionProvider,
+                        ct);
+                    break;
+
+                case ServiceImplementationKind.Scripting:
+                    await HandleScriptingServiceChatStreamAsync(
+                        http,
+                        target,
+                        normalizedPrompt,
+                        request.SessionId,
+                        scopeId,
+                        scopedHeaders,
                         actorRuntime,
                         subscriptionProvider,
                         ct);
@@ -939,28 +953,28 @@ public static class ScopeServiceEndpoints
         HttpContext http,
         ServiceInvocationResolvedTarget target,
         string prompt,
+        string? actorId,
         string? sessionId,
         string scopeId,
+        IReadOnlyDictionary<string, string>? headers,
         IActorRuntime actorRuntime,
         IActorEventSubscriptionProvider subscriptionProvider,
         CancellationToken ct)
     {
         var plan = target.Artifact.DeploymentPlan.StaticPlan;
-        var preferredActorId = string.IsNullOrWhiteSpace(plan.PreferredActorId)
+        var resolvedActorId = string.IsNullOrWhiteSpace(actorId)
             ? null
-            : plan.PreferredActorId.Trim();
-
-        // Resolve the actor type and create/reuse the actor.
+            : actorId.Trim();
         var agentType = ScopeGAgentEndpoints.ResolveAgentType(plan.ActorTypeName);
         if (agentType is null)
             throw new InvalidOperationException(
                 $"GAgent type '{plan.ActorTypeName}' could not be resolved.");
 
         IActor actor;
-        if (preferredActorId is not null)
+        if (resolvedActorId is not null)
         {
-            var existing = await actorRuntime.GetAsync(preferredActorId);
-            actor = existing ?? await actorRuntime.CreateAsync(agentType, preferredActorId, ct);
+            var existing = await actorRuntime.GetAsync(resolvedActorId);
+            actor = existing ?? await actorRuntime.CreateAsync(agentType, resolvedActorId, ct);
         }
         else
         {
@@ -1014,29 +1028,7 @@ public static class ScopeServiceEndpoints
             SessionId = sessionId ?? string.Empty,
             ScopeId = scopeId,
         };
-
-        // Forward the caller's Bearer token so NyxID-backed GAgents can pass it
-        // to the NyxID LLM gateway. Other LLM providers ignore this metadata key.
-        var bearerToken = ExtractBearerToken(http);
-        if (!string.IsNullOrWhiteSpace(bearerToken))
-            chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = bearerToken;
-
-        // Forward the user's preferred model from their config so the LLM provider
-        // uses the correct model (e.g. deepseek-chat) instead of a hardcoded default.
-        var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
-        if (userConfigStore != null)
-        {
-            try
-            {
-                var userConfig = await userConfigStore.GetAsync(ct);
-                if (!string.IsNullOrWhiteSpace(userConfig.DefaultModel))
-                    chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
-            }
-            catch
-            {
-                // Best-effort; fall back to provider default if config unavailable.
-            }
-        }
+        CopyHeaders(headers, chatRequest.Metadata);
 
         var envelope = new EventEnvelope
         {
@@ -1091,6 +1083,127 @@ public static class ScopeServiceEndpoints
 
     internal static bool ShouldEmitSyntheticRunFinished(AGUIEvent.EventOneofCase terminalEventCase) =>
         terminalEventCase == AGUIEvent.EventOneofCase.TextMessageEnd;
+
+    private static async Task HandleScriptingServiceChatStreamAsync(
+        HttpContext http,
+        ServiceInvocationResolvedTarget target,
+        string prompt,
+        string? sessionId,
+        string scopeId,
+        IReadOnlyDictionary<string, string>? headers,
+        IActorRuntime actorRuntime,
+        IActorEventSubscriptionProvider subscriptionProvider,
+        CancellationToken ct)
+    {
+        var actorId = target.Service.PrimaryActorId;
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new InvalidOperationException(
+                "Script runtime actor is not available. The service may not be activated.");
+
+        var actor = await actorRuntime.GetAsync(actorId);
+        if (actor is null)
+            throw new InvalidOperationException(
+                $"Script runtime actor '{actorId}' could not be resolved. The service may not be activated.");
+
+        var writer = new AGUISseWriter(http.Response);
+        http.Response.StatusCode = StatusCodes.Status200OK;
+        http.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
+        http.Response.Headers.CacheControl = "no-store";
+        http.Response.Headers["X-Accel-Buffering"] = "no";
+        await http.Response.StartAsync(ct);
+
+        var runId = Guid.NewGuid().ToString("N");
+        await writer.WriteAsync(new AGUIEvent
+        {
+            RunStarted = new RunStartedEvent { ThreadId = actorId, RunId = runId },
+        }, ct);
+
+        var tcs = new TaskCompletionSource<AGUIEvent.EventOneofCase>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var ctr = ct.Register(() => tcs.TrySetCanceled());
+
+        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+            actorId,
+            async envelope =>
+            {
+                try
+                {
+                    var aguiEvent = ScopeGAgentEndpoints.TryMapEnvelopeToAguiEvent(envelope);
+                    if (aguiEvent is null) return;
+
+                    await writer.WriteAsync(aguiEvent, CancellationToken.None);
+
+                    if (aguiEvent.EventCase is AGUIEvent.EventOneofCase.RunFinished
+                        or AGUIEvent.EventOneofCase.RunError
+                        or AGUIEvent.EventOneofCase.TextMessageEnd)
+                    {
+                        tcs.TrySetResult(aguiEvent.EventCase);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            },
+            ct);
+
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = prompt,
+            SessionId = sessionId ?? string.Empty,
+            ScopeId = scopeId,
+        };
+        CopyHeaders(headers, chatRequest.Metadata);
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(chatRequest),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actorId },
+            },
+        };
+        await actor.HandleEventAsync(envelope, ct);
+
+        var completedTask = await Task.WhenAny(tcs.Task, Task.Delay(120_000, ct));
+        if (completedTask == tcs.Task)
+        {
+            if (tcs.Task.IsFaulted)
+            {
+                var ex = tcs.Task.Exception?.InnerException ?? tcs.Task.Exception;
+                var isAuthRequired = ex is NyxIdAuthenticationRequiredException;
+                await writer.WriteAsync(new AGUIEvent
+                {
+                    RunError = new RunErrorEvent
+                    {
+                        Message = isAuthRequired
+                            ? "NyxID authentication required. Please sign in."
+                            : (ex?.Message ?? "An error occurred."),
+                        Code = isAuthRequired ? "authentication_required" : null,
+                    },
+                }, CancellationToken.None);
+            }
+            else
+            {
+                var terminalEventCase = tcs.Task.Result;
+                if (ShouldEmitSyntheticRunFinished(terminalEventCase))
+                {
+                    await writer.WriteAsync(new AGUIEvent
+                    {
+                        RunFinished = new RunFinishedEvent { ThreadId = actorId, RunId = runId },
+                    }, CancellationToken.None);
+                }
+            }
+        }
+        else
+        {
+            await writer.WriteAsync(new AGUIEvent
+            {
+                RunError = new RunErrorEvent { Message = "Script service chat stream timed out." },
+            }, CancellationToken.None);
+        }
+    }
 
     private static async Task<IResult> HandleInvokeAsync(
         HttpContext http,
@@ -1498,8 +1611,7 @@ public static class ScopeServiceEndpoints
                     revision.Implementation?.Scripting?.Revision ?? string.Empty,
                     revision.Implementation?.Scripting?.DefinitionActorId ?? string.Empty,
                     revision.Implementation?.Scripting?.SourceHash ?? string.Empty,
-                    revision.Implementation?.Static?.ActorTypeName ?? string.Empty,
-                    revision.Implementation?.Static?.PreferredActorId ?? string.Empty);
+                    revision.Implementation?.Static?.ActorTypeName ?? string.Empty);
             })
             .OrderByDescending(x => x.IsDefaultServing)
             .ThenByDescending(x => x.IsActiveServing)
@@ -1728,10 +1840,11 @@ public static class ScopeServiceEndpoints
             throw new InvalidOperationException("Workflow service has no active definition actor.");
     }
 
-    private static Dictionary<string, string> BuildScopedHeaders(
+    private static async Task<Dictionary<string, string>> BuildScopedHeadersAsync(
         string scopeId,
         IReadOnlyDictionary<string, string>? headers,
-        HttpContext? http = null)
+        HttpContext? http = null,
+        CancellationToken cancellationToken = default)
     {
         var scopedHeaders = headers == null
             ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -1739,6 +1852,27 @@ public static class ScopeServiceEndpoints
         scopedHeaders.Remove("scope_id");
         scopedHeaders.Remove(WorkflowRunCommandMetadataKeys.ScopeId);
         InjectBearerToken(http, scopedHeaders);
+        if (http != null)
+        {
+            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            if (userConfigStore != null)
+            {
+                try
+                {
+                    var userConfig = await userConfigStore.GetAsync(cancellationToken);
+                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.ModelOverride) &&
+                        !string.IsNullOrWhiteSpace(userConfig.DefaultModel))
+                        scopedHeaders[LLMRequestMetadataKeys.ModelOverride] = userConfig.DefaultModel.Trim();
+                    if (!scopedHeaders.ContainsKey(LLMRequestMetadataKeys.NyxIdRoutePreference) &&
+                        !string.IsNullOrWhiteSpace(userConfig.PreferredLlmRoute))
+                        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference] = userConfig.PreferredLlmRoute.Trim();
+                }
+                catch
+                {
+                    // Best-effort; fall back to provider defaults if config unavailable.
+                }
+            }
+        }
         return scopedHeaders;
     }
 
@@ -1752,6 +1886,19 @@ public static class ScopeServiceEndpoints
             var bearerToken = auth["Bearer ".Length..].Trim();
             metadata["nyxid.access_token"] = bearerToken;
             metadata[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
+        }
+    }
+
+    private static void CopyHeaders(
+        IReadOnlyDictionary<string, string>? source,
+        IDictionary<string, string> target)
+    {
+        if (source == null)
+            return;
+
+        foreach (var (key, value) in source)
+        {
+            target[key] = value;
         }
     }
 
@@ -1927,17 +2074,6 @@ public static class ScopeServiceEndpoints
         await http.Response.WriteAsJsonAsync(new { code, message }, cancellationToken: ct);
     }
 
-    private static string? ExtractBearerToken(HttpContext http)
-    {
-        var authHeader = http.Request.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(authHeader))
-            return null;
-
-        return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? authHeader["Bearer ".Length..].Trim()
-            : null;
-    }
-
     public sealed record InvokeScopeServiceHttpRequest(
         string? CommandId,
         string? CorrelationId,
@@ -1972,11 +2108,11 @@ public static class ScopeServiceEndpoints
 
     public sealed record ScopeBindingGAgentHttpRequest(
         string ActorTypeName,
-        string? PreferredActorId,
         IReadOnlyList<ServiceEndpoints.ServiceEndpointHttpRequest>? Endpoints);
 
     public sealed record StreamScopeServiceHttpRequest(
         string Prompt,
+        string? ActorId = null,
         string? SessionId = null,
         Dictionary<string, string>? Headers = null,
         string? RevisionId = null);
@@ -2074,8 +2210,7 @@ public static class ScopeServiceEndpoints
         string ScriptRevision = "",
         string ScriptDefinitionActorId = "",
         string ScriptSourceHash = "",
-        string StaticActorTypeName = "",
-        string StaticPreferredActorId = "");
+        string StaticActorTypeName = "");
 
     public sealed record ScopeBindingActivationHttpResponse(
         string ScopeId,

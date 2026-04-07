@@ -358,7 +358,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
         var displayName = ScopeWorkflowCapabilityConventions.ResolveDisplayName(
             request.DisplayName,
             actorTypeName.Split(',')[0]);
-        var preferredActorId = ScopeWorkflowCapabilityConventions.NormalizeOptional(gagent.PreferredActorId) ?? string.Empty;
         var serviceDefinition = new ServiceDefinitionSpec
         {
             Identity = identity.Clone(),
@@ -378,7 +377,6 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     StaticSpec = new StaticServiceRevisionSpec
                     {
                         ActorTypeName = actorTypeName,
-                        PreferredActorId = preferredActorId,
                     },
                 };
                 revisionSpec.StaticSpec.Endpoints.Add(endpointSpecs.Select(ToEndpointDescriptor));
@@ -391,12 +389,9 @@ public sealed class ScopeBindingCommandApplicationService : IScopeBindingCommand
                     displayName,
                     revisionId,
                     ScopeBindingImplementationKind.GAgent,
-                    string.IsNullOrWhiteSpace(preferredActorId)
-                        ? $"gagent-service:static-runtime:{expectedDeploymentId}"
-                        : $"{preferredActorId}:{expectedDeploymentId}",
+                    $"gagent-service:static-runtime:{expectedDeploymentId}",
                     GAgent: new ScopeBindingGAgentResult(
-                        actorTypeName,
-                        preferredActorId)));
+                        actorTypeName)));
     }
 
     private async Task<WorkflowYamlBundle> ParseWorkflowBundleAsync(

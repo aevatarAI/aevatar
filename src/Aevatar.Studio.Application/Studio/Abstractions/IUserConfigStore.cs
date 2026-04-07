@@ -8,19 +8,31 @@ public interface IUserConfigStore
 
 public static class UserConfigLlmRouteDefaults
 {
-    public const string Auto = "auto";
-    public const string Gateway = "gateway";
+    public const string Gateway = "";
 }
 
 public static class UserConfigLlmRoute
 {
     public static string Normalize(string? value)
     {
-        var normalized = value?.Trim().ToLowerInvariant() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(normalized))
-            return UserConfigLlmRouteDefaults.Auto;
+        var normalized = value?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            string.Equals(normalized, "auto", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalized, "gateway", StringComparison.OrdinalIgnoreCase))
+        {
+            return UserConfigLlmRouteDefaults.Gateway;
+        }
 
-        return normalized;
+        if (normalized.StartsWith("//", StringComparison.Ordinal) ||
+            normalized.Contains("://", StringComparison.Ordinal))
+        {
+            return UserConfigLlmRouteDefaults.Gateway;
+        }
+
+        if (normalized.StartsWith("/", StringComparison.Ordinal))
+            return normalized;
+
+        return $"/api/v1/proxy/s/{normalized.Trim('/')}";
     }
 }
 
@@ -69,7 +81,8 @@ public static class UserConfigRuntime
 
 public sealed record UserConfig(
     string DefaultModel,
-    string PreferredLlmRoute = UserConfigLlmRouteDefaults.Auto,
+    string PreferredLlmRoute = UserConfigLlmRouteDefaults.Gateway,
     string RuntimeMode = UserConfigRuntimeDefaults.LocalMode,
     string LocalRuntimeBaseUrl = UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
-    string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
+    string RemoteRuntimeBaseUrl = UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
+    int MaxToolRounds = 0);

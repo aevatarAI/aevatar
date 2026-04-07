@@ -43,6 +43,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdCatalogTool(_client),
             new NyxIdServicesTool(_client),
             new NyxIdProxyTool(_client, _logger),
+            new NyxIdCodeExecuteTool(_client, _logger),
             new NyxIdApiKeysTool(_client),
             new NyxIdNodesTool(_client),
             new NyxIdApprovalsTool(_client),
@@ -51,6 +52,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdNotificationsTool(_client),
             new NyxIdLlmStatusTool(_client),
             new NyxIdProvidersTool(_client),
+            new NyxIdChannelBotsTool(_client),
         ];
 
         _logger.LogInformation(

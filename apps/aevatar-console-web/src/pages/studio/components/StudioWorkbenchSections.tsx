@@ -13,23 +13,19 @@ import {
   DeleteOutlined,
   DownOutlined,
   ExpandOutlined,
-  ExportOutlined,
   FileTextOutlined,
   FolderAddOutlined,
+  LeftOutlined,
   LoadingOutlined,
-  PlayCircleFilled,
   PlusOutlined,
   QuestionCircleOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
-  SaveOutlined,
+  ToolOutlined,
   UploadOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import {
-  ProCard,
-} from '@ant-design/pro-components';
 import {
   Button,
   Col,
@@ -48,15 +44,11 @@ import React from 'react';
 import type { Edge, Node } from '@xyflow/react';
 import ReactDOM from 'react-dom';
 import GraphCanvas from '@/shared/graphs/GraphCanvas';
-import { history } from '@/shared/navigation/history';
-import { buildRuntimeGAgentsHref } from '@/shared/navigation/runtimeRoutes';
 import type { PlaygroundPromptHistoryEntry } from '@/shared/playground/promptHistory';
 import {
   buildRuntimeGAgentAssemblyQualifiedName,
   buildRuntimeGAgentTypeLabel,
-  collectRuntimeGAgentActorIds,
   matchesRuntimeGAgentTypeDescriptor,
-  type RuntimeGAgentActorGroup,
   type RuntimeGAgentTypeDescriptor,
 } from '@/shared/models/runtime/gagents';
 import type {
@@ -64,11 +56,15 @@ import type {
   StudioConnectorDefinition,
   StudioExecutionDetail,
   StudioExecutionSummary,
+  StudioOrnnHealthResult,
+  StudioOrnnSkillSearchResult,
   StudioProviderSettings,
   StudioProviderType,
   StudioRoleDefinition,
   StudioScopeBindingStatus,
   StudioRuntimeTestResult,
+  StudioUserConfig,
+  StudioUserConfigModelsResponse,
   StudioWorkflowFile,
   StudioWorkflowSummary,
   StudioWorkspaceSettings,
@@ -99,6 +95,10 @@ import {
   type ExecutionInteractionState,
 } from '@/shared/studio/execution';
 import { formatDateTime } from '@/shared/datetime/dateTime';
+import AevatarAppFlowGuide, {
+  type AevatarAppFlowGuideStepId,
+} from '@/shared/ui/AevatarAppFlowGuide';
+import StudioStatusBanner from './StudioStatusBanner';
 import {
   cardListActionStyle,
   cardListHeaderStyle,
@@ -124,6 +124,7 @@ import { describeError } from '@/shared/ui/errorText';
 
 type QueryState<T> = {
   readonly isLoading: boolean;
+  readonly isFetching?: boolean;
   readonly isError: boolean;
   readonly error: unknown;
   readonly data: T | undefined;
@@ -144,7 +145,6 @@ type StudioGAgentBindingEndpointDraft = {
 type StudioGAgentBindingDraft = {
   readonly displayName: string;
   readonly actorTypeName: string;
-  readonly preferredActorId: string;
   readonly endpoints: readonly StudioGAgentBindingEndpointDraft[];
   readonly openRunsEndpointId: string;
   readonly prompt: string;
@@ -184,7 +184,6 @@ function createStudioGAgentBindingDraft(
   return {
     displayName,
     actorTypeName: '',
-    preferredActorId: '',
     endpoints: [defaultEndpoint],
     openRunsEndpointId: defaultEndpoint.endpointId,
     prompt: '',
@@ -208,16 +207,22 @@ function isScopeDirectoryPath(path: string): boolean {
   return path.trim().startsWith('scope://');
 }
 
-export type StudioWorkflowLayout = 'grid' | 'list';
-
 const workflowWorkspaceRowStyle: React.CSSProperties = {
   flex: 1,
   minHeight: 0,
+  height: '100%',
+  overflow: 'hidden',
 };
 
 const workflowSidebarStackStyle: React.CSSProperties = {
   ...cardStackStyle,
   flex: 1,
+  minHeight: 0,
+};
+
+const workflowStretchColumnStyle: React.CSSProperties = {
+  ...stretchColumnStyle,
+  flexDirection: 'column',
   minHeight: 0,
 };
 
@@ -245,9 +250,9 @@ const workflowSectionHeaderStyle: React.CSSProperties = {
 };
 
 const workflowSectionHeadingStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 600,
-  letterSpacing: '0.14em',
+  letterSpacing: '0.12em',
   textTransform: 'uppercase',
   color: '#6B7280',
 };
@@ -269,7 +274,13 @@ const workflowToolbarSurfaceStyle: React.CSSProperties = {
   borderBottom: '1px solid #E6E3DE',
   background: 'rgba(255, 255, 255, 0.72)',
   backdropFilter: 'blur(10px)',
-  padding: 20,
+  padding: 12,
+};
+
+const workflowToolbarStackStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
 };
 
 const workflowBrowserStyle: React.CSSProperties = {
@@ -388,33 +399,54 @@ const workflowToolbarActionsStyle: React.CSSProperties = {
   justifyContent: 'flex-end',
 };
 
-const workflowToggleGroupStyle: React.CSSProperties = {
-  display: 'inline-flex',
+const workflowSummaryStripStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'flex-start',
+  gap: 8,
+};
+
+const workflowSummaryCardStyle: React.CSSProperties = {
+  ...workflowSurfaceStyle,
+  flex: '1 1 340px',
+  minWidth: 0,
+  padding: '10px 12px',
+  borderRadius: 14,
+};
+
+const workflowSummaryCardRowStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 12,
+  flexWrap: 'wrap',
+  minWidth: 0,
+};
+
+const workflowSummaryCardBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  minWidth: 0,
+  flex: '1 1 220px',
+};
+
+const workflowSummaryEyebrowRowStyle: React.CSSProperties = {
+  display: 'flex',
   alignItems: 'center',
   gap: 8,
-  padding: 8,
-  border: '1px solid #E5E1DA',
-  borderRadius: 18,
-  background: '#FFFFFF',
-  boxShadow: '0 10px 24px rgba(31, 28, 24, 0.04)',
+  flexWrap: 'wrap',
+  minWidth: 0,
 };
 
-const workflowToggleButtonStyle: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 12,
-  border: 0,
-  cursor: 'pointer',
-  background: 'transparent',
+const workflowSummaryHintStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 11,
+  lineHeight: 1.3,
   color: 'var(--ant-color-text-tertiary)',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const workflowToggleButtonActiveStyle: React.CSSProperties = {
-  background: '#EAF2FF',
-  color: '#2F6FEC',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 };
 
 const workflowGhostActionStyle: React.CSSProperties = {
@@ -438,7 +470,9 @@ const workflowResultsBodyStyle: React.CSSProperties = {
   minHeight: 0,
   display: 'flex',
   flexDirection: 'column',
+  overflowX: 'hidden',
   overflowY: 'auto',
+  overscrollBehavior: 'contain',
   padding: 24,
 };
 
@@ -497,7 +531,7 @@ const workflowCardIconActiveStyle: React.CSSProperties = {
 
 const workflowCardTitleStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: 15,
+  fontSize: 14,
   fontWeight: 600,
   color: '#1F2937',
 };
@@ -575,7 +609,7 @@ const workflowResultsViewportStyle: React.CSSProperties = {
 };
 
 const studioTitleBarStyle: React.CSSProperties = {
-  minWidth: 0,
+  minWidth: 220,
   flex: '1 1 420px',
   maxWidth: '100%',
   display: 'flex',
@@ -587,6 +621,35 @@ const studioTitleBarStyle: React.CSSProperties = {
   borderRadius: 12,
   background: '#FFFFFF',
   boxShadow: 'none',
+};
+
+const studioWorkflowHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'rgba(255,255,255,0.96)',
+  borderBottom: '1px solid #E8E2D9',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 12,
+  justifyContent: 'space-between',
+  padding: '14px 18px',
+};
+
+const studioWorkflowHeaderMainStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flex: '1 1 360px',
+  gap: 12,
+  minWidth: 0,
+};
+
+const studioWorkflowHeaderActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 10,
+  justifyContent: 'flex-end',
+  maxWidth: '100%',
+  minWidth: 0,
 };
 
 const studioTitleGroupStyle: React.CSSProperties = {
@@ -665,6 +728,100 @@ const studioInfoPopoverActionsStyle: React.CSSProperties = {
   marginTop: 12,
 };
 
+type StudioWorkflowHeaderProps = {
+  readonly activeView: 'editor' | 'execution';
+  readonly workflowDisplayName: string;
+  readonly draftWorkflowName: string;
+  readonly activeWorkflowDescription: string;
+  readonly descriptionEditorOpen: boolean;
+  readonly descriptionDraft: string;
+  readonly actions: React.ReactNode;
+  readonly onSwitchStudioView: (view: 'editor' | 'execution') => void;
+  readonly onSetDraftWorkflowName: (value: string) => void;
+  readonly onOpenDescriptionEditor: (open: boolean) => void;
+  readonly onDescriptionDraftChange: (value: string) => void;
+  readonly onCancelDescriptionEdit: () => void;
+  readonly onSaveDescription: () => void;
+};
+
+const StudioWorkflowHeader: React.FC<StudioWorkflowHeaderProps> = ({
+  activeView,
+  workflowDisplayName,
+  draftWorkflowName,
+  activeWorkflowDescription,
+  descriptionEditorOpen,
+  descriptionDraft,
+  actions,
+  onSwitchStudioView,
+  onSetDraftWorkflowName,
+  onOpenDescriptionEditor,
+  onDescriptionDraftChange,
+  onCancelDescriptionEdit,
+  onSaveDescription,
+}) => (
+  <div style={studioWorkflowHeaderStyle}>
+    <div style={studioWorkflowHeaderMainStyle}>
+      <Space.Compact>
+        <Button
+          type={activeView === 'editor' ? 'primary' : 'default'}
+          onClick={() => onSwitchStudioView('editor')}
+        >
+          Edit
+        </Button>
+        <Button
+          type={activeView === 'execution' ? 'primary' : 'default'}
+          onClick={() => onSwitchStudioView('execution')}
+        >
+          Runs
+        </Button>
+      </Space.Compact>
+      <div style={studioTitleBarStyle}>
+        <div style={studioTitleGroupStyle}>
+          <input
+            aria-label="Studio workflow title"
+            placeholder={workflowDisplayName}
+            value={draftWorkflowName}
+            onChange={(event) => onSetDraftWorkflowName(event.target.value)}
+            style={studioTitleInputStyle}
+          />
+          <StudioInfoPopover
+            open={descriptionEditorOpen}
+            ariaLabel="Edit workflow description"
+            onOpenChange={onOpenDescriptionEditor}
+          >
+            <textarea
+              aria-label="Studio workflow description"
+              placeholder="Workflow description"
+              value={descriptionDraft}
+              onChange={(event) => onDescriptionDraftChange(event.target.value)}
+              style={studioDescriptionEditorStyle}
+            />
+            <div style={studioInfoPopoverActionsStyle}>
+              <Button
+                size="small"
+                style={{ minWidth: 72, borderRadius: 10 }}
+                onClick={onCancelDescriptionEdit}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="primary"
+                size="small"
+                style={{ minWidth: 72, borderRadius: 10 }}
+                onClick={onSaveDescription}
+              >
+                Save
+              </Button>
+            </div>
+          </StudioInfoPopover>
+        </div>
+      </div>
+    </div>
+
+    <div style={studioWorkflowHeaderActionsStyle}>{actions}</div>
+  </div>
+);
+
 const studioNoticeStripStyle: React.CSSProperties = {
   display: 'grid',
   gap: 10,
@@ -679,6 +836,373 @@ const studioNoticeCardStyle: React.CSSProperties = {
   minWidth: 0,
   padding: '12px 14px',
 };
+
+const studioNoticeCardHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 10,
+};
+
+const studioNoticeCardHeadingStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  flex: '1 1 240px',
+  minWidth: 0,
+};
+
+const studioNoticeCardActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-end',
+};
+
+const studioNoticeCardInlineActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-start',
+};
+
+const studioNoticeCardCollapsedCopyStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text-tertiary)',
+  display: '-webkit-box',
+  fontSize: 12,
+  lineHeight: 1.6,
+  margin: 0,
+  overflow: 'hidden',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 1,
+};
+
+const studioGuidanceBarStyle: React.CSSProperties = {
+  ...embeddedPanelStyle,
+  backdropFilter: 'blur(10px)',
+  borderRadius: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  minWidth: 0,
+  padding: '12px 16px',
+  pointerEvents: 'auto',
+  width: 'min(420px, calc(100vw - 176px))',
+  boxShadow: '0 22px 48px rgba(15, 23, 42, 0.14)',
+};
+
+const studioGuidanceFloatingWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-end',
+  left: 0,
+  pointerEvents: 'none',
+  position: 'absolute',
+  right: 0,
+  top: 0,
+  zIndex: 12,
+};
+
+const studioGuidanceFloatingCardStyle: React.CSSProperties = {
+  pointerEvents: 'auto',
+  transformOrigin: 'top right',
+};
+
+const studioGuidanceHeaderStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  display: 'flex',
+  gap: 12,
+  justifyContent: 'space-between',
+  minWidth: 0,
+};
+
+const studioGuidanceTagRowStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  display: 'flex',
+  flex: 1,
+  flexWrap: 'wrap',
+  gap: 8,
+  minWidth: 0,
+};
+
+const studioGuidanceControlRowStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexShrink: 0,
+  gap: 4,
+};
+
+const studioGuidanceDragHandleStyle: React.CSSProperties = {
+  alignItems: 'center',
+  color: 'var(--ant-color-text-tertiary)',
+  cursor: 'grab',
+  display: 'inline-flex',
+  justifyContent: 'center',
+};
+
+const studioGuidanceMainStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  gap: 4,
+  minWidth: 0,
+};
+
+const studioGuidanceCollapsedStyle: React.CSSProperties = {
+  ...embeddedPanelStyle,
+  alignItems: 'center',
+  backdropFilter: 'blur(10px)',
+  borderRadius: 999,
+  boxShadow: '0 16px 36px rgba(15, 23, 42, 0.12)',
+  display: 'flex',
+  gap: 6,
+  minWidth: 0,
+  padding: '8px 10px',
+  pointerEvents: 'auto',
+};
+
+const studioGuidanceCollapsedTitleStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text)',
+  display: 'block',
+  fontSize: 12,
+  fontWeight: 600,
+  minWidth: 0,
+};
+
+const studioGuidanceDescriptionStyle: React.CSSProperties = {
+  display: '-webkit-box',
+  lineHeight: 1.5,
+  margin: 0,
+  overflow: 'hidden',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 2,
+  wordBreak: 'break-word',
+};
+
+const studioGuidanceActionsStyle: React.CSSProperties = {
+  alignItems: 'center',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  justifyContent: 'flex-start',
+};
+
+const studioGuidanceNoticeStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  minWidth: 0,
+};
+
+const studioSettingsShellStyle: React.CSSProperties = {
+  background: 'rgba(255, 255, 255, 0.96)',
+  border: '1px solid #E6E3DE',
+  borderRadius: 38,
+  boxShadow: '0 26px 64px rgba(17, 24, 39, 0.08)',
+  display: 'flex',
+  flex: 1,
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const studioSettingsSidebarStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 8,
+  flexDirection: 'column',
+  minHeight: 0,
+  minWidth: 0,
+  overflowY: 'auto',
+  padding: '28px 20px',
+  width: 260,
+};
+
+const studioSettingsSidebarHeaderStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  marginBottom: 12,
+};
+
+const studioSettingsSidebarEyebrowStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text-tertiary)',
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '0.12em',
+  margin: 0,
+  textTransform: 'uppercase',
+};
+
+const studioSettingsSidebarTitleStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text)',
+  fontSize: 24,
+  fontWeight: 700,
+  lineHeight: 1.2,
+  margin: 0,
+};
+
+const studioSettingsSidebarCopyStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text-secondary)',
+  fontSize: 13,
+  lineHeight: 1.6,
+  margin: 0,
+};
+
+const studioSettingsNavListStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+};
+
+const studioSettingsContentPaneStyle: React.CSSProperties = {
+  ...cardStackStyle,
+  flex: 1,
+  minHeight: 0,
+  minWidth: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
+  padding: '40px 40px 40px',
+};
+
+const studioSettingsSectionBodyStyle: React.CSSProperties = {
+  margin: '0 auto',
+  maxWidth: 920,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 32,
+  width: '100%',
+};
+
+const studioSettingsSectionHeaderStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 16,
+  justifyContent: 'space-between',
+};
+
+const studioSettingsSectionTitleStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text)',
+  fontSize: 32,
+  fontWeight: 700,
+  lineHeight: 1.15,
+  margin: 0,
+};
+
+const studioSettingsSectionDescriptionStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text-secondary)',
+  fontSize: 12,
+  lineHeight: 1.6,
+  margin: '4px 0 0',
+};
+
+const studioSettingsSectionCardStyle: React.CSSProperties = {
+  background:
+    'linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(250, 248, 244, 0.92) 100%)',
+  border: '1px solid #EDE8DF',
+  borderRadius: 28,
+  boxShadow: '0 20px 44px rgba(17, 24, 39, 0.06)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+  minWidth: 0,
+  padding: 24,
+};
+
+const studioSettingsSectionGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 16,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+};
+
+const studioSettingsStatusCardStyle: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #E6E1D8',
+  borderRadius: 22,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+  minWidth: 0,
+  padding: '16px 18px',
+};
+
+const studioSettingsProviderPillsStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+};
+
+const studioSettingsProviderPillStyle: React.CSSProperties = {
+  alignItems: 'center',
+  borderRadius: 999,
+  display: 'inline-flex',
+  gap: 6,
+  minWidth: 0,
+  padding: '4px 12px',
+};
+
+const studioSettingsProviderPillReadyStyle: React.CSSProperties = {
+  background: '#F0FDF4',
+  color: '#15803D',
+};
+
+const studioSettingsProviderPillPendingStyle: React.CSSProperties = {
+  background: '#F3F4F6',
+  color: '#9CA3AF',
+};
+
+const studioSettingsMutedBlockStyle: React.CSSProperties = {
+  background: '#FAF8F4',
+  border: '1px solid #EEEAE4',
+  borderRadius: 20,
+  color: 'var(--ant-color-text-secondary)',
+  fontSize: 13,
+  lineHeight: 1.6,
+  padding: '12px 16px',
+};
+
+const studioSettingsPrimaryActionStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background:
+    'linear-gradient(180deg, var(--accent, #2563eb) 0%, rgba(var(--accent-rgb, 37, 99, 235), 0.92) 100%)',
+  border: '1px solid rgba(var(--accent-rgb, 37, 99, 235), 0.24)',
+  borderRadius: 12,
+  color: '#fff',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  fontSize: 12,
+  fontWeight: 700,
+  gap: 8,
+  justifyContent: 'center',
+  minHeight: 38,
+  minWidth: 180,
+  padding: '0 14px',
+  textDecoration: 'none',
+};
+
+const studioSettingsPillDotStyle: React.CSSProperties = {
+  borderRadius: '50%',
+  flex: '0 0 auto',
+  height: 8,
+  width: 8,
+};
+
+function formatStudioUserConfigProviderLabel(provider: {
+  readonly providerName: string;
+  readonly providerSlug: string;
+}): string {
+  const explicitName = provider.providerName.trim();
+  if (explicitName) {
+    return explicitName;
+  }
+
+  const slug = provider.providerSlug.trim();
+  if (!slug) {
+    return 'Provider';
+  }
+
+  return slug
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
 
 const studioStatusStripStyle: React.CSSProperties = {
   display: 'flex',
@@ -713,6 +1237,10 @@ const studioToolDrawerSectionStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 12,
+};
+
+const studioCanvasDrawerRootStyle: React.CSSProperties = {
+  position: 'absolute',
 };
 
 function getStudioNoticeAccent(
@@ -757,6 +1285,10 @@ type StudioNoticeCardProps = {
   readonly title: React.ReactNode;
   readonly description?: React.ReactNode;
   readonly action?: React.ReactNode;
+  readonly compact?: boolean;
+  readonly defaultExpanded?: boolean;
+  readonly expandLabel?: string;
+  readonly collapseLabel?: string;
 };
 
 const StudioNoticeCard: React.FC<StudioNoticeCardProps> = ({
@@ -764,8 +1296,18 @@ const StudioNoticeCard: React.FC<StudioNoticeCardProps> = ({
   title,
   description,
   action,
+  compact = false,
+  defaultExpanded,
+  expandLabel = 'Details',
+  collapseLabel = 'Hide details',
 }) => {
   const accent = getStudioNoticeAccent(type);
+  const canToggleDescription =
+    compact && typeof description === 'string' && description.trim().length > 0;
+  const [expanded, setExpanded] = React.useState(
+    defaultExpanded ?? type === 'error',
+  );
+  const showExpandedDescription = !compact || !canToggleDescription || expanded;
 
   return (
     <div
@@ -775,27 +1317,631 @@ const StudioNoticeCard: React.FC<StudioNoticeCardProps> = ({
         borderColor: accent.border,
       }}
     >
-      <Space wrap size={[8, 8]}>
-        <Tag color={type === 'default' ? 'default' : type}>{accent.label}</Tag>
-        <Typography.Text strong>{title}</Typography.Text>
-      </Space>
-      {description ? (
-        typeof description === 'string' ? (
-          <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-            {description}
-          </Typography.Paragraph>
-        ) : (
-          description
-        )
-      ) : null}
-      {action}
+      {compact ? (
+        <>
+          <div style={studioNoticeCardHeaderStyle}>
+            <div style={studioNoticeCardHeadingStyle}>
+              <Space wrap size={[8, 8]}>
+                <Tag color={type === 'default' ? 'default' : type}>{accent.label}</Tag>
+                <Typography.Text strong>{title}</Typography.Text>
+              </Space>
+              {canToggleDescription && !expanded ? (
+                <Typography.Text style={studioNoticeCardCollapsedCopyStyle}>
+                  {description}
+                </Typography.Text>
+              ) : null}
+            </div>
+            {action || canToggleDescription ? (
+              <div style={studioNoticeCardActionsStyle}>
+                {action}
+                {canToggleDescription ? (
+                  <Button
+                    type="text"
+                    size="small"
+                    onClick={() => setExpanded((current) => !current)}
+                    aria-expanded={expanded}
+                    icon={
+                      <DownOutlined
+                        style={{
+                          transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                          transition: 'transform 0.2s ease',
+                        }}
+                      />
+                    }
+                  >
+                    {expanded ? collapseLabel : expandLabel}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          {description && showExpandedDescription ? (
+            typeof description === 'string' ? (
+              <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+                {description}
+              </Typography.Paragraph>
+            ) : (
+              description
+            )
+          ) : null}
+        </>
+      ) : (
+        <>
+          <Space wrap size={[8, 8]}>
+            <Tag color={type === 'default' ? 'default' : type}>{accent.label}</Tag>
+            <Typography.Text strong>{title}</Typography.Text>
+          </Space>
+          {description ? (
+            typeof description === 'string' ? (
+              <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+                {description}
+              </Typography.Paragraph>
+            ) : (
+              description
+            )
+          ) : null}
+          {action ? (
+            <div style={studioNoticeCardInlineActionsStyle}>{action}</div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 };
 
+type StudioGuidanceAction = {
+  readonly label: string;
+  readonly onClick: () => void;
+  readonly type?: 'primary' | 'default';
+  readonly loading?: boolean;
+  readonly disabled?: boolean;
+};
+
+type StudioGuidanceTag = {
+  readonly label: string;
+  readonly color?: string;
+};
+
+type StudioGuidanceBarProps = {
+  readonly type: StudioNoticeLike['type'];
+  readonly title: string;
+  readonly description: string;
+  readonly statusTags?: readonly StudioGuidanceTag[];
+  readonly primaryAction?: StudioGuidanceAction;
+  readonly secondaryAction?: StudioGuidanceAction;
+  readonly notice?: StudioNoticeLike | null;
+  readonly guideTitle: string;
+  readonly guideDescription: string;
+  readonly guideTone?: StudioNoticeLike['type'];
+  readonly guideHighlightSteps?: readonly AevatarAppFlowGuideStepId[];
+};
+
+type StudioGuidancePresentation = 'expanded' | 'collapsed' | 'dismissed';
+
+type StudioGuidanceOffset = {
+  readonly x: number;
+  readonly y: number;
+};
+
+const studioGuidanceUpdatePulseMs = 820;
+
+function clampStudioGuidanceOffset(
+  offset: StudioGuidanceOffset,
+  cardRect: Pick<DOMRect, 'height' | 'width'>,
+  wrapRect: Pick<DOMRect, 'top' | 'width'>,
+): StudioGuidanceOffset {
+  const edgePadding = 12;
+
+  if (cardRect.width <= 0 || cardRect.height <= 0 || wrapRect.width <= 0) {
+    return {
+      x: Math.min(0, offset.x),
+      y: Math.max(0, offset.y),
+    };
+  }
+
+  const maxX = 0;
+  const minX = Math.min(0, cardRect.width - wrapRect.width + edgePadding);
+  const maxY = Math.max(
+    0,
+    window.innerHeight - wrapRect.top - cardRect.height - edgePadding,
+  );
+
+  return {
+    x: Math.min(maxX, Math.max(minX, offset.x)),
+    y: Math.min(maxY, Math.max(0, offset.y)),
+  };
+}
+
+const StudioGuidanceBar: React.FC<StudioGuidanceBarProps> = ({
+  type,
+  title,
+  description,
+  statusTags = [],
+  primaryAction,
+  secondaryAction,
+  notice,
+  guideTitle,
+  guideDescription,
+  guideTone = type,
+  guideHighlightSteps = [],
+}) => {
+  const accent = getStudioNoticeAccent(type);
+  const [guideOpen, setGuideOpen] = React.useState(false);
+  const [presentation, setPresentation] =
+    React.useState<StudioGuidancePresentation>('collapsed');
+  const [dragOffset, setDragOffset] = React.useState<StudioGuidanceOffset>({
+    x: 0,
+    y: 0,
+  });
+  const [dragging, setDragging] = React.useState(false);
+  const [updatedPulse, setUpdatedPulse] = React.useState(false);
+  const floatingWrapRef = React.useRef<HTMLDivElement | null>(null);
+  const floatingCardRef = React.useRef<HTMLDivElement | null>(null);
+  const dragSessionRef = React.useRef<{
+    originX: number;
+    originY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const hasMountedRef = React.useRef(false);
+  const guidanceIdentity = React.useMemo(
+    () =>
+      JSON.stringify({
+        type,
+        title,
+        description,
+        statusTags,
+        primaryActionLabel: primaryAction?.label ?? '',
+        secondaryActionLabel: secondaryAction?.label ?? '',
+        noticeMessage: notice?.message ?? '',
+        guideTitle,
+        guideDescription,
+        guideTone,
+        guideHighlightSteps,
+      }),
+    [
+      description,
+      guideDescription,
+      guideHighlightSteps,
+      guideTitle,
+      guideTone,
+      notice?.message,
+      primaryAction?.label,
+      secondaryAction?.label,
+      statusTags,
+      title,
+      type,
+    ],
+  );
+
+  const clampDragOffset = React.useCallback(
+    (nextOffset: StudioGuidanceOffset): StudioGuidanceOffset => {
+      if (typeof window === 'undefined') {
+        return nextOffset;
+      }
+
+      const cardNode = floatingCardRef.current;
+      const wrapNode = floatingWrapRef.current;
+
+      if (!cardNode || !wrapNode) {
+        return nextOffset;
+      }
+
+      return clampStudioGuidanceOffset(
+        nextOffset,
+        cardNode.getBoundingClientRect(),
+        wrapNode.getBoundingClientRect(),
+      );
+    },
+    [],
+  );
+
+  const startDragging = React.useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dragSessionRef.current = {
+        originX: dragOffset.x,
+        originY: dragOffset.y,
+        startX: event.clientX,
+        startY: event.clientY,
+      };
+      setDragging(true);
+    },
+    [dragOffset.x, dragOffset.y],
+  );
+
+  React.useEffect(() => {
+    setGuideOpen(false);
+    setPresentation('collapsed');
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return;
+    }
+    setUpdatedPulse(true);
+    const pulseTimer = window.setTimeout(
+      () => setUpdatedPulse(false),
+      studioGuidanceUpdatePulseMs,
+    );
+    return () => window.clearTimeout(pulseTimer);
+  }, [guidanceIdentity]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const syncOffset = window.setTimeout(() => {
+      setDragOffset((currentOffset) => clampDragOffset(currentOffset));
+    }, 0);
+
+    return () => window.clearTimeout(syncOffset);
+  }, [clampDragOffset, guidanceIdentity, presentation]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      setDragOffset((currentOffset) => clampDragOffset(currentOffset));
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [clampDragOffset]);
+
+  React.useEffect(() => {
+    if (!dragging || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+
+    const stopDragging = () => {
+      dragSessionRef.current = null;
+      setDragging(false);
+      document.body.style.userSelect = previousUserSelect;
+    };
+
+    const handlePointerMove = (event: MouseEvent) => {
+      const session = dragSessionRef.current;
+      if (!session) {
+        return;
+      }
+
+      setDragOffset(
+        clampDragOffset({
+          x: session.originX + event.clientX - session.startX,
+          y: session.originY + event.clientY - session.startY,
+        }),
+      );
+    };
+
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('mouseup', stopDragging);
+
+    return () => {
+      window.removeEventListener('mousemove', handlePointerMove);
+      window.removeEventListener('mouseup', stopDragging);
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [clampDragOffset, dragging]);
+
+  const floatingCardStyle: React.CSSProperties = {
+    ...studioGuidanceFloatingCardStyle,
+    borderRadius: presentation === 'expanded' ? 20 : 999,
+    boxShadow: updatedPulse
+      ? `0 0 0 3px ${accent.border}, 0 24px 52px rgba(15, 23, 42, 0.16)`
+      : dragging
+        ? '0 20px 44px rgba(15, 23, 42, 0.18)'
+        : undefined,
+    transform: `translate3d(${dragOffset.x}px, ${
+      dragOffset.y + (updatedPulse && !dragging ? -4 : 0)
+    }px, 0) scale(${updatedPulse && !dragging ? 1.02 : 1})`,
+    transition: dragging
+      ? 'none'
+      : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms ease',
+  };
+
+  return (
+    <>
+      <div ref={floatingWrapRef} style={studioGuidanceFloatingWrapStyle}>
+        {presentation === 'expanded' ? (
+          <div
+            ref={floatingCardRef}
+            data-guidance-presentation={presentation}
+            data-guidance-updated={updatedPulse ? 'true' : 'false'}
+            data-testid="studio-guidance-floating-card"
+            style={{
+              ...floatingCardStyle,
+              ...studioGuidanceBarStyle,
+              background: accent.background,
+              borderColor: accent.border,
+            }}
+          >
+            <div style={studioGuidanceHeaderStyle}>
+              <div style={studioGuidanceTagRowStyle}>
+                <Tag color={type}>Guidance</Tag>
+                {statusTags.map((tag) => (
+                  <Tag
+                    key={`${tag.color || 'default'}:${tag.label}`}
+                    color={tag.color}
+                  >
+                    {tag.label}
+                  </Tag>
+                ))}
+              </div>
+              <div style={studioGuidanceControlRowStyle}>
+                <Button
+                  type="text"
+                  size="small"
+                  shape="circle"
+                  icon={<BarsOutlined />}
+                  aria-label="Drag guidance"
+                  onMouseDown={startDragging}
+                  style={{
+                    ...studioGuidanceDragHandleStyle,
+                    cursor: dragging ? 'grabbing' : studioGuidanceDragHandleStyle.cursor,
+                  }}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  shape="circle"
+                  icon={<DownOutlined />}
+                  aria-label="Collapse guidance"
+                  onClick={() => setPresentation('collapsed')}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  shape="circle"
+                  icon={<CloseOutlined />}
+                  aria-label="Close guidance"
+                  onClick={() => setPresentation('dismissed')}
+                />
+              </div>
+            </div>
+
+            <div style={studioGuidanceMainStyle}>
+              <Typography.Text strong>{title}</Typography.Text>
+              <Typography.Paragraph
+                style={studioGuidanceDescriptionStyle}
+                title={description}
+                type="secondary"
+              >
+                {description}
+              </Typography.Paragraph>
+
+              {notice ? (
+                <div style={studioGuidanceNoticeStyle}>
+                  <Tag color={notice.type}>
+                    {notice.type === 'error' ? 'Needs attention' : 'Latest update'}
+                  </Tag>
+                  <Typography.Text
+                    style={{
+                      color:
+                        notice.type === 'error'
+                          ? 'var(--ant-color-error)'
+                          : 'var(--ant-color-text-tertiary)',
+                    }}
+                  >
+                    {notice.message}
+                  </Typography.Text>
+                </div>
+              ) : null}
+            </div>
+
+            <div style={studioGuidanceActionsStyle}>
+              {primaryAction ? (
+                <Button
+                  type={primaryAction.type ?? 'primary'}
+                  onClick={primaryAction.onClick}
+                  loading={primaryAction.loading}
+                  disabled={primaryAction.disabled}
+                >
+                  {primaryAction.label}
+                </Button>
+              ) : null}
+              {secondaryAction ? (
+                <Button
+                  type={secondaryAction.type ?? 'default'}
+                  onClick={secondaryAction.onClick}
+                  loading={secondaryAction.loading}
+                  disabled={secondaryAction.disabled}
+                >
+                  {secondaryAction.label}
+                </Button>
+              ) : null}
+              <Button
+                icon={<QuestionCircleOutlined />}
+                onClick={() => setGuideOpen(true)}
+              >
+                Why?
+              </Button>
+            </div>
+          </div>
+        ) : presentation === 'collapsed' ? (
+          <div
+            ref={floatingCardRef}
+            data-guidance-presentation={presentation}
+            data-guidance-updated={updatedPulse ? 'true' : 'false'}
+            data-testid="studio-guidance-floating-card"
+            style={{
+              ...floatingCardStyle,
+              ...studioGuidanceCollapsedStyle,
+              background: accent.background,
+              borderColor: accent.border,
+            }}
+          >
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              icon={<BarsOutlined />}
+              aria-label="Drag guidance"
+              onMouseDown={startDragging}
+              style={{
+                ...studioGuidanceDragHandleStyle,
+                cursor: dragging ? 'grabbing' : studioGuidanceDragHandleStyle.cursor,
+              }}
+            />
+            <Button
+              type="text"
+              icon={<ExpandOutlined />}
+              aria-label="Expand guidance"
+              onClick={() => setPresentation('expanded')}
+              style={{ height: 'auto', padding: 0 }}
+            >
+              <Typography.Text
+                style={studioGuidanceCollapsedTitleStyle}
+                ellipsis={{ tooltip: title }}
+              >
+                {title}
+              </Typography.Text>
+            </Button>
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              icon={<CloseOutlined />}
+              aria-label="Close guidance"
+              onClick={() => setPresentation('dismissed')}
+            />
+          </div>
+        ) : (
+          <Button
+            type="default"
+            shape="circle"
+            icon={<ExpandOutlined />}
+            aria-label="Show guidance"
+            onClick={() => setPresentation('expanded')}
+            data-guidance-presentation={presentation}
+            data-guidance-updated={updatedPulse ? 'true' : 'false'}
+            data-testid="studio-guidance-floating-card"
+            style={{
+              ...floatingCardStyle,
+              boxShadow: '0 14px 32px rgba(15, 23, 42, 0.12)',
+              pointerEvents: 'auto',
+            }}
+          />
+        )}
+      </div>
+
+      <Drawer
+        title="Workflow guide"
+        open={guideOpen}
+        width={560}
+        destroyOnClose
+        onClose={() => setGuideOpen(false)}
+        styles={{ body: drawerBodyStyle }}
+      >
+        <div style={drawerScrollStyle}>
+          <AevatarAppFlowGuide
+            compact
+            contextTitle={guideTitle}
+            contextDescription={guideDescription}
+            tone={guideTone}
+            highlightSteps={guideHighlightSteps}
+          />
+        </div>
+      </Drawer>
+    </>
+  );
+};
+
+type StudioSettingsNavButtonProps = {
+  readonly active: boolean;
+  readonly description: string;
+  readonly icon: React.ReactNode;
+  readonly onClick: () => void;
+  readonly title: string;
+};
+
+const StudioSettingsNavButton: React.FC<StudioSettingsNavButtonProps> = ({
+  active,
+  description,
+  icon,
+  onClick,
+  title,
+}) => (
+  <button
+    type="button"
+    aria-label={title}
+    aria-pressed={active}
+    title={description}
+    onClick={onClick}
+    className={`settings-nav-button ${active ? 'active' : ''}`}
+  >
+    <span className="settings-nav-icon">
+      {icon}
+    </span>
+    <span style={{ ...cardStackStyle, minWidth: 0 }}>
+      <span
+        style={{
+          fontSize: 14,
+          fontWeight: 600,
+          lineHeight: 1.4,
+        }}
+      >
+        {title}
+      </span>
+    </span>
+  </button>
+);
+
+type StudioSettingsStatusPillProps = {
+  readonly status: 'idle' | 'testing' | 'success' | 'error';
+};
+
+const studioSettingsStatusPillToneMap: Record<
+  StudioSettingsStatusPillProps['status'],
+  { background: string; color: string; label: string }
+> = {
+  idle: {
+    background: '#F3F4F6',
+    color: '#6B7280',
+    label: 'Idle',
+  },
+  testing: {
+    background: '#EFF6FF',
+    color: '#2563EB',
+    label: 'Testing',
+  },
+  success: {
+    background: '#ECFDF3',
+    color: '#15803D',
+    label: 'Reachable',
+  },
+  error: {
+    background: '#FEF2F2',
+    color: '#DC2626',
+    label: 'Unreachable',
+  },
+};
+
+const StudioSettingsStatusPill: React.FC<StudioSettingsStatusPillProps> = ({
+  status,
+}) => {
+  const tone = studioSettingsStatusPillToneMap[status];
+
+  return (
+    <span
+      className={`settings-status-pill ${status === 'idle' ? '' : status}`.trim()}
+      style={status === 'idle' ? { background: tone.background, color: tone.color } : undefined}
+    >
+      {tone.label}
+    </span>
+  );
+};
+
 type StudioSummaryFieldProps = {
+  readonly block?: boolean;
   readonly copyable?: boolean;
   readonly label: string;
+  readonly monospace?: boolean;
   readonly value: React.ReactNode;
 };
 
@@ -819,17 +1965,42 @@ const studioSummaryMetricToneMap: Record<
 function renderStudioSummaryValue(
   value: React.ReactNode,
   copyable?: boolean,
+  options?: { readonly block?: boolean; readonly monospace?: boolean },
 ): React.ReactNode {
   if (typeof value === 'string') {
     if (!value) {
       return <Typography.Text type="secondary">n/a</Typography.Text>;
     }
 
-    return copyable ? (
+    const textNode = options?.block ? (
+      <Typography.Paragraph
+        copyable={copyable}
+        style={{
+          background: '#FAF8F4',
+          border: '1px solid #EDE8DF',
+          borderRadius: 12,
+          display: 'block',
+          fontFamily: options.monospace
+            ? 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+            : undefined,
+          fontSize: 12,
+          lineHeight: 1.6,
+          margin: 0,
+          overflowWrap: 'anywhere',
+          padding: '8px 10px',
+          whiteSpace: 'normal',
+          wordBreak: 'break-word',
+        }}
+      >
+        {value}
+      </Typography.Paragraph>
+    ) : copyable ? (
       <Typography.Text copyable>{value}</Typography.Text>
     ) : (
       <Typography.Text>{value}</Typography.Text>
     );
+
+    return textNode;
   }
 
   if (typeof value === 'number') {
@@ -840,13 +2011,15 @@ function renderStudioSummaryValue(
 }
 
 const StudioSummaryField: React.FC<StudioSummaryFieldProps> = ({
+  block,
   copyable,
   label,
+  monospace,
   value,
 }) => (
   <div style={summaryFieldStyle}>
     <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
-    {renderStudioSummaryValue(value, copyable)}
+    {renderStudioSummaryValue(value, copyable, { block, monospace })}
   </div>
 );
 
@@ -929,6 +2102,19 @@ function formatScopeBindingRevisionTimestamp(
   );
 }
 
+function formatCompactScopeBindingIdentifier(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 'n/a';
+  }
+
+  if (trimmed.length <= 28) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, 12)}...${trimmed.slice(-8)}`;
+}
+
 type StudioScopeBindingPanelProps = {
   readonly scopeId?: string;
   readonly binding?: StudioScopeBindingStatus;
@@ -960,306 +2146,401 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   const currentContext = describeStudioScopeBindingRevisionContext(currentRevision);
   const currentActor =
     currentRevision?.primaryActorId ||
-    currentRevision?.staticPreferredActorId ||
     binding?.primaryActorId ||
     '';
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const bindingStateColor = loading
+    ? 'processing'
+    : error
+      ? 'error'
+      : binding?.available
+        ? 'success'
+        : 'default';
+  const bindingStateLabel = loading
+    ? 'Loading'
+    : error
+      ? 'Unavailable'
+      : binding?.available
+        ? 'Active'
+        : 'Not published';
+  const detailsContent = loading ? (
+    <StudioNoticeCard
+      title="Loading scope binding"
+      description="Fetching the current revision history and serving state for this scope."
+      compact
+    />
+  ) : error ? (
+    <StudioNoticeCard
+      type="error"
+      title="Failed to load scope binding"
+      description={describeError(error)}
+      compact
+      defaultExpanded
+    />
+  ) : !binding?.available ? (
+    <StudioNoticeCard
+      type="info"
+      title="No published binding"
+      description="Use Bind scope to publish the current workflow as the scope's default service."
+      compact
+    />
+  ) : (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div
+        style={{
+          ...cardStackStyle,
+          minWidth: 0,
+        }}
+      >
+        <div
+          style={{
+            border: '1px solid #E6E3DE',
+            borderRadius: 24,
+            background: '#FFFFFF',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            padding: 18,
+          }}
+        >
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong>Current posture</Typography.Text>
+            <Typography.Text type="secondary">
+              The current published default binding, target identity, and serving posture live together here.
+            </Typography.Text>
+          </Space>
+
+          <div
+            style={{
+              display: 'grid',
+              gap: 12,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            }}
+          >
+            <StudioSummaryMetric
+              label="Revisions"
+              value={binding.revisions.length}
+            />
+            <StudioSummaryMetric
+              label="Binding kind"
+              value={formatStudioScopeBindingImplementationKind(
+                currentRevision?.implementationKind,
+              )}
+            />
+            <StudioSummaryMetric
+              label="Current target"
+              value={currentTarget}
+            />
+            <StudioSummaryMetric
+              label="Default revision"
+              tone="success"
+              value={formatCompactScopeBindingIdentifier(
+                binding.defaultServingRevisionId,
+              )}
+            />
+            <StudioSummaryMetric
+              label="Active revision"
+              tone="info"
+              value={formatCompactScopeBindingIdentifier(
+                binding.activeServingRevisionId,
+              )}
+            />
+            <StudioSummaryMetric
+              label="Deployment"
+              value={binding.deploymentStatus || 'n/a'}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gap: 14 }}>
+            <StudioSummaryField
+              block
+              label="Service key"
+              copyable
+              monospace
+              value={binding.serviceKey}
+            />
+            <div
+              style={{
+                display: 'grid',
+                gap: 12,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              }}
+            >
+              <StudioSummaryField
+                label="Target"
+                value={currentTarget}
+              />
+              <StudioSummaryField
+                label="Deployment"
+                value={binding.deploymentId}
+              />
+              <StudioSummaryField
+                label="Updated"
+                value={formatDateTime(binding.updatedAt)}
+              />
+            </div>
+            <StudioSummaryField
+              block
+              label="Target detail"
+              copyable
+              monospace
+              value={currentContext || 'n/a'}
+            />
+            <StudioSummaryField
+              block
+              label="Primary actor"
+              copyable
+              monospace
+              value={currentActor || 'n/a'}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div
+        style={{
+          ...cardStackStyle,
+          minWidth: 0,
+        }}
+      >
+        <div
+          style={{
+            border: '1px solid #E6E3DE',
+            borderRadius: 24,
+            background: '#FFFFFF',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+            padding: 18,
+          }}
+        >
+          <Space direction="vertical" size={2}>
+            <Typography.Text strong>Revision rollout</Typography.Text>
+            <Typography.Text type="secondary">
+              Review published revisions, switch the default serving revision, or retire stale ones.
+            </Typography.Text>
+          </Space>
+
+          <div
+            style={{
+              ...cardStackStyle,
+              maxHeight: 420,
+              overflowY: 'auto',
+            }}
+          >
+            {revisions.map((revision) => {
+              const canActivate = canActivateScopeBindingRevision(
+                binding,
+                revision,
+              );
+              const canRetire = canRetireScopeBindingRevision(binding, revision);
+              const revisionTarget = describeStudioScopeBindingRevisionTarget(revision);
+              const revisionContext = describeStudioScopeBindingRevisionContext(revision);
+              return (
+                <div
+                  key={revision.revisionId}
+                  style={{
+                    border: '1px solid #E6E3DE',
+                    borderRadius: 20,
+                    background: '#FFFFFF',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 16,
+                    padding: 16,
+                  }}
+                >
+                  <div
+                    style={{
+                      ...cardStackStyle,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    <Space wrap size={[8, 8]}>
+                      <Typography.Text
+                        strong
+                        copyable
+                        style={{
+                          fontFamily:
+                            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                          overflowWrap: 'anywhere',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {revision.revisionId}
+                      </Typography.Text>
+                      <Tag
+                        color={
+                          getScopeBindingRevisionTone(revision) === 'default'
+                            ? 'default'
+                            : getScopeBindingRevisionTone(revision)
+                        }
+                      >
+                        {revision.status || 'unknown'}
+                      </Tag>
+                      {revision.isDefaultServing ? (
+                        <Tag color="success">default</Tag>
+                      ) : null}
+                      {revision.isActiveServing ? (
+                        <Tag color="processing">active</Tag>
+                      ) : null}
+                      {revision.isServingTarget ? (
+                        <Tag color="blue">
+                          {revision.allocationWeight}% {revision.servingState || 'serving'}
+                        </Tag>
+                      ) : null}
+                    </Space>
+                    <Typography.Text type="secondary">
+                      {formatStudioScopeBindingImplementationKind(
+                        revision.implementationKind,
+                      )}{' '}
+                      · {revisionTarget} · updated{' '}
+                      {formatScopeBindingRevisionTimestamp(revision)}
+                    </Typography.Text>
+                    {revisionContext ? (
+                      <Typography.Text
+                        type="secondary"
+                        style={{
+                          fontFamily:
+                            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                          overflowWrap: 'anywhere',
+                          wordBreak: 'break-word',
+                        }}
+                      >
+                        {revisionContext}
+                      </Typography.Text>
+                    ) : null}
+                    {revision.failureReason ? (
+                      <Typography.Text type="danger">
+                        {revision.failureReason}
+                      </Typography.Text>
+                    ) : null}
+                  </div>
+
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 12,
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography.Text
+                      type="secondary"
+                      style={{
+                        fontFamily:
+                          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        overflowWrap: 'anywhere',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      Deployment {formatCompactScopeBindingIdentifier(revision.deploymentId || 'draft only')}
+                    </Typography.Text>
+                    <Space wrap size={[8, 8]}>
+                      <Button
+                        type={canActivate ? 'primary' : 'default'}
+                        disabled={!canActivate}
+                        loading={pendingRevisionId === revision.revisionId}
+                        onClick={() => onActivateRevision(revision.revisionId)}
+                      >
+                        {revision.isDefaultServing ? 'Serving' : 'Activate'}
+                      </Button>
+                      <Button
+                        danger
+                        disabled={!canRetire}
+                        loading={
+                          pendingRetirementRevisionId === revision.revisionId
+                        }
+                        onClick={() => onRetireRevision(revision.revisionId)}
+                      >
+                        Retire
+                      </Button>
+                    </Space>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div
       style={{
         ...workflowSectionShellStyle,
-        gap: 18,
+        gap: 12,
+        padding: 16,
       }}
     >
-      <div style={workflowSectionHeaderStyle}>
+      <div
+        style={{
+          ...workflowSectionHeaderStyle,
+          alignItems: 'center',
+        }}
+      >
         <div style={workflowDirectoryTextStackStyle}>
           <Typography.Text style={workflowSectionHeadingStyle}>
             Scope Binding
           </Typography.Text>
-          <Typography.Title
-            level={5}
-            style={{ margin: 0 }}
-          >
-            {binding?.available
-              ? binding.displayName || binding.serviceId
-              : 'No active binding'}
-          </Typography.Title>
-          <Typography.Text type="secondary">
-            {binding?.available
-              ? `Scope ${scopeId} is routed through the default service binding.`
-              : `Scope ${scopeId} has not published a service binding yet.`}
-          </Typography.Text>
+          <Space wrap size={[8, 8]}>
+            <Typography.Title
+              level={5}
+              style={{ margin: 0 }}
+            >
+              {binding?.available
+                ? binding.displayName || binding.serviceId
+                : 'No active binding'}
+            </Typography.Title>
+            <Tag color={bindingStateColor}>{bindingStateLabel}</Tag>
+          </Space>
         </div>
         <Space wrap size={[8, 8]}>
           <Tag color="processing">{scopeId}</Tag>
-          {binding?.available ? (
-            <Tag color="success">
-              {binding.defaultServingRevisionId || 'default pending'}
-            </Tag>
-          ) : null}
           <Button
-            onClick={() =>
-              history.push(
-                buildRuntimeGAgentsHref({
-                  scopeId,
-                  actorId: currentRevision?.staticPreferredActorId || undefined,
-                  actorTypeName: currentRevision?.staticActorTypeName || undefined,
-                }),
-              )
+            type="text"
+            size="small"
+            aria-haspopup="dialog"
+            aria-controls="studio-scope-binding-details"
+            onClick={() => setDetailsOpen(true)}
+            icon={
+              <DownOutlined
+                style={{
+                  transform: 'rotate(0deg)',
+                  transition: 'transform 0.2s ease',
+                }}
+              />
             }
           >
-            Open GAgents
+            Show details
           </Button>
         </Space>
       </div>
-
-      {loading ? (
-        <StudioNoticeCard
-          title="Loading scope binding"
-          description="Fetching the current revision history and serving state for this scope."
-        />
-      ) : error ? (
-        <StudioNoticeCard
-          type="error"
-          title="Failed to load scope binding"
-          description={describeError(error)}
-        />
-      ) : !binding?.available ? (
-        <StudioNoticeCard
-          type="info"
-          title="No published binding"
-          description="Use Bind scope to publish the current workflow as the scope's default service."
-        />
-      ) : (
-        <div
-          style={{
-            display: 'grid',
-            gap: 16,
-            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          }}
-        >
-          <div
-            style={{
-              ...cardStackStyle,
-              minWidth: 0,
-            }}
-          >
-            <div
-              style={{
-                border: '1px solid #E6E3DE',
-                borderRadius: 24,
-                background: '#FFFFFF',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 16,
-                padding: 18,
-              }}
-            >
-              <Space direction="vertical" size={2}>
-                <Typography.Text strong>Current posture</Typography.Text>
-                <Typography.Text type="secondary">
-                  The current published default binding, target identity, and serving posture live together here.
-                </Typography.Text>
-              </Space>
-
-              <div style={summaryMetricGridStyle}>
-                <StudioSummaryMetric
-                  label="Revisions"
-                  value={binding.revisions.length}
-                />
-                <StudioSummaryMetric
-                  label="Binding kind"
-                  value={formatStudioScopeBindingImplementationKind(
-                    currentRevision?.implementationKind,
-                  )}
-                />
-                <StudioSummaryMetric
-                  label="Current target"
-                  value={currentTarget}
-                />
-                <StudioSummaryMetric
-                  label="Default"
-                  tone="success"
-                  value={binding.defaultServingRevisionId || 'n/a'}
-                />
-                <StudioSummaryMetric
-                  label="Active"
-                  tone="info"
-                  value={binding.activeServingRevisionId || 'n/a'}
-                />
-                <StudioSummaryMetric
-                  label="Deployment"
-                  value={binding.deploymentStatus || 'n/a'}
-                />
-              </div>
-
-              <div style={summaryFieldGridStyle}>
-                <StudioSummaryField
-                  label="Service key"
-                  copyable
-                  value={binding.serviceKey}
-                />
-                <StudioSummaryField
-                  label="Target"
-                  value={currentTarget}
-                />
-                <StudioSummaryField
-                  label="Target detail"
-                  copyable
-                  value={currentContext || 'n/a'}
-                />
-                <StudioSummaryField
-                  label="Primary actor"
-                  copyable
-                  value={currentActor || 'n/a'}
-                />
-                <StudioSummaryField
-                  label="Deployment"
-                  value={binding.deploymentId}
-                />
-                <StudioSummaryField
-                  label="Updated"
-                  value={formatDateTime(binding.updatedAt)}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div
-            style={{
-              ...cardStackStyle,
-              minWidth: 0,
-            }}
-          >
-            <div
-              style={{
-                border: '1px solid #E6E3DE',
-                borderRadius: 24,
-                background: '#FFFFFF',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 16,
-                padding: 18,
-              }}
-            >
-              <Space direction="vertical" size={2}>
-                <Typography.Text strong>Revision rollout</Typography.Text>
-                <Typography.Text type="secondary">
-                  Review published revisions, switch the default serving revision, or retire stale ones.
-                </Typography.Text>
-              </Space>
-
-              <div
-                style={{
-                  ...cardStackStyle,
-                  maxHeight: 420,
-                  overflowY: 'auto',
-                }}
-              >
-                {revisions.map((revision) => {
-                  const canActivate = canActivateScopeBindingRevision(
-                    binding,
-                    revision,
-                  );
-                  const canRetire = canRetireScopeBindingRevision(binding, revision);
-                  const revisionTarget = describeStudioScopeBindingRevisionTarget(revision);
-                  const revisionContext = describeStudioScopeBindingRevisionContext(revision);
-                  return (
-                    <div
-                      key={revision.revisionId}
-                      style={{
-                        alignItems: 'flex-start',
-                        border: '1px solid #E6E3DE',
-                        borderRadius: 20,
-                        background: '#FFFFFF',
-                        display: 'flex',
-                        gap: 16,
-                        justifyContent: 'space-between',
-                        padding: 16,
-                      }}
-                    >
-                      <div
-                        style={{
-                          ...cardStackStyle,
-                          flex: 1,
-                          minWidth: 0,
-                        }}
-                      >
-                        <Space wrap size={[8, 8]}>
-                          <Typography.Text strong copyable>
-                            {revision.revisionId}
-                          </Typography.Text>
-                          <Tag
-                            color={
-                              getScopeBindingRevisionTone(revision) === 'default'
-                                ? 'default'
-                                : getScopeBindingRevisionTone(revision)
-                            }
-                          >
-                            {revision.status || 'unknown'}
-                          </Tag>
-                          {revision.isDefaultServing ? (
-                            <Tag color="success">default</Tag>
-                          ) : null}
-                          {revision.isActiveServing ? (
-                            <Tag color="processing">active</Tag>
-                          ) : null}
-                          {revision.isServingTarget ? (
-                            <Tag color="blue">
-                              {revision.allocationWeight}% {revision.servingState || 'serving'}
-                            </Tag>
-                          ) : null}
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {formatStudioScopeBindingImplementationKind(
-                            revision.implementationKind,
-                          )}{' '}
-                          · {revisionTarget} · updated{' '}
-                          {formatScopeBindingRevisionTimestamp(revision)}
-                        </Typography.Text>
-                        {revisionContext ? (
-                          <Typography.Text type="secondary">
-                            {revisionContext}
-                          </Typography.Text>
-                        ) : null}
-                        {revision.failureReason ? (
-                          <Typography.Text type="danger">
-                            {revision.failureReason}
-                          </Typography.Text>
-                        ) : null}
-                      </div>
-
-                      <Space direction="vertical" size={8} align="end">
-                        <Typography.Text type="secondary">
-                          {revision.deploymentId || 'draft only'}
-                        </Typography.Text>
-                        <Button
-                          type={canActivate ? 'primary' : 'default'}
-                          disabled={!canActivate}
-                          loading={pendingRevisionId === revision.revisionId}
-                          onClick={() => onActivateRevision(revision.revisionId)}
-                        >
-                          {revision.isDefaultServing ? 'Serving' : 'Activate'}
-                        </Button>
-                        <Button
-                          danger
-                          disabled={!canRetire}
-                          loading={
-                            pendingRetirementRevisionId === revision.revisionId
-                          }
-                          onClick={() => onRetireRevision(revision.revisionId)}
-                        >
-                          Retire
-                        </Button>
-                      </Space>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <Drawer
+        id="studio-scope-binding-details"
+        open={detailsOpen}
+        title="Scope Binding Details"
+        placement="right"
+        size={720}
+        onClose={() => setDetailsOpen(false)}
+        destroyOnClose
+        styles={{ body: drawerBodyStyle }}
+        extra={
+          <Button size="small" onClick={() => setDetailsOpen(false)}>
+            Close panel
+          </Button>
+        }
+      >
+        <div style={drawerScrollStyle}>{detailsContent}</div>
+      </Drawer>
     </div>
   );
 };
@@ -1444,22 +2725,18 @@ export type StudioWorkspaceAlertsProps = {
 
 export const StudioWorkspaceAlerts: React.FC<StudioWorkspaceAlertsProps> = ({
   authSession,
-  draftMode,
-  legacySource,
 }) => {
-  const notices: React.ReactNode[] = [];
+  if (!authSession?.enabled || authSession.authenticated) {
+    return null;
+  }
 
-  if (authSession?.enabled && !authSession.authenticated) {
-    notices.push(
-      <StudioNoticeCard
-        key="auth"
+  return (
+    <div style={studioNoticeStripStyle}>
+      <StudioStatusBanner
         type="warning"
         title="Studio sign-in required"
         description={
-          <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-            {authSession.errorMessage ||
-              'Sign in to access protected Studio APIs.'}
-          </Typography.Paragraph>
+          authSession.errorMessage || 'Sign in to access protected Studio APIs.'
         }
         action={
           authSession.loginUrl ? (
@@ -1472,37 +2749,9 @@ export const StudioWorkspaceAlerts: React.FC<StudioWorkspaceAlertsProps> = ({
             </Button>
           ) : undefined
         }
-      />,
-    );
-  }
-
-  if (draftMode === 'new') {
-    notices.push(
-      <StudioNoticeCard
-        key="blank-draft"
-        type="info"
-        title="Blank Studio draft"
-        description="You are editing a new unsaved workflow draft inside Studio. Save it to workspace once the YAML and metadata are ready."
-      />,
-    );
-  }
-
-  if (draftMode === 'new' && legacySource === 'playground') {
-    notices.push(
-      <StudioNoticeCard
-        key="imported-draft"
-        type="warning"
-        title="Imported local draft"
-        description="This Studio draft was loaded from your browser-stored draft so you can keep editing it in Studio."
-      />,
-    );
-  }
-
-  if (notices.length === 0) {
-    return null;
-  }
-
-  return <div style={studioNoticeStripStyle}>{notices}</div>;
+      />
+    </div>
+  );
 };
 
 export type StudioWorkflowsPageProps = {
@@ -1513,11 +2762,11 @@ export type StudioWorkflowsPageProps = {
   readonly selectedDirectoryId: string;
   readonly templateWorkflow: string;
   readonly draftMode: DraftMode;
+  readonly legacySource: LegacySource;
   readonly activeWorkflowName: string;
   readonly activeWorkflowDescription: string;
   readonly activeWorkflowSourceKey: string;
   readonly workflowSearch: string;
-  readonly workflowLayout: StudioWorkflowLayout;
   readonly showDirectoryForm: boolean;
   readonly directoryPath: string;
   readonly directoryLabel: string;
@@ -1525,10 +2774,8 @@ export type StudioWorkflowsPageProps = {
   readonly workflowImportInputRef: React.RefObject<HTMLInputElement | null>;
   readonly onOpenWorkflow: (workflowId: string) => void;
   readonly onStartBlankDraft: () => void;
-  readonly onOpenCurrentDraft: () => void;
   readonly onSelectDirectoryId: (directoryId: string) => void;
   readonly onSetWorkflowSearch: (value: string) => void;
-  readonly onSetWorkflowLayout: (value: StudioWorkflowLayout) => void;
   readonly onToggleDirectoryForm: () => void;
   readonly onSetDirectoryPath: (value: string) => void;
   readonly onSetDirectoryLabel: (value: string) => void;
@@ -1546,11 +2793,11 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   selectedDirectoryId,
   templateWorkflow,
   draftMode,
+  legacySource,
   activeWorkflowName,
   activeWorkflowDescription,
   activeWorkflowSourceKey,
   workflowSearch,
-  workflowLayout,
   showDirectoryForm,
   directoryPath,
   directoryLabel,
@@ -1558,10 +2805,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   workflowImportInputRef,
   onOpenWorkflow,
   onStartBlankDraft,
-  onOpenCurrentDraft,
   onSelectDirectoryId,
   onSetWorkflowSearch,
-  onSetWorkflowLayout,
   onToggleDirectoryForm,
   onSetDirectoryPath,
   onSetDirectoryLabel,
@@ -1571,6 +2816,11 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   onWorkflowImportChange,
 }) => {
   const directories = workspaceSettings.data?.directories ?? [];
+  const isScopeMode = workflowStorageMode === 'scope';
+  const activeDirectory =
+    directories.find((directory) => directory.directoryId === selectedDirectoryId) ||
+    directories[0] ||
+    null;
   const filteredWorkflows = (workflows.data ?? []).filter((workflow) => {
     const keyword = workflowSearch.trim().toLowerCase();
     if (!keyword) {
@@ -1584,29 +2834,105 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
       workflow.fileName,
     ].some((value) => value.toLowerCase().includes(keyword));
   });
+  const workflowViewportMaxWidth = isScopeMode ? undefined : 1080;
+
+  const scopeSummaryDescription = workspaceSettings.isLoading
+    ? 'Resolving the current scope.'
+    : workspaceSettings.isError
+      ? describeError(workspaceSettings.error)
+      : 'Platform-managed scope for workspace workflows.';
+  const draftSummaryDescription =
+    activeWorkflowDescription || 'Open the selected workflow or start a blank draft.';
+  const isImportedDraft = draftMode === 'new' && legacySource === 'playground';
+  const resultsBodyRef = React.useRef<HTMLDivElement | null>(null);
+  const [resultsViewportHeight, setResultsViewportHeight] = React.useState<
+    number | null
+  >(null);
+
+  const clampResultsViewportHeight = React.useCallback((value: number) => {
+    const minHeight = 220;
+    const maxHeight =
+      typeof window === 'undefined'
+        ? 520
+        : Math.max(minHeight, Math.min(720, window.innerHeight - 220));
+    return Math.min(Math.max(value, minHeight), maxHeight);
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    let frameId = 0;
+    let resizeObserver: ResizeObserver | null = null;
+
+    const updateViewportHeight = () => {
+      const rect = resultsBodyRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+
+      const nextHeight = clampResultsViewportHeight(window.innerHeight - rect.top - 24);
+      setResultsViewportHeight((current) =>
+        current === nextHeight ? current : nextHeight,
+      );
+    };
+
+    const scheduleViewportHeightUpdate = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateViewportHeight);
+    };
+
+    scheduleViewportHeightUpdate();
+
+    window.addEventListener('resize', scheduleViewportHeightUpdate);
+    window.addEventListener('scroll', scheduleViewportHeightUpdate, true);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(scheduleViewportHeightUpdate);
+      if (resultsBodyRef.current) {
+        resizeObserver.observe(resultsBodyRef.current);
+        if (resultsBodyRef.current.parentElement) {
+          resizeObserver.observe(resultsBodyRef.current.parentElement);
+        }
+      }
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', scheduleViewportHeightUpdate);
+      window.removeEventListener('scroll', scheduleViewportHeightUpdate, true);
+      resizeObserver?.disconnect();
+    };
+  }, [
+    activeWorkflowName,
+    clampResultsViewportHeight,
+    filteredWorkflows.length,
+    isScopeMode,
+    selectedWorkflowId,
+    workflowSearch,
+  ]);
 
   return (
     <Row gutter={[16, 16]} align="stretch" style={workflowWorkspaceRowStyle}>
-      <Col xs={24} xl={8} xxl={7} style={stretchColumnStyle}>
-        <div style={workflowSidebarStackStyle}>
-          <section
-            style={{
-              ...workflowSectionShellStyle,
-              ...workflowSectionFillStyle,
-            }}
-          >
-            <div style={workflowSectionHeaderStyle}>
-              <div style={cardStackStyle}>
-                <Typography.Text style={workflowSectionHeadingStyle}>
-                  {workflowStorageMode === 'scope' ? 'Scope' : 'Directories'}
-                </Typography.Text>
-                <Typography.Text style={workflowSectionCopyStyle}>
-                  {workflowStorageMode === 'scope'
-                    ? 'Workflows follow the current resolved scope. tenantId and appId stay platform-managed and hidden from Studio.'
-                    : 'New workflows are created in the selected directory.'}
-                </Typography.Text>
-              </div>
-              {workflowStorageMode !== 'scope' ? (
+      {!isScopeMode ? (
+        <Col xs={24} xl={8} xxl={7} style={workflowStretchColumnStyle}>
+          <div style={workflowSidebarStackStyle}>
+            <section
+              style={{
+                ...workflowSectionShellStyle,
+                ...workflowSectionFillStyle,
+              }}
+            >
+              <div style={workflowSectionHeaderStyle}>
+                <div style={cardStackStyle}>
+                  <Typography.Text style={workflowSectionHeadingStyle}>
+                    Directories
+                  </Typography.Text>
+                  <Typography.Text style={workflowSectionCopyStyle}>
+                    New workflows are created in the selected directory.
+                  </Typography.Text>
+                </div>
                 <Button
                   type="text"
                   icon={<FolderAddOutlined />}
@@ -1614,174 +2940,131 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                   aria-label="Toggle workflow directory form"
                   style={workflowPanelIconButtonStyle}
                 />
-              ) : null}
-            </div>
+              </div>
 
-            {workspaceSettings.isLoading ? (
-              <Typography.Text type="secondary">
-                Loading workflow directories...
-              </Typography.Text>
-            ) : workspaceSettings.isError ? (
-              <StudioNoticeCard
-                type="error"
-                title="Failed to load workspace settings"
-                description={describeError(workspaceSettings.error)}
-              />
-            ) : (
-              <div style={workflowDirectoryContentStyle}>
-                {showDirectoryForm && workflowStorageMode !== 'scope' ? (
-                  <div style={workflowSurfaceStyle}>
-                    <div style={cardStackStyle}>
-                      <Input
-                        aria-label="Studio directory path"
-                        placeholder="/absolute/path/to/workflows"
-                        value={directoryPath}
-                        onChange={(event) => onSetDirectoryPath(event.target.value)}
-                      />
-                      <Input
-                        aria-label="Studio directory label"
-                        placeholder="Directory label"
-                        value={directoryLabel}
-                        onChange={(event) => onSetDirectoryLabel(event.target.value)}
-                      />
-                      <Button type="primary" onClick={onAddDirectory}>
-                        Add directory
-                      </Button>
+              {workspaceSettings.isLoading ? (
+                <Typography.Text type="secondary">
+                  Loading workflow directories...
+                </Typography.Text>
+              ) : workspaceSettings.isError ? (
+                <StudioNoticeCard
+                  type="error"
+                  title="Failed to load workspace settings"
+                  description={describeError(workspaceSettings.error)}
+                />
+              ) : (
+                <div style={workflowDirectoryContentStyle}>
+                  {showDirectoryForm ? (
+                    <div style={workflowSurfaceStyle}>
+                      <div style={cardStackStyle}>
+                        <Input
+                          aria-label="Studio directory path"
+                          placeholder="/absolute/path/to/workflows"
+                          value={directoryPath}
+                          onChange={(event) => onSetDirectoryPath(event.target.value)}
+                        />
+                        <Input
+                          aria-label="Studio directory label"
+                          placeholder="Directory label"
+                          value={directoryLabel}
+                          onChange={(event) => onSetDirectoryLabel(event.target.value)}
+                        />
+                        <Button type="primary" onClick={onAddDirectory}>
+                          Add directory
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
 
-                {directories.length > 0 ? (
-                  <div style={workflowDirectoryListStyle}>
-                    {directories.map((directory) => {
-                      const active = selectedDirectoryId === directory.directoryId;
-                      const showDirectoryPath =
-                        workflowStorageMode !== 'scope' &&
-                        !isScopeDirectoryPath(directory.path);
+                  {directories.length > 0 ? (
+                    <div style={workflowDirectoryListStyle}>
+                      {directories.map((directory) => {
+                        const active = selectedDirectoryId === directory.directoryId;
+                        const showDirectoryPath = !isScopeDirectoryPath(directory.path);
 
-                      return (
-                        <div
-                          key={directory.directoryId}
-                          style={{
-                            ...workflowSurfaceStyle,
-                            ...(active ? workflowSurfaceActiveStyle : {}),
-                          }}
-                        >
+                        return (
                           <div
+                            key={directory.directoryId}
                             style={{
-                              display: 'flex',
-                              alignItems: 'flex-start',
-                              gap: 12,
-                              justifyContent: 'space-between',
+                              ...workflowSurfaceStyle,
+                              ...(active ? workflowSurfaceActiveStyle : {}),
                             }}
                           >
-                            <Button
-                              type="text"
-                              style={workflowDirectorySelectButtonStyle}
-                              onClick={() => onSelectDirectoryId(directory.directoryId)}
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: 12,
+                                justifyContent: 'space-between',
+                              }}
                             >
-                              <div style={workflowDirectoryTextStackStyle}>
-                                <Typography.Text
-                                  style={workflowDirectoryLabelStyle}
-                                  ellipsis={{ tooltip: directory.label }}
-                                >
-                                  {directory.label}
-                                </Typography.Text>
-                                {showDirectoryPath ? (
-                                  <Typography.Text
-                                    style={workflowDirectoryPathStyle}
-                                    ellipsis={{ tooltip: directory.path }}
-                                  >
-                                    {directory.path}
-                                  </Typography.Text>
-                                ) : null}
-                              </div>
-                            </Button>
-                            {!directory.isBuiltIn && workflowStorageMode !== 'scope' ? (
                               <Button
                                 type="text"
-                                icon={<DeleteOutlined />}
-                                aria-label={`Remove workflow directory ${directory.label}`}
-                                onClick={() => onRemoveDirectory(directory.directoryId)}
-                                style={{
-                                  ...workflowPanelIconButtonStyle,
-                                  width: 32,
-                                  height: 32,
-                                  color: 'var(--ant-color-text-tertiary)',
-                                }}
+                                style={workflowDirectorySelectButtonStyle}
+                                onClick={() => onSelectDirectoryId(directory.directoryId)}
                               >
-                                <span style={{ display: 'none' }}>Remove</span>
+                                <div style={workflowDirectoryTextStackStyle}>
+                                  <Typography.Text
+                                    style={workflowDirectoryLabelStyle}
+                                    ellipsis={{ tooltip: directory.label }}
+                                  >
+                                    {directory.label}
+                                  </Typography.Text>
+                                  {showDirectoryPath ? (
+                                    <Typography.Text
+                                      style={workflowDirectoryPathStyle}
+                                      ellipsis={{ tooltip: directory.path }}
+                                    >
+                                      {directory.path}
+                                    </Typography.Text>
+                                  ) : null}
+                                </div>
                               </Button>
-                            ) : null}
+                              {!directory.isBuiltIn ? (
+                                <Button
+                                  type="text"
+                                  icon={<DeleteOutlined />}
+                                  aria-label={`Remove workflow directory ${directory.label}`}
+                                  onClick={() => onRemoveDirectory(directory.directoryId)}
+                                  style={{
+                                    ...workflowPanelIconButtonStyle,
+                                    width: 32,
+                                    height: 32,
+                                    color: 'var(--ant-color-text-tertiary)',
+                                  }}
+                                >
+                                  <span style={{ display: 'none' }}>Remove</span>
+                                </Button>
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div style={workflowEmptyStateStyle}>
-                    <div style={workflowEmptyStateInnerStyle}>
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description="No workflow directories are configured yet."
-                      />
+                        );
+                      })}
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
+                  ) : (
+                    <div style={workflowEmptyStateStyle}>
+                      <div style={workflowEmptyStateInnerStyle}>
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description="No workflow directories are configured yet."
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
 
-          <section style={workflowSectionShellStyle}>
-            <div style={workflowSectionHeaderStyle}>
-              <div style={cardStackStyle}>
-                <Typography.Text style={workflowSectionHeadingStyle}>
-                  Current draft
-                </Typography.Text>
-                <Typography.Text style={workflowSectionCopyStyle}>
-                  Keep the active draft in view while browsing the workspace library.
-                </Typography.Text>
-              </div>
-            </div>
+          </div>
+        </Col>
+      ) : null}
 
-            <div style={workflowSurfaceStyle}>
-              <div style={cardStackStyle}>
-                <Space wrap size={[8, 8]}>
-                  {selectedWorkflowId ? (
-                    <Tag color="processing">Workspace workflow</Tag>
-                  ) : null}
-                  {templateWorkflow ? (
-                    <Tag color="success">Published template</Tag>
-                  ) : null}
-                  {draftMode === 'new' ? <Tag color="gold">Blank draft</Tag> : null}
-                </Space>
-                <Typography.Text strong>
-                  {activeWorkflowName || 'No draft selected'}
-                </Typography.Text>
-                <Typography.Text style={workflowSectionCopyStyle}>
-                  {activeWorkflowDescription ||
-                    'Pick a workflow or start a blank draft to open the Studio editor.'}
-                </Typography.Text>
-                <Space wrap size={[8, 8]}>
-                  <Button
-                    type="primary"
-                    disabled={!activeWorkflowSourceKey}
-                    onClick={onOpenCurrentDraft}
-                    style={activeWorkflowSourceKey ? workflowSolidActionStyle : undefined}
-                  >
-                    Open editor
-                  </Button>
-                  <Button onClick={onStartBlankDraft} style={workflowGhostActionStyle}>
-                    New workflow
-                  </Button>
-                </Space>
-              </div>
-            </div>
-          </section>
-        </div>
-      </Col>
-
-      <Col xs={24} xl={16} xxl={17} style={stretchColumnStyle}>
+      <Col
+        xs={24}
+        xl={isScopeMode ? 24 : 16}
+        xxl={isScopeMode ? 24 : 17}
+        style={workflowStretchColumnStyle}
+      >
         <section style={workflowBrowserStyle}>
           <input
             ref={workflowImportInputRef}
@@ -1792,70 +3075,126 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
           />
 
           <div style={workflowToolbarSurfaceStyle}>
-            <div style={workflowToolbarLayoutStyle}>
-              <div style={workflowSearchFieldStyle}>
-                <SearchOutlined style={{ color: 'var(--ant-color-text-tertiary)' }} />
-                <input
-                  aria-label="Search workflows"
-                  placeholder="Search workflows"
-                  style={workflowSearchInputStyle}
-                  value={workflowSearch}
-                  onChange={(event) => onSetWorkflowSearch(event.target.value)}
-                />
+            <div style={workflowToolbarStackStyle}>
+              <div style={workflowSummaryStripStyle}>
+                {isScopeMode ? (
+                  <div
+                    style={{
+                      ...workflowSummaryCardStyle,
+                      ...(activeDirectory ? workflowSurfaceActiveStyle : {}),
+                    }}
+                  >
+                    <div style={workflowSummaryCardRowStyle}>
+                      <div style={workflowSummaryCardBodyStyle}>
+                        <Typography.Text style={workflowSectionHeadingStyle}>
+                          Current scope
+                        </Typography.Text>
+                        <Typography.Text
+                          strong
+                          style={workflowCardTitleStyle}
+                          ellipsis={{ tooltip: activeDirectory?.label || 'Resolved by Studio' }}
+                        >
+                          {activeDirectory?.label || 'Resolved by Studio'}
+                        </Typography.Text>
+                        <Typography.Text
+                          style={workflowSummaryHintStyle}
+                          ellipsis={{ tooltip: scopeSummaryDescription }}
+                        >
+                          {scopeSummaryDescription}
+                        </Typography.Text>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div style={workflowSummaryCardStyle}>
+                  <div style={workflowSummaryCardRowStyle}>
+                    <div style={workflowSummaryCardBodyStyle}>
+                      <div style={workflowSummaryEyebrowRowStyle}>
+                        <Typography.Text style={workflowSectionHeadingStyle}>
+                          Current draft
+                        </Typography.Text>
+                        <Space wrap size={[6, 6]}>
+                          {selectedWorkflowId ? (
+                            <Tag color="processing">Workspace workflow</Tag>
+                          ) : null}
+                          {templateWorkflow ? (
+                            <Tag color="success">Published template</Tag>
+                          ) : null}
+                          {isImportedDraft ? (
+                            <Tag color="warning">Imported draft</Tag>
+                          ) : draftMode === 'new' ? (
+                            <Tag color="gold">Blank draft</Tag>
+                          ) : null}
+                        </Space>
+                      </div>
+                      <Typography.Text
+                        strong
+                        style={workflowCardTitleStyle}
+                        ellipsis={{ tooltip: activeWorkflowName || 'No draft selected' }}
+                      >
+                        {activeWorkflowName || 'No draft selected'}
+                      </Typography.Text>
+                      <Typography.Text
+                        style={workflowSummaryHintStyle}
+                        ellipsis={{ tooltip: draftSummaryDescription }}
+                      >
+                        {draftSummaryDescription}
+                      </Typography.Text>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div style={workflowToolbarActionsStyle}>
-                <div style={workflowToggleGroupStyle}>
-                  <button
-                    type="button"
-                    aria-label="Show workflows in a grid"
-                    title="Show workflows in a grid"
-                    onClick={() => onSetWorkflowLayout('grid')}
-                    style={{
-                      ...workflowToggleButtonStyle,
-                      ...(workflowLayout === 'grid'
-                        ? workflowToggleButtonActiveStyle
-                        : {}),
-                    }}
-                  >
-                    <AppstoreOutlined />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Show workflows in a list"
-                    title="Show workflows in a list"
-                    onClick={() => onSetWorkflowLayout('list')}
-                    style={{
-                      ...workflowToggleButtonStyle,
-                      ...(workflowLayout === 'list'
-                        ? workflowToggleButtonActiveStyle
-                        : {}),
-                    }}
-                  >
-                    <BarsOutlined />
-                  </button>
+              <div style={workflowToolbarLayoutStyle}>
+                <div style={workflowSearchFieldStyle}>
+                  <SearchOutlined
+                    style={{ color: 'var(--ant-color-text-tertiary)' }}
+                  />
+                  <input
+                    aria-label="Search workflows"
+                    placeholder="Search workflows"
+                    style={workflowSearchInputStyle}
+                    value={workflowSearch}
+                    onChange={(event) => onSetWorkflowSearch(event.target.value)}
+                  />
                 </div>
-                <Button
-                  icon={<UploadOutlined />}
-                  loading={workflowImportPending}
-                  onClick={onWorkflowImportClick}
-                  style={workflowGhostActionStyle}
-                >
-                  Import
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<PlusOutlined />}
-                  onClick={onStartBlankDraft}
-                  style={workflowSolidActionStyle}
-                >
-                  New workflow
-                </Button>
+
+                <div style={workflowToolbarActionsStyle}>
+                  <Button
+                    icon={<UploadOutlined />}
+                    loading={workflowImportPending}
+                    onClick={onWorkflowImportClick}
+                    style={workflowGhostActionStyle}
+                  >
+                    Import
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={onStartBlankDraft}
+                    style={workflowSolidActionStyle}
+                  >
+                    New workflow
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
 
-          <div style={workflowResultsBodyStyle}>
+          <div
+            data-testid="studio-workflows-results-body"
+            ref={resultsBodyRef}
+            style={{
+              ...workflowResultsBodyStyle,
+              ...(resultsViewportHeight
+                ? {
+                    height: resultsViewportHeight,
+                    maxHeight: resultsViewportHeight,
+                  }
+                : null),
+            }}
+          >
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
                 Loading workflows...
@@ -1867,137 +3206,78 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                 description={describeError(workflows.error)}
               />
             ) : filteredWorkflows.length > 0 ? (
-              workflowLayout === 'grid' ? (
-                <Row
-                  gutter={[16, 16]}
-                  style={{
-                    ...workflowResultsViewportStyle,
-                    maxWidth: 1080,
-                  }}
-                >
-                  {filteredWorkflows.map((workflow) => {
-                    const active = workflow.workflowId === selectedWorkflowId;
-                    return (
-                      <Col
-                        key={workflow.workflowId}
-                        xs={24}
-                        md={24}
-                        xxl={24}
-                        style={stretchColumnStyle}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => onOpenWorkflow(workflow.workflowId)}
-                          style={{
-                            ...workflowCardButtonBaseStyle,
-                            ...(active ? workflowCardButtonActiveStyle : {}),
-                            height: '100%',
-                          }}
-                        >
-                          <div style={workflowCardRowStyle}>
-                            <div
-                              style={{
-                                ...workflowCardIconStyle,
-                                ...(active ? workflowCardIconActiveStyle : {}),
-                              }}
-                            >
-                              <FileTextOutlined />
-                            </div>
-                            <div style={{ ...cardStackStyle, minWidth: 0 }}>
-                              <Typography.Text style={workflowCardTitleStyle}>
-                                {workflow.name}
-                              </Typography.Text>
-                              <Typography.Text style={workflowDirectoryPathStyle}>
-                                {workflow.directoryLabel}
-                              </Typography.Text>
-                              <Typography.Text style={workflowDirectoryPathStyle}>
-                                {workflow.stepCount} steps ·{' '}
-                                {formatDateTime(workflow.updatedAtUtc)}
-                              </Typography.Text>
-                              {workflow.description ? (
-                                <Typography.Paragraph style={workflowCardDescriptionStyle}>
-                                  {workflow.description}
-                                </Typography.Paragraph>
-                              ) : null}
-                            </div>
-                          </div>
-                        </button>
-                      </Col>
-                    );
-                  })}
-                </Row>
-              ) : (
-                <div
-                  style={{
-                    ...cardStackStyle,
-                    ...workflowResultsViewportStyle,
-                    maxWidth: 1080,
-                  }}
-                >
-                  {filteredWorkflows.map((workflow) => {
-                    const active = workflow.workflowId === selectedWorkflowId;
-                    return (
-                      <button
-                        key={workflow.workflowId}
-                        type="button"
-                        onClick={() => onOpenWorkflow(workflow.workflowId)}
+              <div
+                style={{
+                  ...cardStackStyle,
+                  ...workflowResultsViewportStyle,
+                  ...(workflowViewportMaxWidth
+                    ? { maxWidth: workflowViewportMaxWidth }
+                    : null),
+                }}
+              >
+                {filteredWorkflows.map((workflow) => {
+                  const active = workflow.workflowId === selectedWorkflowId;
+                  return (
+                    <button
+                      key={workflow.workflowId}
+                      type="button"
+                      onClick={() => onOpenWorkflow(workflow.workflowId)}
+                      style={{
+                        ...workflowCardButtonListStyle,
+                        ...(active ? workflowCardButtonActiveStyle : {}),
+                      }}
+                    >
+                      <div
                         style={{
-                          ...workflowCardButtonListStyle,
-                          ...(active ? workflowCardButtonActiveStyle : {}),
+                          ...workflowCardListRowStyle,
+                          justifyContent: 'space-between',
                         }}
                       >
                         <div
                           style={{
                             ...workflowCardListRowStyle,
-                            justifyContent: 'space-between',
+                            minWidth: 0,
                           }}
                         >
                           <div
                             style={{
-                              ...workflowCardListRowStyle,
-                              minWidth: 0,
+                              ...workflowCardIconStyle,
+                              ...(active ? workflowCardIconActiveStyle : {}),
+                              width: 44,
+                              height: 44,
                             }}
                           >
-                            <div
-                              style={{
-                                ...workflowCardIconStyle,
-                                ...(active ? workflowCardIconActiveStyle : {}),
-                                width: 44,
-                                height: 44,
-                              }}
-                            >
-                              <FileTextOutlined />
-                            </div>
-                            <div style={{ minWidth: 0 }}>
-                              <Typography.Text style={workflowCardTitleStyle}>
-                                {workflow.name}
-                              </Typography.Text>
-                              <div style={workflowCardMetaLineStyle}>
-                                <span>{workflow.directoryLabel}</span>
-                                <span>{workflow.stepCount} steps</span>
-                                <span>{formatDateTime(workflow.updatedAtUtc)}</span>
-                              </div>
-                              <Typography.Paragraph
-                                style={workflowCardDescriptionCompactStyle}
-                              >
-                                {workflow.description || 'No description provided.'}
-                              </Typography.Paragraph>
-                            </div>
+                            <FileTextOutlined />
                           </div>
-                          <span
-                            style={{
-                              ...workflowOpenHintStyle,
-                              display: 'block',
-                            }}
-                          >
-                            Open
-                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <Typography.Text style={workflowCardTitleStyle}>
+                              {workflow.name}
+                            </Typography.Text>
+                            <div style={workflowCardMetaLineStyle}>
+                              <span>{workflow.directoryLabel}</span>
+                              <span>{workflow.stepCount} steps</span>
+                              <span>{formatDateTime(workflow.updatedAtUtc)}</span>
+                            </div>
+                            <Typography.Paragraph
+                              style={workflowCardDescriptionCompactStyle}
+                            >
+                              {workflow.description || 'No description provided.'}
+                            </Typography.Paragraph>
+                          </div>
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )
+                        <span
+                          style={{
+                            ...workflowOpenHintStyle,
+                            display: 'block',
+                          }}
+                        >
+                          Open
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             ) : (
               <div style={workflowEmptyStateStyle}>
                 <div style={workflowEmptyStateInnerStyle}>
@@ -2751,7 +4031,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 
   if (logsPopoutMode) {
     return (
-      <div style={fillCardStyle}>
+      <div style={{ ...fillCardStyle, height: '100%' }}>
         {selectedExecution.isError ? (
           <StudioNoticeCard
             type="error"
@@ -2773,7 +4053,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const executionLogsBottomInset = logsCollapsed ? 84 : logsHeight + 28;
 
   return (
-    <div style={cardStackStyle}>
+    <div style={{ ...cardStackStyle, position: 'relative' }}>
       {executions.isError ? (
         <StudioNoticeCard
           type="error"
@@ -2821,117 +4101,74 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           overflow: 'hidden',
         }}
       >
-        <header className="studio-editor-header">
-          <div className="studio-editor-toolbar">
-            <div className="studio-view-switch">
-              {(['editor', 'execution'] as const).map((view) => (
-                <button
-                  key={view}
-                  type="button"
-                  onClick={() => onSwitchStudioView(view)}
-                  className={`studio-view-switch-button ${view === 'execution' ? 'active' : ''}`}
-                >
-                  {view === 'editor' ? 'Edit' : 'Runs'}
-                </button>
-              ))}
-            </div>
-            <div className="studio-title-bar">
-              <div className="studio-title-group">
-                <input
-                  aria-label="Studio workflow title"
-                  className="studio-title-input"
-                  placeholder={activeWorkflowName || 'draft'}
-                  value={draftWorkflowName}
-                  onChange={(event) => onSetDraftWorkflowName(event.target.value)}
+        <StudioWorkflowHeader
+          activeView="execution"
+          workflowDisplayName={activeWorkflowName || 'draft'}
+          draftWorkflowName={draftWorkflowName}
+          activeWorkflowDescription={activeWorkflowDescription}
+          descriptionEditorOpen={descriptionEditorOpen}
+          descriptionDraft={descriptionDraft}
+          onSwitchStudioView={onSwitchStudioView}
+          onSetDraftWorkflowName={onSetDraftWorkflowName}
+          onOpenDescriptionEditor={(open) => {
+            setDescriptionEditorOpen(open);
+            if (open) {
+              setDescriptionDraft(activeWorkflowDescription);
+            }
+          }}
+          onDescriptionDraftChange={setDescriptionDraft}
+          onCancelDescriptionEdit={() => {
+            setDescriptionDraft(activeWorkflowDescription);
+            setDescriptionEditorOpen(false);
+          }}
+          onSaveDescription={() => {
+            onSetWorkflowDescription(descriptionDraft);
+            setDescriptionEditorOpen(false);
+          }}
+          actions={
+            <>
+              <Button
+                type="text"
+                shape="circle"
+                icon={<CheckOutlined />}
+                loading={savePending}
+                disabled={!canSaveWorkflow}
+                onClick={onSaveDraft}
+                aria-label="Save"
+                title="Save"
+              />
+              <Button
+                type="text"
+                shape="circle"
+                icon={<UploadOutlined />}
+                onClick={onExportDraft}
+                aria-label="Export"
+                title="Export"
+              />
+              <Button
+                type="primary"
+                shape="circle"
+                icon={runPending ? <LoadingOutlined /> : <CaretRightFilled />}
+                disabled={!canOpenRunWorkflow || runPending}
+                onClick={() => setRunModalOpen(true)}
+                aria-label="Run"
+                title="Run"
+              />
+              {executionCanStop ? (
+                <Button
+                  danger
+                  type="text"
+                  shape="circle"
+                  icon={executionStopPending ? <LoadingOutlined /> : <CloseCircleFilled />}
+                  onClick={onStopExecution}
+                  disabled={executionStopPending}
+                  aria-label="Stop"
+                  title="Stop"
                 />
-                <StudioInfoPopover
-                  open={descriptionEditorOpen}
-                  ariaLabel="Edit workflow description"
-                  onOpenChange={(open) => {
-                    setDescriptionEditorOpen(open);
-                    if (open) {
-                      setDescriptionDraft(activeWorkflowDescription);
-                    }
-                  }}
-                >
-                  <textarea
-                    aria-label="Studio workflow description"
-                    placeholder="Workflow description"
-                    value={descriptionDraft}
-                    onChange={(event) => setDescriptionDraft(event.target.value)}
-                    style={studioDescriptionEditorStyle}
-                  />
-                  <div style={studioInfoPopoverActionsStyle}>
-                    <Button
-                      size="small"
-                      style={{ minWidth: 72, borderRadius: 10 }}
-                      onClick={() => {
-                        setDescriptionDraft(activeWorkflowDescription);
-                        setDescriptionEditorOpen(false);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="primary"
-                      size="small"
-                      style={{ minWidth: 72, borderRadius: 10 }}
-                      onClick={() => {
-                        onSetWorkflowDescription(descriptionDraft);
-                        setDescriptionEditorOpen(false);
-                      }}
-                    >
-                      Save
-                    </Button>
-                  </div>
-                </StudioInfoPopover>
-              </div>
-              <div className="studio-header-actions">
-                <button
-                  type="button"
-                  onClick={onSaveDraft}
-                  disabled={!canSaveWorkflow || savePending}
-                  aria-label="Save"
-                  title="Save"
-                  className="panel-icon-button header-toolbar-action header-save-action"
-                >
-                  {savePending ? <LoadingOutlined /> : <SaveOutlined />}
-                </button>
-                <button
-                  type="button"
-                  onClick={onExportDraft}
-                  aria-label="Export"
-                  title="Export"
-                  className="panel-icon-button header-toolbar-action header-export-action"
-                >
-                  <ExportOutlined />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRunModalOpen(true)}
-                  disabled={!canOpenRunWorkflow || runPending}
-                  aria-label="Run"
-                  title="Run"
-                  className="panel-icon-button header-toolbar-action header-run-action"
-                >
-                  {runPending ? <LoadingOutlined /> : <PlayCircleFilled />}
-                </button>
-                {executionCanStop ? (
-                  <button
-                    type="button"
-                    onClick={onStopExecution}
-                    disabled={executionStopPending}
-                    aria-label="Stop"
-                    title="Stop"
-                    className="panel-icon-button header-toolbar-action header-stop-action"
-                  >
-                    {executionStopPending ? <LoadingOutlined /> : <CloseCircleFilled />}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </header>
+              ) : null}
+            </>
+          }
+        />
 
         <section
           style={{
@@ -3098,12 +4335,11 @@ export type StudioEditorPageProps = {
   readonly scopeBinding?: StudioScopeBindingStatus;
   readonly scopeBindingLoading: boolean;
   readonly scopeBindingError: unknown;
+  readonly projectEntrySurface?: 'chat' | 'invoke';
+  readonly projectEntryReadyForCurrentWorkflow?: boolean;
   readonly gAgentTypes: readonly RuntimeGAgentTypeDescriptor[];
   readonly gAgentTypesLoading: boolean;
   readonly gAgentTypesError: unknown;
-  readonly gAgentActorGroups: readonly RuntimeGAgentActorGroup[];
-  readonly gAgentActorsLoading: boolean;
-  readonly gAgentActorsError: unknown;
   readonly bindingActivationRevisionId: string;
   readonly bindingRetirementRevisionId: string;
   readonly onSwitchStudioView: (view: 'editor' | 'execution') => void;
@@ -3138,7 +4374,6 @@ export type StudioEditorPageProps = {
   readonly onBindGAgent: (input: {
     displayName?: string;
     actorTypeName: string;
-    preferredActorId?: string;
     endpoints?: Array<{
       endpointId: string;
       displayName?: string;
@@ -3213,12 +4448,11 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   scopeBinding,
   scopeBindingLoading,
   scopeBindingError,
+  projectEntrySurface = 'invoke',
+  projectEntryReadyForCurrentWorkflow = false,
   gAgentTypes,
   gAgentTypesLoading,
   gAgentTypesError,
-  gAgentActorGroups,
-  gAgentActorsLoading,
-  gAgentActorsError,
   bindingActivationRevisionId,
   bindingRetirementRevisionId,
   onSwitchStudioView,
@@ -3274,23 +4508,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       ) || null,
     [gAgentDraft.actorTypeName, gAgentTypes],
   );
-  const savedGAgentActorIds = React.useMemo(
-    () =>
-      collectRuntimeGAgentActorIds(
-        gAgentDraft.actorTypeName,
-        gAgentActorGroups,
-        selectedDiscoveredGAgentType,
-      ),
-    [gAgentActorGroups, gAgentDraft.actorTypeName, selectedDiscoveredGAgentType],
-  );
-  const selectedSavedGAgentActorId = React.useMemo(() => {
-    const normalizedPreferredActorId = gAgentDraft.preferredActorId.trim();
-    if (!normalizedPreferredActorId || !savedGAgentActorIds.includes(normalizedPreferredActorId)) {
-      return undefined;
-    }
-
-    return normalizedPreferredActorId;
-  }, [gAgentDraft.preferredActorId, savedGAgentActorIds]);
   const launchableGAgentEndpoints = React.useMemo(
     () =>
       gAgentDraft.endpoints.filter((endpoint) => endpoint.endpointId.trim().length > 0),
@@ -3440,6 +4657,17 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
+  const openToolDrawer = React.useCallback((mode: StudioToolDrawerMode) => {
+    setInspectorDrawerOpen(false);
+    setToolDrawerMode(mode);
+  }, []);
+
+  const openInspectorDrawer = React.useCallback((tab: StudioInspectorTab) => {
+    setToolDrawerMode(null);
+    onSetInspectorTab(tab);
+    setInspectorDrawerOpen(true);
+  }, [onSetInspectorTab]);
+
   const openGAgentModal = React.useCallback(() => {
     setGAgentDraft((current) => ({
       ...current,
@@ -3469,7 +4697,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         {
           displayName: gAgentDraft.displayName,
           actorTypeName: gAgentDraft.actorTypeName,
-          preferredActorId: gAgentDraft.preferredActorId,
           endpoints: gAgentDraft.endpoints.map((endpoint) => ({
             endpointId: endpoint.endpointId,
             displayName: endpoint.displayName,
@@ -3513,15 +4740,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
   React.useEffect(() => {
     if (inspectorTab === 'node') {
-      setInspectorDrawerOpen(hasSelectedGraphNode);
+      setInspectorDrawerOpen(hasSelectedGraphNode && toolDrawerMode === null);
     }
-  }, [hasSelectedGraphNode, inspectorTab]);
+  }, [hasSelectedGraphNode, inspectorTab, toolDrawerMode]);
 
   React.useEffect(() => {
     if (askAiPending || askAiNotice || askAiAnswer || askAiReasoning) {
-      setToolDrawerMode('ask-ai');
+      openToolDrawer('ask-ai');
     }
-  }, [askAiAnswer, askAiNotice, askAiPending, askAiReasoning]);
+  }, [askAiAnswer, askAiNotice, askAiPending, askAiReasoning, openToolDrawer]);
 
   React.useEffect(() => {
     if (!descriptionEditorOpen) {
@@ -3797,175 +5024,183 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     </div>
   );
 
-  const editorStatusItems: React.ReactNode[] = [];
+  const editorStatusNotice =
+    [publishNotice, runNotice, workflowImportNotice, saveNotice].find(
+      (notice) => notice?.type === 'error',
+    ) || null;
+  const projectEntryIsChat = projectEntrySurface === 'chat';
 
-  if (!hasResolvedProject) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-project-step"
-        type="warning"
-        title="Next step: resolve the current project"
-        description="This workflow path only becomes a real project flow after Studio resolves the current project scope. Once resolved, save the asset, run the draft, then bind the project."
-      />,
-    );
-  } else if (!hasNamedDraft) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-draft-step"
-        type="warning"
-        title="Next step: finish the workflow draft"
-        description="Add a workflow name and valid YAML first. Then save the asset before you run the draft or bind the project."
-      />,
-    );
-  } else if (isDraftDirty && canSaveWorkflow) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-save-step"
-        type="info"
-        title="Next step: Save asset"
-        description="Save stores this workflow as a named project asset. That keeps the project catalog in sync before you verify the draft or publish the default binding."
-        action={
-          <Space wrap>
-            <Button type="primary" onClick={onSaveDraft} loading={savePending}>
-              Save asset
-            </Button>
-          </Space>
+  const editorGuidance = !hasResolvedProject
+    ? {
+        type: 'warning' as const,
+        title: 'Next: Resolve project',
+        description:
+          'Resolve this scope first. Then save, run, and bind from the project path.',
+        statusTags: [
+          { label: 'Project pending', color: 'warning' },
+          { label: 'Draft', color: 'default' },
+        ],
+        secondaryAction: {
+          label: 'Open Project Overview',
+          onClick: onOpenProjectOverview,
+        },
+        guideTitle: 'Resolve project context first',
+        guideDescription:
+          'Studio can keep editing locally, but project actions stay incomplete until this scope resolves into a real project.',
+        guideHighlightSteps: ['studio-draft'] as const,
+      }
+    : !hasNamedDraft
+      ? {
+          type: 'warning' as const,
+          title: 'Next: Finish draft',
+          description:
+            'Add a workflow name and valid YAML before save, run, or bind.',
+          statusTags: [
+            { label: 'Draft incomplete', color: 'warning' },
+            { label: 'Name + YAML', color: 'default' },
+          ],
+          guideTitle: 'Finish the draft before publish',
+          guideDescription:
+            'Save, run, and bind unlock after the draft has a valid name and YAML payload.',
+          guideHighlightSteps: ['studio-draft'] as const,
         }
-      />,
-    );
-  } else if (saveNotice?.type === 'success') {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-run-step"
-        type="success"
-        title="Next step: Run draft"
-        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the project so Project Invoke can use the published entrypoint."
-        action={
-          <Space wrap>
-            <Button
-              type="primary"
-              onClick={onRunInConsole}
-              disabled={!canOpenRunWorkflow}
-            >
-              Run draft
-            </Button>
-            <Button
-              onClick={onPublishWorkflow}
-              loading={publishPending}
-              disabled={!canPublishWorkflow}
-            >
-              Bind project
-            </Button>
-          </Space>
-        }
-      />,
-    );
-  } else if (!scopeBinding?.available) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-bind-step"
-        type="warning"
-        title="Next step: Bind project"
-        description="The workflow asset is ready, but Project Invoke still has no active default project binding. Bind this workflow when you want the published project path to use it."
-        action={
-          <Space wrap>
-            <Button
-              type="primary"
-              onClick={onPublishWorkflow}
-              loading={publishPending}
-              disabled={!canPublishWorkflow}
-            >
-              Bind project
-            </Button>
-            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
-          </Space>
-        }
-      />,
-    );
-  } else {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="recommended-invoke-step"
-        type="success"
-        title="Next step: Open Project Invoke"
-        description="The default project binding is already active. Move to Project Invoke to test the published entrypoint, then continue in Runs for the full event trace."
-        action={
-          <Space wrap>
-            <Button type="primary" onClick={onOpenProjectInvoke}>
-              Open Project Invoke
-            </Button>
-            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
-            <Button
-              onClick={onRunInConsole}
-              disabled={!canOpenRunWorkflow}
-            >
-              Run draft
-            </Button>
-          </Space>
-        }
-      />,
-    );
-  }
-
-  if (saveNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="save-notice"
-        type={saveNotice.type}
-        title={
-          saveNotice.type === 'success'
-            ? 'Workflow saved'
-            : 'Workflow save failed'
-        }
-        description={saveNotice.message}
-      />,
-    );
-  }
-
-  if (workflowImportNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="workflow-import-notice"
-        type={workflowImportNotice.type}
-        title={
-          workflowImportNotice.type === 'error'
-            ? 'Workflow import failed'
-            : 'Workflow imported'
-        }
-        description={workflowImportNotice.message}
-      />,
-    );
-  }
-
-  if (runNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="run-notice"
-        type={runNotice.type}
-        title={
-          runNotice.type === 'success'
-            ? 'Draft run ready'
-            : 'Draft run failed'
-        }
-        description={runNotice.message}
-      />,
-    );
-  }
-
-  if (publishNotice) {
-    editorStatusItems.push(
-      <StudioNoticeCard
-        key="publish-notice"
-        type={publishNotice.type}
-        title={
-          publishNotice.type === 'error'
-            ? 'Scope binding failed'
-            : 'Scope binding updated'
-        }
-        description={publishNotice.message}
-      />,
-    );
-  }
+      : isDraftDirty && canSaveWorkflow
+        ? {
+            type: 'info' as const,
+            title: 'Next: Save asset',
+            description:
+              'Save the named workflow asset first so the project catalog stays in sync.',
+            statusTags: [
+              { label: 'Unsaved changes', color: 'processing' },
+              { label: 'Asset pending', color: 'default' },
+            ],
+            primaryAction: {
+              label: 'Save asset',
+              onClick: onSaveDraft,
+              loading: savePending,
+            },
+            guideTitle: 'Save before verify or bind',
+            guideDescription:
+              'Saving creates or updates the project asset without changing the published binding.',
+            guideHighlightSteps: ['save-asset'] as const,
+          }
+        : saveNotice?.type === 'success'
+          ? {
+              type: 'success' as const,
+              title: 'Next: Run draft',
+              description:
+                'Run the inline draft first. Bind the project after the result looks right.',
+              statusTags: [
+                { label: 'Asset saved', color: 'success' },
+                { label: 'Ready to test', color: 'processing' },
+              ],
+              primaryAction: {
+                label: 'Run draft',
+                onClick: onRunInConsole,
+                disabled: !canOpenRunWorkflow,
+              },
+              secondaryAction: {
+                label: 'Bind project',
+                onClick: onPublishWorkflow,
+                loading: publishPending,
+                disabled: !canPublishWorkflow,
+              },
+              guideTitle: 'Verify the draft first',
+              guideDescription:
+                'Run draft tests the inline bundle, while Bind project switches the published entrypoint.',
+              guideHighlightSteps: ['run-draft', 'bind-scope'] as const,
+            }
+          : !scopeBinding?.available
+            ? {
+                type: 'warning' as const,
+                title: 'Next: Bind project',
+                description:
+                  'The asset is saved, but Project Invoke still has no default binding.',
+                statusTags: [
+                  { label: 'Saved asset', color: 'success' },
+                  { label: 'No binding', color: 'warning' },
+                ],
+                primaryAction: {
+                  label: 'Bind project',
+                  onClick: onPublishWorkflow,
+                  loading: publishPending,
+                  disabled: !canPublishWorkflow,
+                },
+                secondaryAction: {
+                  label: 'Open Project Overview',
+                  onClick: onOpenProjectOverview,
+                },
+                guideTitle: 'Publish the project entrypoint',
+                guideDescription:
+                  'Binding makes this workflow the default published path for Project Invoke.',
+                guideHighlightSteps: ['bind-scope'] as const,
+              }
+            : !projectEntryReadyForCurrentWorkflow
+              ? {
+                  type: 'warning' as const,
+                  title: 'Next: Bind project',
+                  description:
+                    projectEntryIsChat
+                      ? 'A different published service is live. Bind this workflow before opening Chat.'
+                      : 'A different published service is live. Bind this workflow before opening Project Invoke.',
+                  statusTags: [
+                    { label: 'Binding active', color: 'success' },
+                    { label: 'Different workflow', color: 'warning' },
+                  ],
+                  primaryAction: {
+                    label: 'Bind project',
+                    onClick: onPublishWorkflow,
+                    loading: publishPending,
+                    disabled: !canPublishWorkflow,
+                  },
+                  secondaryAction: {
+                    label: 'Run draft',
+                    onClick: onRunInConsole,
+                    disabled: !canOpenRunWorkflow,
+                  },
+                  guideTitle: 'Publish this workflow before opening the live entry',
+                  guideDescription:
+                    projectEntryIsChat
+                      ? 'Chat still points at a previously published workflow. Bind this workflow first if you want Chat to open the same flow you are editing.'
+                      : 'Project Invoke still points at a previously published workflow. Bind this workflow first if you want the live entry to match the editor.',
+                  guideHighlightSteps: ['bind-scope'] as const,
+                }
+            : {
+                type: 'success' as const,
+                title: projectEntryIsChat
+                  ? 'Next: Open Chat'
+                  : 'Next: Open Project Invoke',
+                description:
+                  projectEntryIsChat
+                    ? 'The published binding is live. Use Chat to verify the user path, then Runs for deeper traces.'
+                    : 'The published binding is live. Use Project Invoke, then Runs for deeper traces.',
+                statusTags: [
+                  { label: 'Binding active', color: 'success' },
+                  {
+                    label: projectEntryIsChat ? 'Chat ready' : 'Invoke ready',
+                    color: 'processing',
+                  },
+                ],
+                primaryAction: {
+                  label: projectEntryIsChat
+                    ? 'Open Chat'
+                    : 'Open Project Invoke',
+                  onClick: onOpenProjectInvoke,
+                },
+                secondaryAction: {
+                  label: 'Run draft',
+                  onClick: onRunInConsole,
+                  disabled: !canOpenRunWorkflow,
+                },
+                guideTitle: projectEntryIsChat
+                  ? 'Move from authoring to chat'
+                  : 'Move from authoring to invoke',
+                guideDescription:
+                  projectEntryIsChat
+                    ? 'Chat now routes through the published binding, while Run draft still works for inline verification.'
+                    : 'Project Invoke now targets the published entrypoint, while Run draft still works for inline verification.',
+                guideHighlightSteps: ['invoke-services', 'open-in-runs'] as const,
+              };
 
   const editorFatalNotice = selectedWorkflow.isError ? (
     <StudioNoticeCard
@@ -3973,6 +5208,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       type="error"
       title="Failed to load Studio workflow"
       description={describeError(selectedWorkflow.error)}
+      compact
     />
   ) : templateWorkflow.isError ? (
     <StudioNoticeCard
@@ -3980,13 +5216,31 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       type="error"
       title="Failed to load published workflow template"
       description={describeError(templateWorkflow.error)}
+      compact
     />
   ) : null;
 
   return (
-    <div style={cardStackStyle}>
-      {editorStatusItems.length > 0 ? (
-        <div style={studioNoticeStripStyle}>{editorStatusItems}</div>
+    <div
+      style={{
+        ...cardStackStyle,
+        paddingTop: 20,
+        position: 'relative',
+      }}
+    >
+      {!editorFatalNotice ? (
+        <StudioGuidanceBar
+          type={editorGuidance.type}
+          title={editorGuidance.title}
+          description={editorGuidance.description}
+          statusTags={editorGuidance.statusTags}
+          primaryAction={editorGuidance.primaryAction}
+          secondaryAction={editorGuidance.secondaryAction}
+          notice={editorStatusNotice}
+          guideTitle={editorGuidance.guideTitle}
+          guideDescription={editorGuidance.guideDescription}
+          guideHighlightSteps={editorGuidance.guideHighlightSteps}
+        />
       ) : null}
 
       <StudioScopeBindingPanel
@@ -4024,161 +5278,97 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               overflow: 'hidden',
             }}
           >
-            <div
-              style={{
-                alignItems: 'center',
-                background: 'rgba(255,255,255,0.96)',
-                borderBottom: '1px solid #E8E2D9',
-                display: 'flex',
-                gap: 12,
-                justifyContent: 'space-between',
-                padding: '14px 18px',
+            <StudioWorkflowHeader
+              activeView="editor"
+              workflowDisplayName={workflowDisplayName}
+              draftWorkflowName={draftWorkflowName}
+              activeWorkflowDescription={activeWorkflowDescription}
+              descriptionEditorOpen={descriptionEditorOpen}
+              descriptionDraft={descriptionDraft}
+              onSwitchStudioView={onSwitchStudioView}
+              onSetDraftWorkflowName={onSetDraftWorkflowName}
+              onOpenDescriptionEditor={(open) => {
+                setDescriptionEditorOpen(open);
+                if (open) {
+                  setDescriptionDraft(activeWorkflowDescription);
+                }
               }}
-            >
-              <div
-                style={{
-                  alignItems: 'center',
-                  display: 'flex',
-                  flex: 1,
-                  gap: 12,
-                  minWidth: 0,
-                }}
-              >
-                <Space.Compact>
-                  <Button type="primary" onClick={() => onSwitchStudioView('editor')}>
-                    Edit
+              onDescriptionDraftChange={setDescriptionDraft}
+              onCancelDescriptionEdit={() => {
+                setDescriptionDraft(activeWorkflowDescription);
+                setDescriptionEditorOpen(false);
+              }}
+              onSaveDescription={() => {
+                onSetWorkflowDescription(descriptionDraft);
+                setDescriptionEditorOpen(false);
+              }}
+              actions={
+                <>
+                  <Button
+                    icon={<AppstoreOutlined />}
+                    onClick={() => openToolDrawer('palette')}
+                  >
+                    Add node
                   </Button>
-                  <Button onClick={() => onSwitchStudioView('execution')}>Runs</Button>
-                </Space.Compact>
-                <div style={studioTitleBarStyle}>
-                  <div style={studioTitleGroupStyle}>
-                    <input
-                      aria-label="Studio workflow title"
-                      placeholder={workflowDisplayName}
-                      value={draftWorkflowName}
-                      onChange={(event) => onSetDraftWorkflowName(event.target.value)}
-                      style={studioTitleInputStyle}
-                    />
-                    <StudioInfoPopover
-                      open={descriptionEditorOpen}
-                      ariaLabel="Edit workflow description"
-                      onOpenChange={(open) => {
-                        setDescriptionEditorOpen(open);
-                        if (open) {
-                          setDescriptionDraft(activeWorkflowDescription);
-                        }
-                      }}
-                    >
-                      <textarea
-                        aria-label="Studio workflow description"
-                        placeholder="Workflow description"
-                        value={descriptionDraft}
-                        onChange={(event) =>
-                          setDescriptionDraft(event.target.value)
-                        }
-                        style={studioDescriptionEditorStyle}
-                      />
-                      <div style={studioInfoPopoverActionsStyle}>
-                        <Button
-                          size="small"
-                          style={{ minWidth: 72, borderRadius: 10 }}
-                          onClick={() => {
-                            setDescriptionDraft(activeWorkflowDescription);
-                            setDescriptionEditorOpen(false);
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          type="primary"
-                          size="small"
-                          style={{ minWidth: 72, borderRadius: 10 }}
-                          onClick={() => {
-                            onSetWorkflowDescription(descriptionDraft);
-                            setDescriptionEditorOpen(false);
-                          }}
-                        >
-                          Save
-                        </Button>
-                      </div>
-                    </StudioInfoPopover>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  alignItems: 'center',
-                  display: 'flex',
-                  gap: 10,
-                  justifyContent: 'flex-end',
-                  minWidth: 0,
-                }}
-              >
-                <Button
-                  icon={<AppstoreOutlined />}
-                  onClick={() => setToolDrawerMode('palette')}
-                >
-                  Add node
-                </Button>
-                <Button
-                  icon={<RobotOutlined />}
-                  type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
-                  onClick={() => setToolDrawerMode('ask-ai')}
-                >
-                  Ask AI
-                </Button>
-                <Button
-                  icon={<BarsOutlined />}
-                  onClick={onRunInConsole}
-                  disabled={!resolvedScopeId}
-                >
-                  Run draft
-                </Button>
-                <Button
-                  icon={<RobotOutlined />}
-                  onClick={openGAgentModal}
-                  disabled={!resolvedScopeId}
-                >
-                  GAgent service
-                </Button>
-                <Button
-                  icon={<SafetyCertificateOutlined />}
-                  loading={publishPending}
-                  disabled={!canPublishWorkflow}
-                  onClick={onPublishWorkflow}
-                >
-                  Bind project
-                </Button>
-                <Button
-                  type="text"
-                  shape="circle"
-                  icon={<CheckOutlined />}
-                  loading={savePending}
-                  disabled={!canSaveWorkflow}
-                  onClick={onSaveDraft}
-                  aria-label="Save"
-                  title="Save"
-                />
-                <Button
-                  type="text"
-                  shape="circle"
-                  icon={<UploadOutlined />}
-                  onClick={onExportDraft}
-                  aria-label="Export"
-                  title="Export"
-                />
-                <Button
-                  type="primary"
-                  shape="circle"
-                  icon={<CaretRightFilled />}
-                  disabled={!canOpenRunWorkflow}
-                  onClick={() => setRunModalOpen(true)}
-                  aria-label="Run"
-                  title="Run"
-                />
-              </div>
-            </div>
+                  <Button
+                    icon={<RobotOutlined />}
+                    type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
+                    onClick={() => openToolDrawer('ask-ai')}
+                  >
+                    Ask AI
+                  </Button>
+                  <Button
+                    icon={<BarsOutlined />}
+                    onClick={onRunInConsole}
+                    disabled={!resolvedScopeId}
+                  >
+                    Run draft
+                  </Button>
+                  <Button
+                    icon={<RobotOutlined />}
+                    onClick={openGAgentModal}
+                    disabled={!resolvedScopeId}
+                  >
+                    GAgent service
+                  </Button>
+                  <Button
+                    icon={<SafetyCertificateOutlined />}
+                    loading={publishPending}
+                    disabled={!canPublishWorkflow}
+                    onClick={onPublishWorkflow}
+                  >
+                    Bind project
+                  </Button>
+                  <Button
+                    type="text"
+                    shape="circle"
+                    icon={<CheckOutlined />}
+                    loading={savePending}
+                    disabled={!canSaveWorkflow}
+                    onClick={onSaveDraft}
+                    aria-label="Save"
+                    title="Save"
+                  />
+                  <Button
+                    type="text"
+                    shape="circle"
+                    icon={<UploadOutlined />}
+                    onClick={onExportDraft}
+                    aria-label="Export"
+                    title="Export"
+                  />
+                  <Button
+                    type="primary"
+                    shape="circle"
+                    icon={<CaretRightFilled />}
+                    disabled={!canOpenRunWorkflow}
+                    onClick={() => setRunModalOpen(true)}
+                    aria-label="Run"
+                    title="Run"
+                  />
+                </>
+              }
+            />
 
             <div style={{ padding: '12px 12px 0' }}>
               <div style={studioStatusStripStyle}>
@@ -4243,10 +5433,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   <Button
                     shape="circle"
                     icon={<UserOutlined />}
-                    onClick={() => {
-                      onSetInspectorTab('roles');
-                      setInspectorDrawerOpen(true);
-                    }}
+                    onClick={() => openInspectorDrawer('roles')}
                     type={inspectorTab === 'roles' && inspectorDrawerOpen ? 'primary' : 'default'}
                     aria-label="Open roles inspector"
                     title="Roles"
@@ -4255,10 +5442,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   <Button
                     shape="circle"
                     icon={<CodeOutlined />}
-                    onClick={() => {
-                      onSetInspectorTab('yaml');
-                      setInspectorDrawerOpen(true);
-                    }}
+                    onClick={() => openInspectorDrawer('yaml')}
                     type={inspectorTab === 'yaml' && inspectorDrawerOpen ? 'primary' : 'default'}
                     aria-label="Open YAML inspector"
                     title="YAML"
@@ -4342,9 +5526,59 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   edges={workflowGraph.edges}
                   height="calc(100vh - 278px)"
                   variant="studio"
+                  overlayContent={
+                    <>
+                      <Drawer
+                        open={toolDrawerVisible}
+                        title={toolDrawerTitle}
+                        placement="left"
+                        size={420}
+                        getContainer={false}
+                        mask={false}
+                        rootStyle={studioCanvasDrawerRootStyle}
+                        onClose={closeToolDrawer}
+                        destroyOnClose={false}
+                        styles={{ body: drawerBodyStyle }}
+                      >
+                        <div style={drawerScrollStyle}>
+                          {toolDrawerMode === 'palette'
+                            ? nodePaletteDrawerContent
+                            : askAiDrawerContent}
+                        </div>
+                      </Drawer>
+
+                      <Drawer
+                        open={inspectorDrawerVisible}
+                        title={inspectorDrawerTitle}
+                        placement="left"
+                        size={420}
+                        getContainer={false}
+                        mask={false}
+                        rootStyle={studioCanvasDrawerRootStyle}
+                        onClose={() => setInspectorDrawerOpen(false)}
+                        destroyOnClose={false}
+                        styles={{ body: drawerBodyStyle }}
+                      >
+                        <div style={drawerScrollStyle}>
+                          <datalist id="studio-workflow-role-options">
+                            {workflowRoleIds.map((roleId) => (
+                              <option key={roleId} value={roleId} />
+                            ))}
+                          </datalist>
+                          <datalist id="studio-workflow-step-options">
+                            {workflowStepIds.map((stepId) => (
+                              <option key={stepId} value={stepId} />
+                            ))}
+                          </datalist>
+                          {inspectorContent}
+                        </div>
+                      </Drawer>
+                    </>
+                  }
                   selectedNodeId={selectedGraphNodeId}
                   selectedEdgeId={selectedGraphEdge?.edgeId}
                   onNodeSelect={(nodeId) => {
+                    setToolDrawerMode(null);
                     setInspectorDrawerOpen(true);
                     onSelectGraphNode(nodeId);
                   }}
@@ -4359,7 +5593,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       x: flowX,
                       y: flowY,
                     });
-                    setToolDrawerMode('palette');
+                    openToolDrawer('palette');
                   }}
                   onConnectNodes={onConnectGraphNodes}
                   onNodeLayoutChange={onUpdateGraphLayout}
@@ -4368,47 +5602,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               </div>
             </div>
           </div>
-
-          <Drawer
-            open={toolDrawerVisible}
-            title={toolDrawerTitle}
-            placement="left"
-            size={420}
-            mask={false}
-            onClose={closeToolDrawer}
-            destroyOnClose={false}
-            styles={{ body: drawerBodyStyle }}
-          >
-            <div style={drawerScrollStyle}>
-              {toolDrawerMode === 'palette'
-                ? nodePaletteDrawerContent
-                : askAiDrawerContent}
-            </div>
-          </Drawer>
-
-          <Drawer
-            open={inspectorDrawerVisible}
-            title={inspectorDrawerTitle}
-            placement="right"
-            size={420}
-            onClose={() => setInspectorDrawerOpen(false)}
-            destroyOnClose={false}
-            styles={{ body: drawerBodyStyle }}
-          >
-            <div style={drawerScrollStyle}>
-              <datalist id="studio-workflow-role-options">
-                {workflowRoleIds.map((roleId) => (
-                  <option key={roleId} value={roleId} />
-                ))}
-              </datalist>
-              <datalist id="studio-workflow-step-options">
-                {workflowStepIds.map((stepId) => (
-                  <option key={stepId} value={stepId} />
-                ))}
-              </datalist>
-              {inspectorContent}
-            </div>
-          </Drawer>
 
           <Modal
             open={gAgentModalOpen}
@@ -4504,54 +5697,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   setGAgentDraft((current) => ({
                     ...current,
                     actorTypeName: event.target.value,
-                  }))
-                }
-              />
-              <Select
-                aria-label="Saved GAgent actor id"
-                allowClear
-                showSearch
-                style={{ width: '100%' }}
-                placeholder={
-                  gAgentActorsLoading
-                    ? 'Loading saved actors'
-                    : savedGAgentActorIds.length > 0
-                    ? 'Reuse a saved actor id (optional)'
-                    : 'No saved actors for the selected type'
-                }
-                value={selectedSavedGAgentActorId}
-                optionFilterProp="label"
-                options={savedGAgentActorIds.map((actorId) => ({
-                  value: actorId,
-                  label: actorId,
-                }))}
-                notFoundContent={
-                  gAgentActorsLoading ? 'Loading actor ids...' : 'No saved actors found.'
-                }
-                onChange={(value) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    preferredActorId: value ?? '',
-                  }))
-                }
-              />
-              {gAgentActorsError ? (
-                <Typography.Text type="danger">
-                  {describeError(gAgentActorsError)}
-                </Typography.Text>
-              ) : (
-                <Typography.Text type="secondary">
-                  Saved actor ids come from previous GAgent draft runs. You can still type a custom actor id below.
-                </Typography.Text>
-              )}
-              <Input
-                aria-label="GAgent preferred actor id"
-                placeholder="Preferred actor id (optional)"
-                value={gAgentDraft.preferredActorId}
-                onChange={(event) =>
-                  setGAgentDraft((current) => ({
-                    ...current,
-                    preferredActorId: event.target.value,
                   }))
                 }
               />
@@ -6201,21 +7346,36 @@ export type StudioSettingsPageProps = {
   readonly workspaceSettings: QueryState<StudioWorkspaceSettings>;
   readonly settings: QueryState<unknown>;
   readonly settingsDraft: StudioSettingsDraftLike | null;
+  readonly userConfig: QueryState<StudioUserConfig>;
+  readonly userConfigModels: QueryState<StudioUserConfigModelsResponse>;
+  readonly userConfigDraft: StudioUserConfig | null;
   readonly selectedProvider: StudioProviderSettings | null;
   readonly hostMode: 'embedded' | 'proxy';
   readonly workflowStorageMode: 'workspace' | 'scope';
   readonly settingsDirty: boolean;
   readonly settingsPending: boolean;
+  readonly userConfigDirty: boolean;
+  readonly userConfigPending: boolean;
   readonly runtimeTestPending: boolean;
   readonly settingsNotice: StudioNoticeLike | null;
+  readonly userConfigNotice: StudioNoticeLike | null;
   readonly runtimeTestResult: StudioRuntimeTestResult | null;
+  readonly ornnHealth: QueryState<StudioOrnnHealthResult>;
+  readonly ornnSkills: QueryState<StudioOrnnSkillSearchResult>;
   readonly directoryPath: string;
   readonly directoryLabel: string;
   readonly onSaveSettings: () => void;
+  readonly onSaveUserConfig: () => void;
   readonly onTestRuntime: () => void;
+  readonly onCloseSettingsPage?: () => void;
   readonly onSetSettingsDraft: React.Dispatch<
     React.SetStateAction<StudioSettingsDraftLike | null>
   >;
+  readonly onSetUserConfigDraft: React.Dispatch<
+    React.SetStateAction<StudioUserConfig | null>
+  >;
+  readonly onRefreshOrnnHealth: () => void;
+  readonly onRefreshOrnnSkills: () => void;
   readonly onAddProvider: () => void;
   readonly onSelectProviderName: (providerName: string) => void;
   readonly onDeleteSelectedProvider: () => void;
@@ -6226,764 +7386,853 @@ export type StudioSettingsPageProps = {
   readonly onRemoveDirectory: (directoryId: string) => void;
 };
 
+type StudioSettingsSectionKey = 'runtime' | 'llm' | 'skills';
+
 export const StudioSettingsPage: React.FC<StudioSettingsPageProps> = ({
   workspaceSettings,
   settings,
   settingsDraft,
-  selectedProvider,
+  userConfig,
+  userConfigModels,
+  userConfigDraft,
   hostMode,
-  workflowStorageMode,
   settingsDirty,
   settingsPending,
+  userConfigDirty,
+  userConfigPending,
   runtimeTestPending,
   settingsNotice,
+  userConfigNotice,
   runtimeTestResult,
-  directoryPath,
-  directoryLabel,
+  ornnHealth,
+  ornnSkills,
   onSaveSettings,
+  onSaveUserConfig,
   onTestRuntime,
+  onCloseSettingsPage,
   onSetSettingsDraft,
-  onAddProvider,
-  onSelectProviderName,
-  onDeleteSelectedProvider,
-  onSetDefaultProvider,
-  onSetDirectoryPath,
-  onSetDirectoryLabel,
-  onAddDirectory,
-  onRemoveDirectory,
+  onSetUserConfigDraft,
+  onRefreshOrnnHealth,
+  onRefreshOrnnSkills,
 }) => {
-  const canEditRuntime = true;
-  const canManageDirectories = workflowStorageMode === 'workspace';
+  const canEditRuntime = hostMode === 'proxy';
   const runtimeBaseUrl =
     settingsDraft?.runtimeBaseUrl ?? workspaceSettings.data?.runtimeBaseUrl ?? '';
   const runtimeFieldLabel = canEditRuntime
-    ? 'Runtime endpoint'
-    : 'Host-managed runtime endpoint';
+    ? 'Runtime URL'
+    : 'Host-managed runtime URL';
   const runtimeActionLabel = canEditRuntime
-    ? 'Test runtime'
+    ? 'Test connection'
     : 'Check host runtime';
-  const [advancedSettingsOpen, setAdvancedSettingsOpen] = React.useState(false);
-  const providerFormGridStyle: React.CSSProperties = {
-    display: 'grid',
-    gap: 12,
-    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-  };
-  const sectionPanelStyle: React.CSSProperties = {
-    ...embeddedPanelStyle,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 12,
-  };
-  const providers = settingsDraft?.providers ?? [];
-  const selectedProviderIsDefault = Boolean(
-    selectedProvider &&
-      settingsDraft?.defaultProviderName === selectedProvider.providerName,
-  );
+  const [activeSection, setActiveSection] =
+    React.useState<StudioSettingsSectionKey>('runtime');
+  const [llmFilterText, setLlmFilterText] = React.useState('');
+  const [llmDropdownOpen, setLlmDropdownOpen] = React.useState(false);
+  const llmInputRef = React.useRef<HTMLInputElement | null>(null);
+  const llmContainerRef = React.useRef<HTMLDivElement | null>(null);
   const runtimeModeLabel = canEditRuntime ? 'Editable' : 'Host managed';
-  const workflowSourcesLabel = canManageDirectories
-    ? 'Workspace directories'
-    : 'Scope bound';
+  const hostModeLabel = hostMode === 'proxy' ? 'Remote proxy' : 'Embedded host';
+  const runtimeHealthValue = runtimeTestResult
+    ? runtimeTestResult.reachable
+      ? 'Reachable'
+      : 'Needs attention'
+    : 'Not checked';
+  const runtimeHealthTone = runtimeTestResult
+    ? runtimeTestResult.reachable
+      ? 'success'
+      : 'warning'
+    : 'default';
+  const runtimeStatus: 'idle' | 'testing' | 'success' | 'error' =
+    runtimeTestPending
+      ? 'testing'
+      : runtimeTestResult
+        ? runtimeTestResult.reachable
+          ? 'success'
+          : 'error'
+        : 'idle';
+  const readyLlmProviders = React.useMemo(
+    () =>
+      (userConfigModels.data?.providers ?? []).filter(
+        (provider) => provider.status === 'ready',
+      ),
+    [userConfigModels.data?.providers],
+  );
+  const groupedLlmModels = React.useMemo(() => {
+    const prefixToProvider: Record<string, string> = {};
 
-  return (
-    <>
-      <ProCard
-        title="Provider settings"
-        extra={
-          <Space wrap size={[8, 8]}>
-            <Button onClick={() => setAdvancedSettingsOpen(true)}>
-              Advanced settings
-            </Button>
-          </Space>
+    for (const provider of readyLlmProviders) {
+      const slug = provider.providerSlug;
+      const name = formatStudioUserConfigProviderLabel(provider);
+      if (slug === 'openai') {
+        for (const prefix of ['gpt-', 'o1-', 'o1', 'o3-', 'o3', 'o4-', 'chatgpt-']) {
+          prefixToProvider[prefix] = name;
         }
-        {...moduleCardProps}
-        style={fillCardStyle}
-        loading={settings.isLoading}
-      >
-        {settings.isError ? (
+      } else if (slug === 'anthropic') {
+        prefixToProvider['claude-'] = name;
+      } else if (slug === 'google-ai') {
+        prefixToProvider['gemini-'] = name;
+      } else if (slug === 'mistral') {
+        for (const prefix of ['mistral-', 'codestral-', 'magistral-']) {
+          prefixToProvider[prefix] = name;
+        }
+      } else if (slug === 'cohere') {
+        prefixToProvider['command-'] = name;
+      } else if (slug === 'deepseek') {
+        prefixToProvider['deepseek-'] = name;
+      } else if (slug) {
+        prefixToProvider[`${slug}-`] = name;
+      }
+    }
+
+    const query = llmFilterText.trim().toLowerCase();
+    const groups = new Map<string, string[]>();
+    for (const model of userConfigModels.data?.supportedModels ?? []) {
+      if (query && !model.toLowerCase().includes(query)) {
+        continue;
+      }
+
+      let providerName = 'Other';
+      for (const [prefix, name] of Object.entries(prefixToProvider)) {
+        if (model.startsWith(prefix) || model === prefix.replace(/-$/, '')) {
+          providerName = name;
+          break;
+        }
+      }
+
+      if (!groups.has(providerName)) {
+        groups.set(providerName, []);
+      }
+
+      groups.get(providerName)?.push(model);
+    }
+
+    return groups;
+  }, [llmFilterText, readyLlmProviders, userConfigModels.data?.supportedModels]);
+  const llmModelsLoading =
+    userConfigModels.isLoading || Boolean(userConfigModels.isFetching);
+  const hasLlmModelCatalog =
+    (userConfigModels.data?.supportedModels?.length ?? 0) > 0;
+  const ornnHealthPending =
+    ornnHealth.isLoading || Boolean(ornnHealth.isFetching);
+  const ornnSkillsPending =
+    ornnSkills.isLoading || Boolean(ornnSkills.isFetching);
+  const ornnBaseUrl =
+    ornnHealth.data?.baseUrl ?? ornnSkills.data?.baseUrl ?? '';
+  const ornnHealthStatus: 'idle' | 'testing' | 'success' | 'error' =
+    ornnHealthPending
+      ? 'testing'
+      : ornnHealth.isError
+        ? 'error'
+        : ornnHealth.data
+          ? ornnHealth.data.reachable
+            ? 'success'
+            : 'error'
+          : 'idle';
+
+  React.useEffect(() => {
+    if (!llmDropdownOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        llmContainerRef.current &&
+        event.target instanceof Node &&
+        !llmContainerRef.current.contains(event.target)
+      ) {
+        setLlmDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [llmDropdownOpen]);
+
+  const renderSectionHeader = React.useCallback(
+    (title: string, description?: string, action?: React.ReactNode) => (
+      <div style={studioSettingsSectionHeaderStyle}>
+        <div>
+          <div className="panel-eyebrow">Settings</div>
+          <div className="panel-title">{title}</div>
+          {description ? (
+            <Typography.Paragraph style={studioSettingsSectionDescriptionStyle}>
+              {description}
+            </Typography.Paragraph>
+          ) : null}
+        </div>
+        {action}
+      </div>
+    ),
+    [],
+  );
+  const settingsNoticeCard = settingsNotice ? (
+    <StudioNoticeCard
+      type={settingsNotice.type}
+      title={settingsNotice.type === 'error' ? 'Settings update failed' : 'Settings updated'}
+      description={settingsNotice.message}
+      compact
+    />
+  ) : null;
+  const userConfigNoticeCard = userConfigNotice ? (
+    <StudioNoticeCard
+      type={userConfigNotice.type}
+      title={
+        userConfigNotice.type === 'error'
+          ? 'LLM config update failed'
+          : 'LLM config updated'
+      }
+      description={userConfigNotice.message}
+      compact
+    />
+  ) : null;
+  const renderRuntimeSection = () => {
+    if (workspaceSettings.isError) {
+      return (
+        <StudioNoticeCard
+          type="error"
+          title="Failed to load workspace settings"
+          description={describeError(workspaceSettings.error)}
+        />
+      );
+    }
+
+    if (!settingsDraft) {
+      return (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="Runtime settings are unavailable right now."
+        />
+      );
+    }
+
+    const runtimeStatusTitle =
+      runtimeStatus === 'success'
+        ? 'Connection succeeded'
+        : runtimeStatus === 'error'
+          ? 'Connection failed'
+          : 'Testing runtime';
+    const runtimeStatusDescription =
+      runtimeStatus === 'success' || runtimeStatus === 'error'
+        ? runtimeTestResult?.message || ''
+        : 'Studio is checking the configured runtime endpoint.';
+
+    return (
+      <>
+        {!canEditRuntime ? (
+          <StudioNoticeCard
+            type="info"
+            title="Runtime is host-managed in embedded mode"
+            description="Studio runs against the local host runtime. The endpoint is shown for reference and connectivity checks only."
+            compact
+          />
+        ) : null}
+        <div className="settings-section-card" style={cardStackStyle}>
+          <div>
+            <label className="field-label" htmlFor="studio-runtime-base-url">
+              {runtimeFieldLabel}
+            </label>
+            <input
+              id="studio-runtime-base-url"
+              aria-label="Studio runtime base URL"
+              className="panel-input mt-1"
+              value={runtimeBaseUrl}
+              disabled={!canEditRuntime}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                onSetSettingsDraft((current) =>
+                  current
+                    ? { ...current, runtimeBaseUrl: event.target.value }
+                    : current,
+                )
+              }
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => onTestRuntime()}
+              className="ghost-action justify-center"
+              disabled={runtimeTestPending}
+            >
+              {runtimeTestPending ? 'Testing...' : runtimeActionLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => onSaveSettings()}
+              className="solid-action justify-center"
+              disabled={!settingsDirty || !settingsDraft || settingsPending}
+            >
+              {settingsPending ? 'Saving...' : 'Save runtime'}
+            </button>
+          </div>
+        </div>
+        {runtimeStatus !== 'idle' ? (
+          <div className={`settings-status-card ${runtimeStatus}`}>
+            <div
+              style={{
+                alignItems: 'center',
+                display: 'flex',
+                gap: 12,
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={cardStackStyle}>
+                <Typography.Text strong>{runtimeStatusTitle}</Typography.Text>
+                <Typography.Text type="secondary">
+                  {runtimeStatusDescription}
+                </Typography.Text>
+              </div>
+              <StudioSettingsStatusPill status={runtimeStatus} />
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--studio-muted-text)' }}>
+              {runtimeBaseUrl}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--studio-muted-text)' }}>
+              {runtimeTestResult?.checkedUrl || runtimeTestResult?.message}
+            </div>
+          </div>
+        ) : null}
+      </>
+    );
+  };
+
+  const renderLlmSection = () => {
+    return (
+      <>
+        {userConfig.isError ? (
           <StudioNoticeCard
             type="error"
-            title="Failed to load workbench config"
-            description={describeError(settings.error)}
+            title="Failed to load LLM settings"
+            description={describeError(userConfig.error)}
+            compact
           />
-        ) : settingsDraft ? (
-          <div style={cardStackStyle}>
-            <div style={studioNoticeStripStyle}>
-              <StudioNoticeCard
-                type={settingsDirty ? 'warning' : 'success'}
-                title="Workbench config"
-                description={
-                  settingsDirty
-                    ? 'You have unsaved Studio settings changes.'
-                    : 'Studio settings are in sync with workbench config.'
-                }
-                action={
-                  <Button
-                    type="primary"
-                    loading={settingsPending}
-                    disabled={!settingsDirty}
-                    onClick={onSaveSettings}
+        ) : null}
+        {userConfigModels.isError ? (
+          <StudioNoticeCard
+            type="error"
+            title="Failed to load connected providers"
+            description={describeError(userConfigModels.error)}
+            compact
+          />
+        ) : null}
+        {(llmModelsLoading ||
+          (userConfigModels.data?.providers?.length ?? 0) > 0) ? (
+          <div className="settings-section-card" style={cardStackStyle}>
+            <div className="section-heading">Connected providers</div>
+            {llmModelsLoading ? (
+              <div
+                style={{
+                  alignItems: 'center',
+                  color: 'var(--ant-color-text-tertiary)',
+                  display: 'flex',
+                  fontSize: 12,
+                  gap: 8,
+                  minHeight: 28,
+                }}
+              >
+                <LoadingOutlined spin />
+                <span>Loading providers...</span>
+              </div>
+            ) : (
+              <div style={studioSettingsProviderPillsStyle}>
+                {(userConfigModels.data?.providers ?? []).map((provider) => (
+                  <span
+                    key={provider.providerSlug}
+                    style={{
+                      ...studioSettingsProviderPillStyle,
+                      ...(provider.status === 'ready'
+                        ? studioSettingsProviderPillReadyStyle
+                        : studioSettingsProviderPillPendingStyle),
+                    }}
                   >
-                    Save workbench config
-                  </Button>
+                    <span
+                      style={{
+                        ...studioSettingsPillDotStyle,
+                        height: 6,
+                        background:
+                          provider.status === 'ready' ? '#22C55E' : '#D1D5DB',
+                        width: 6,
+                      }}
+                    />
+                    <span style={{ fontSize: 12, fontWeight: 500 }}>
+                      {formatStudioUserConfigProviderLabel(provider)}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+        <div className="settings-section-card" style={cardStackStyle}>
+          <div className="section-heading">Default model</div>
+          <div ref={llmContainerRef} style={{ position: 'relative' }}>
+            <label className="field-label" htmlFor="studio-llm-default-model">
+              Model
+            </label>
+            {hasLlmModelCatalog ? (
+              <div style={{ marginTop: 4, position: 'relative' }}>
+                <input
+                  id="studio-llm-default-model"
+                  ref={llmInputRef}
+                  aria-label="Studio LLM default model"
+                  className="panel-input"
+                  value={
+                    llmDropdownOpen
+                      ? llmFilterText
+                      : userConfigDraft?.defaultModel ?? ''
+                  }
+                  placeholder={
+                    llmModelsLoading ? 'Loading...' : 'Select a model...'
+                  }
+                  disabled={!userConfigDraft || userConfigPending}
+                  onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+                    setLlmFilterText(event.target.value);
+                    if (!llmDropdownOpen) {
+                      setLlmDropdownOpen(true);
+                    }
+                  }}
+                  onFocus={() => {
+                    setLlmFilterText('');
+                    setLlmDropdownOpen(true);
+                  }}
+                />
+                <button
+                  type="button"
+                  aria-label="Toggle model list"
+                  onClick={() => {
+                    setLlmDropdownOpen((current) => {
+                      const next = !current;
+                      if (next) {
+                        setLlmFilterText('');
+                        llmInputRef.current?.focus();
+                      }
+                      return next;
+                    });
+                  }}
+                  disabled={!userConfigDraft || userConfigPending}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--ant-color-text-tertiary)',
+                    cursor: 'pointer',
+                    padding: 0,
+                    position: 'absolute',
+                    right: 12,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                  }}
+                >
+                  <DownOutlined />
+                </button>
+                {llmDropdownOpen ? (
+                  <div
+                    style={{
+                      background: '#fff',
+                      border: '1px solid var(--ant-color-border-secondary)',
+                      borderRadius: 12,
+                      boxShadow: '0 18px 34px rgba(17, 24, 39, 0.12)',
+                      left: 0,
+                      marginTop: 4,
+                      maxHeight: 280,
+                      overflow: 'auto',
+                      position: 'absolute',
+                      right: 0,
+                      zIndex: 20,
+                    }}
+                  >
+                    {llmModelsLoading ? (
+                      <div style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12, padding: '8px 12px' }}>
+                        Loading...
+                      </div>
+                    ) : groupedLlmModels.size === 0 ? (
+                      <div style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 12, padding: '8px 12px' }}>
+                        No matching models
+                      </div>
+                    ) : (
+                      Array.from(groupedLlmModels.entries()).map(
+                        ([providerName, models]) => (
+                          <div key={providerName}>
+                            <div
+                              style={{
+                                color: 'var(--ant-color-text-tertiary)',
+                                fontSize: 10,
+                                fontWeight: 600,
+                                letterSpacing: '0.08em',
+                                padding: '8px 12px 4px',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {providerName}
+                            </div>
+                            {models.map((model) => (
+                              <button
+                                key={model}
+                                type="button"
+                                onClick={() => {
+                                  onSetUserConfigDraft((current) =>
+                                    current
+                                      ? { ...current, defaultModel: model }
+                                      : current,
+                                  );
+                                  setLlmDropdownOpen(false);
+                                  setLlmFilterText('');
+                                }}
+                                style={{
+                                  background:
+                                    model === userConfigDraft?.defaultModel
+                                      ? 'rgba(37, 99, 235, 0.08)'
+                                      : 'transparent',
+                                  border: 'none',
+                                  color:
+                                    model === userConfigDraft?.defaultModel
+                                      ? '#1D4ED8'
+                                      : 'var(--ant-color-text)',
+                                  cursor: 'pointer',
+                                  display: 'block',
+                                  fontSize: 13,
+                                  fontWeight:
+                                    model === userConfigDraft?.defaultModel
+                                      ? 600
+                                      : 400,
+                                  padding: '8px 12px',
+                                  textAlign: 'left',
+                                  width: '100%',
+                                }}
+                              >
+                                {model}
+                              </button>
+                            ))}
+                          </div>
+                        ),
+                      )
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <input
+                id="studio-llm-default-model"
+                aria-label="Studio LLM default model"
+                className="panel-input mt-1"
+                value={userConfigDraft?.defaultModel ?? ''}
+                placeholder={llmModelsLoading ? 'Loading...' : 'Enter model name...'}
+                disabled={!userConfigDraft || userConfigPending}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                  onSetUserConfigDraft((current) =>
+                    current
+                      ? { ...current, defaultModel: event.target.value }
+                      : current,
+                  )
                 }
               />
-              <StudioNoticeCard
-                title="Provider routing"
-                description={`Default provider: ${
-                  settingsDraft.defaultProviderName || 'n/a'
-                }`}
+            )}
+          </div>
+          <div
+            style={{
+              color: 'var(--ant-color-text-tertiary)',
+              fontSize: 11,
+              lineHeight: 1.7,
+            }}
+          >
+            The default model used by NyxID Gateway. Select from supported
+            models, or type a model name manually.
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  const renderSkillsSection = () => {
+    return (
+      <>
+        <div className="settings-section-card" style={cardStackStyle}>
+          <div className="section-heading">Ornn Platform</div>
+          <div
+            style={{
+              display: 'grid',
+              gap: 16,
+              alignItems: 'end',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            }}
+          >
+            <div>
+              <label className="field-label" htmlFor="studio-skills-ornn-url">
+                Ornn Base URL
+              </label>
+              <input
+                id="studio-skills-ornn-url"
+                aria-label="Studio skills Ornn base URL"
+                className="panel-input mt-1"
+                value={ornnBaseUrl}
+                disabled
+                onChange={() => undefined}
               />
-              {settingsNotice ? (
-                <StudioNoticeCard
-                  type={settingsNotice.type}
-                  title={
-                    settingsNotice.type === 'error'
-                      ? 'Config action failed'
-                      : 'Config updated'
+            </div>
+            <button
+              type="button"
+              onClick={() => onRefreshOrnnHealth()}
+              className="ghost-action justify-center"
+              disabled={ornnHealthPending}
+            >
+              {ornnHealthPending ? 'Testing...' : 'Test connection'}
+            </button>
+            {ornnBaseUrl ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    window.open(ornnBaseUrl, '_blank', 'noopener,noreferrer');
                   }
-                  description={settingsNotice.message}
-                />
-              ) : null}
-            </div>
-
-            <div style={sectionPanelStyle}>
-              <div style={summaryMetricGridStyle}>
-                <StudioSummaryMetric label="Providers" value={providers.length} />
-                <StudioSummaryMetric
-                  label="Default"
-                  tone="info"
-                  value={settingsDraft.defaultProviderName || 'n/a'}
-                />
-                <StudioSummaryMetric label="Runtime mode" value={runtimeModeLabel} />
-                <StudioSummaryMetric
-                  label="Workflow sources"
-                  value={workflowSourcesLabel}
-                />
+                }}
+                className="solid-action"
+                style={studioSettingsPrimaryActionStyle}
+              >
+                Open Ornn Platform
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="solid-action"
+                style={{
+                  ...studioSettingsPrimaryActionStyle,
+                  cursor: 'not-allowed',
+                  opacity: 0.6,
+                }}
+                disabled
+              >
+                Open Ornn Platform
+              </button>
+            )}
+          </div>
+          {ornnHealthStatus !== 'idle' ? (
+            <div className={`settings-status-card ${ornnHealthStatus}`}>
+              <div
+                style={{
+                  alignItems: 'center',
+                  display: 'flex',
+                  gap: 12,
+                  justifyContent: 'space-between',
+                }}
+              >
+                <Typography.Text strong>
+                  {ornnHealthStatus === 'success'
+                    ? 'Connected'
+                    : ornnHealthStatus === 'testing'
+                      ? 'Testing...'
+                      : 'Failed'}
+                </Typography.Text>
+                <StudioSettingsStatusPill status={ornnHealthStatus} />
               </div>
-              <div style={summaryFieldGridStyle}>
-                <StudioSummaryField
-                  label="Selected provider"
-                  value={selectedProvider?.providerName || 'None selected'}
-                />
-                <StudioSummaryField
-                  label="Runtime endpoint"
-                  value={runtimeBaseUrl || 'n/a'}
-                  copyable={Boolean(runtimeBaseUrl)}
-                />
-              </div>
+              <Typography.Text type="secondary">
+                {ornnHealth.isError
+                  ? describeError(ornnHealth.error)
+                  : ornnHealth.data?.message || 'Checking Ornn connectivity.'}
+              </Typography.Text>
             </div>
-
-            <Row gutter={[16, 16]} align="stretch">
-              <Col xs={24} xl={9} style={stretchColumnStyle}>
-                <div style={sectionPanelStyle}>
+          ) : null}
+          <div style={studioSettingsMutedBlockStyle}>
+            Agents automatically get <strong>ornn_search_skills</strong> and{' '}
+            <strong>ornn_use_skill</strong> tools. To manage skills, use the Ornn
+            platform.
+          </div>
+        </div>
+        <div className="settings-section-card" style={cardStackStyle}>
+          <div
+            style={{
+              alignItems: 'center',
+              display: 'flex',
+              gap: 12,
+              justifyContent: 'space-between',
+            }}
+          >
+            <Typography.Text strong>Your Skills</Typography.Text>
+            <button
+              type="button"
+              onClick={() => onRefreshOrnnSkills()}
+              className="ghost-action"
+              disabled={ornnSkillsPending}
+            >
+              {ornnSkillsPending ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+          {ornnSkills.isError ? (
+            <StudioNoticeCard
+              type="error"
+              title="Failed to load skills"
+              description={describeError(ornnSkills.error)}
+              compact
+            />
+          ) : (ornnSkills.data?.items?.length ?? 0) === 0 ? (
+            <div style={{ color: 'var(--ant-color-text-tertiary)', fontSize: 13 }}>
+              {ornnSkillsPending
+                ? 'Loading...'
+                : ornnSkills.data?.message || 'Click Refresh to load skills from Ornn.'}
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gap: 12,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              }}
+            >
+              {(ornnSkills.data?.items ?? []).map((skill) => (
+                <div
+                  key={`${skill.guid}:${skill.name}`}
+                  style={{
+                    background: '#fff',
+                    border: '1px solid #EAE4DB',
+                    borderRadius: 14,
+                    padding: 12,
+                  }}
+                >
                   <div
                     style={{
                       alignItems: 'center',
                       display: 'flex',
-                      gap: 12,
+                      gap: 8,
                       justifyContent: 'space-between',
+                      marginBottom: 6,
                     }}
                   >
-                    <div>
-                      <Typography.Text strong>Provider catalog</Typography.Text>
-                      <Typography.Paragraph
-                        style={{ margin: '4px 0 0' }}
-                        type="secondary"
-                      >
-                        Pick a provider to edit, or create a new one before wiring it
-                        into Studio.
-                      </Typography.Paragraph>
+                    <div
+                      style={{
+                        color: 'var(--ant-color-text)',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {skill.name}
                     </div>
-                    <Button type="primary" onClick={onAddProvider}>
-                      Add provider
-                    </Button>
+                    <span
+                      style={{
+                        color: 'var(--ant-color-text-tertiary)',
+                        fontSize: 10,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {skill.isPrivate ? 'private' : 'public'}
+                    </span>
                   </div>
-
-                  {providers.length > 0 ? (
-                    <div style={cardListStyle}>
-                      {providers.map((provider) => {
-                        const isSelected =
-                          selectedProvider?.providerName === provider.providerName;
-
-                        return (
-                          <div
-                            key={provider.providerName}
-                            style={{
-                              ...cardListItemStyle,
-                              background: isSelected
-                                ? 'rgba(240, 245, 255, 0.96)'
-                                : cardListItemStyle.background,
-                              borderColor: isSelected
-                                ? 'rgba(22, 119, 255, 0.28)'
-                                : 'var(--ant-color-border-secondary)',
-                            }}
-                          >
-                            <div style={cardListHeaderStyle}>
-                              <div style={cardListMainStyle}>
-                                <Typography.Text strong>
-                                  {provider.providerName}
-                                </Typography.Text>
-                                <Typography.Text type="secondary">
-                                  {provider.model ||
-                                    provider.displayName ||
-                                    provider.providerType}
-                                </Typography.Text>
-                                <Space wrap size={[6, 6]}>
-                                  <Tag>{provider.providerType}</Tag>
-                                  {provider.endpoint ? (
-                                    <Tag color="processing">endpoint</Tag>
-                                  ) : null}
-                                  {settingsDraft.defaultProviderName ===
-                                  provider.providerName ? (
-                                    <Tag color="success">default</Tag>
-                                  ) : null}
-                                </Space>
-                              </div>
-                              <div style={cardListActionStyle}>
-                                <Button
-                                  type={isSelected ? 'primary' : 'default'}
-                                  size="small"
-                                  onClick={() =>
-                                    onSelectProviderName(provider.providerName)
-                                  }
-                                >
-                                  {isSelected ? 'Selected' : 'Edit'}
-                                </Button>
-                              </div>
-                            </div>
-                            {provider.endpoint ? (
-                              <Typography.Paragraph
-                                style={{ margin: 0 }}
-                                type="secondary"
-                              >
-                                {provider.endpoint}
-                              </Typography.Paragraph>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="No providers are configured in workbench config."
-                    />
-                  )}
+                  <div
+                    style={{
+                      color: 'var(--ant-color-text-secondary)',
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {skill.description || 'No description provided.'}
+                  </div>
                 </div>
-              </Col>
-              <Col xs={24} xl={15} style={stretchColumnStyle}>
-                {selectedProvider ? (
-                  <div style={cardStackStyle}>
-                    <div style={sectionPanelStyle}>
-                      <div
-                        style={{
-                          alignItems: 'center',
-                          display: 'flex',
-                          gap: 12,
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <div>
-                          <Typography.Text strong>Provider detail</Typography.Text>
-                          <Typography.Paragraph
-                            style={{ margin: '4px 0 0' }}
-                            type="secondary"
-                          >
-                            Editing {selectedProvider.providerName} inside the current
-                            Studio workbench config.
-                          </Typography.Paragraph>
-                        </div>
-                        <div style={cardListActionStyle}>
-                          <Button danger onClick={onDeleteSelectedProvider}>
-                            Delete provider
-                          </Button>
-                          <Button
-                            disabled={selectedProviderIsDefault}
-                            onClick={onSetDefaultProvider}
-                          >
-                            {selectedProviderIsDefault
-                              ? 'Default provider'
-                              : 'Set as default'}
-                          </Button>
-                        </div>
-                      </div>
-                      <div style={summaryMetricGridStyle}>
-                        <StudioSummaryMetric
-                          label="Provider type"
-                          tone="info"
-                          value={selectedProvider.providerType}
-                        />
-                        <StudioSummaryMetric
-                          label="Default"
-                          tone={selectedProviderIsDefault ? 'success' : 'default'}
-                          value={selectedProviderIsDefault ? 'Yes' : 'No'}
-                        />
-                        <StudioSummaryMetric
-                          label="Endpoint"
-                          value={selectedProvider.endpoint ? 'Configured' : 'Missing'}
-                          tone={selectedProvider.endpoint ? 'success' : 'warning'}
-                        />
-                        <StudioSummaryMetric
-                          label="API key"
-                          value={
-                            selectedProvider.clearApiKeyRequested
-                              ? 'Will clear'
-                              : selectedProvider.apiKeyConfigured
-                                ? 'Stored'
-                                : selectedProvider.apiKey
-                                  ? 'Pending update'
-                                  : 'Empty'
-                          }
-                          tone={
-                            selectedProvider.clearApiKeyRequested
-                              ? 'warning'
-                              : selectedProvider.apiKeyConfigured
-                                ? 'success'
-                                : 'default'
-                          }
-                        />
-                      </div>
-                      <div style={summaryFieldGridStyle}>
-                        <StudioSummaryField
-                          label="Display name"
-                          value={selectedProvider.displayName || 'n/a'}
-                        />
-                        <StudioSummaryField
-                          label="Category"
-                          value={selectedProvider.category || 'n/a'}
-                        />
-                      </div>
-                      {selectedProvider.description ? (
-                        <div>
-                          <Typography.Text style={summaryFieldLabelStyle}>
-                            Description
-                          </Typography.Text>
-                          <Typography.Paragraph
-                            style={{ margin: '8px 0 0' }}
-                            type="secondary"
-                          >
-                            {selectedProvider.description}
-                          </Typography.Paragraph>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div style={sectionPanelStyle}>
-                      <Typography.Text strong>Connection and model</Typography.Text>
-                      <div style={providerFormGridStyle}>
-                        <div style={cardStackStyle}>
-                          <Typography.Text strong>Provider name</Typography.Text>
-                          <Input
-                            aria-label="Studio provider name"
-                            value={selectedProvider.providerName}
-                            onChange={(event) => {
-                              const nextName = event.target.value;
-                              onSetSettingsDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      providers: current.providers.map((provider) =>
-                                        provider.providerName ===
-                                        selectedProvider.providerName
-                                          ? {
-                                              ...provider,
-                                              providerName: nextName,
-                                            }
-                                          : provider,
-                                      ),
-                                      defaultProviderName:
-                                        current.defaultProviderName ===
-                                        selectedProvider.providerName
-                                          ? nextName
-                                          : current.defaultProviderName,
-                                    }
-                                  : current,
-                              );
-                              onSelectProviderName(nextName);
-                            }}
-                          />
-                        </div>
-                        <div style={cardStackStyle}>
-                          <Typography.Text strong>Provider type</Typography.Text>
-                          <Select
-                            aria-label="Studio provider type"
-                            value={selectedProvider.providerType}
-                            options={settingsDraft.providerTypes.map((type) => ({
-                              label: type.displayName,
-                              value: type.id,
-                            }))}
-                            onChange={(value) => {
-                              const profile =
-                                settingsDraft.providerTypes.find(
-                                  (type) => type.id === value,
-                                ) || null;
-                              onSetSettingsDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      providers: current.providers.map((provider) =>
-                                        provider.providerName ===
-                                        selectedProvider.providerName
-                                          ? {
-                                              ...provider,
-                                              providerType: value,
-                                              displayName:
-                                                profile?.displayName ||
-                                                provider.displayName,
-                                              category:
-                                                profile?.category ||
-                                                provider.category,
-                                              description:
-                                                profile?.description ||
-                                                provider.description,
-                                              endpoint:
-                                                provider.endpoint ||
-                                                profile?.defaultEndpoint ||
-                                                '',
-                                              model:
-                                                provider.model ||
-                                                profile?.defaultModel ||
-                                                '',
-                                            }
-                                          : provider,
-                                      ),
-                                    }
-                                  : current,
-                              );
-                            }}
-                          />
-                        </div>
-                        <div style={cardStackStyle}>
-                          <Typography.Text strong>Model</Typography.Text>
-                          <Input
-                            aria-label="Studio provider model"
-                            value={selectedProvider.model}
-                            onChange={(event) =>
-                              onSetSettingsDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      providers: current.providers.map((provider) =>
-                                        provider.providerName ===
-                                        selectedProvider.providerName
-                                          ? { ...provider, model: event.target.value }
-                                          : provider,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </div>
-                        <div style={cardStackStyle}>
-                          <Typography.Text strong>Endpoint</Typography.Text>
-                          <Input
-                            aria-label="Studio provider endpoint"
-                            value={selectedProvider.endpoint}
-                            onChange={(event) =>
-                              onSetSettingsDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      providers: current.providers.map((provider) =>
-                                        provider.providerName ===
-                                        selectedProvider.providerName
-                                          ? {
-                                              ...provider,
-                                              endpoint: event.target.value,
-                                            }
-                                          : provider,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={sectionPanelStyle}>
-                      <Typography.Text strong>Secrets</Typography.Text>
-                      <Space wrap size={[8, 8]}>
-                        {selectedProvider.apiKeyConfigured ? (
-                          <Tag color="success">saved key configured</Tag>
-                        ) : null}
-                        {selectedProvider.clearApiKeyRequested ? (
-                          <Tag color="warning">key will be cleared on save</Tag>
-                        ) : null}
-                        {selectedProvider.apiKeyConfigured ||
-                        selectedProvider.clearApiKeyRequested ? (
-                          <Button
-                            danger={!selectedProvider.clearApiKeyRequested}
-                            onClick={() =>
-                              onSetSettingsDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      providers: current.providers.map((provider) =>
-                                        provider.providerName ===
-                                        selectedProvider.providerName
-                                          ? {
-                                              ...provider,
-                                              apiKey: '',
-                                              clearApiKeyRequested:
-                                                !provider.clearApiKeyRequested,
-                                            }
-                                          : provider,
-                                      ),
-                                    }
-                                  : current,
-                              )
-                            }
-                          >
-                            {selectedProvider.clearApiKeyRequested
-                              ? 'Keep saved key'
-                              : 'Clear saved key'}
-                          </Button>
-                        ) : null}
-                      </Space>
-                      <Input.Password
-                        aria-label="Studio provider API key"
-                        value={selectedProvider.apiKey}
-                        placeholder={
-                          selectedProvider.clearApiKeyRequested
-                            ? 'Saved key will be removed when you save'
-                            : selectedProvider.apiKeyConfigured
-                              ? 'Configured. Enter a new key to replace it'
-                              : 'optional'
-                        }
-                        onChange={(event) =>
-                          onSetSettingsDraft((current) =>
-                            current
-                              ? {
-                                  ...current,
-                                  providers: current.providers.map((provider) =>
-                                    provider.providerName ===
-                                    selectedProvider.providerName
-                                      ? {
-                                          ...provider,
-                                          apiKey: event.target.value,
-                                          clearApiKeyRequested: false,
-                                        }
-                                      : provider,
-                                  ),
-                                }
-                              : current,
-                          )
-                        }
-                      />
-                      <Typography.Text type="secondary">
-                        Leave this blank to keep the saved secret. Enter a new value
-                        only when you want to replace it.
-                      </Typography.Text>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={sectionPanelStyle}>
-                    <Typography.Text strong>Provider detail</Typography.Text>
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="Select a provider to edit or add a new one."
-                    />
-                  </div>
-                )}
-              </Col>
-            </Row>
-          </div>
-        ) : null}
-      </ProCard>
-
-      <Drawer
-        open={advancedSettingsOpen}
-        onClose={() => setAdvancedSettingsOpen(false)}
-        title="Advanced settings"
-        size={560}
-        styles={{ body: drawerBodyStyle }}
-      >
-        <div style={drawerScrollStyle}>
-          <div style={cardStackStyle}>
-          <ProCard
-            title="Runtime connection"
-            {...moduleCardProps}
-            style={fillCardStyle}
-            loading={workspaceSettings.isLoading || settings.isLoading}
-          >
-            {workspaceSettings.isError ? (
-              <StudioNoticeCard
-                type="error"
-                title="Failed to load workspace settings"
-                description={describeError(workspaceSettings.error)}
-              />
-            ) : settings.isError ? (
-              <StudioNoticeCard
-                type="error"
-                title="Failed to load workbench config"
-                description={describeError(settings.error)}
-              />
-            ) : settingsDraft ? (
-              <div style={cardStackStyle}>
-                {canEditRuntime ? null : (
-                  <StudioNoticeCard
-                    type="info"
-                    title="Runtime is host-managed in embedded mode"
-                    description="Studio runs against the local runtime hosted by aevatar app. The endpoint is shown for reference and health checks only."
-                  />
-                )}
-                <div style={sectionPanelStyle}>
-                  <div style={summaryFieldGridStyle}>
-                    <StudioSummaryField label="Runtime mode" value={runtimeModeLabel} />
-                    <StudioSummaryField
-                      label={runtimeFieldLabel}
-                      value={runtimeBaseUrl || 'n/a'}
-                      copyable={Boolean(runtimeBaseUrl)}
-                    />
-                  </div>
-                  <Input
-                    aria-label="Studio runtime base URL"
-                    value={runtimeBaseUrl}
-                    disabled={!canEditRuntime}
-                    onChange={(event) =>
-                      onSetSettingsDraft((current) =>
-                        current
-                          ? { ...current, runtimeBaseUrl: event.target.value }
-                          : current,
-                      )
-                    }
-                  />
-                  <Button loading={runtimeTestPending} onClick={onTestRuntime}>
-                    {runtimeActionLabel}
-                  </Button>
-                </div>
-                {runtimeTestResult ? (
-                  <StudioNoticeCard
-                    type={runtimeTestResult.reachable ? 'success' : 'warning'}
-                    title={
-                      runtimeTestResult.reachable
-                        ? 'Runtime is reachable'
-                        : 'Runtime check failed'
-                    }
-                    description={`${runtimeTestResult.message} · ${runtimeTestResult.checkedUrl}`}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-          </ProCard>
-
-          <ProCard
-            title="Workflow sources"
-            {...moduleCardProps}
-            style={fillCardStyle}
-            loading={workspaceSettings.isLoading}
-          >
-            {workspaceSettings.isError ? (
-              <StudioNoticeCard
-                type="error"
-                title="Failed to load workflow sources"
-                description={describeError(workspaceSettings.error)}
-              />
-            ) : workspaceSettings.data ? (
-              <div style={cardStackStyle}>
-                {!canManageDirectories ? (
-                  <StudioNoticeCard
-                    type="info"
-                    title="Workflow source is bound to the current scope"
-                    description="Studio hides directory management when workflows are resolved from the active login scope."
-                  />
-                ) : null}
-                <div style={summaryMetricGridStyle}>
-                  <StudioSummaryMetric
-                    label="Sources"
-                    value={workspaceSettings.data.directories.length}
-                  />
-                  <StudioSummaryMetric
-                    label="Mode"
-                    tone="info"
-                    value={workflowSourcesLabel}
-                  />
-                </div>
-                {workspaceSettings.data.directories.length > 0 ? (
-                  <div style={cardListStyle}>
-                    {workspaceSettings.data.directories.map((directory) => {
-                      const showDirectoryPath =
-                        workflowStorageMode !== 'scope' &&
-                        !isScopeDirectoryPath(directory.path);
-
-                      return (
-                        <div key={directory.directoryId} style={cardListItemStyle}>
-                          <div style={cardListHeaderStyle}>
-                            <div style={cardListMainStyle}>
-                              <Typography.Text strong>{directory.label}</Typography.Text>
-                              <Space wrap size={[6, 6]}>
-                                {directory.isBuiltIn ? <Tag>built-in</Tag> : null}
-                                <Tag>{directory.directoryId}</Tag>
-                              </Space>
-                            </div>
-                            {canManageDirectories && !directory.isBuiltIn ? (
-                              <div style={cardListActionStyle}>
-                                <Button
-                                  danger
-                                  size="small"
-                                  loading={settingsPending}
-                                  onClick={() => onRemoveDirectory(directory.directoryId)}
-                                >
-                                  Remove
-                                </Button>
-                              </div>
-                            ) : null}
-                          </div>
-                          {showDirectoryPath ? (
-                            <Typography.Paragraph
-                              copyable
-                              style={{ margin: 0 }}
-                              type="secondary"
-                            >
-                              {directory.path}
-                            </Typography.Paragraph>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="No workflow sources are configured."
-                  />
-                )}
-
-                {canManageDirectories ? (
-                  <>
-                    <Divider style={{ margin: 0 }}>Add workflow directory</Divider>
-                    <div style={sectionPanelStyle}>
-                      <Input
-                        aria-label="Studio directory path"
-                        placeholder="/path/to/workflows"
-                        value={directoryPath}
-                        onChange={(event) => onSetDirectoryPath(event.target.value)}
-                      />
-                      <Input
-                        aria-label="Studio directory label"
-                        placeholder="optional label"
-                        value={directoryLabel}
-                        onChange={(event) => onSetDirectoryLabel(event.target.value)}
-                      />
-                      <Button
-                        type="primary"
-                        loading={settingsPending}
-                        onClick={onAddDirectory}
-                      >
-                        Add directory
-                      </Button>
-                    </div>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-          </ProCard>
-          </div>
+              ))}
+            </div>
+          )}
         </div>
-      </Drawer>
-    </>
+      </>
+    );
+  };
+
+  const activeSectionContent =
+    activeSection === 'runtime'
+      ? renderRuntimeSection()
+      : activeSection === 'llm'
+        ? renderLlmSection()
+        : renderSkillsSection();
+
+  return (
+    <div style={studioSettingsShellStyle}>
+      <aside className="settings-sidebar" style={studioSettingsSidebarStyle}>
+        {onCloseSettingsPage ? (
+          <button
+            type="button"
+            onClick={onCloseSettingsPage}
+            style={{
+              alignItems: 'center',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--ant-color-text-tertiary)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              fontSize: 13,
+              gap: 8,
+              padding: 0,
+            }}
+          >
+            <LeftOutlined style={{ fontSize: 14 }} />
+            <span>Back to workspace</span>
+          </button>
+        ) : null}
+        <div
+          style={{
+            ...studioSettingsNavListStyle,
+            marginTop: onCloseSettingsPage ? 32 : 0,
+          }}
+        >
+          <StudioSettingsNavButton
+            active={activeSection === 'runtime'}
+            icon={<ApiOutlined />}
+            title="Runtime"
+            description="Base URL and connectivity"
+            onClick={() => setActiveSection('runtime')}
+          />
+          <StudioSettingsNavButton
+            active={activeSection === 'llm'}
+            icon={<DatabaseOutlined />}
+            title="LLM"
+            description="Per-user settings on NyxID"
+            onClick={() => setActiveSection('llm')}
+          />
+          <StudioSettingsNavButton
+            active={activeSection === 'skills'}
+            icon={<ToolOutlined />}
+            title="Skills"
+            description="Ornn skill platform"
+            onClick={() => setActiveSection('skills')}
+          />
+        </div>
+      </aside>
+      <div style={studioSettingsContentPaneStyle}>
+        <div style={studioSettingsSectionBodyStyle}>
+          {renderSectionHeader(
+            activeSection === 'runtime'
+              ? 'Runtime'
+              : activeSection === 'llm'
+                ? 'LLM'
+                : 'Skills',
+            activeSection === 'runtime'
+              ? undefined
+              : activeSection === 'llm'
+                ? 'Per-user configuration stored on NyxID. Changes sync across all your devices.'
+                : 'Connect to your Ornn skill library. Skills are automatically available to all agents via tool calling.',
+            activeSection === 'llm' ? (
+              <button
+                type="button"
+                className="solid-action"
+                style={{
+                  ...studioSettingsPrimaryActionStyle,
+                  ...(!userConfigDraft || userConfigPending || !userConfigDirty
+                    ? { cursor: 'not-allowed', opacity: 0.6 }
+                    : {}),
+                }}
+                onClick={() => onSaveUserConfig()}
+                disabled={!userConfigDraft || userConfigPending || !userConfigDirty}
+              >
+                {userConfigPending ? 'Saving...' : 'Save config'}
+              </button>
+            ) : undefined,
+          )}
+          {activeSection === 'runtime'
+            ? settingsNoticeCard
+            : activeSection === 'llm'
+              ? userConfigNoticeCard
+              : null}
+          {activeSectionContent}
+        </div>
+      </div>
+    </div>
   );
 };

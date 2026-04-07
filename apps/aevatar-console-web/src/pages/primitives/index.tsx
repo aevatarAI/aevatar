@@ -151,6 +151,7 @@ const PrimitiveCatalogCard: React.FC<{
 
       <div style={cardListActionStyle}>
         <Button
+          aria-label="Inspect"
           icon={<EyeOutlined />}
           onClick={(event) => {
             event.stopPropagation();
@@ -160,6 +161,7 @@ const PrimitiveCatalogCard: React.FC<{
           Inspect
         </Button>
         <Button
+          aria-label="Example workflow"
           disabled={!hasExampleWorkflow}
           icon={<BuildOutlined />}
           onClick={(event) => {
@@ -234,15 +236,18 @@ const PrimitivesPage: React.FC = () => {
 
   return (
     <AevatarPageShell
-      content="Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector."
+      layoutMode="document"
       title="Primitive Library"
+      titleHelp="Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector."
     >
       <AevatarWorkbenchLayout
+        layoutMode="document"
         rail={
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
-              description="Filter by category or keyword without leaving the viewport."
+              layoutMode="document"
               title="Filter Library"
+              titleHelp="Filter by category or keyword without leaving the viewport."
             >
               <div
                 style={{
@@ -278,7 +283,7 @@ const PrimitivesPage: React.FC = () => {
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Library Digest">
+            <AevatarPanel layoutMode="document" title="Library Digest">
               <Space direction="vertical" size={6}>
                 <Typography.Text strong>
                   {filteredRows.length} primitives in view
@@ -297,8 +302,9 @@ const PrimitivesPage: React.FC = () => {
         }
         stage={
           <AevatarPanel
-            description="A card-flow library lets you scan categories and examples without collapsing into parameter tables."
+            layoutMode="document"
             title="Runtime Primitives"
+            titleHelp="A card-flow library lets you scan categories and examples without collapsing into parameter tables."
           >
             <ProList<WorkflowPrimitiveDescriptor>
               dataSource={filteredRows}
@@ -345,8 +351,8 @@ const PrimitivesPage: React.FC = () => {
         ) : (
           <>
             <AevatarPanel
-              description="Primitive description and aliases remain concise so the drawer stays decision-oriented."
               title="Definition"
+              titleHelp="Primitive description and aliases remain concise so the drawer stays decision-oriented."
             >
               <Space direction="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
@@ -368,8 +374,8 @@ const PrimitivesPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="Parameter contracts move here so the library stage can stay lightweight."
               title="Parameters"
+              titleHelp="Parameter contracts move here so the library stage can stay lightweight."
             >
               {selectedPrimitive.parameters.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -414,8 +420,8 @@ const PrimitivesPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="Examples form the bridge from primitive library to workflow design."
               title="Example Coverage"
+              titleHelp="Examples form the bridge from primitive library to workflow design."
             >
               {selectedPrimitive.exampleWorkflows.length > 0 ? (
                 <Space direction="vertical" size={8} style={{ width: "100%" }}>

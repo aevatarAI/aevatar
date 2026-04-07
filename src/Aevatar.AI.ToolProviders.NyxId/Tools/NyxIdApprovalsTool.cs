@@ -71,10 +71,8 @@ public sealed class NyxIdApprovalsTool : IAgentTool
 
             "grants" => await _client.ListApprovalGrantsAsync(token, ct),
             "configs" => await _client.ListApprovalServiceConfigsAsync(token, ct),
-            "enable" => await _client.UpdateNotificationSettingsAsync(token,
-                """{"approval_required":true}""", ct),
-            "disable" => await _client.UpdateNotificationSettingsAsync(token,
-                """{"approval_required":false}""", ct),
+            "enable" => await _client.SetGlobalApprovalAsync(token, true, ct),
+            "disable" => await _client.SetGlobalApprovalAsync(token, false, ct),
             _ => await _client.ListApprovalsAsync(token, ct),
         };
     }

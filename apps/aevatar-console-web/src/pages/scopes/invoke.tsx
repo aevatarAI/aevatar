@@ -1,59 +1,79 @@
-import { parseCustomEvent } from "@aevatar-react-sdk/agui";
 import {
   AGUIEventType,
   CustomEventName,
-  type AGUIEvent,
-} from "@aevatar-react-sdk/types";
+} from '@aevatar-react-sdk/types';
 import {
-  BorderBottomOutlined,
+  ApiOutlined,
+  AppstoreOutlined,
+  ArrowLeftOutlined,
+  ClearOutlined,
+  CodeOutlined,
+  DeploymentUnitOutlined,
+  LinkOutlined,
   PlayCircleOutlined,
   StopOutlined,
-} from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Input, Select, Space, Typography } from "antd";
+  UnorderedListOutlined,
+} from '@ant-design/icons';
+import { ProCard } from '@ant-design/pro-components';
+import { useQuery } from '@tanstack/react-query';
+import { Alert, Button, Empty, Input, Select, Space, Typography } from 'antd';
 import React, {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-} from "react";
-import { parseRunContextData } from "@/shared/agui/customEventData";
-import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
-import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
-import { servicesApi } from "@/shared/api/servicesApi";
-import { history } from "@/shared/navigation/history";
+} from 'react';
+import {
+  RuntimeEventPreviewPanel,
+} from '@/shared/agui/runtimeConversationPresentation';
+import {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
+  type RuntimeEvent,
+  type RuntimeStepInfo,
+  type RuntimeToolCallInfo,
+} from '@/shared/agui/runtimeEventSemantics';
+import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
+import { servicesApi } from '@/shared/api/servicesApi';
+import { history } from '@/shared/navigation/history';
 import {
   buildRuntimeGAgentsHref,
   buildRuntimeRunsHref,
-} from "@/shared/navigation/runtimeRoutes";
-import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
-import { studioApi } from "@/shared/studio/api";
+} from '@/shared/navigation/runtimeRoutes';
+import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
+import { studioApi } from '@/shared/studio/api';
 import type {
   ServiceCatalogSnapshot,
   ServiceEndpointSnapshot,
-} from "@/shared/models/services";
+} from '@/shared/models/services';
 import {
   describeStudioScopeBindingRevisionContext,
   describeStudioScopeBindingRevisionTarget,
   getStudioScopeBindingCurrentRevision,
-} from "@/shared/studio/models";
+} from '@/shared/studio/models';
 import {
   AevatarContextDrawer,
+  AevatarHelpTooltip,
   AevatarPageShell,
-  AevatarPanel,
   AevatarStatusTag,
-  AevatarWorkbenchLayout,
-} from "@/shared/ui/aevatarPageShells";
-import ScopeServiceRuntimeWorkbench from "./components/ScopeServiceRuntimeWorkbench";
-import { resolveStudioScopeContext } from "./components/resolvedScope";
-import ScopeQueryCard from "./components/ScopeQueryCard";
+} from '@/shared/ui/aevatarPageShells';
+import {
+  ChatInput,
+  ChatMessageBubble,
+  ChatMetaStrip,
+  EmptyChatState,
+} from '../chat/chatPresentation';
+import type { ChatMessage } from '../chat/chatTypes';
+import ScopeServiceRuntimeWorkbench from './components/ScopeServiceRuntimeWorkbench';
+import { resolveStudioScopeContext } from './components/resolvedScope';
 import {
   buildScopeHref,
   normalizeScopeDraft,
   readScopeQueryDraft,
   type ScopeQueryDraft,
-} from "./components/scopeQuery";
+} from './components/scopeQuery';
 
 type InvokeResultState = {
   actorId: string;
@@ -62,31 +82,343 @@ type InvokeResultState = {
   endpointId: string;
   error: string;
   eventCount: number;
-  events: AGUIEvent[];
-  mode: "stream" | "invoke";
+  events: RuntimeEvent[];
+  mode: 'stream' | 'invoke';
   responseJson: string;
   runId: string;
   serviceId: string;
-  status: "idle" | "running" | "success" | "error";
+  status: 'idle' | 'running' | 'success' | 'error';
+  steps: RuntimeStepInfo[];
+  thinking: string;
+  toolCalls: RuntimeToolCallInfo[];
 };
 
-type InvokeDockTab = "events" | "output";
+type InvokeDockTab = 'chat' | 'events' | 'output';
 
-type InvokeContextSurface = "insight" | "service" | null;
+type InvokeContextSurface = 'service' | null;
+
+type InvokeEndpointOption = {
+  description: string;
+  displayName: string;
+  endpointId: string;
+  kind: string;
+  requestTypeUrl: string;
+  responseTypeUrl: string;
+};
+
+type InvokeServiceOption = {
+  deploymentStatus?: string;
+  displayName: string;
+  endpoints: InvokeEndpointOption[];
+  kind: 'nyxid-chat' | 'service';
+  namespace: string;
+  primaryActorId?: string;
+  serviceId: string;
+};
+
+type MonacoEditorComponentProps = {
+  ariaLabel?: string;
+  defaultLanguage?: string;
+  height?: number | string;
+  language?: string;
+  onChange?: (value: string | undefined) => void;
+  options?: Record<string, unknown>;
+  path?: string;
+  placeholder?: string;
+  theme?: string;
+  value?: string;
+};
 
 const initialDraft = readScopeQueryDraft();
-const scopeServiceAppId = "default";
-const scopeServiceNamespace = "default";
+const scopeServiceAppId = 'default';
+const scopeServiceNamespace = 'default';
+const nyxIdChatActorTypeName = 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent';
+const nyxIdChatConversationPrefix = 'NyxIdChat:';
+const nyxIdChatServiceId = 'nyxid-chat';
+const nyxIdChatLabel = 'NyxID Chat';
+const monoFontFamily =
+  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
+const viewportShellStyle: React.CSSProperties = {
+  background: 'var(--ant-color-bg-layout)',
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  gap: 12,
+  height: 'calc(100vh - 64px)',
+  maxHeight: 'calc(100vh - 64px)',
+  minHeight: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
+};
+const pageHeaderStyle: React.CSSProperties = {
+  alignItems: 'center',
+  background: 'var(--ant-color-bg-container)',
+  border: '1px solid var(--ant-color-border-secondary)',
+  borderRadius: 6,
+  display: 'flex',
+  flex: '0 0 auto',
+  gap: 12,
+  justifyContent: 'space-between',
+  padding: '10px 14px',
+  position: 'sticky',
+  top: 0,
+  zIndex: 3,
+};
+const workspaceViewportStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: '1 0 auto',
+  minHeight: 0,
+  overflow: 'visible',
+};
+const workspaceGridStyle: React.CSSProperties = {
+  alignItems: 'start',
+  display: 'grid',
+  gap: 12,
+  gridTemplateColumns: '250px minmax(0, 1fr) 300px',
+  minHeight: 0,
+  minWidth: 0,
+  width: '100%',
+};
+const columnStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  minHeight: 0,
+};
+const viewportCardStyle: React.CSSProperties = {
+  border: '1px solid var(--ant-color-border-secondary)',
+  borderRadius: 6,
+  boxShadow: 'none',
+  overflow: 'hidden',
+};
+const viewportFillCardStyle: React.CSSProperties = {
+  ...viewportCardStyle,
+  height: '100%',
+  minHeight: 0,
+};
+const viewportGrowCardStyle: React.CSSProperties = {
+  ...viewportCardStyle,
+  flex: '1 1 0',
+  minHeight: 0,
+};
+const viewportCardBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  height: '100%',
+  minHeight: 0,
+  overflow: 'hidden',
+  padding: 12,
+};
+const scrollColumnStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  gap: 12,
+  minHeight: 0,
+  overflowX: 'hidden',
+  overflowY: 'auto',
+  paddingRight: 4,
+};
+const sectionStyle: React.CSSProperties = {
+  border: '1px solid var(--ant-color-border-secondary)',
+  borderRadius: 6,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  padding: 12,
+};
+const fieldLabelStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text-secondary)',
+  fontSize: 12,
+  fontWeight: 500,
+};
+const fieldValueStyle: React.CSSProperties = {
+  color: 'var(--ant-color-text)',
+  fontSize: 13,
+  fontWeight: 600,
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+};
+const metricRowStyle: React.CSSProperties = {
+  alignItems: 'flex-start',
+  display: 'grid',
+  gap: 8,
+  gridTemplateColumns: '16px minmax(0, 1fr)',
+};
+const editorShellStyle: React.CSSProperties = {
+  border: '1px solid var(--ant-color-border-secondary)',
+  borderRadius: 6,
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  minHeight: 280,
+  overflow: 'hidden',
+  position: 'relative',
+};
+const editorViewportStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  minHeight: 0,
+  overflow: 'hidden',
+};
+const editorFallbackStyle: React.CSSProperties = {
+  background: 'transparent',
+  border: 0,
+  color: 'var(--ant-color-text)',
+  fontFamily: monoFontFamily,
+  fontSize: 13,
+  height: '100%',
+  lineHeight: 1.6,
+  outline: 'none',
+  padding: '14px 16px 84px',
+  resize: 'none',
+  width: '100%',
+};
+const editorActionBarStyle: React.CSSProperties = {
+  bottom: 16,
+  position: 'absolute',
+  right: 16,
+  zIndex: 2,
+};
+const playgroundChatShellStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  gap: 12,
+  minHeight: 0,
+};
+const playgroundChatMessagesStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  gap: 20,
+  margin: '0 auto',
+  maxWidth: 840,
+  minHeight: 0,
+  overflow: 'auto',
+  padding: '20px 20px 16px',
+  width: '100%',
+};
+const playgroundChatComposerStyle: React.CSSProperties = {
+  background: '#ffffff',
+  borderTop: '1px solid #e7e5e4',
+  flexShrink: 0,
+  padding: '14px 20px',
+};
+const consoleShellStyle: React.CSSProperties = {
+  background: 'var(--ant-color-bg-container)',
+  border: '1px solid var(--ant-color-border-secondary)',
+  borderRadius: 6,
+  boxShadow: 'none',
+  flex: '0 0 auto',
+  minHeight: 0,
+  overflow: 'hidden',
+};
+const consoleBodyStyle: React.CSSProperties = {
+  display: 'flex',
+  flex: 1,
+  flexDirection: 'column',
+  minHeight: 0,
+  overflow: 'hidden',
+  padding: 12,
+};
+const codeBlockStyle: React.CSSProperties = {
+  background: 'var(--ant-color-fill-quaternary)',
+  border: '1px solid var(--ant-color-border-secondary)',
+  borderRadius: 6,
+  fontFamily: monoFontFamily,
+  fontSize: 12,
+  lineHeight: 1.6,
+  margin: 0,
+  overflow: 'auto',
+  padding: 12,
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+};
 
 function readQueryValue(name: string): string {
-  if (typeof window === "undefined") {
-    return "";
+  if (typeof window === 'undefined') {
+    return '';
   }
 
-  return new URLSearchParams(window.location.search).get(name)?.trim() ?? "";
+  return new URLSearchParams(window.location.search).get(name)?.trim() ?? '';
+}
+
+function createClientId(): string {
+  return globalThis.crypto?.randomUUID?.()
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function buildServiceOptions(
+  services: readonly ServiceCatalogSnapshot[],
+  defaultServiceId?: string,
+): InvokeServiceOption[] {
+  const builtInNyxIdService: InvokeServiceOption = {
+    displayName: nyxIdChatLabel,
+    endpoints: [
+      {
+        description:
+          'Chat with NyxID about services, credentials, and configuration.',
+        displayName: 'Chat',
+        endpointId: 'chat',
+        kind: 'chat',
+        requestTypeUrl: '',
+        responseTypeUrl: '',
+      },
+    ],
+    kind: 'nyxid-chat',
+    namespace: scopeServiceNamespace,
+    serviceId: nyxIdChatServiceId,
+  };
+  const publishedServices = [...services]
+    .filter((service) => service.serviceId !== builtInNyxIdService.serviceId)
+    .map((service) => ({
+      deploymentStatus: service.deploymentStatus,
+      displayName: service.displayName || service.serviceId,
+      endpoints: service.endpoints.map((endpoint) => ({
+        description: endpoint.description,
+        displayName: endpoint.displayName,
+        endpointId: endpoint.endpointId,
+        kind: endpoint.kind,
+        requestTypeUrl: endpoint.requestTypeUrl,
+        responseTypeUrl: endpoint.responseTypeUrl,
+      })),
+      kind: 'service' as const,
+      namespace: service.namespace,
+      primaryActorId: service.primaryActorId,
+      serviceId: service.serviceId,
+    }))
+    .sort((left, right) => {
+      const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
+      const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+
+      if (leftIsDefault !== rightIsDefault) {
+        return rightIsDefault - leftIsDefault;
+      }
+
+      return left.serviceId.localeCompare(right.serviceId);
+    });
+
+  return [builtInNyxIdService, ...publishedServices];
+}
+
+function getPreferredServiceId(
+  services: readonly InvokeServiceOption[],
+  defaultServiceId?: string,
+): string {
+  return (
+    services.find((service) => service.serviceId === defaultServiceId)
+      ?.serviceId ||
+    services.find((service) => service.serviceId === nyxIdChatServiceId)
+      ?.serviceId ||
+    services[0]?.serviceId ||
+    ''
+  );
+}
+
+function buildPublishedServiceCatalog(
   services: readonly ServiceCatalogSnapshot[],
   defaultServiceId?: string,
 ): ServiceCatalogSnapshot[] {
@@ -102,65 +434,97 @@ function buildServiceOptions(
   });
 }
 
-function isChatEndpoint(endpoint: ServiceEndpointSnapshot | undefined): boolean {
+function isChatEndpoint(
+  endpoint: ServiceEndpointSnapshot | undefined,
+): boolean {
   if (!endpoint) {
     return false;
   }
 
-  return endpoint.kind === "chat" || endpoint.endpointId.trim() === "chat";
+  return endpoint.kind === 'chat' || endpoint.endpointId.trim() === 'chat';
 }
 
 function createIdleResult(): InvokeResultState {
   return {
-    actorId: "",
-    assistantText: "",
-    commandId: "",
-    endpointId: "",
-    error: "",
+    actorId: '',
+    assistantText: '',
+    commandId: '',
+    endpointId: '',
+    error: '',
     eventCount: 0,
     events: [],
-    mode: "invoke",
-    responseJson: "",
-    runId: "",
-    serviceId: "",
-    status: "idle",
+    mode: 'invoke',
+    responseJson: '',
+    runId: '',
+    serviceId: '',
+    status: 'idle',
+    steps: [],
+    thinking: '',
+    toolCalls: [],
   };
 }
 
-function getEventKey(event: AGUIEvent, indexHint: number): string {
+function getEventKey(event: RuntimeEvent, indexHint: number): string {
   const candidate = event as unknown as Record<string, unknown>;
   return [
     event.type,
-    String(candidate.timestamp ?? ""),
-    String(candidate.runId ?? ""),
-    String(candidate.messageId ?? ""),
+    String(candidate.timestamp ?? ''),
+    String(candidate.runId ?? ''),
+    String(candidate.messageId ?? ''),
     String(indexHint),
-  ].join("-");
+  ].join('-');
+}
+
+function resolveMonacoEditorComponent(): React.ComponentType<MonacoEditorComponentProps> | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  if (/jsdom/i.test(window.navigator.userAgent)) {
+    return null;
+  }
+
+  try {
+    const module = require('@monaco-editor/react') as {
+      default: React.ComponentType<MonacoEditorComponentProps>;
+    };
+    return module.default;
+  } catch {
+    return null;
+  }
 }
 
 const ScopeInvokePage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nyxIdChatBoundRef = useRef(false);
+  const previousChatBindingKeyRef = useRef('');
+  const initialSelectedServiceId = readQueryValue('serviceId');
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const serviceSelectionSourceRef = useRef<'auto' | 'manual'>(
+    initialSelectedServiceId ? 'manual' : 'auto',
+  );
   const [draft, setDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(initialDraft);
-  const [selectedServiceId, setSelectedServiceId] = useState(readQueryValue("serviceId"));
-  const [selectedEndpointId, setSelectedEndpointId] = useState(
-    readQueryValue("endpointId"),
+  const [selectedServiceId, setSelectedServiceId] = useState(
+    initialSelectedServiceId,
   );
-  const [prompt, setPrompt] = useState("");
-  const [payloadTypeUrl, setPayloadTypeUrl] = useState("");
-  const [payloadBase64, setPayloadBase64] = useState("");
+  const [selectedEndpointId, setSelectedEndpointId] = useState(
+    readQueryValue('endpointId'),
+  );
+  const [prompt, setPrompt] = useState('');
+  const [payloadTypeUrl, setPayloadTypeUrl] = useState('');
+  const [payloadBase64, setPayloadBase64] = useState('');
   const [preserveEmptySelection, setPreserveEmptySelection] = useState(false);
   const [invokeResult, setInvokeResult] = useState<InvokeResultState>(
     createIdleResult(),
   );
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [contextSurface, setContextSurface] =
     useState<InvokeContextSurface>(null);
-  const [dockTab, setDockTab] = useState<InvokeDockTab>("events");
-  const [dockHeight, setDockHeight] = useState(248);
-  const [isDockCollapsed, setDockCollapsed] = useState(false);
+  const [dockTab, setDockTab] = useState<InvokeDockTab>('events');
 
   const authSessionQuery = useQuery({
-    queryKey: ["scopes", "auth-session"],
+    queryKey: ['scopes', 'auth-session'],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
@@ -188,7 +552,7 @@ const ScopeInvokePage: React.FC = () => {
 
   useEffect(() => {
     history.replace(
-      buildScopeHref("/scopes/invoke", activeDraft, {
+      buildScopeHref('/scopes/invoke', activeDraft, {
         endpointId: selectedEndpointId,
         serviceId: selectedServiceId,
       }),
@@ -197,15 +561,22 @@ const ScopeInvokePage: React.FC = () => {
 
   useEffect(() => () => abortControllerRef.current?.abort(), []);
 
+  useEffect(() => {
+    scrollAnchorRef.current?.scrollIntoView?.({
+      behavior: chatMessages.length > 1 ? 'smooth' : 'auto',
+      block: 'end',
+    });
+  }, [chatMessages]);
+
   const scopeId = activeDraft.scopeId.trim();
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["scopes", "binding", scopeId],
+    queryKey: ['scopes', 'binding', scopeId],
     queryFn: () => studioApi.getScopeBinding(scopeId),
   });
   const scopeServicesQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["scopes", "invoke", "services", scopeId],
+    queryKey: ['scopes', 'invoke', 'services', scopeId],
     queryFn: () =>
       servicesApi.listServices({
         appId: scopeServiceAppId,
@@ -214,39 +585,74 @@ const ScopeInvokePage: React.FC = () => {
       }),
   });
 
-  const services = useMemo(
+  useEffect(() => {
+    nyxIdChatBoundRef.current = false;
+  }, [scopeId]);
+
+  const publishedServices = useMemo(
     () =>
-      buildServiceOptions(
+      buildPublishedServiceCatalog(
         scopeServicesQuery.data ?? [],
         bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
       ),
-    [bindingQuery.data?.available, bindingQuery.data?.serviceId, scopeServicesQuery.data],
+    [
+      bindingQuery.data?.available,
+      bindingQuery.data?.serviceId,
+      scopeServicesQuery.data,
+    ],
+  );
+  const services = useMemo(
+    () =>
+      scopeId
+        ? buildServiceOptions(
+            publishedServices,
+            bindingQuery.data?.available
+              ? bindingQuery.data.serviceId
+              : undefined,
+          )
+        : [],
+    [
+      bindingQuery.data?.available,
+      bindingQuery.data?.serviceId,
+      publishedServices,
+      scopeId,
+    ],
   );
 
   useEffect(() => {
     if (!services.length) {
-      setSelectedServiceId("");
+      serviceSelectionSourceRef.current = 'auto';
+      setSelectedServiceId('');
+      return;
+    }
+
+    const preferredServiceId = getPreferredServiceId(
+      services,
+      bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
+    );
+    const hasSelectedService =
+      selectedServiceId &&
+      services.some((service) => service.serviceId === selectedServiceId);
+
+    if (!hasSelectedService) {
+      if (preserveEmptySelection) {
+        serviceSelectionSourceRef.current = 'auto';
+        setSelectedServiceId('');
+        return;
+      }
+
+      serviceSelectionSourceRef.current = 'auto';
+      setSelectedServiceId(preferredServiceId);
       return;
     }
 
     if (
-      selectedServiceId &&
-      services.some((service) => service.serviceId === selectedServiceId)
+      serviceSelectionSourceRef.current === 'auto' &&
+      preferredServiceId &&
+      selectedServiceId !== preferredServiceId
     ) {
-      return;
+      setSelectedServiceId(preferredServiceId);
     }
-
-    if (preserveEmptySelection) {
-      setSelectedServiceId("");
-      return;
-    }
-
-    setSelectedServiceId(
-      services.find((service) => service.serviceId === bindingQuery.data?.serviceId)
-        ?.serviceId ||
-        services[0]?.serviceId ||
-        "",
-    );
   }, [
     bindingQuery.data?.serviceId,
     preserveEmptySelection,
@@ -259,7 +665,7 @@ const ScopeInvokePage: React.FC = () => {
 
   useEffect(() => {
     if (!selectedService) {
-      setSelectedEndpointId("");
+      setSelectedEndpointId('');
       return;
     }
 
@@ -273,10 +679,11 @@ const ScopeInvokePage: React.FC = () => {
     }
 
     setSelectedEndpointId(
-      selectedService.endpoints.find((endpoint) => endpoint.endpointId === "chat")
-        ?.endpointId ||
+      selectedService.endpoints.find(
+        (endpoint) => endpoint.endpointId === 'chat',
+      )?.endpointId ||
         selectedService.endpoints[0]?.endpointId ||
-        "",
+        '',
     );
   }, [selectedEndpointId, selectedService]);
 
@@ -284,6 +691,9 @@ const ScopeInvokePage: React.FC = () => {
     selectedService?.endpoints.find(
       (endpoint) => endpoint.endpointId === selectedEndpointId,
     ) ?? null;
+  const isChatPlayground = Boolean(
+    selectedEndpoint && isChatEndpoint(selectedEndpoint),
+  );
   const currentBindingRevision = getStudioScopeBindingCurrentRevision(
     bindingQuery.data,
   );
@@ -295,36 +705,81 @@ const ScopeInvokePage: React.FC = () => {
   );
   const currentBindingActor =
     currentBindingRevision?.primaryActorId ||
-    currentBindingRevision?.staticPreferredActorId ||
     bindingQuery.data?.primaryActorId ||
-    "";
+    '';
 
   useEffect(() => {
     if (!selectedEndpoint || isChatEndpoint(selectedEndpoint)) {
-      setPayloadTypeUrl("");
-      setPayloadBase64("");
+      setPayloadTypeUrl('');
+      setPayloadBase64('');
       return;
     }
 
-    setPayloadTypeUrl(selectedEndpoint.requestTypeUrl || "");
+    setPayloadTypeUrl(selectedEndpoint.requestTypeUrl || '');
   }, [selectedEndpoint]);
+
+  useEffect(() => {
+    const bindingKey = `${scopeId}::${selectedServiceId}::${selectedEndpointId}`;
+    if (!previousChatBindingKeyRef.current) {
+      previousChatBindingKeyRef.current = bindingKey;
+      return;
+    }
+
+    if (previousChatBindingKeyRef.current === bindingKey) {
+      return;
+    }
+
+    previousChatBindingKeyRef.current = bindingKey;
+    setChatMessages([]);
+    setInvokeResult(createIdleResult());
+  }, [scopeId, selectedEndpointId, selectedServiceId]);
+
+  useEffect(() => {
+    setDockTab(isChatPlayground ? 'chat' : 'output');
+  }, [isChatPlayground]);
 
   const serviceOptions = services.map((service) => ({
     label: service.displayName || service.serviceId,
     value: service.serviceId,
   }));
-  const endpointOptions = (selectedService?.endpoints ?? []).map((endpoint) => ({
-    label: endpoint.displayName || endpoint.endpointId,
-    value: endpoint.endpointId,
-  }));
+
+  const ensureNyxIdChatBound = useCallback(async () => {
+    if (!scopeId || nyxIdChatBoundRef.current) {
+      return;
+    }
+
+    await studioApi.bindScopeGAgent({
+      actorTypeName: nyxIdChatActorTypeName,
+      displayName: nyxIdChatLabel,
+      endpoints: [
+        {
+          description:
+            'Chat with NyxID about services, credentials, and configuration.',
+          displayName: 'Chat',
+          endpointId: 'chat',
+          kind: 'chat',
+        },
+      ],
+      preferredActorId: `${nyxIdChatConversationPrefix}${scopeId}`,
+      scopeId,
+      serviceId: nyxIdChatServiceId,
+    });
+    nyxIdChatBoundRef.current = true;
+  }, [scopeId]);
+  const endpointOptions = (selectedService?.endpoints ?? []).map(
+    (endpoint) => ({
+      label: endpoint.displayName || endpoint.endpointId,
+      value: endpoint.endpointId,
+    }),
+  );
 
   const handleAbort = () => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setInvokeResult((current) => ({
       ...current,
-      error: "Invocation aborted by operator.",
-      status: "error",
+      error: 'Invocation aborted by operator.',
+      status: 'error',
     }));
   };
 
@@ -337,17 +792,46 @@ const ScopeInvokePage: React.FC = () => {
     abortControllerRef.current = null;
 
     if (isChatEndpoint(selectedEndpoint)) {
+      const trimmedPrompt = prompt.trim();
+      const userMessageId = createClientId();
+      const assistantMessageId = createClientId();
+      const userMessage: ChatMessage = {
+        content: trimmedPrompt,
+        id: userMessageId,
+        role: 'user',
+        status: 'complete',
+        timestamp: Date.now(),
+      };
+      const assistantMessage: ChatMessage = {
+        content: '',
+        events: [],
+        id: assistantMessageId,
+        role: 'assistant',
+        status: 'streaming',
+        steps: [],
+        thinking: '',
+        timestamp: Date.now(),
+        toolCalls: [],
+      };
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      const accumulator = createRuntimeEventAccumulator();
+      setChatMessages((current) => [...current, userMessage, assistantMessage]);
+      setDockTab('chat');
+      setPrompt('');
       setInvokeResult({
         ...createIdleResult(),
         endpointId: selectedEndpoint.endpointId,
-        mode: "stream",
+        mode: 'stream',
         serviceId: selectedService.serviceId,
-        status: "running",
+        status: 'running',
       });
 
       try {
+        if (selectedService.kind === 'nyxid-chat') {
+          await ensureNyxIdChatBound();
+        }
+
         const response = await runtimeRunsApi.streamChat(
           scopeId,
           {
@@ -359,82 +843,117 @@ const ScopeInvokePage: React.FC = () => {
           },
         );
 
-        let assistantText = "";
-        let actorId = "";
-        let commandId = "";
-        let runId = "";
-        let eventCount = 0;
-        let runError = "";
-        const events: AGUIEvent[] = [];
-
         for await (const event of parseBackendSSEStream(response, {
           signal: controller.signal,
         })) {
-          eventCount += 1;
-          events.push(event);
-
-          if (event.type === AGUIEventType.RUN_STARTED) {
-            runId = event.runId || runId;
-          }
-
-          if (event.type === AGUIEventType.TEXT_MESSAGE_CONTENT) {
-            assistantText += event.delta || "";
-          }
-
-          if (event.type === AGUIEventType.RUN_ERROR) {
-            runError = event.message || "Assistant run failed.";
-          }
-
-          if (event.type === AGUIEventType.CUSTOM) {
-            const custom = parseCustomEvent(event);
-            if (custom.name === CustomEventName.RunContext) {
-              const context = parseRunContextData(custom.data);
-              actorId = context?.actorId ?? actorId;
-              commandId = context?.commandId ?? commandId;
-            }
-          }
+          applyRuntimeEvent(accumulator, event);
+          setChatMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? {
+                    ...message,
+                    content: accumulator.assistantText,
+                    error: accumulator.errorText || undefined,
+                    events: [...accumulator.events],
+                    status: accumulator.errorText ? 'error' : 'streaming',
+                    steps: [...accumulator.steps],
+                    thinking: accumulator.thinking,
+                    toolCalls: [...accumulator.toolCalls],
+                  }
+                : message,
+            ),
+          );
 
           setInvokeResult({
-            actorId,
-            assistantText,
-            commandId,
+            actorId: accumulator.actorId,
+            assistantText: accumulator.assistantText,
+            commandId: accumulator.commandId,
             endpointId: selectedEndpoint.endpointId,
-            error: runError,
-            eventCount,
-            events: [...events],
-            mode: "stream",
-            responseJson: "",
-            runId,
+            error: accumulator.errorText,
+            eventCount: accumulator.events.length,
+            events: [...accumulator.events],
+            mode: 'stream',
+            responseJson: '',
+            runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            status: runError ? "error" : "running",
+            status: accumulator.errorText ? 'error' : 'running',
+            steps: [...accumulator.steps],
+            thinking: accumulator.thinking,
+            toolCalls: [...accumulator.toolCalls],
           });
         }
 
         if (!controller.signal.aborted) {
+          setChatMessages((current) =>
+            current.map((message) =>
+              message.id === assistantMessageId
+                ? {
+                    ...message,
+                    content: accumulator.assistantText,
+                    error: accumulator.errorText || undefined,
+                    events: [...accumulator.events],
+                    status: accumulator.errorText ? 'error' : 'complete',
+                    steps: [...accumulator.steps],
+                    thinking: accumulator.thinking,
+                    toolCalls: [...accumulator.toolCalls],
+                  }
+                : message,
+            ),
+          );
           setInvokeResult({
-            actorId,
-            assistantText,
-            commandId,
+            actorId: accumulator.actorId,
+            assistantText: accumulator.assistantText,
+            commandId: accumulator.commandId,
             endpointId: selectedEndpoint.endpointId,
-            error: runError,
-            eventCount,
-            events,
-            mode: "stream",
-            responseJson: "",
-            runId,
+            error: accumulator.errorText,
+            eventCount: accumulator.events.length,
+            events: [...accumulator.events],
+            mode: 'stream',
+            responseJson: '',
+            runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            status: runError ? "error" : "success",
+            status: accumulator.errorText ? 'error' : 'success',
+            steps: [...accumulator.steps],
+            thinking: accumulator.thinking,
+            toolCalls: [...accumulator.toolCalls],
           });
         }
       } catch (error) {
         if (!controller.signal.aborted) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          setChatMessages((current) =>
+            current.map((entry) =>
+              entry.id === assistantMessageId
+                ? {
+                    ...entry,
+                    content: accumulator.assistantText,
+                    error: message,
+                    events: [...accumulator.events],
+                    status: 'error',
+                    steps: [...accumulator.steps],
+                    thinking: accumulator.thinking,
+                    toolCalls: [...accumulator.toolCalls],
+                  }
+                : entry,
+            ),
+          );
           setInvokeResult({
             ...createIdleResult(),
+            actorId: accumulator.actorId,
+            assistantText: accumulator.assistantText,
+            commandId: accumulator.commandId,
             endpointId: selectedEndpoint.endpointId,
-            error: error instanceof Error ? error.message : String(error),
-            mode: "stream",
+            error: message,
+            eventCount: accumulator.events.length,
+            events: [...accumulator.events],
+            mode: 'stream',
+            runId: accumulator.runId,
             serviceId: selectedService.serviceId,
-            status: "error",
+            status: 'error',
+            steps: [...accumulator.steps],
+            thinking: accumulator.thinking,
+            toolCalls: [...accumulator.toolCalls],
           });
         }
       } finally {
@@ -449,10 +968,11 @@ const ScopeInvokePage: React.FC = () => {
     setInvokeResult({
       ...createIdleResult(),
       endpointId: selectedEndpoint.endpointId,
-      mode: "invoke",
+      mode: 'invoke',
       serviceId: selectedService.serviceId,
-      status: "running",
+      status: 'running',
     });
+    setDockTab('output');
 
     try {
       const response = await runtimeRunsApi.invokeEndpoint(
@@ -468,24 +988,29 @@ const ScopeInvokePage: React.FC = () => {
         },
       );
       const responseRunId = String(
-        response.request_id ?? response.requestId ?? response.commandId ?? "",
+        response.request_id ?? response.requestId ?? response.commandId ?? '',
       ).trim();
       const responseActorId = String(
-        response.target_actor_id ?? response.targetActorId ?? response.actorId ?? "",
+        response.target_actor_id ??
+          response.targetActorId ??
+          response.actorId ??
+          '',
       ).trim();
       const responseCommandId = String(
         response.command_id ?? response.commandId ?? responseRunId,
       ).trim();
-      const events: AGUIEvent[] = [
+      const events: RuntimeEvent[] = [
         {
           runId: responseRunId || undefined,
           threadId:
             String(
-              response.correlation_id ?? response.correlationId ?? responseRunId,
+              response.correlation_id ??
+                response.correlationId ??
+                responseRunId,
             ).trim() || undefined,
           timestamp: Date.now(),
           type: AGUIEventType.RUN_STARTED,
-        } as AGUIEvent,
+        } as RuntimeEvent,
       ];
 
       if (responseActorId || responseCommandId) {
@@ -497,7 +1022,7 @@ const ScopeInvokePage: React.FC = () => {
             actorId: responseActorId || undefined,
             commandId: responseCommandId || undefined,
           },
-        } as AGUIEvent);
+        } as RuntimeEvent);
       }
 
       setInvokeResult({
@@ -507,20 +1032,20 @@ const ScopeInvokePage: React.FC = () => {
         endpointId: selectedEndpoint.endpointId,
         eventCount: events.length,
         events,
-        mode: "invoke",
+        mode: 'invoke',
         responseJson: JSON.stringify(response, null, 2),
         runId: responseRunId,
         serviceId: selectedService.serviceId,
-        status: "success",
+        status: 'success',
       });
     } catch (error) {
       setInvokeResult({
         ...createIdleResult(),
         endpointId: selectedEndpoint.endpointId,
         error: error instanceof Error ? error.message : String(error),
-        mode: "invoke",
+        mode: 'invoke',
         serviceId: selectedService.serviceId,
-        status: "error",
+        status: 'error',
       });
     }
   };
@@ -531,12 +1056,13 @@ const ScopeInvokePage: React.FC = () => {
     }
 
     const observedDraftKey =
-      invokeResult.events.length > 0
+      observedEvents.length > 0
         ? saveObservedRunSessionPayload({
             actorId: invokeResult.actorId || undefined,
             commandId: invokeResult.commandId || undefined,
-            endpointId: invokeResult.endpointId || selectedEndpoint?.endpointId || "chat",
-            events: invokeResult.events,
+            endpointId:
+              invokeResult.endpointId || selectedEndpoint?.endpointId || 'chat',
+            events: observedEvents,
             payloadBase64:
               selectedEndpoint && !isChatEndpoint(selectedEndpoint)
                 ? payloadBase64 || undefined
@@ -550,7 +1076,7 @@ const ScopeInvokePage: React.FC = () => {
             scopeId,
             serviceOverrideId: selectedService?.serviceId,
           })
-        : "";
+        : '';
 
     history.push(
       buildRuntimeRunsHref({
@@ -568,13 +1094,55 @@ const ScopeInvokePage: React.FC = () => {
     );
   };
 
+  const handleReset = () => {
+    const nextDraft = normalizeScopeDraft({
+      scopeId: resolvedScope?.scopeId ?? '',
+    });
+    setPreserveEmptySelection(true);
+    setDraft(nextDraft);
+    setActiveDraft(nextDraft);
+    setSelectedServiceId('');
+    setSelectedEndpointId('');
+    setPrompt('');
+    setPayloadTypeUrl('');
+    setPayloadBase64('');
+    setChatMessages([]);
+    setInvokeResult(createIdleResult());
+  };
+
+  const handleLoad = () => {
+    const nextDraft = normalizeScopeDraft(draft);
+    setPreserveEmptySelection(false);
+    setDraft(nextDraft);
+    setActiveDraft(nextDraft);
+  };
+
+  const handleUseResolvedScope = () => {
+    if (!resolvedScope?.scopeId) {
+      return;
+    }
+
+    const nextDraft = normalizeScopeDraft({
+      scopeId: resolvedScope.scopeId,
+    });
+    setPreserveEmptySelection(false);
+    setDraft(nextDraft);
+    setActiveDraft(nextDraft);
+  };
+
+  const handleClearConsole = () => {
+    setChatMessages([]);
+    setInvokeResult(createIdleResult());
+    setDockTab(isChatPlayground ? 'chat' : 'output');
+  };
+
   const recommendedNextStep = !scopeId
     ? {
-        action: () => history.push("/scopes/overview"),
-        actionLabel: "Open projects",
+        action: () => history.push('/scopes/overview'),
+        actionLabel: 'Open projects',
         description:
-          "Project Invoke only becomes useful after you anchor the console to a scope.",
-        title: "Load a project first",
+          'Invoke Lab only becomes useful after you anchor the console to a scope.',
+        title: 'Load a project first',
       }
     : services.length === 0
       ? {
@@ -582,634 +1150,925 @@ const ScopeInvokePage: React.FC = () => {
             history.push(
               buildRuntimeGAgentsHref({
                 scopeId,
-                actorId: currentBindingRevision?.staticPreferredActorId || undefined,
-                actorTypeName: currentBindingRevision?.staticActorTypeName || undefined,
+                actorId:
+                  currentBindingRevision?.primaryActorId || undefined,
+                actorTypeName:
+                  currentBindingRevision?.staticActorTypeName || undefined,
               }),
             ),
-          actionLabel: "Open GAgents",
+          actionLabel: 'Open GAgents',
           description:
-            "No published scope services were discovered. Manage the current binding before using the invoke lab.",
-          title: "Publish or switch the default binding",
+            'No published scope services were discovered. Manage the current binding before invoking.',
+          title: 'Publish or switch the default binding',
         }
-      : invokeResult.status === "success"
+      : invokeResult.status === 'success'
         ? {
             action: handleOpenRuns,
-            actionLabel: "Continue in Runs",
+            actionLabel: 'Continue in Runs',
             description:
-              "The latest invoke has context attached. Move to Runs for the full trace and intervention controls.",
-            title: "Promote this session to runtime observation",
+              'Promote the current session into runtime observation and keep the trace attached.',
+            title: 'Promote this session',
           }
         : {
-            action: () => setContextSurface("service"),
-            actionLabel: "Browse services",
+            action: () => setContextSurface('service'),
+            actionLabel: 'Browse services',
             description:
-              "Pick the right service and endpoint before you start streaming or generic invocation.",
-            title: "Choose the published entrypoint",
+              'Inspect the published catalog when you need deeper runtime context.',
+            title: 'Open the service workbench',
           };
 
   const outputPanels = useMemo(
     () =>
       [
-        invokeResult.assistantText
-          ? {
-              title: "Assistant Output",
-              value: invokeResult.assistantText,
-            }
-          : null,
         invokeResult.responseJson
           ? {
-              title: "Invocation Receipt",
+              title: 'Invocation Receipt',
               value: invokeResult.responseJson,
             }
           : null,
-      ].filter((panel): panel is { title: string; value: string } => Boolean(panel)),
-    [invokeResult.assistantText, invokeResult.responseJson],
+      ].filter((panel): panel is { title: string; value: string } =>
+        Boolean(panel),
+      ),
+    [invokeResult.responseJson],
   );
+  const latestChatObservedEvents = useMemo(() => {
+    const latestAssistantMessage = [...chatMessages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'assistant' && (message.events?.length ?? 0) > 0,
+      );
 
-  const startDockResize = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
-      if (isDockCollapsed) {
-        return;
-      }
-
-      event.preventDefault();
-      const startY = event.clientY;
-      const startHeight = dockHeight;
-
-      const handleMouseMove = (moveEvent: MouseEvent) => {
-        const nextHeight = Math.max(
-          180,
-          Math.min(420, startHeight + startY - moveEvent.clientY),
-        );
-        setDockHeight(nextHeight);
-      };
-
-      const handleMouseUp = () => {
-        window.removeEventListener("mousemove", handleMouseMove);
-        window.removeEventListener("mouseup", handleMouseUp);
-      };
-
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
-    },
-    [dockHeight, isDockCollapsed],
+    return latestAssistantMessage?.events ?? [];
+  }, [chatMessages]);
+  const observedEvents = useMemo(
+    () =>
+      invokeResult.events.length > 0
+        ? invokeResult.events
+        : latestChatObservedEvents,
+    [invokeResult.events, latestChatObservedEvents],
   );
+  const observedEventCount = observedEvents.length;
+
+  const bindingStatus =
+    bindingQuery.data?.deploymentStatus ||
+    (bindingQuery.data?.available ? 'ready' : 'missing');
 
   return (
-    <AevatarPageShell
-      content="Invoke Lab keeps parameters on the left, execution on the main stage, and deeper context in the drawer or lab console."
-      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
-      title="Invoke Lab"
-    >
-      <AevatarWorkbenchLayout
-        rail={
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <AevatarPanel
-              description="Load the current scope, then choose the published service and endpoint you want to probe."
-              title="Invocation Controls"
-            >
-              <ScopeQueryCard
-                draft={draft}
-                loadLabel="Load invoke lab"
-                onChange={setDraft}
-                onLoad={() => {
-                  const nextDraft = normalizeScopeDraft(draft);
-                  setPreserveEmptySelection(false);
-                  setDraft(nextDraft);
-                  setActiveDraft(nextDraft);
-                }}
-                onReset={() => {
-                  const nextDraft = normalizeScopeDraft({
-                    scopeId: resolvedScope?.scopeId ?? "",
-                  });
-                  setPreserveEmptySelection(true);
-                  setDraft(nextDraft);
-                  setActiveDraft(nextDraft);
-                  setSelectedServiceId("");
-                  setSelectedEndpointId("");
-                  setPrompt("");
-                  setPayloadTypeUrl("");
-                  setPayloadBase64("");
-                  setInvokeResult(createIdleResult());
-                }}
-                onUseResolvedScope={() => {
-                  if (!resolvedScope?.scopeId) {
-                    return;
-                  }
-
-                  const nextDraft = normalizeScopeDraft({
-                    scopeId: resolvedScope.scopeId,
-                  });
-                  setPreserveEmptySelection(false);
-                  setDraft(nextDraft);
-                  setActiveDraft(nextDraft);
-                }}
-                resolvedScopeId={resolvedScope?.scopeId}
-                resolvedScopeSource={resolvedScope?.scopeSource}
-              />
-
-              <Select
-                onChange={(value) => {
-                  setPreserveEmptySelection(false);
-                  setSelectedServiceId(value);
-                }}
-                options={serviceOptions}
-                placeholder="Select published service"
-                value={selectedServiceId || undefined}
-              />
-              <Select
-                onChange={setSelectedEndpointId}
-                options={endpointOptions}
-                placeholder="Select endpoint"
-                value={selectedEndpointId || undefined}
-              />
-              <Input.TextArea
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Prompt or payload text"
-                rows={5}
-                value={prompt}
-              />
-              {selectedEndpoint && !isChatEndpoint(selectedEndpoint) ? (
-                <>
-                  <Input
-                    onChange={(event) => setPayloadTypeUrl(event.target.value)}
-                    placeholder="Payload type URL"
-                    value={payloadTypeUrl}
-                  />
-                  <Input.TextArea
-                    onChange={(event) => setPayloadBase64(event.target.value)}
-                    placeholder="Payload base64"
-                    rows={3}
-                    value={payloadBase64}
-                  />
-                </>
-              ) : (
-                <Alert
-                  title="Chat endpoints stream SSE responses and emit run context events automatically."
-                  showIcon
-                  type="info"
-                />
-              )}
-              <Space wrap>
-                <Button
-                  aria-label={
-                    selectedEndpoint && isChatEndpoint(selectedEndpoint)
-                      ? "Stream chat"
-                      : "Invoke endpoint"
-                  }
-                  disabled={!selectedEndpointId}
-                  icon={<PlayCircleOutlined />}
-                  loading={invokeResult.status === "running"}
-                  onClick={() => void handleInvoke()}
-                  type="primary"
-                >
-                  {selectedEndpoint && isChatEndpoint(selectedEndpoint)
-                    ? "Stream chat"
-                    : "Invoke endpoint"}
-                </Button>
-                <Button
-                  aria-label="Abort"
-                  disabled={invokeResult.status !== "running"}
-                  icon={<StopOutlined />}
-                  onClick={handleAbort}
-                >
-                  Abort
-                </Button>
-              </Space>
-            </AevatarPanel>
-
-            <AevatarPanel
-              description="Keep the default binding visible while you choose a service and endpoint."
-              title="Current Binding"
-            >
-              {!bindingQuery.data?.available || !currentBindingRevision ? (
-                <Alert
-                  title="No published default binding is active for this project yet."
-                  showIcon
-                  type="info"
-                />
-              ) : (
-                <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                  <MetricCard
-                    label="Target"
-                    value={currentBindingTarget}
-                  />
-                  <MetricCard
-                    label="Revision"
-                    value={currentBindingRevision.revisionId}
-                  />
-                  <MetricCard
-                    label="Actor"
-                    value={currentBindingActor || "n/a"}
-                  />
-                  {currentBindingContext ? (
-                    <Typography.Text type="secondary">
-                      {currentBindingContext}
-                    </Typography.Text>
-                  ) : null}
-                  <Button
-                    onClick={() =>
-                      history.push(
-                        buildRuntimeGAgentsHref({
-                          scopeId,
-                          actorId:
-                            currentBindingRevision.staticPreferredActorId ||
-                            undefined,
-                          actorTypeName:
-                            currentBindingRevision.staticActorTypeName ||
-                            undefined,
-                        }),
-                      )
-                    }
-                  >
-                    Manage in GAgents
-                  </Button>
-                </Space>
-              )}
-            </AevatarPanel>
-          </div>
-        }
-        stage={
-          <div
-            style={{
-              display: "flex",
-              flex: 1,
-              flexDirection: "column",
-              gap: 16,
-              minHeight: 0,
-            }}
-          >
-            <AevatarPanel
-              description="The center stage stays focused on execution. Service catalog details and operator guidance move into the contextual drawer."
-              extra={
-                <Space wrap>
-                  <Button onClick={() => setContextSurface("service")}>
-                    Browse services
-                  </Button>
-                  <Button onClick={() => setContextSurface("insight")}>
-                    Open operator brief
-                  </Button>
-                  {invokeResult.status === "success" ? (
-                    <Button onClick={handleOpenRuns} type="primary">
-                      Continue in Runs
-                    </Button>
-                  ) : null}
-                </Space>
+    <AevatarPageShell pageHeaderRender={false} title="Invoke Lab">
+      <div style={viewportShellStyle}>
+        <style>
+          {`
+            @keyframes pulse {
+              0%, 100% { opacity: 1; }
+              50% { opacity: 0.45; }
+            }
+            @keyframes blink {
+              50% { opacity: 0; }
+            }
+            @keyframes bounce {
+              0%, 80%, 100% { transform: translateY(0); opacity: 0.7; }
+              40% { transform: translateY(-3px); opacity: 1; }
+            }
+          `}
+        </style>
+        <div style={pageHeaderStyle}>
+          <Space size={12}>
+            <Button
+              icon={<ArrowLeftOutlined />}
+              onClick={() =>
+                history.push(buildScopeHref('/scopes/overview', activeDraft))
               }
-              minHeight={320}
-              title="Execution Preview"
+              type="text"
             >
-              {!scopeId ? (
-                <Alert
-                  title="Select a project to load its published services."
-                  showIcon
-                  type="info"
-                />
-              ) : !selectedService ? (
-                <Alert
-                  title="No published project service is selected yet."
-                  showIcon
-                  type="warning"
-                />
-              ) : (
-                <>
-                  {invokeResult.status !== "idle" ? (
-                    <Alert
-                      description={
-                        invokeResult.error ||
-                        (invokeResult.status === "running"
-                          ? "Invocation in progress."
-                          : "Invocation completed.")
-                      }
-                      title={`${
-                        invokeResult.mode === "stream" ? "Streaming" : "Invoke"
-                      } · ${invokeResult.serviceId || selectedService.serviceId} / ${
-                        invokeResult.endpointId || selectedEndpointId || "endpoint"
-                      }`}
-                      showIcon
-                      type={
-                        invokeResult.status === "error"
-                          ? "error"
-                          : invokeResult.status === "success"
-                            ? "success"
-                            : "info"
-                      }
-                    />
-                  ) : (
-                    <Alert
-                      title="Ready to invoke"
-                      showIcon
-                      type="info"
-                    />
-                  )}
-
-                  <div
-                    style={{
-                      display: "grid",
-                      gap: 12,
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                    }}
-                  >
-                    <MetricCard label="Service" value={selectedService.displayName || selectedService.serviceId} />
-                    <MetricCard label="Endpoint" value={selectedEndpoint?.endpointId || "n/a"} />
-                    <MetricCard label="Run ID" value={invokeResult.runId || "n/a"} />
-                    <MetricCard label="Actor ID" value={invokeResult.actorId || "n/a"} />
-                  </div>
-
-                  <Alert
-                    showIcon
-                    title={
-                      invokeResult.status === "idle"
-                        ? "The lab console is ready for live events and invocation output."
-                        : invokeResult.status === "running"
-                          ? "Live data is streaming into the lab console."
-                          : "Open the lab console for the full event trace and response payload."
-                    }
-                    type={
-                      invokeResult.status === "error"
-                        ? "error"
-                        : invokeResult.status === "success"
-                          ? "success"
-                          : "info"
-                    }
-                  />
-                </>
-              )}
-            </AevatarPanel>
-          </div>
-        }
-      />
-
-      <InvokeLabDock
-        activeTab={dockTab}
-        dockHeight={dockHeight}
-        events={invokeResult.events}
-        isCollapsed={isDockCollapsed}
-        onResizeStart={startDockResize}
-        onTabChange={setDockTab}
-        outputPanels={outputPanels}
-        setCollapsed={setDockCollapsed}
-      />
-
-      <AevatarContextDrawer
-        onClose={() => setContextSurface(null)}
-        open={Boolean(contextSurface)}
-        subtitle={
-          contextSurface === "service"
-            ? selectedService
-              ? `${selectedService.namespace}/${selectedService.serviceId}`
-              : "Published service"
-            : "Recommended next step for the current invoke session"
-        }
-        title={
-          contextSurface === "service"
-            ? selectedService?.displayName || selectedService?.serviceId || "Service"
-            : "Operator Brief"
-        }
-        extra={
-          contextSurface === "insight" ? (
-            <Button onClick={recommendedNextStep.action} type="primary">
-              {recommendedNextStep.actionLabel}
+              Back
             </Button>
-          ) : null
-        }
-      >
-        {contextSurface === "insight" ? (
-          <>
-            <AevatarPanel
-              description="The operator brief keeps the next step out of the main stage until you need it."
-              title="Recommended Action"
-            >
-              <Space direction="vertical" size={10} style={{ width: "100%" }}>
-                <Typography.Text strong>{recommendedNextStep.title}</Typography.Text>
-                <Typography.Text type="secondary">
-                  {recommendedNextStep.description}
-                </Typography.Text>
-                <AevatarStatusTag
-                  domain="run"
-                  status={
-                    invokeResult.status === "idle" ? "draft" : invokeResult.status
-                  }
-                />
-                <Typography.Text type="secondary">
-                  {invokeResult.eventCount} observed events · Mode {invokeResult.mode}
-                </Typography.Text>
-              </Space>
-            </AevatarPanel>
-            <AevatarPanel title="Session Snapshot">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
                 style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  alignItems: 'center',
+                  display: 'inline-flex',
+                  flexWrap: 'wrap',
+                  gap: 6,
+                  maxWidth: '100%',
                 }}
               >
-                <MetricCard label="Project" value={scopeId || "n/a"} />
-                <MetricCard
-                  label="Service"
-                  value={selectedService?.displayName || selectedService?.serviceId || "n/a"}
-                />
-                <MetricCard
-                  label="Endpoint"
-                  value={selectedEndpoint?.displayName || selectedEndpoint?.endpointId || "n/a"}
-                />
-                <MetricCard label="Run ID" value={invokeResult.runId || "n/a"} />
+                <Typography.Text strong style={{ fontSize: 16 }}>
+                  Invoke Lab
+                </Typography.Text>
+                <AevatarHelpTooltip content="IDE-style runtime playground with a fixed console and inspector." />
               </div>
-            </AevatarPanel>
-          </>
-        ) : (
-          <ScopeServiceRuntimeWorkbench
-            onSelectService={(serviceId) => {
-              setPreserveEmptySelection(false);
-              setSelectedServiceId(serviceId);
-            }}
-            onUseEndpoint={(serviceId, endpointId) => {
-              setPreserveEmptySelection(false);
-              setSelectedServiceId(serviceId);
-              setSelectedEndpointId(endpointId);
-            }}
-            scopeId={scopeId}
-            selectedEndpointId={selectedEndpointId}
-            selectedServiceId={selectedServiceId}
-            services={services}
-          />
-        )}
-      </AevatarContextDrawer>
+            </div>
+          </Space>
+          <Space size={[8, 8]} wrap>
+            <AevatarStatusTag domain="run" status={invokeResult.status} />
+            {scopeId ? (
+              <Typography.Text code style={{ marginInlineStart: 4 }}>
+                {scopeId}
+              </Typography.Text>
+            ) : null}
+            <Button onClick={() => setContextSurface('service')}>
+              Browse services
+            </Button>
+            {invokeResult.status === 'success' ? (
+              <Button onClick={handleOpenRuns} type="primary">
+                Continue in Runs
+              </Button>
+            ) : null}
+          </Space>
+        </div>
+
+        <div style={workspaceViewportStyle}>
+          <div style={workspaceGridStyle}>
+            <div style={columnStyle}>
+              <ProCard
+                bodyStyle={viewportCardBodyStyle}
+                boxShadow={false}
+                headerBordered
+                style={viewportCardStyle}
+                title={
+                  <PaneTitle
+                    icon={<DeploymentUnitOutlined />}
+                    subtitle="Scope selector and reset controls."
+                    title="Invocation Controls"
+                  />
+                }
+              >
+                <div style={scrollColumnStyle}>
+                  <div style={sectionStyle}>
+                    <Typography.Text style={fieldLabelStyle}>
+                      Scope ID
+                    </Typography.Text>
+                    <Input
+                      allowClear
+                      placeholder="Enter project scopeId"
+                      value={draft.scopeId}
+                      onChange={(event) =>
+                        setDraft({
+                          scopeId: event.target.value,
+                        })
+                      }
+                      onPressEnter={handleLoad}
+                    />
+                    <Space size={[8, 8]} wrap>
+                      <Button type="primary" onClick={handleLoad}>
+                        Load invoke lab
+                      </Button>
+                      <Button onClick={handleReset}>Reset</Button>
+                    </Space>
+                  </div>
+
+                  <div style={sectionStyle}>
+                    <Typography.Text style={fieldLabelStyle}>
+                      Resolved project
+                    </Typography.Text>
+                    {resolvedScope?.scopeId ? (
+                      <>
+                        <Typography.Paragraph copyable style={codeBlockStyle}>
+                          {resolvedScope.scopeId}
+                        </Typography.Paragraph>
+                        <Typography.Text type="secondary">
+                          Resolved from the current session via{' '}
+                          {resolvedScope.scopeSource || 'session'}.
+                        </Typography.Text>
+                        {draft.scopeId.trim() !== resolvedScope.scopeId ? (
+                          <div>
+                            <Button size="small" onClick={handleUseResolvedScope}>
+                              Use resolved project
+                            </Button>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <Typography.Text type="secondary">
+                        No project scope was resolved from the current session.
+                      </Typography.Text>
+                    )}
+                  </div>
+                </div>
+              </ProCard>
+
+              <ProCard
+                bodyStyle={viewportCardBodyStyle}
+                boxShadow={false}
+                headerBordered
+                style={viewportGrowCardStyle}
+                title={
+                  <PaneTitle
+                    icon={<LinkOutlined />}
+                    subtitle="Published binding visible beside the playground."
+                    title="Current Binding"
+                  />
+                }
+              >
+                {!bindingQuery.data?.available || !currentBindingRevision ? (
+                  <Alert
+                    showIcon
+                    title="No published default binding is active for this project yet."
+                    type="info"
+                  />
+                ) : (
+                  <div style={scrollColumnStyle}>
+                    <div style={sectionStyle}>
+                      <Space size={[8, 8]} wrap>
+                        <AevatarStatusTag
+                          domain="governance"
+                          status={bindingStatus}
+                        />
+                        <Typography.Text strong>
+                          {bindingQuery.data.displayName ||
+                            bindingQuery.data.serviceId}
+                        </Typography.Text>
+                      </Space>
+                      <MetricRow
+                        icon={<LinkOutlined />}
+                        label="Target"
+                        value={currentBindingTarget}
+                      />
+                      <MetricRow
+                        icon={<CodeOutlined />}
+                        label="Revision"
+                        value={currentBindingRevision.revisionId}
+                      />
+                      <MetricRow
+                        icon={<DeploymentUnitOutlined />}
+                        label="Actor"
+                        value={currentBindingActor || 'n/a'}
+                      />
+                      {currentBindingContext ? (
+                        <Typography.Text type="secondary">
+                          {currentBindingContext}
+                        </Typography.Text>
+                      ) : null}
+                      <Button
+                        onClick={() =>
+                          history.push(
+                            buildRuntimeGAgentsHref({
+                              scopeId,
+                              actorId:
+                                currentBindingRevision.primaryActorId ||
+                                undefined,
+                              actorTypeName:
+                                currentBindingRevision.staticActorTypeName ||
+                                undefined,
+                            }),
+                          )
+                        }
+                      >
+                        Manage in GAgents
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </ProCard>
+            </div>
+
+            <ProCard
+              bodyStyle={viewportCardBodyStyle}
+              boxShadow={false}
+              headerBordered
+              style={viewportFillCardStyle}
+              title={
+                <PaneTitle
+                  icon={<CodeOutlined />}
+                  subtitle="Prompt and payload staging surface."
+                  title="Playground"
+                />
+              }
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  flex: 1,
+                  flexDirection: 'column',
+                  gap: 12,
+                  minHeight: 0,
+                }}
+              >
+                <Space size={[8, 8]} wrap>
+                  <AevatarStatusTag domain="run" status={invokeResult.status} />
+                  {selectedService ? (
+                    <Typography.Text type="secondary">
+                      {selectedService.displayName || selectedService.serviceId}
+                    </Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary">
+                      No service selected
+                    </Typography.Text>
+                  )}
+                  {selectedEndpoint ? (
+                    <Typography.Text type="secondary">
+                      /{' '}
+                      {selectedEndpoint.displayName ||
+                        selectedEndpoint.endpointId}
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+
+                {isChatPlayground ? (
+                  <div style={playgroundChatShellStyle}>
+                    <InvokeLabConsole
+                      activeTab={dockTab}
+                      chatPanel={
+                        <div style={playgroundChatMessagesStyle}>
+                          {!scopeId ? (
+                            <Alert
+                              showIcon
+                              title="Select a project to start chatting with a published service."
+                              type="info"
+                            />
+                          ) : !selectedService || !selectedEndpoint ? (
+                            <Alert
+                              showIcon
+                              title="Choose a published service and chat endpoint first."
+                              type="info"
+                            />
+                          ) : chatMessages.length === 0 ? (
+                            <EmptyChatState
+                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through Invoke Lab while keeping raw runtime observation close by.`}
+                              title={
+                                selectedService.displayName ||
+                                selectedService.serviceId
+                              }
+                            />
+                          ) : (
+                            chatMessages.map((message) => (
+                              <ChatMessageBubble
+                                key={message.id}
+                                message={message}
+                              />
+                            ))
+                          )}
+                          <div ref={scrollAnchorRef} />
+                        </div>
+                      }
+                      events={observedEvents}
+                      fillHeight
+                      hasChatContent={chatMessages.length > 0}
+                      onClear={handleClearConsole}
+                      onTabChange={setDockTab}
+                      outputPanels={outputPanels}
+                    />
+
+                    <div style={playgroundChatComposerStyle}>
+                      <div style={{ margin: '0 auto', maxWidth: 840 }}>
+                        <ChatInput
+                          disabled={!scopeId || !selectedService || !selectedEndpoint}
+                          isStreaming={invokeResult.status === 'running'}
+                          onChange={setPrompt}
+                          onSend={() => void handleInvoke()}
+                          onStop={handleAbort}
+                          value={prompt}
+                        />
+                        <ChatMetaStrip
+                          actorId={invokeResult.actorId || undefined}
+                          commandId={invokeResult.commandId || undefined}
+                          runId={invokeResult.runId || undefined}
+                          scopeId={scopeId || undefined}
+                          serviceId={selectedService?.serviceId}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flex: 1, flexDirection: 'column', gap: 12, minHeight: 0 }}>
+                    <div style={editorShellStyle}>
+                      <div
+                        style={{
+                          alignItems: 'center',
+                          borderBottom: '1px solid var(--ant-color-border-secondary)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          padding: '10px 12px',
+                        }}
+                      >
+                        <div
+                          style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+                        >
+                          <Typography.Text strong>
+                            Prompt / Payload
+                          </Typography.Text>
+                          <Typography.Text type="secondary">
+                            Use the editor for operator input. Advanced typed payload
+                            stays in the inspector.
+                          </Typography.Text>
+                        </div>
+                      </div>
+                      <div style={editorViewportStyle}>
+                        <InvokeCodeEditor
+                          ariaLabel="Prompt or payload editor"
+                          language="plaintext"
+                          onChange={setPrompt}
+                          placeholder="Prompt or payload text"
+                          value={prompt}
+                        />
+                      </div>
+                      <div style={editorActionBarStyle}>
+                        <Space size={[8, 8]} wrap>
+                          <Button
+                            aria-label="Invoke endpoint"
+                            disabled={!selectedEndpointId}
+                            icon={<PlayCircleOutlined />}
+                            loading={invokeResult.status === 'running'}
+                            onClick={() => void handleInvoke()}
+                            type="primary"
+                          >
+                            Invoke endpoint
+                          </Button>
+                          <Button
+                            aria-label="Abort"
+                            danger
+                            disabled={invokeResult.status !== 'running'}
+                            icon={<StopOutlined />}
+                            onClick={handleAbort}
+                          >
+                            Abort
+                          </Button>
+                        </Space>
+                      </div>
+                    </div>
+
+                    <InvokeLabConsole
+                      activeTab={dockTab}
+                      chatPanel={null}
+                      events={observedEvents}
+                      hasChatContent={false}
+                      onClear={handleClearConsole}
+                      onTabChange={setDockTab}
+                      outputPanels={outputPanels}
+                    />
+                  </div>
+                )}
+              </div>
+            </ProCard>
+
+            <ProCard
+              bodyStyle={viewportCardBodyStyle}
+              boxShadow={false}
+              headerBordered
+              style={viewportFillCardStyle}
+              title={
+                <PaneTitle
+                  icon={<AppstoreOutlined />}
+                  subtitle="Service, endpoint, and execution context."
+                  title="Inspector"
+                />
+              }
+            >
+              <div style={scrollColumnStyle}>
+                <div style={sectionStyle}>
+                  <SectionTitle
+                    icon={<AppstoreOutlined />}
+                    title="Select Service"
+                  />
+                  <Select
+                    onChange={(value) => {
+                      setPreserveEmptySelection(false);
+                      serviceSelectionSourceRef.current = 'manual';
+                      setSelectedServiceId(value);
+                    }}
+                    options={serviceOptions}
+                    placeholder="Select published service"
+                    value={selectedServiceId || undefined}
+                  />
+                </div>
+
+                <div style={sectionStyle}>
+                  <SectionTitle icon={<ApiOutlined />} title="Select Endpoint" />
+                  <Select
+                    onChange={setSelectedEndpointId}
+                    options={endpointOptions}
+                    placeholder="Select endpoint"
+                    value={selectedEndpointId || undefined}
+                  />
+                  {selectedEndpoint && !isChatEndpoint(selectedEndpoint) ? (
+                    <>
+                      <Typography.Text style={fieldLabelStyle}>
+                        Payload Type URL
+                      </Typography.Text>
+                      <Input
+                        onChange={(event) =>
+                          setPayloadTypeUrl(event.target.value)
+                        }
+                        placeholder="Payload type URL"
+                        value={payloadTypeUrl}
+                      />
+                      <Typography.Text style={fieldLabelStyle}>
+                        Payload Base64
+                      </Typography.Text>
+                      <Input.TextArea
+                        onChange={(event) => setPayloadBase64(event.target.value)}
+                        placeholder="Payload base64"
+                        rows={5}
+                        style={{ fontFamily: monoFontFamily }}
+                        value={payloadBase64}
+                      />
+                    </>
+                  ) : null}
+                </div>
+
+                <div style={sectionStyle}>
+                  <SectionTitle
+                    icon={<DeploymentUnitOutlined />}
+                    title="Execution Preview"
+                  />
+                  {!scopeId ? (
+                    <Alert
+                      showIcon
+                      title="Select a project to load its published services."
+                      type="info"
+                    />
+                  ) : !selectedService ? (
+                    <Alert
+                      showIcon
+                      title="No published project service is selected yet."
+                      type="warning"
+                    />
+                  ) : (
+                    <>
+                      {invokeResult.status !== 'idle' ? (
+                        <Alert
+                          description={
+                            invokeResult.error ||
+                            (invokeResult.status === 'running'
+                              ? 'Invocation in progress.'
+                              : 'Invocation completed.')
+                          }
+                          showIcon
+                          title={`${
+                            invokeResult.mode === 'stream' ? 'Streaming' : 'Invoke'
+                          } · ${invokeResult.serviceId || selectedService.serviceId} / ${
+                            invokeResult.endpointId ||
+                            selectedEndpointId ||
+                            'endpoint'
+                          }`}
+                          type={
+                            invokeResult.status === 'error'
+                              ? 'error'
+                              : invokeResult.status === 'success'
+                                ? 'success'
+                                : 'info'
+                          }
+                        />
+                      ) : null}
+                      <MetricRow
+                        icon={<AppstoreOutlined />}
+                        label="Service"
+                        value={
+                          selectedService.displayName || selectedService.serviceId
+                        }
+                      />
+                      <MetricRow
+                        icon={<ApiOutlined />}
+                        label="Endpoint"
+                        value={selectedEndpoint?.endpointId || 'n/a'}
+                      />
+                      <MetricRow
+                        icon={<CodeOutlined />}
+                        label="Run ID"
+                        value={invokeResult.runId || 'n/a'}
+                      />
+                      <MetricRow
+                        icon={<DeploymentUnitOutlined />}
+                        label="Actor ID"
+                        value={invokeResult.actorId || 'n/a'}
+                      />
+                      <div
+                        style={{
+                          borderTop:
+                            '1px solid var(--ant-color-border-secondary)',
+                          paddingTop: 10,
+                        }}
+                      >
+                        <Typography.Text strong>
+                          {recommendedNextStep.title}
+                        </Typography.Text>
+                        <Typography.Paragraph
+                          style={{ marginBottom: 10, marginTop: 6 }}
+                          type="secondary"
+                        >
+                          {recommendedNextStep.description}
+                        </Typography.Paragraph>
+                        <Space size={[8, 8]} wrap>
+                          <Button
+                            aria-label={
+                              recommendedNextStep.actionLabel ===
+                              'Continue in Runs'
+                                ? 'Continue in Runs from lab console'
+                                : recommendedNextStep.actionLabel
+                            }
+                            onClick={recommendedNextStep.action}
+                          >
+                            {recommendedNextStep.actionLabel}
+                          </Button>
+                          <Typography.Text type="secondary">
+                            {observedEventCount} observed events
+                          </Typography.Text>
+                        </Space>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </ProCard>
+          </div>
+        </div>
+
+        {contextSurface === 'service' ? (
+          <AevatarContextDrawer
+            onClose={() => setContextSurface(null)}
+            open
+            subtitle={
+              selectedService
+                ? `${selectedService.namespace}/${selectedService.serviceId}`
+                : 'Published service'
+            }
+            title={
+              selectedService?.displayName ||
+              selectedService?.serviceId ||
+              'Service'
+            }
+          >
+            <ScopeServiceRuntimeWorkbench
+              onSelectService={(serviceId) => {
+                setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
+                setSelectedServiceId(serviceId);
+              }}
+              onUseEndpoint={(serviceId, endpointId) => {
+                setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
+                setSelectedServiceId(serviceId);
+                setSelectedEndpointId(endpointId);
+              }}
+              scopeId={scopeId}
+              selectedEndpointId={selectedEndpointId}
+              selectedServiceId={selectedServiceId}
+              services={publishedServices}
+            />
+          </AevatarContextDrawer>
+        ) : null}
+      </div>
     </AevatarPageShell>
   );
 };
 
-const MetricCard: React.FC<{
-  label: string;
-  value: React.ReactNode;
-}> = ({ label, value }) => (
-  <div
-    style={{
-      background: "var(--ant-color-fill-quaternary)",
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 4,
-      padding: 12,
-    }}
-  >
-    <Typography.Text type="secondary">{label}</Typography.Text>
-    <Typography.Text strong>{value}</Typography.Text>
+const PaneTitle: React.FC<{
+  icon: React.ReactNode;
+  subtitle: string;
+  title: string;
+}> = ({ icon, subtitle, title }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Space size={8}>
+      <span style={{ color: 'var(--ant-color-text-secondary)' }}>{icon}</span>
+      <Typography.Text strong>{title}</Typography.Text>
+    </Space>
+    <Typography.Text type="secondary">{subtitle}</Typography.Text>
   </div>
 );
+
+const SectionTitle: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+}> = ({ icon, title }) => (
+  <Space size={8}>
+    <span style={{ color: 'var(--ant-color-text-secondary)' }}>{icon}</span>
+    <Typography.Text strong>{title}</Typography.Text>
+  </Space>
+);
+
+const MetricRow: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  value: React.ReactNode;
+}> = ({ icon, label, value }) => (
+  <div style={metricRowStyle}>
+    <span style={{ color: 'var(--ant-color-text-secondary)', marginTop: 2 }}>
+      {icon}
+    </span>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}
+    >
+      <Typography.Text style={fieldLabelStyle}>{label}</Typography.Text>
+      <Typography.Text style={fieldValueStyle}>{value}</Typography.Text>
+    </div>
+  </div>
+);
+
+const InvokeCodeEditor: React.FC<{
+  ariaLabel: string;
+  language: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  value: string;
+}> = ({ ariaLabel, language, onChange, placeholder, value }) => {
+  const MonacoEditor = useMemo(() => resolveMonacoEditorComponent(), []);
+
+  if (!MonacoEditor) {
+    return (
+      <textarea
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        style={editorFallbackStyle}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+
+  return (
+    <MonacoEditor
+      ariaLabel={ariaLabel}
+      defaultLanguage={language}
+      height="100%"
+      language={language}
+      onChange={(nextValue) => onChange(nextValue ?? '')}
+      options={{
+        automaticLayout: true,
+        fontFamily: monoFontFamily,
+        fontLigatures: false,
+        fontSize: 13,
+        glyphMargin: false,
+        lineNumbers: 'on',
+        minimap: { enabled: false },
+        padding: { top: 14, bottom: 84 },
+        renderLineHighlight: 'line',
+        roundedSelection: false,
+        scrollBeyondLastLine: false,
+        smoothScrolling: true,
+        wordWrap: 'on',
+      }}
+      path={`file:///invoke-lab/${language}.txt`}
+      placeholder={placeholder}
+      theme="vs"
+      value={value}
+    />
+  );
+};
 
 const CodePanel: React.FC<{
   title: string;
   value: string;
 }> = ({ title, value }) => (
-  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-    <Typography.Text strong>{title}</Typography.Text>
-    <pre
-      style={{
-        background: "var(--ant-color-fill-quaternary)",
-        border: "1px solid var(--ant-color-border-secondary)",
-        borderRadius: 12,
-        margin: 0,
-        maxHeight: 320,
-        overflow: "auto",
-        padding: 12,
-        whiteSpace: "pre-wrap",
-      }}
-    >
-      {value}
-    </pre>
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <Space size={8}>
+      <CodeOutlined />
+      <Typography.Text strong>{title}</Typography.Text>
+    </Space>
+    <pre style={codeBlockStyle}>{value}</pre>
   </div>
 );
 
-const InvokeLabDock: React.FC<{
+const InvokeLabConsole: React.FC<{
   activeTab: InvokeDockTab;
-  dockHeight: number;
-  events: AGUIEvent[];
-  isCollapsed: boolean;
-  onResizeStart: (event: React.MouseEvent<HTMLDivElement>) => void;
+  chatPanel: React.ReactNode | null;
+  events: RuntimeEvent[];
+  fillHeight?: boolean;
+  hasChatContent: boolean;
+  onClear: () => void;
   onTabChange: (tab: InvokeDockTab) => void;
   outputPanels: { title: string; value: string }[];
-  setCollapsed: (collapsed: boolean) => void;
 }> = ({
   activeTab,
-  dockHeight,
+  chatPanel,
   events,
-  isCollapsed,
-  onResizeStart,
+  fillHeight,
+  hasChatContent,
+  onClear,
   onTabChange,
   outputPanels,
-  setCollapsed,
 }) => (
-  <div
-    style={{
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flex: `0 0 ${isCollapsed ? 54 : dockHeight}px`,
-      flexDirection: "column",
-      minHeight: isCollapsed ? 54 : 188,
-      overflow: "hidden",
+  <ProCard
+    bodyStyle={{
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      minHeight: 0,
+      overflow: 'hidden',
+      padding: 0,
     }}
+    boxShadow={false}
+    headerBordered={false}
+    style={fillHeight ? { ...consoleShellStyle, flex: '1 1 0' } : consoleShellStyle}
   >
-    <hr
-      aria-label="Resize lab console"
-      onMouseDown={onResizeStart}
-      style={{
-        background: "var(--ant-color-fill-tertiary)",
-        border: 0,
-        cursor: isCollapsed ? "default" : "row-resize",
-        flex: "0 0 8px",
-        margin: 0,
-      }}
-    />
     <div
       style={{
-        alignItems: "center",
-        borderBottom: "1px solid var(--ant-color-border-secondary)",
-        display: "flex",
+        alignItems: 'center',
+        borderBottom: '1px solid var(--ant-color-border-secondary)',
+        display: 'flex',
         gap: 12,
-        justifyContent: "space-between",
-        padding: "12px 16px",
+        justifyContent: 'space-between',
+        padding: '10px 12px',
       }}
     >
-      <Space wrap size={[8, 8]}>
+      <Space size={[8, 8]} wrap>
         <Typography.Text strong>Lab Console</Typography.Text>
+        {chatPanel ? (
+          <Button
+            aria-label="Chat"
+            icon={<CodeOutlined />}
+            onClick={() => onTabChange('chat')}
+            type={activeTab === 'chat' ? 'primary' : 'default'}
+          >
+            Chat
+          </Button>
+        ) : null}
         <Button
-          icon={<BorderBottomOutlined />}
-          onClick={() => onTabChange("events")}
-          type={activeTab === "events" ? "primary" : "default"}
+          aria-label="Observed Events"
+          icon={<UnorderedListOutlined />}
+          onClick={() => onTabChange('events')}
+          type={activeTab === 'events' ? 'primary' : 'default'}
         >
           Observed Events
         </Button>
+        {!chatPanel || outputPanels.length > 0 ? (
+          <Button
+            aria-label="Output"
+            icon={<CodeOutlined />}
+            onClick={() => onTabChange('output')}
+            type={activeTab === 'output' ? 'primary' : 'default'}
+          >
+            Output
+          </Button>
+        ) : null}
+      </Space>
+      <Space size={[8, 8]} wrap>
         <Button
-          onClick={() => onTabChange("output")}
-          type={activeTab === "output" ? "primary" : "default"}
+          disabled={!hasChatContent && events.length === 0 && outputPanels.length === 0}
+          icon={<ClearOutlined />}
+          onClick={onClear}
         >
-          Output
+          Clear
         </Button>
       </Space>
-      <Button onClick={() => setCollapsed(!isCollapsed)}>
-        {isCollapsed ? "Expand Console" : "Collapse Console"}
-      </Button>
     </div>
-    {!isCollapsed ? (
-      <div
-        style={{
-          display: "flex",
-          flex: 1,
-          flexDirection: "column",
-          minHeight: 0,
-          overflow: "auto",
-          padding: 16,
-        }}
-      >
-        {activeTab === "events" ? (
-          events.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {events.slice(-16).map((event, index) => (
+
+    <div style={consoleBodyStyle}>
+      {activeTab === 'chat' ? (
+        chatPanel ?? (
+          <Empty
+            description="No chat content has been observed yet."
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        )
+      ) : activeTab === 'events' ? (
+        events.length > 0 ? (
+          <div style={scrollColumnStyle}>
+            <RuntimeEventPreviewPanel
+              events={events}
+              title={`Observed Events (${events.length})`}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Typography.Text type="secondary">
+                Latest raw payloads
+              </Typography.Text>
+              {events.slice(-6).map((event, index) => (
                 <div
                   key={getEventKey(event, index)}
                   style={{
-                    border: "1px solid var(--ant-color-border-secondary)",
-                    borderRadius: 12,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 6,
-                    padding: 12,
+                    border: '1px solid var(--ant-color-border-secondary)',
+                    borderRadius: 6,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    padding: 10,
                   }}
                 >
-                  <Space wrap size={[8, 8]}>
+                  <Space size={[8, 8]} wrap>
                     <AevatarStatusTag domain="observation" status="streaming" />
                     <Typography.Text strong>{event.type}</Typography.Text>
                   </Space>
-                  <Typography.Text type="secondary">
+                  <pre style={codeBlockStyle}>
                     {JSON.stringify(event, null, 2)}
-                  </Typography.Text>
+                  </pre>
                 </div>
               ))}
             </div>
-          ) : (
-            <Empty
-              description="No events have been observed yet."
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
-          )
-        ) : outputPanels.length > 0 ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {outputPanels.map((panel) => (
-              <CodePanel key={panel.title} title={panel.title} value={panel.value} />
-            ))}
           </div>
         ) : (
           <Empty
-            description="Invocation output will appear here after you stream or invoke a service."
+            description="No events have been observed yet."
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
-        )}
-      </div>
-    ) : null}
-  </div>
+        )
+      ) : outputPanels.length > 0 ? (
+        <div style={scrollColumnStyle}>
+          {outputPanels.map((panel) => (
+            <CodePanel
+              key={panel.title}
+              title={panel.title}
+              value={panel.value}
+            />
+          ))}
+        </div>
+      ) : (
+        <Empty
+          description="Invocation output will appear here after you stream or invoke a service."
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+        />
+      )}
+    </div>
+  </ProCard>
 );
 
 export default ScopeInvokePage;

@@ -158,6 +158,56 @@ public sealed class ChatRuntimeStreamingBufferTests
     }
 
     [Fact]
+    public async Task ChatStreamAsync_WhenFinalRoundParsesTextToolCall_ShouldIncludeToolResultInSummaryRequest()
+    {
+        var provider = new QueuedStreamingProvider(
+        [
+            [
+                new LLMStreamChunk
+                {
+                    DeltaToolCall = new ToolCall
+                    {
+                        Id = "tc-initial",
+                        Name = "lookup",
+                        ArgumentsJson = "{\"q\":\"initial\"}",
+                    },
+                },
+            ],
+            [
+                new LLMStreamChunk
+                {
+                    DeltaContent = """
+                        <function_calls>
+                        <invoke name="lookup">
+                        <parameter name="q">final</parameter>
+                        </invoke>
+                        </function_calls>
+                        """,
+                },
+            ],
+            [
+                new LLMStreamChunk { DeltaContent = "summary-ready" },
+            ],
+        ]);
+        var tools = new ToolManager();
+        tools.Register(new DelegateTool("lookup", args => $"RESULT:{args}"));
+        var runtime = CreateRuntime(provider, streamBufferCapacity: 2, tools: tools);
+
+        var output = new StringBuilder();
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
+        {
+            if (!string.IsNullOrEmpty(chunk.DeltaContent))
+                output.Append(chunk.DeltaContent);
+        }
+
+        output.ToString().Should().Contain("summary-ready");
+        provider.StreamRequests.Should().HaveCount(3);
+        provider.StreamRequests[2].Messages.Any(m =>
+            m.Role == "tool" &&
+            m.Content == "RESULT:{\"q\":\"final\"}").Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ChatStreamAsync_WhenRequestIdentityProvided_ShouldForwardRequestIdAndMergeMetadata()
     {
         var provider = new StreamingProvider(["A"]);

@@ -15,6 +15,7 @@ export type RuntimeEventType =
   | 'STEP_FINISHED'
   | 'TOOL_CALL_START'
   | 'TOOL_CALL_END'
+  | 'TOOL_APPROVAL_REQUEST'
   | 'HUMAN_INPUT_REQUEST'
   | 'CUSTOM'
   | 'STATE_SNAPSHOT';
@@ -56,6 +57,7 @@ const ONEOF_KEY_MAP: Record<string, RuntimeEventType> = {
   stepFinished: 'STEP_FINISHED',
   toolCallStart: 'TOOL_CALL_START',
   toolCallEnd: 'TOOL_CALL_END',
+  toolApprovalRequest: 'TOOL_APPROVAL_REQUEST',
   humanInputRequest: 'HUMAN_INPUT_REQUEST',
   custom: 'CUSTOM',
   stateSnapshot: 'STATE_SNAPSHOT',
@@ -167,6 +169,18 @@ export function normalizeBackendSseFrame(raw: unknown): RuntimeEvent | null {
           type: 'TOOL_CALL_END', timestamp,
           toolCallId: d ? str(d, 'toolCallId') : '',
           result: d ? str(d, 'result') : '',
+        };
+      }
+      case 'TOOL_APPROVAL_REQUEST': {
+        const d = nested;
+        return {
+          type: 'TOOL_APPROVAL_REQUEST', timestamp,
+          requestId: d ? str(d, 'requestId') : '',
+          toolName: d ? str(d, 'toolName') : '',
+          toolCallId: d ? str(d, 'toolCallId') : '',
+          argumentsJson: d ? str(d, 'argumentsJson') : '',
+          isDestructive: d ? !!d.isDestructive : false,
+          timeoutSeconds: d && typeof d.timeoutSeconds === 'number' ? d.timeoutSeconds : 15,
         };
       }
       case 'HUMAN_INPUT_REQUEST': {

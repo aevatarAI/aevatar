@@ -575,8 +575,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            description="This service-level posture is the fastest way to confirm what the selected project service is actually serving right now."
             title="Runtime Posture"
+            titleHelp="This service-level posture is the fastest way to confirm what the selected project service is actually serving right now."
           >
             <div
               style={{
@@ -634,8 +634,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
           </AevatarPanel>
 
           <AevatarPanel
-            description="Operators can switch endpoints from here without losing the current scope and service context."
             title="Endpoint Surface"
+            titleHelp="Operators can switch endpoints from here without losing the current scope and service context."
           >
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {selectedService.endpoints.length > 0 ? (
@@ -708,7 +708,6 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            description="Scope-specific bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
             extra={
               <Button
                 icon={<PlusOutlined />}
@@ -722,6 +721,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
               </Button>
             }
             title="Dependency Surface"
+            titleHelp="Scope-specific bindings describe which services, connectors, or secrets this published service is allowed to depend on inside the project."
           >
             {bindingsQuery.error ? (
               <Alert
@@ -750,8 +750,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            description="Revisions tell you which artifact is serving now and which historical versions are still available or ready to retire."
             title="Revision Catalog"
+            titleHelp="Revisions tell you which artifact is serving now and which historical versions are still available or ready to retire."
           >
             {revisionsQuery.error ? (
               <Alert
@@ -772,8 +772,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
 
           {currentRevision ? (
             <AevatarPanel
-              description="The selected revision stays expanded here so operators can compare implementation target, serving posture, and actor assignment without leaving the tab."
               title="Selected Revision"
+              titleHelp="The selected revision stays expanded here so operators can compare implementation target, serving posture, and actor assignment without leaving the tab."
             >
               <div
                 style={{
@@ -798,11 +798,7 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
                 />
                 <RuntimeMetricCard
                   label="Actor"
-                  value={
-                    currentRevision.primaryActorId ||
-                    currentRevision.staticPreferredActorId ||
-                    "n/a"
-                  }
+                  value={currentRevision.primaryActorId || "n/a"}
                 />
               </div>
               {describeStudioScopeBindingRevisionContext(currentRevision) ? (
@@ -828,8 +824,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       children: selectedService ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <AevatarPanel
-            description="Recent runs are the shortest path from a published service to a traceable execution posture."
             title="Recent Runs"
+            titleHelp="Recent runs are the shortest path from a published service to a traceable execution posture."
           >
             {runsQuery.error ? (
               <Alert
@@ -850,8 +846,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
 
           {selectedRunAuditTarget ? (
             <AevatarPanel
-              description="Audit detail keeps the latest selected run in view so operators can understand failure posture or completion depth before opening full Runs."
               title="Run Audit"
+              titleHelp="Audit detail keeps the latest selected run in view so operators can understand failure posture or completion depth before opening full Runs."
             >
               {selectedRunAuditQuery.error ? (
                 <Alert
@@ -1012,8 +1008,8 @@ const ScopeServiceRuntimeWorkbench: React.FC<ScopeServiceRuntimeWorkbenchProps> 
       {messageContextHolder}
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <AevatarPanel
-          description="Operators stay in the same drawer while switching between published services in the current project."
           title="Published Services"
+          titleHelp="Operators stay in the same drawer while switching between published services in the current project."
         >
           {services.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

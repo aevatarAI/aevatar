@@ -272,15 +272,18 @@ const ServicesPage: React.FC = () => {
 
   return (
     <AevatarPageShell
-      content="Services now live inside a single high-density workbench. Catalog rows stay on stage while lifecycle detail, deployment posture, and governance context move into the right-side inspector."
+      layoutMode="document"
       title="Services"
+      titleHelp="Services now live inside a single high-density workbench. Catalog rows stay on stage while lifecycle detail, deployment posture, and governance context move into the right-side inspector."
     >
       <AevatarWorkbenchLayout
+        layoutMode="document"
         rail={
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
-              description="Filter the raw tenant/app/namespace surface when you need operator-level diagnostics."
+              layoutMode="document"
               title="Scope"
+              titleHelp="Filter the raw tenant/app/namespace surface when you need operator-level diagnostics."
             >
               <ServiceQueryCard
                 draft={draft}
@@ -295,7 +298,7 @@ const ServicesPage: React.FC = () => {
               />
             </AevatarPanel>
 
-            <AevatarPanel title="Control Digest">
+            <AevatarPanel layoutMode="document" title="Control Digest">
               <div
                 style={{
                   display: "grid",
@@ -322,7 +325,7 @@ const ServicesPage: React.FC = () => {
               </div>
             </AevatarPanel>
 
-            <AevatarPanel title="Next Actions">
+            <AevatarPanel layoutMode="document" title="Next Actions">
               <Space direction="vertical" size={8} style={{ width: "100%" }}>
                 <Button onClick={() => history.push("/deployments")}>
                   Open Deployments
@@ -339,8 +342,9 @@ const ServicesPage: React.FC = () => {
         }
         stage={
           <AevatarPanel
-            description="The stage keeps service identity, serving posture, and operator actions visible at once. Deep lifecycle detail only appears when you explicitly inspect a service."
+            layoutMode="document"
             title="Service Workbench"
+            titleHelp="The stage keeps service identity, serving posture, and operator actions visible at once. Deep lifecycle detail only appears when you explicitly inspect a service."
           >
             {servicesQuery.error ? (
               <Alert
@@ -429,8 +433,8 @@ const ServicesPage: React.FC = () => {
         ) : (
           <>
             <AevatarPanel
-              description="Core service identity and current serving posture."
               title="Lifecycle Snapshot"
+              titleHelp="Core service identity and current serving posture."
             >
               <div style={summaryFieldGridStyle}>
                 <SummaryField label="Service key" value={selectedService.serviceKey} />
@@ -456,8 +460,8 @@ const ServicesPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="Endpoint surface stays compact here so the stage can focus on service cards."
               title="Endpoints"
+              titleHelp="Endpoint surface stays compact here so the stage can focus on service cards."
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {selectedService.endpoints.length > 0 ? (
@@ -500,8 +504,8 @@ const ServicesPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel
-              description="Revision, deployment, and traffic signals are grouped here instead of split across dedicated pages."
               title="Rollout Posture"
+              titleHelp="Revision, deployment, and traffic signals are grouped here instead of split across dedicated pages."
             >
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <RolloutDigestSection

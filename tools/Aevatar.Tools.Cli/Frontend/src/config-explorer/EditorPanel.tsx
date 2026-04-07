@@ -3,6 +3,7 @@ import { Loader2, ExternalLink, Pencil, Save, X, Trash2 } from 'lucide-react';
 import type { ManifestEntry } from './types';
 import RolesCatalogEditor from './editors/RolesCatalogEditor';
 import ConnectorsCatalogEditor from './editors/ConnectorsCatalogEditor';
+import UserConfigEditor from './editors/UserConfigEditor';
 import ExplorerContentView from './ExplorerContentView';
 
 type Props = {
@@ -43,9 +44,10 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
   const fileType = entry?.type ?? 'file';
   const isReadOnly = fileType === 'workflow' || fileType === 'script';
 
-  // Rich editors for roles and connectors
+  // Rich editors for specific file types
   if (fileType === 'roles') return <RolesCatalogEditor flash={flash} />;
   if (fileType === 'connectors') return <ConnectorsCatalogEditor flash={flash} />;
+  if (fileType === 'config') return <UserConfigEditor flash={flash} />;
 
   const fileName = selectedKey.split('/').pop() || selectedKey;
 
@@ -104,7 +106,7 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
           {(fileType === 'workflow' || fileType === 'script') && onOpenInStudio && (
             <button
               onClick={() => onOpenInStudio(fileType, selectedKey)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[#EEEAE4] bg-white px-3 py-1.5 text-[12px] font-semibold text-gray-700 hover:bg-[#FAF8F4]"
+              className="ghost-action !min-h-[34px]"
             >
               <ExternalLink size={12} /> Open in Studio
             </button>
@@ -112,7 +114,7 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
           {!isReadOnly && !editing ? (
             <button
               onClick={startEditing}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333]"
+              className="solid-action !min-h-[34px]"
             >
               <Pencil size={12} /> Edit
             </button>
@@ -121,13 +123,13 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
               <button
                 onClick={handleSave}
                 disabled={saving}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[#18181B] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#333] disabled:opacity-50"
+                className="solid-action !min-h-[34px] disabled:opacity-50"
               >
                 {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Save
               </button>
               <button
                 onClick={cancelEditing}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#EEEAE4] bg-white px-3 py-1.5 text-[12px] font-semibold text-gray-700 hover:bg-[#FAF8F4]"
+                className="ghost-action !min-h-[34px]"
               >
                 <X size={12} /> Cancel
               </button>
@@ -155,12 +157,12 @@ export default function EditorPanel({ selectedKey, content, loading, manifest, o
       </div>
 
       {/* Content */}
-      <div className="rounded-2xl border border-[#EEEAE4] bg-white p-1">
+      <div className="workspace-editor-frame">
         {editing ? (
           <textarea
             value={editContent}
             onChange={e => setEditContent(e.target.value)}
-            className="w-full min-h-[400px] max-h-[70vh] p-4 text-[13px] font-mono leading-relaxed text-gray-700 resize-y outline-none"
+            className="panel-textarea !min-h-[400px] !max-h-[70vh] !border-0 !bg-transparent !shadow-none p-4"
             spellCheck={false}
           />
         ) : (

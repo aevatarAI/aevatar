@@ -40,6 +40,8 @@ public sealed class ChronoStorageAgentToolSource : IAgentToolSource
             new ChronoFileReadTool(_client),
             new ChronoFileWriteTool(_client),
             new ChronoFileEditTool(_client),
+            new ChronoTreeTool(_client),
+            new ChronoDiffTool(_client),
         ];
 
         _logger.LogInformation(

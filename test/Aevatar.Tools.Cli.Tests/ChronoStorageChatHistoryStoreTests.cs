@@ -51,6 +51,139 @@ public sealed class ChronoStorageChatHistoryStoreTests
     }
 
     [Fact]
+    public async Task GetIndexAsync_ShouldUseSidecarWhenFresh()
+    {
+        var storageServer = new InMemoryChronoStorageServer();
+        // .jsonl written at T0
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/NyxIdChat:scope-a.jsonl",
+            """
+            {"id":"u1","role":"user","content":"original question","timestamp":1711968000000,"status":"complete"}
+            """,
+            "2026-04-01T00:00:00Z");
+        // sidecar written at T1 (after .jsonl) — fresh
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/_meta/NyxIdChat:scope-a.json",
+            """{"title":"original question","serviceId":"nyxid-chat","serviceKind":"nyxid-chat","createdAtMs":1711968000000,"updatedAtMs":1711968000000,"messageCount":1,"llmRoute":"","llmModel":"gpt-5.3-codex"}""",
+            "2026-04-01T00:01:00Z");
+
+        var store = CreateStore(storageServer);
+        var index = await store.GetIndexAsync("scope-a");
+
+        index.Conversations.Should().HaveCount(1);
+        index.Conversations[0].Title.Should().Be("original question");
+        index.Conversations[0].MessageCount.Should().Be(1);
+        index.Conversations[0].LlmRoute.Should().Be("");
+        index.Conversations[0].LlmModel.Should().Be("gpt-5.3-codex");
+    }
+
+    [Fact]
+    public async Task GetIndexAsync_ShouldFallbackWhenSidecarMissing()
+    {
+        var storageServer = new InMemoryChronoStorageServer();
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/NyxIdChat:scope-a.jsonl",
+            """
+            {"id":"u1","role":"user","content":"legacy conversation","timestamp":1711968000000,"status":"complete"}
+            {"id":"a1","role":"assistant","content":"reply","timestamp":1711968060000,"status":"complete"}
+            """);
+        // No sidecar file at all
+
+        var store = CreateStore(storageServer);
+        var index = await store.GetIndexAsync("scope-a");
+
+        index.Conversations.Should().HaveCount(1);
+        index.Conversations[0].Title.Should().Be("legacy conversation");
+        index.Conversations[0].MessageCount.Should().Be(2);
+
+        // Backfill should have written a sidecar (best-effort, give it a moment)
+        await Task.Delay(200);
+        storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/_meta/NyxIdChat:scope-a.json");
+    }
+
+    [Fact]
+    public async Task GetIndexAsync_ShouldFallbackWhenSidecarStale()
+    {
+        var storageServer = new InMemoryChronoStorageServer();
+        // sidecar written at T0
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/_meta/conv-1.json",
+            """{"title":"old title","serviceId":"nyxid-chat","serviceKind":"nyxid-chat","createdAtMs":1711968000000,"updatedAtMs":1711968000000,"messageCount":1}""",
+            "2026-04-01T00:00:00Z");
+        // .jsonl updated at T1 (after sidecar) — sidecar is stale
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/conv-1.jsonl",
+            """
+            {"id":"u1","role":"user","content":"new question","timestamp":1711968000000,"status":"complete"}
+            {"id":"a1","role":"assistant","content":"new answer","timestamp":1711968060000,"status":"complete"}
+            {"id":"u2","role":"user","content":"follow up","timestamp":1711968120000,"status":"complete"}
+            """,
+            "2026-04-01T01:00:00Z");
+
+        var store = CreateStore(storageServer);
+        var index = await store.GetIndexAsync("scope-a");
+
+        index.Conversations.Should().HaveCount(1);
+        index.Conversations[0].Title.Should().Be("new question");
+        index.Conversations[0].MessageCount.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task SaveMessagesAsync_ShouldWriteSidecar()
+    {
+        var storageServer = new InMemoryChronoStorageServer();
+        var store = CreateStore(storageServer);
+        var messages = new[]
+        {
+            new StoredChatMessage("u1", "user", "hello sidecar", 1711968000000, "complete"),
+            new StoredChatMessage("a1", "assistant", "hi there", 1711968060000, "complete"),
+        };
+        var meta = new ConversationMeta(
+            "test-conv",
+            "hello sidecar",
+            "nyxid-chat",
+            "nyxid-chat",
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968000000),
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968060000),
+            2,
+            LlmRoute: "",
+            LlmModel: "gpt-5.3-codex");
+
+        await store.SaveMessagesAsync("scope-a", "test-conv", meta, messages);
+
+        storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/test-conv.jsonl");
+        storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/_meta/test-conv.json");
+        var sidecarJson = Encoding.UTF8.GetString(storageServer.Objects["aevatar-studio:user-prefix/scope-a/chat-histories/_meta/test-conv.json"]);
+        sidecarJson.Should().Contain("\"llmRoute\":\"\"");
+        sidecarJson.Should().Contain("\"llmModel\":\"gpt-5.3-codex\"");
+    }
+
+    [Fact]
+    public async Task DeleteConversationAsync_ShouldDeleteSidecarAndJsonl()
+    {
+        var storageServer = new InMemoryChronoStorageServer();
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/conv-del.jsonl",
+            """{"id":"u1","role":"user","content":"bye","timestamp":1711968000000,"status":"complete"}""");
+        storageServer.StoreText(
+            "aevatar-studio",
+            "user-prefix/scope-a/chat-histories/_meta/conv-del.json",
+            """{"title":"bye","serviceId":"nyxid-chat","serviceKind":"nyxid-chat","createdAtMs":1711968000000,"updatedAtMs":1711968000000,"messageCount":1}""");
+
+        var store = CreateStore(storageServer);
+        await store.DeleteConversationAsync("scope-a", "conv-del");
+
+        storageServer.Objects.Should().NotContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/conv-del.jsonl");
+        storageServer.Objects.Should().NotContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/_meta/conv-del.json");
+    }
+
+    [Fact]
     public async Task SaveMessagesAsync_ShouldDeleteLegacyIndexFile()
     {
         var storageServer = new InMemoryChronoStorageServer();
@@ -64,8 +197,16 @@ public sealed class ChronoStorageChatHistoryStoreTests
         {
             new StoredChatMessage("u1", "user", "hello", 1711968000000, "complete"),
         };
+        var meta = new ConversationMeta(
+            "NyxIdChat:scope-a",
+            "hello",
+            "nyxid-chat",
+            "nyxid-chat",
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968000000),
+            DateTimeOffset.FromUnixTimeMilliseconds(1711968000000),
+            1);
 
-        await store.SaveMessagesAsync("scope-a", "NyxIdChat:scope-a", messages);
+        await store.SaveMessagesAsync("scope-a", "NyxIdChat:scope-a", meta, messages);
 
         storageServer.Objects.Should().ContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/NyxIdChat:scope-a.jsonl");
         storageServer.Objects.Should().NotContainKey("aevatar-studio:user-prefix/scope-a/chat-histories/index.json");
@@ -117,9 +258,13 @@ public sealed class ChronoStorageChatHistoryStoreTests
     private sealed class InMemoryChronoStorageServer
     {
         public Dictionary<string, byte[]> Objects { get; } = new(StringComparer.Ordinal);
+        public Dictionary<string, string> Timestamps { get; } = new(StringComparer.Ordinal);
 
-        public void StoreText(string bucket, string key, string content) =>
+        public void StoreText(string bucket, string key, string content, string? lastModified = null)
+        {
             Objects[$"{bucket}:{key}"] = Encoding.UTF8.GetBytes(content);
+            Timestamps[$"{bucket}:{key}"] = lastModified ?? "2026-04-01T00:00:00Z";
+        }
 
         public IHttpClientFactory CreateHttpClientFactory() =>
             new StubHttpClientFactory(new HttpClient(new Handler(this))
@@ -152,7 +297,7 @@ public sealed class ChronoStorageChatHistoryStoreTests
                         .Select(key => new
                         {
                             key,
-                            lastModified = "2026-04-01T00:00:00Z",
+                            lastModified = _server.Timestamps.GetValueOrDefault($"aevatar-studio:{key}", "2026-04-01T00:00:00Z"),
                             size = _server.Objects[$"aevatar-studio:{key}"].LongLength,
                         })
                         .ToList();
@@ -163,6 +308,7 @@ public sealed class ChronoStorageChatHistoryStoreTests
                 {
                     var key = GetRequiredQueryValue(uri, "key");
                     _server.Objects[$"aevatar-studio:{key}"] = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
+                    _server.Timestamps[$"aevatar-studio:{key}"] = DateTimeOffset.UtcNow.ToString("O");
                     return CreateJsonResponse(HttpStatusCode.OK, new { data = new { stored = true }, error = (object?)null });
                 }
 

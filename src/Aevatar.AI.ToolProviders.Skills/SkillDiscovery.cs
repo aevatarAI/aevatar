@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // SkillDiscovery — 技能发现
 // 扫描目录查找 SKILL.md 文件并解析为 SkillDefinition
+// 支持 frontmatter 元数据和旧格式兼容
 // ─────────────────────────────────────────────────────────────
 
 using Microsoft.Extensions.Logging;
@@ -13,10 +14,14 @@ namespace Aevatar.AI.ToolProviders.Skills;
 /// </summary>
 public sealed class SkillDiscovery
 {
+    private readonly SkillFrontmatterParser _parser;
     private readonly ILogger _logger;
 
-    public SkillDiscovery(ILogger? logger = null) =>
+    public SkillDiscovery(SkillFrontmatterParser? parser = null, ILogger? logger = null)
+    {
+        _parser = parser ?? new SkillFrontmatterParser();
         _logger = logger ?? NullLogger.Instance;
+    }
 
     /// <summary>
     /// 扫描目录，发现所有 SKILL.md 文件并解析为 SkillDefinition。
@@ -61,34 +66,25 @@ public sealed class SkillDiscovery
 
     /// <summary>
     /// 解析 SKILL.md 文件为 SkillDefinition。
-    /// SKILL.md 格式：第一行为 # 标题（技能名），第二段为描述，其余为指令。
+    /// 支持 frontmatter 格式和旧的 H1 + 首段格式。
     /// </summary>
-    private static SkillDefinition? ParseSkillFile(string filePath)
+    private SkillDefinition? ParseSkillFile(string filePath)
     {
         var content = File.ReadAllText(filePath).Trim();
         if (string.IsNullOrEmpty(content)) return null;
 
-        var lines = content.Split('\n');
-        var name = lines[0].TrimStart('#', ' ').Trim();
-        if (string.IsNullOrEmpty(name))
+        var parsed = _parser.Parse(content);
+
+        // 名称：frontmatter name > 旧格式解析 > 目录名
+        var name = parsed.Name;
+        if (string.IsNullOrWhiteSpace(name))
             name = Path.GetFileName(Path.GetDirectoryName(filePath)) ?? "unnamed";
 
-        // 找到第一个非空段落作为描述
-        var description = "";
-        var instructionsStart = 1;
-        for (var i = 1; i < lines.Length; i++)
-        {
-            var line = lines[i].Trim();
-            if (string.IsNullOrEmpty(line) && !string.IsNullOrEmpty(description))
-            {
-                instructionsStart = i + 1;
-                break;
-            }
-            if (!string.IsNullOrEmpty(line))
-                description += (description.Length > 0 ? " " : "") + line;
-        }
+        // 描述：frontmatter description > 旧格式解析 > 空
+        var description = parsed.Description ?? "";
 
-        var instructions = string.Join("\n", lines.Skip(instructionsStart));
+        // 指令：frontmatter 之后的正文（如果无 frontmatter 则为旧格式解析的 body）
+        var instructions = parsed.Body;
 
         return new SkillDefinition
         {
@@ -96,6 +92,11 @@ public sealed class SkillDiscovery
             Description = description,
             Instructions = instructions,
             FilePath = filePath,
+            Source = SkillSource.Local,
+            Arguments = parsed.Arguments,
+            WhenToUse = parsed.WhenToUse,
+            IsModelInvocable = parsed.IsModelInvocable,
+            IsUserInvocable = parsed.IsUserInvocable,
         };
     }
 }

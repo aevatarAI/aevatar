@@ -165,7 +165,6 @@ public sealed class ScopeServiceEndpointsTests
             gagent = new
             {
                 actorTypeName = "Tests.DemoActor, Tests",
-                preferredActorId = "orders-gagent",
                 endpoints = new[]
                 {
                     new
@@ -539,7 +538,6 @@ public sealed class ScopeServiceEndpointsTests
         response.Revisions.Single(x => x.RevisionId == "rev-workflow").WorkflowDefinitionActorId.Should().Be("workflow-def-1");
         response.Revisions.Single(x => x.RevisionId == "rev-workflow").InlineWorkflowCount.Should().Be(2);
         response.Revisions.Single(x => x.RevisionId == "rev-static").StaticActorTypeName.Should().Be("Tests.StaticActor, Tests");
-        response.Revisions.Single(x => x.RevisionId == "rev-static").StaticPreferredActorId.Should().Be("static-actor-1");
     }
 
     [Fact]
@@ -653,7 +651,6 @@ public sealed class ScopeServiceEndpointsTests
         response.Should().NotBeNull();
         response!.RevisionId.Should().Be("rev-static");
         response.StaticActorTypeName.Should().Be("Tests.StaticActor, Tests");
-        response.StaticPreferredActorId.Should().Be("static-actor-1");
         response.IsServingTarget.Should().BeTrue();
         response.ServingState.Should().Be(ServiceServingState.Active.ToString());
     }
@@ -2263,8 +2260,7 @@ public sealed class ScopeServiceEndpointsTests
                 GAgent: request.GAgent == null
                     ? null
                     : new ScopeBindingGAgentResult(
-                        request.GAgent.ActorTypeName,
-                        request.GAgent.PreferredActorId ?? string.Empty)));
+                        request.GAgent.ActorTypeName)));
         }
     }
 
