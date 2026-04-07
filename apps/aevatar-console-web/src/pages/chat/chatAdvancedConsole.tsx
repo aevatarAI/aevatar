@@ -10,6 +10,10 @@ import { servicesApi } from "@/shared/api/servicesApi";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import type {
+  WorkflowActorGraphEnrichedSnapshot,
+  WorkflowActorSnapshot,
+} from "@/shared/models/runtime/actors";
 import type { ScopeServiceRunAuditSnapshot } from "@/shared/models/runtime/scopeServices";
 import { history } from "@/shared/navigation/history";
 import {
@@ -32,14 +36,42 @@ import {
 } from "./chatEventAdapter";
 import { DebugPanel } from "./chatPresentation";
 import type { RuntimeEvent } from "./chatTypes";
+import {
+  buildTimelineRows,
+  filterTimelineRows,
+} from "../actors/actorPresentation";
+import {
+  buildTimelineBlockingSummary,
+  describeActorCompletionStatus,
+} from "./runtimeInspector";
 
-type ConsoleTab = "query" | "execute" | "raw";
+type ConsoleTab = "query" | "execute" | "timeline" | "raw";
 type QueryTarget = "binding" | "services" | "workflows" | "actor";
+
+type ConsoleFlow = {
+  description: string;
+  group: "developer" | "operate" | "understand";
+  id: ConsoleTab;
+  label: string;
+};
 
 type ChatAdvancedConsoleProps = {
   defaultServiceId?: string;
   onClose: () => void;
   onEnsureNyxIdBound?: () => Promise<void>;
+  onTimelineActionResult?: (input: {
+    action: "resume" | "approve" | "reject" | "signal";
+    actorId: string;
+    commandId?: string;
+    content: string;
+    error?: string;
+    kind: "human_input" | "human_approval" | "wait_signal";
+    runId: string;
+    serviceId: string;
+    signalName?: string;
+    stepId: string;
+    success: boolean;
+  }) => void;
   open: boolean;
   scopeId: string;
   services: readonly ServiceCatalogSnapshot[];
@@ -78,6 +110,37 @@ const queryTargets: { description: string; id: QueryTarget; label: string }[] = 
     description: "Inspect a specific actor by its runtime ID.",
     id: "actor",
     label: "Actor Snapshot",
+  },
+];
+
+const consoleFlows: readonly ConsoleFlow[] = [
+  {
+    description:
+      "Check the scope binding, published services, deployed workflows, or inspect an actor directly.",
+    group: "understand",
+    id: "query",
+    label: "Query",
+  },
+  {
+    description:
+      "Inspect actor state, timeline evidence, graph topology, and any blocking gate that needs operator action.",
+    group: "understand",
+    id: "timeline",
+    label: "Timeline",
+  },
+  {
+    description:
+      "Launch a service endpoint, capture the run receipt, and continue into Runs or Explorer when needed.",
+    group: "operate",
+    id: "execute",
+    label: "Execute",
+  },
+  {
+    description:
+      "Send direct API requests only when you need low-level integration or protocol debugging.",
+    group: "developer",
+    id: "raw",
+    label: "Raw API",
   },
 ];
 
@@ -148,6 +211,33 @@ const actionButtonStyle = (
   opacity: disabled ? 0.45 : 1,
   padding: "9px 14px",
 });
+
+function timelineStatusTone(
+  status: "processing" | "success" | "error" | "default"
+): { background: string; color: string } {
+  switch (status) {
+    case "processing":
+      return {
+        background: "#eff6ff",
+        color: "#1d4ed8",
+      };
+    case "success":
+      return {
+        background: "#ecfdf5",
+        color: "#047857",
+      };
+    case "error":
+      return {
+        background: "#fef2f2",
+        color: "#dc2626",
+      };
+    default:
+      return {
+        background: "#f5f5f4",
+        color: "#57534e",
+      };
+  }
+}
 
 function safeJson(value: unknown): string {
   try {
@@ -254,6 +344,7 @@ export function ChatAdvancedConsole({
   defaultServiceId,
   onClose,
   onEnsureNyxIdBound,
+  onTimelineActionResult,
   open,
   scopeId,
   services,
@@ -273,6 +364,27 @@ export function ChatAdvancedConsole({
   const [queryActorId, setQueryActorId] = useState("");
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryResult, setQueryResult] = useState<string | null>(null);
+  const [timelineActorInput, setTimelineActorInput] = useState("");
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState("");
+  const [timelineSnapshot, setTimelineSnapshot] =
+    useState<WorkflowActorSnapshot | null>(null);
+  const [timelineGraph, setTimelineGraph] =
+    useState<WorkflowActorGraphEnrichedSnapshot | null>(null);
+  const [timelineSearch, setTimelineSearch] = useState("");
+  const [timelineOnlyErrors, setTimelineOnlyErrors] = useState(false);
+  const [timelineSelectedStage, setTimelineSelectedStage] = useState("");
+  const [timelineItems, setTimelineItems] = useState<
+    ReturnType<typeof buildTimelineRows>
+  >([]);
+  const [timelineRefreshTick, setTimelineRefreshTick] = useState(0);
+  const [timelineSelectedKey, setTimelineSelectedKey] = useState<string | null>(
+    null
+  );
+  const [timelineActionInput, setTimelineActionInput] = useState("");
+  const [timelineActionLoading, setTimelineActionLoading] = useState(false);
+  const [timelineActionError, setTimelineActionError] = useState("");
+  const [timelineActionNotice, setTimelineActionNotice] = useState("");
 
   const [executeServiceId, setExecuteServiceId] = useState(defaultServiceId || "");
   const [executeEndpointId, setExecuteEndpointId] = useState("chat");
@@ -317,6 +429,73 @@ export function ChatAdvancedConsole({
     ) ??
     activeExecuteService?.endpoints[0] ??
     null;
+  const effectiveTimelineServiceId =
+    executeLaunchContext?.serviceId || defaultServiceId || executeServiceId || "";
+  const effectiveTimelineActorId = (
+    timelineActorInput.trim() ||
+    executeActorId.trim() ||
+    sessionActorId?.trim() ||
+    queryActorId.trim()
+  ).trim();
+  const timelineRows = useMemo(
+    () =>
+      filterTimelineRows(timelineItems, {
+        errorsOnly: timelineOnlyErrors,
+        eventTypes: [],
+        query: timelineSearch,
+        stages: timelineSelectedStage ? [timelineSelectedStage] : [],
+        stepTypes: [],
+      }),
+    [timelineItems, timelineOnlyErrors, timelineSearch, timelineSelectedStage]
+  );
+  const timelineStageOptions = useMemo(
+    () =>
+      [...new Set(timelineItems.map((item) => item.stage).filter(Boolean))].sort(
+        (left, right) => left.localeCompare(right)
+      ),
+    [timelineItems]
+  );
+  const selectedTimelineRow = useMemo(() => {
+    if (!timelineRows.length) {
+      return null;
+    }
+
+    return (
+      timelineRows.find((item) => item.key === timelineSelectedKey) ||
+      timelineRows[0]
+    );
+  }, [timelineRows, timelineSelectedKey]);
+  const timelineBlockingSummary = useMemo(
+    () => buildTimelineBlockingSummary(timelineItems),
+    [timelineItems]
+  );
+  const consoleFlowGroups = useMemo(
+    () => [
+      {
+        description: "Inspect the current scope and understand runtime state.",
+        flows: consoleFlows.filter((flow) => flow.group === "understand"),
+        id: "understand",
+        label: "Understand",
+      },
+      {
+        description: "Run work, inspect the receipt, and act on runtime gates.",
+        flows: consoleFlows.filter((flow) => flow.group === "operate"),
+        id: "operate",
+        label: "Operate",
+      },
+      {
+        description: "Drop to direct API calls when you need low-level debugging.",
+        flows: consoleFlows.filter((flow) => flow.group === "developer"),
+        id: "developer",
+        label: "Developer",
+      },
+    ],
+    []
+  );
+  const activeConsoleFlow = useMemo(
+    () => consoleFlows.find((flow) => flow.id === activeTab) || null,
+    [activeTab]
+  );
 
   const rawShortcuts = useMemo(
     () => [
@@ -406,6 +585,81 @@ export function ChatAdvancedConsole({
   useEffect(() => {
     setExecutePayloadTypeUrl(activeExecuteEndpoint?.requestTypeUrl || "");
   }, [activeExecuteEndpoint?.endpointId, activeExecuteEndpoint?.requestTypeUrl]);
+
+  useEffect(() => {
+    if (!open || activeTab !== "timeline") {
+      return;
+    }
+
+    if (!effectiveTimelineActorId) {
+      setTimelineError("");
+      setTimelineSnapshot(null);
+      setTimelineGraph(null);
+      setTimelineItems([]);
+      setTimelineSelectedKey(null);
+      return;
+    }
+
+    let cancelled = false;
+    setTimelineLoading(true);
+    setTimelineError("");
+
+    void Promise.all([
+      runtimeActorsApi.getActorSnapshot(effectiveTimelineActorId),
+      runtimeActorsApi.getActorTimeline(effectiveTimelineActorId, { take: 40 }),
+      runtimeActorsApi.getActorGraphEnriched(effectiveTimelineActorId, {
+        depth: 2,
+        take: 40,
+      }),
+    ])
+      .then(([snapshot, timeline, graph]) => {
+        if (cancelled) {
+          return;
+        }
+
+        setTimelineSnapshot(snapshot);
+        setTimelineGraph(graph);
+        setTimelineItems(buildTimelineRows(timeline));
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setTimelineSnapshot(null);
+        setTimelineGraph(null);
+        setTimelineItems([]);
+        setTimelineError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTimelineLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, effectiveTimelineActorId, open, timelineRefreshTick]);
+
+  useEffect(() => {
+    if (!timelineRows.length) {
+      setTimelineSelectedKey(null);
+      return;
+    }
+
+    setTimelineSelectedKey((current) =>
+      current && timelineRows.some((item) => item.key === current)
+        ? current
+        : timelineRows[0].key
+    );
+  }, [timelineRows]);
+
+  useEffect(() => {
+    setTimelineActionError("");
+    setTimelineActionInput("");
+    setTimelineActionNotice("");
+  }, [timelineBlockingSummary?.kind, timelineBlockingSummary?.stepId]);
 
   useEffect(
     () => () => {
@@ -651,19 +905,19 @@ export function ChatAdvancedConsole({
   ]);
 
   const handleOpenExplorer = useCallback(() => {
-    if (!scopeId || !executeLaunchContext) {
+    if (!scopeId) {
       return;
     }
 
     history.push(
       buildRuntimeExplorerHref({
-        actorId: executeActorId || undefined,
+        actorId: effectiveTimelineActorId || undefined,
         runId: executeRunId || undefined,
         scopeId,
-        serviceId: executeLaunchContext.serviceId,
+        serviceId: executeLaunchContext?.serviceId,
       })
     );
-  }, [executeActorId, executeLaunchContext, executeRunId, scopeId]);
+  }, [effectiveTimelineActorId, executeLaunchContext?.serviceId, executeRunId, scopeId]);
 
   const handleLoadAudit = useCallback(async () => {
     if (!scopeId || !executeLaunchContext?.serviceId || !executeRunId) {
@@ -678,7 +932,7 @@ export function ChatAdvancedConsole({
         executeLaunchContext.serviceId,
         executeRunId,
         {
-          actorId: executeActorId || undefined,
+          actorId: effectiveTimelineActorId || undefined,
         }
       );
       setExecuteAuditSnapshot(snapshot);
@@ -688,12 +942,149 @@ export function ChatAdvancedConsole({
     } finally {
       setExecuteAuditLoading(false);
     }
-  }, [executeActorId, executeLaunchContext?.serviceId, executeRunId, scopeId]);
+  }, [
+    effectiveTimelineActorId,
+    executeLaunchContext?.serviceId,
+    executeRunId,
+    scopeId,
+  ]);
 
   const executeAuditTimeline = executeAuditSnapshot?.audit.timeline ?? [];
   const executeAuditSteps = executeAuditSnapshot?.audit.steps ?? [];
   const executeAuditReplies = executeAuditSnapshot?.audit.roleReplies ?? [];
   const executeAuditSummary = executeAuditSnapshot?.audit.summary;
+  const relatedAuditStep = useMemo(() => {
+    const stepId =
+      selectedTimelineRow?.stepId || timelineBlockingSummary?.stepId || "";
+    if (!stepId) {
+      return null;
+    }
+
+    return (
+      executeAuditSteps.find((step) => step.stepId === stepId) || null
+    );
+  }, [executeAuditSteps, selectedTimelineRow?.stepId, timelineBlockingSummary?.stepId]);
+
+  const handleTimelineAction = useCallback(
+    async (action: "resume" | "approve" | "reject" | "signal") => {
+      if (
+        !scopeId ||
+        !timelineBlockingSummary ||
+        !effectiveTimelineActorId ||
+        !executeRunId ||
+        !effectiveTimelineServiceId
+      ) {
+        return;
+      }
+
+      setTimelineActionLoading(true);
+      setTimelineActionError("");
+      setTimelineActionNotice("");
+
+      try {
+        if (action === "signal") {
+          const result = await runtimeRunsApi.signal(
+            scopeId,
+            {
+              actorId: effectiveTimelineActorId,
+              payload: timelineActionInput.trim() || undefined,
+              runId: executeRunId,
+              signalName: timelineBlockingSummary.signalName || "continue",
+              stepId: timelineBlockingSummary.stepId,
+            },
+            {
+              serviceId: effectiveTimelineServiceId,
+            }
+          );
+
+          const content = `Signal ${
+            timelineBlockingSummary.signalName || "continue"
+          } submitted.`;
+          setTimelineActionNotice(content);
+          onTimelineActionResult?.({
+            action,
+            actorId: result.actorId || effectiveTimelineActorId,
+            commandId: result.commandId,
+            content,
+            kind: timelineBlockingSummary.kind,
+            runId: result.runId || executeRunId,
+            serviceId: effectiveTimelineServiceId,
+            signalName: timelineBlockingSummary.signalName,
+            stepId: timelineBlockingSummary.stepId,
+            success: true,
+          });
+        } else {
+          const result = await runtimeRunsApi.resume(
+            scopeId,
+            {
+              actorId: effectiveTimelineActorId,
+              approved: action !== "reject",
+              runId: executeRunId,
+              stepId: timelineBlockingSummary.stepId,
+              userInput: timelineActionInput.trim() || undefined,
+            },
+            {
+              serviceId: effectiveTimelineServiceId,
+            }
+          );
+
+          const content =
+            action === "reject"
+              ? `Rejection submitted for ${timelineBlockingSummary.stepId}.`
+              : timelineBlockingSummary.kind === "human_approval"
+                ? `Approval submitted for ${timelineBlockingSummary.stepId}.`
+                : `Input submitted for ${timelineBlockingSummary.stepId}.`;
+          setTimelineActionNotice(content);
+          onTimelineActionResult?.({
+            action,
+            actorId: result.actorId || effectiveTimelineActorId,
+            commandId: result.commandId,
+            content,
+            kind: timelineBlockingSummary.kind,
+            runId: result.runId || executeRunId,
+            serviceId: effectiveTimelineServiceId,
+            signalName: timelineBlockingSummary.signalName,
+            stepId: timelineBlockingSummary.stepId,
+            success: true,
+          });
+        }
+
+        setTimelineActionInput("");
+        setTimelineRefreshTick((current) => current + 1);
+        if (executeAuditSnapshot) {
+          void handleLoadAudit();
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        setTimelineActionError(errorMessage);
+        onTimelineActionResult?.({
+          action,
+          actorId: effectiveTimelineActorId,
+          content: errorMessage,
+          error: errorMessage,
+          kind: timelineBlockingSummary.kind,
+          runId: executeRunId,
+          serviceId: effectiveTimelineServiceId,
+          signalName: timelineBlockingSummary.signalName,
+          stepId: timelineBlockingSummary.stepId,
+          success: false,
+        });
+      } finally {
+        setTimelineActionLoading(false);
+      }
+    },
+    [
+      effectiveTimelineActorId,
+      effectiveTimelineServiceId,
+      executeAuditSnapshot,
+      executeRunId,
+      handleLoadAudit,
+      onTimelineActionResult,
+      scopeId,
+      timelineActionInput,
+      timelineBlockingSummary,
+    ]
+  );
 
   const handleRawSubmit = useCallback(async () => {
     const normalizedPath = rawPath.trim();
@@ -760,34 +1151,124 @@ export function ChatAdvancedConsole({
         />
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div
-            style={{
-              alignItems: "center",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-            }}
-          >
-            {([
-              ["query", "Query"],
-              ["execute", "Execute"],
-              ["raw", "Raw API"],
-            ] as Array<[ConsoleTab, string]>).map(([tab, label]) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                style={{
-                  ...actionButtonStyle(
-                    activeTab === tab ? "primary" : "secondary"
-                  ),
-                  minWidth: 96,
-                }}
-                type="button"
-              >
-                {label}
-              </button>
-            ))}
+          <div style={drawerSectionStyle}>
+            <Typography.Text strong>Choose a task</Typography.Text>
+            <Typography.Text type="secondary">
+              Advanced Console keeps runtime inspection, operator actions, and
+              developer tooling in one drawer. Start from the task you are
+              trying to complete.
+            </Typography.Text>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {consoleFlowGroups.map((group) => (
+                <div
+                  key={group.id}
+                  style={{ display: "flex", flexDirection: "column", gap: 10 }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        color: "#111827",
+                        fontSize: 13,
+                        fontWeight: 700,
+                        marginBottom: 4,
+                      }}
+                    >
+                      {group.label}
+                    </div>
+                    <div style={{ color: "#6b7280", fontSize: 12, lineHeight: 1.5 }}>
+                      {group.description}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 10,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                    }}
+                  >
+                    {group.flows.map((flow) => {
+                      const active = activeTab === flow.id;
+                      return (
+                        <button
+                          aria-label={flow.label}
+                          aria-pressed={active}
+                          key={flow.id}
+                          onClick={() => setActiveTab(flow.id)}
+                          style={{
+                            background: active ? "#f8fafc" : "#ffffff",
+                            border: `1px solid ${active ? "#bfdbfe" : "#e7e5e4"}`,
+                            borderRadius: 14,
+                            cursor: "pointer",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 8,
+                            minHeight: 110,
+                            padding: 14,
+                            textAlign: "left",
+                          }}
+                          type="button"
+                        >
+                          <div
+                            style={{
+                              alignItems: "center",
+                              display: "flex",
+                              gap: 8,
+                              justifyContent: "space-between",
+                            }}
+                          >
+                            <span
+                              style={{
+                                color: "#111827",
+                                fontSize: 14,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {flow.label}
+                            </span>
+                            {active ? (
+                              <span
+                                style={{
+                                  background: "#eff6ff",
+                                  borderRadius: 999,
+                                  color: "#2563eb",
+                                  fontSize: 10,
+                                  fontWeight: 700,
+                                  letterSpacing: "0.08em",
+                                  padding: "3px 8px",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                Active
+                              </span>
+                            ) : null}
+                          </div>
+                          <div
+                            style={{
+                              color: "#6b7280",
+                              fontSize: 12,
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            {flow.description}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
+
+          {activeConsoleFlow ? (
+            <Alert
+              description={activeConsoleFlow.description}
+              message={`Current task: ${activeConsoleFlow.label}`}
+              showIcon
+              type="info"
+            />
+          ) : null}
 
           {activeTab === "query" ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -1255,6 +1736,662 @@ export function ChatAdvancedConsole({
                   <DebugPanel events={executeEvents} />
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {activeTab === "timeline" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={drawerSectionStyle}>
+                <Typography.Text strong>Actor Timeline</Typography.Text>
+                <Typography.Text type="secondary">
+                  Inspect the current actor snapshot, recent runtime stages, and
+                  any blocking gate without leaving chat.
+                </Typography.Text>
+
+                <label style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <span style={fieldLabelStyle}>Actor ID</span>
+                  <input
+                    aria-label="Advanced timeline actor ID"
+                    onChange={(event) => setTimelineActorInput(event.target.value)}
+                    placeholder={
+                      executeActorId || sessionActorId || "actor://..."
+                    }
+                    style={{ ...inputStyle, fontFamily: monoFontFamily }}
+                    value={timelineActorInput}
+                  />
+                </label>
+
+                <Space wrap>
+                  <button
+                    disabled={!effectiveTimelineActorId || timelineLoading}
+                    onClick={() => setTimelineRefreshTick((current) => current + 1)}
+                    style={actionButtonStyle(
+                      "primary",
+                      !effectiveTimelineActorId || timelineLoading
+                    )}
+                    type="button"
+                  >
+                    {timelineLoading ? "Refreshing..." : "Refresh Timeline"}
+                  </button>
+                  <button
+                    disabled={!executeRunId || executeAuditLoading}
+                    onClick={() => void handleLoadAudit()}
+                    style={actionButtonStyle(
+                      "secondary",
+                      !executeRunId || executeAuditLoading
+                    )}
+                    type="button"
+                  >
+                    {executeAuditLoading
+                      ? "Loading Audit..."
+                      : executeAuditSnapshot
+                        ? "Refresh Audit"
+                        : "Load Audit for Timeline"}
+                  </button>
+                  <button
+                    disabled={!effectiveTimelineActorId}
+                    onClick={handleOpenExplorer}
+                    style={actionButtonStyle(
+                      "secondary",
+                      !effectiveTimelineActorId
+                    )}
+                    type="button"
+                  >
+                    Open Explorer
+                  </button>
+                  <button
+                    disabled={!executeLaunchContext}
+                    onClick={handleOpenRuns}
+                    style={actionButtonStyle("secondary", !executeLaunchContext)}
+                    type="button"
+                  >
+                    Open Runs
+                  </button>
+                </Space>
+
+                {!effectiveTimelineActorId ? (
+                  <Alert
+                    description="Run a service endpoint or provide an actor ID to inspect runtime state."
+                    showIcon
+                    title="No actor is currently selected."
+                    type="info"
+                  />
+                ) : null}
+
+                {effectiveTimelineActorId ? (
+                  <div
+                    style={{
+                      color: "#4b5563",
+                      display: "grid",
+                      gap: 8,
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(220px, 1fr))",
+                    }}
+                  >
+                    <div>
+                      <div style={fieldLabelStyle}>Effective actor</div>
+                      <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
+                        {effectiveTimelineActorId}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={fieldLabelStyle}>Run</div>
+                      <div style={{ fontFamily: monoFontFamily, fontSize: 12 }}>
+                        {executeRunId || "Unavailable"}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {timelineError ? (
+                <Alert showIcon title={timelineError} type="error" />
+              ) : null}
+
+              {timelineSnapshot ? (
+                <div style={drawerSectionStyle}>
+                  <Typography.Text strong>Snapshot</Typography.Text>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(180px, 1fr))",
+                    }}
+                  >
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Workflow</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineSnapshot.workflowName || "n/a"}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Completion</Typography.Text>
+                      <Typography.Text strong>
+                        {describeActorCompletionStatus(timelineSnapshot)}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">State version</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineSnapshot.stateVersion}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Completed steps</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineSnapshot.completedSteps}/
+                        {timelineSnapshot.totalSteps}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Role replies</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineSnapshot.roleReplyCount}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Last update</Typography.Text>
+                      <Typography.Text strong>
+                        {formatDateTime(timelineSnapshot.lastUpdatedAt)}
+                      </Typography.Text>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {timelineGraph ? (
+                <div style={drawerSectionStyle}>
+                  <Typography.Text strong>Topology Digest</Typography.Text>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(180px, 1fr))",
+                    }}
+                  >
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Nodes</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineGraph.subgraph.nodes.length}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Edges</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineGraph.subgraph.edges.length}
+                      </Typography.Text>
+                    </div>
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text type="secondary">Root node</Typography.Text>
+                      <Typography.Text strong>
+                        {timelineGraph.subgraph.rootNodeId || "Unavailable"}
+                      </Typography.Text>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
+                    {(timelineGraph.subgraph.nodes ?? []).slice(0, 6).map((node) => (
+                      <div
+                        key={node.nodeId}
+                        style={{
+                          alignItems: "center",
+                          border: "1px solid #e7e5e4",
+                          borderRadius: 12,
+                          display: "flex",
+                          gap: 8,
+                          justifyContent: "space-between",
+                          padding: 12,
+                        }}
+                      >
+                        <Typography.Text strong>{node.nodeId}</Typography.Text>
+                        <Typography.Text type="secondary">
+                          {node.nodeType || "node"}
+                        </Typography.Text>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {timelineBlockingSummary ? (
+                <div style={drawerSectionStyle}>
+                  <Typography.Text strong>Blocking State</Typography.Text>
+                  <Alert
+                    description={
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 8,
+                        }}
+                      >
+                        <span>{timelineBlockingSummary.summary}</span>
+                        <span>{timelineBlockingSummary.prompt}</span>
+                        <span style={{ color: "#6b7280", fontSize: 12 }}>
+                          Step: {timelineBlockingSummary.stepId}
+                          {timelineBlockingSummary.signalName
+                            ? ` · Signal: ${timelineBlockingSummary.signalName}`
+                            : ""}
+                          {timelineBlockingSummary.timeoutLabel
+                            ? ` · ${timelineBlockingSummary.timeoutLabel}`
+                            : ""}
+                        </span>
+                      </div>
+                    }
+                    message={timelineBlockingSummary.title}
+                    showIcon
+                    type="warning"
+                  />
+                  <label
+                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                  >
+                    <span style={fieldLabelStyle}>
+                      {timelineBlockingSummary.kind === "wait_signal"
+                        ? "Signal payload"
+                        : timelineBlockingSummary.kind === "human_approval"
+                          ? "Approval note"
+                          : "Operator input"}
+                    </span>
+                    <textarea
+                      aria-label="Advanced timeline action input"
+                      disabled={timelineActionLoading}
+                      onChange={(event) =>
+                        setTimelineActionInput(event.target.value)
+                      }
+                      placeholder={
+                        timelineBlockingSummary.kind === "wait_signal"
+                          ? "Optional signal payload"
+                          : timelineBlockingSummary.kind === "human_approval"
+                            ? "Optional approval note"
+                            : "Provide the requested input"
+                      }
+                      style={textareaStyle}
+                      value={timelineActionInput}
+                    />
+                  </label>
+
+                  <Space wrap>
+                    {timelineBlockingSummary.kind === "wait_signal" ? (
+                      <button
+                        disabled={
+                          timelineActionLoading ||
+                          !executeRunId ||
+                          !effectiveTimelineServiceId
+                        }
+                        onClick={() => void handleTimelineAction("signal")}
+                        style={actionButtonStyle(
+                          "primary",
+                          timelineActionLoading ||
+                            !executeRunId ||
+                            !effectiveTimelineServiceId
+                        )}
+                        type="button"
+                      >
+                        {timelineActionLoading ? "Sending..." : "Send Signal"}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          disabled={
+                            timelineActionLoading ||
+                            !executeRunId ||
+                            !effectiveTimelineServiceId ||
+                            (timelineBlockingSummary.kind === "human_input" &&
+                              !timelineActionInput.trim())
+                          }
+                          onClick={() =>
+                            void handleTimelineAction(
+                              timelineBlockingSummary.kind === "human_approval"
+                                ? "approve"
+                                : "resume"
+                            )
+                          }
+                          style={actionButtonStyle(
+                            "primary",
+                            timelineActionLoading ||
+                              !executeRunId ||
+                              !effectiveTimelineServiceId ||
+                              (timelineBlockingSummary.kind === "human_input" &&
+                                !timelineActionInput.trim())
+                          )}
+                          type="button"
+                        >
+                          {timelineActionLoading
+                            ? "Applying..."
+                            : timelineBlockingSummary.kind === "human_approval"
+                              ? "Approve"
+                              : "Resume"}
+                        </button>
+                        {timelineBlockingSummary.kind === "human_approval" ? (
+                          <button
+                            disabled={
+                              timelineActionLoading ||
+                              !executeRunId ||
+                              !effectiveTimelineServiceId
+                            }
+                            onClick={() => void handleTimelineAction("reject")}
+                            style={actionButtonStyle(
+                              "secondary",
+                              timelineActionLoading ||
+                                !executeRunId ||
+                                !effectiveTimelineServiceId
+                            )}
+                            type="button"
+                          >
+                            Reject
+                          </button>
+                        ) : null}
+                      </>
+                    )}
+                  </Space>
+
+                  {!executeRunId || !effectiveTimelineServiceId ? (
+                    <Typography.Text type="secondary">
+                      Run actions become available after the console has a run
+                      ID and service context.
+                    </Typography.Text>
+                  ) : null}
+
+                  {timelineActionError ? (
+                    <Alert showIcon title={timelineActionError} type="error" />
+                  ) : null}
+
+                  {timelineActionNotice ? (
+                    <Alert showIcon title={timelineActionNotice} type="success" />
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div style={drawerSectionStyle}>
+                <Typography.Text strong>Timeline Filters</Typography.Text>
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns:
+                      "repeat(auto-fit, minmax(180px, 1fr))",
+                  }}
+                >
+                  <label
+                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                  >
+                    <span style={fieldLabelStyle}>Search</span>
+                    <input
+                      aria-label="Advanced timeline search"
+                      onChange={(event) => setTimelineSearch(event.target.value)}
+                      placeholder="Filter by stage, step, message, or agent"
+                      style={inputStyle}
+                      value={timelineSearch}
+                    />
+                  </label>
+
+                  <label
+                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
+                  >
+                    <span style={fieldLabelStyle}>Stage</span>
+                    <select
+                      aria-label="Advanced timeline stage"
+                      onChange={(event) =>
+                        setTimelineSelectedStage(event.target.value)
+                      }
+                      style={selectStyle}
+                      value={timelineSelectedStage}
+                    >
+                      <option value="">All stages</option>
+                      {timelineStageOptions.map((stage) => (
+                        <option key={stage} value={stage}>
+                          {stage}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label
+                    style={{
+                      alignItems: "center",
+                      display: "flex",
+                      gap: 8,
+                      paddingTop: 28,
+                    }}
+                  >
+                    <input
+                      aria-label="Advanced timeline errors only"
+                      checked={timelineOnlyErrors}
+                      onChange={(event) =>
+                        setTimelineOnlyErrors(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span style={{ color: "#4b5563", fontSize: 13 }}>
+                      Errors only
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gap: 16,
+                  gridTemplateColumns: "minmax(0, 1.4fr) minmax(280px, 1fr)",
+                }}
+              >
+                <div style={drawerSectionStyle}>
+                  <Typography.Text strong>Timeline Events</Typography.Text>
+                  {timelineLoading && !timelineRows.length ? (
+                    <Alert
+                      description="Loading the latest actor timeline."
+                      showIcon
+                      title="Fetching runtime evidence"
+                      type="info"
+                    />
+                  ) : timelineRows.length > 0 ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 10,
+                        maxHeight: 480,
+                        overflow: "auto",
+                      }}
+                    >
+                      {timelineRows.map((row) => {
+                        const tone = timelineStatusTone(row.timelineStatus);
+                        const isSelected = row.key === selectedTimelineRow?.key;
+                        const hasAuditMatch = executeAuditSteps.some(
+                          (step) => step.stepId === row.stepId
+                        );
+
+                        return (
+                          <button
+                            key={row.key}
+                            onClick={() => setTimelineSelectedKey(row.key)}
+                            style={{
+                              background: isSelected ? "#faf5ff" : "#ffffff",
+                              border: `1px solid ${
+                                isSelected ? "#c4b5fd" : "#e7e5e4"
+                              }`,
+                              borderRadius: 12,
+                              cursor: "pointer",
+                              padding: 12,
+                              textAlign: "left",
+                            }}
+                            type="button"
+                          >
+                            <div
+                              style={{
+                                alignItems: "center",
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: 8,
+                                marginBottom: 8,
+                              }}
+                            >
+                              <span
+                                style={{
+                                  background: tone.background,
+                                  borderRadius: 999,
+                                  color: tone.color,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  padding: "3px 8px",
+                                }}
+                              >
+                                {row.stage || row.eventType || "event"}
+                              </span>
+                              {row.stepId ? (
+                                <span
+                                  style={{
+                                    background: "#f5f5f4",
+                                    borderRadius: 999,
+                                    color: "#57534e",
+                                    fontSize: 11,
+                                    padding: "3px 8px",
+                                  }}
+                                >
+                                  {row.stepId}
+                                </span>
+                              ) : null}
+                              {hasAuditMatch ? (
+                                <span
+                                  style={{
+                                    background: "#eff6ff",
+                                    borderRadius: 999,
+                                    color: "#2563eb",
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    padding: "3px 8px",
+                                  }}
+                                >
+                                  Audit linked
+                                </span>
+                              ) : null}
+                            </div>
+                            <div
+                              style={{
+                                color: "#111827",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                marginBottom: 6,
+                              }}
+                            >
+                              {row.message || "No message"}
+                            </div>
+                            <div
+                              style={{
+                                color: "#6b7280",
+                                fontSize: 12,
+                                lineHeight: 1.6,
+                              }}
+                            >
+                              {row.dataSummary || "No structured data"}
+                            </div>
+                            <div
+                              style={{
+                                color: "#9ca3af",
+                                fontFamily: monoFontFamily,
+                                fontSize: 11,
+                                marginTop: 8,
+                              }}
+                            >
+                              {formatDateTime(row.timestamp)}
+                              {row.stepType ? ` · ${row.stepType}` : ""}
+                              {row.agentId ? ` · ${row.agentId}` : ""}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Empty
+                      description="No timeline items matched the current filters."
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    />
+                  )}
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  {selectedTimelineRow ? (
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text strong>Selected Event</Typography.Text>
+                      <div
+                        style={{
+                          color: "#4b5563",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 8,
+                        }}
+                      >
+                        <div>
+                          <div style={fieldLabelStyle}>Stage</div>
+                          <div>{selectedTimelineRow.stage || "n/a"}</div>
+                        </div>
+                        <div>
+                          <div style={fieldLabelStyle}>Message</div>
+                          <div>{selectedTimelineRow.message || "No message"}</div>
+                        </div>
+                        <div>
+                          <div style={fieldLabelStyle}>Timestamp</div>
+                          <div>{formatDateTime(selectedTimelineRow.timestamp)}</div>
+                        </div>
+                      </div>
+                      <pre style={monoBlockStyle}>
+                        {safeJson(selectedTimelineRow.data)}
+                      </pre>
+                    </div>
+                  ) : null}
+
+                  {relatedAuditStep ? (
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text strong>Related Audit Step</Typography.Text>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 8,
+                        }}
+                      >
+                        <Typography.Text strong>{relatedAuditStep.stepId}</Typography.Text>
+                        <Typography.Text type="secondary">
+                          {relatedAuditStep.stepType || "step"} ·{" "}
+                          {relatedAuditStep.targetRole || "unassigned"}
+                        </Typography.Text>
+                        {relatedAuditStep.outputPreview ? (
+                          <Alert
+                            description={relatedAuditStep.outputPreview}
+                            showIcon
+                            title="Output preview"
+                            type="success"
+                          />
+                        ) : null}
+                        {relatedAuditStep.suspensionPrompt ? (
+                          <Alert
+                            description={relatedAuditStep.suspensionPrompt}
+                            showIcon
+                            title="Suspension prompt"
+                            type="warning"
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : executeRunId && !executeAuditSnapshot ? (
+                    <div style={drawerSectionStyle}>
+                      <Typography.Text strong>Related Audit Step</Typography.Text>
+                      <Empty
+                        description="Load the run audit to correlate timeline events with structured step details."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           ) : null}
 

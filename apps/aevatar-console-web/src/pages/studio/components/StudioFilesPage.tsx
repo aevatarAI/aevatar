@@ -1,5 +1,7 @@
 import {
   ApiOutlined,
+  AppstoreOutlined,
+  BarsOutlined,
   CodeOutlined,
   DownOutlined,
   FileOutlined,
@@ -11,10 +13,13 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Col, Input, Row, Space, Typography } from 'antd';
+import { Button, Col, Input, Row, Space, Typography } from 'antd';
 import React from 'react';
 import { chatHistoryApi } from '@/pages/chat/chatHistoryApi';
 import type { ConversationMeta } from '@/pages/chat/chatTypes';
+import ExplorerDetailPane from '@/pages/studio/explorer/ExplorerDetailPane';
+import ExplorerTree from '@/pages/studio/explorer/ExplorerTree';
+import { useExplorerStore } from '@/pages/studio/explorer/useExplorerStore';
 import type {
   StudioConnectorCatalog,
   StudioRoleCatalog,
@@ -50,6 +55,8 @@ type StaticFileDescriptor = {
   readonly icon: React.ReactNode;
   readonly label: string;
 };
+
+type FilesViewMode = 'curated' | 'explorer';
 
 type StudioFilesPageProps = {
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
@@ -154,6 +161,11 @@ const treeDividerStyle: React.CSSProperties = {
   margin: '8px 12px',
 };
 
+const viewToggleWrapStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'flex-start',
+};
+
 function matchesSearch(values: Array<string | null | undefined>, search: string): boolean {
   const keyword = search.trim().toLowerCase();
   if (!keyword) {
@@ -247,10 +259,13 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   showHeader = true,
 }) => {
   const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('settings.json');
+  const [viewMode, setViewMode] = React.useState<FilesViewMode>('curated');
+  const [explorerDirty, setExplorerDirty] = React.useState(false);
   const [search, setSearch] = React.useState('');
   const [workflowsOpen, setWorkflowsOpen] = React.useState(true);
   const [scriptsOpen, setScriptsOpen] = React.useState(true);
   const [chatHistoriesOpen, setChatHistoriesOpen] = React.useState(false);
+  const explorer = useExplorerStore(scopeId);
 
   const scripts = useQuery({
     queryKey: ['studio-files-scripts', scopeId],
@@ -327,6 +342,15 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
     [chatConversations.data, search],
   );
+  const visibleExplorerKeys = React.useMemo(
+    () =>
+      explorer.manifest
+        .filter((entry) =>
+          matchesSearch([entry.key, entry.name, entry.type], search),
+        )
+        .map((entry) => entry.key),
+    [explorer.manifest, search],
+  );
 
   React.useEffect(() => {
     const visibleWorkflowIds = filteredWorkflows.map((workflow) => workflow.workflowId);
@@ -370,7 +394,76 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
     visibleStaticFiles,
   ]);
 
-  const rootLabel = scopeId || 'workspace';
+  React.useEffect(() => {
+    if (viewMode !== 'explorer') {
+      return;
+    }
+
+    if (visibleExplorerKeys.length === 0) {
+      if (!explorerDirty) {
+        explorer.setSelectedKey(null);
+      }
+      return;
+    }
+
+    if (!explorer.selectedKey) {
+      explorer.setSelectedKey(visibleExplorerKeys[0] ?? null);
+      return;
+    }
+
+    if (!visibleExplorerKeys.includes(explorer.selectedKey) && !explorerDirty) {
+      explorer.setSelectedKey(visibleExplorerKeys[0] ?? null);
+    }
+  }, [
+    explorer.selectedKey,
+    explorer.setSelectedKey,
+    explorerDirty,
+    viewMode,
+    visibleExplorerKeys,
+  ]);
+
+  const handleViewModeChange = React.useCallback(
+    (nextMode: FilesViewMode) => {
+      if (nextMode === viewMode) {
+        return;
+      }
+
+      if (
+        viewMode === 'explorer' &&
+        explorerDirty &&
+        !window.confirm('Discard unsaved Explorer changes?')
+      ) {
+        return;
+      }
+
+      setViewMode(nextMode);
+      if (nextMode !== 'explorer') {
+        setExplorerDirty(false);
+      }
+    },
+    [explorerDirty, viewMode],
+  );
+
+  const handleExplorerSelect = React.useCallback(
+    (key: string) => {
+      if (key === explorer.selectedKey) {
+        return;
+      }
+
+      if (
+        explorerDirty &&
+        !window.confirm('Discard unsaved Explorer changes before switching files?')
+      ) {
+        return;
+      }
+
+      explorer.setSelectedKey(key);
+      setExplorerDirty(false);
+    },
+    [explorer.selectedKey, explorer.setSelectedKey, explorerDirty],
+  );
+
+  const rootLabel = viewMode === 'explorer' ? scopeId || 'chrono-storage' : scopeId || 'workspace';
 
   return (
     <Row gutter={[16, 16]} align="stretch" style={pageRowStyle}>
@@ -382,169 +475,214 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
                 Files
               </Typography.Title>
               <Typography.Text type="secondary">
-                Browse workflow files, reusable catalogs, and scope-aware scripts from
-                a single tree.
+                Use the guided Studio view for common assets, or switch to raw storage
+                when you need to inspect the underlying files directly.
               </Typography.Text>
             </div>
           ) : null}
+
+          <div style={viewToggleWrapStyle}>
+            <Space.Compact>
+              <Button
+                type={viewMode === 'curated' ? 'primary' : 'default'}
+                icon={<AppstoreOutlined />}
+                onClick={() => handleViewModeChange('curated')}
+              >
+                Studio View
+              </Button>
+              <Button
+                type={viewMode === 'explorer' ? 'primary' : 'default'}
+                icon={<BarsOutlined />}
+                onClick={() => handleViewModeChange('explorer')}
+              >
+                Storage Explorer
+              </Button>
+            </Space.Compact>
+          </div>
 
           <Input
             allowClear
             prefix={<SearchOutlined />}
             aria-label="Search files"
-            placeholder="Search files"
+            placeholder={viewMode === 'explorer' ? 'Search explorer' : 'Search files'}
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
 
-          <div style={treeScrollStyle}>
-            <div style={{ padding: '4px 12px' }}>
-              <Space size={8}>
-                <FolderOpenOutlined />
-                <Typography.Text strong>{rootLabel}/</Typography.Text>
-              </Space>
-            </div>
-
-            <FolderToggle
-              label="workflows/"
-              open={workflowsOpen}
-              count={workflows.data?.length ?? 0}
-              onToggle={() => setWorkflowsOpen((current) => !current)}
+          {viewMode === 'explorer' ? (
+            <ExplorerTree
+              manifest={explorer.manifest}
+              onSelect={handleExplorerSelect}
+              scopeId={scopeId}
+              search={search}
+              selectedKey={explorer.selectedKey}
             />
-            {workflowsOpen ? (
-              filteredWorkflows.length > 0 ? (
-                filteredWorkflows.map((workflow) => (
-                  <TreeRow
-                    key={workflow.workflowId}
-                    active={selectedFile === `workflow:${workflow.workflowId}`}
-                    icon={<FileOutlined />}
-                    indent
-                    label={workflow.fileName}
-                    meta={workflow.directoryLabel}
-                    onClick={() => setSelectedFile(`workflow:${workflow.workflowId}`)}
-                  />
-                ))
-              ) : (
-                <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                  {workflows.isLoading ? 'Loading workflows...' : 'No workflow files matched.'}
-                </Typography.Text>
-              )
-            ) : null}
+          ) : (
+            <div style={treeScrollStyle}>
+              <div style={{ padding: '4px 12px' }}>
+                <Space size={8}>
+                  <FolderOpenOutlined />
+                  <Typography.Text strong>{rootLabel}/</Typography.Text>
+                </Space>
+              </div>
 
-            {scriptsEnabled ? (
-              <>
-                <FolderToggle
-                  label="scripts/"
-                  open={scriptsOpen}
-                  count={scopeId ? scripts.data?.length ?? 0 : 0}
-                  onToggle={() => setScriptsOpen((current) => !current)}
-                />
-                {scriptsOpen ? (
-                  scopeId ? (
-                    filteredScripts.length > 0 ? (
-                      filteredScripts.map((detail) => (
-                        <TreeRow
-                          key={detail.script?.scriptId}
-                          active={selectedFile === `script:${detail.script?.scriptId || ''}`}
-                          icon={<CodeOutlined />}
-                          indent
-                          label={`${detail.script?.scriptId || 'script'}.cs`}
-                          meta={detail.script?.activeRevision || 'Draft'}
-                          onClick={() =>
-                            detail.script?.scriptId
-                              ? setSelectedFile(`script:${detail.script.scriptId}`)
-                              : undefined
-                          }
-                        />
-                      ))
-                    ) : (
-                      <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                        {scripts.isLoading ? 'Loading scripts...' : 'No script files matched.'}
-                      </Typography.Text>
-                    )
-                  ) : (
-                    <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                      Resolve a project scope to browse scripts.
-                    </Typography.Text>
-                  )
-                ) : null}
-              </>
-            ) : null}
-
-            {visibleStaticFiles.length > 0 ? <div aria-hidden="true" style={treeDividerStyle} /> : null}
-
-            {visibleStaticFiles.map((fileName) => {
-              const descriptor = staticFiles.find((item) => item.file === fileName);
-              if (!descriptor) {
-                return null;
-              }
-
-              return (
-                <TreeRow
-                  key={descriptor.file}
-                  active={selectedFile === descriptor.file}
-                  icon={descriptor.icon}
-                  label={descriptor.label}
-                  onClick={() => setSelectedFile(descriptor.file)}
-                />
-              );
-            })}
-
-            <div aria-hidden="true" style={treeDividerStyle} />
-            <FolderToggle
-              label="chat-histories/"
-              open={chatHistoriesOpen}
-              count={scopeId ? chatConversations.data?.length ?? 0 : 0}
-              onToggle={() => setChatHistoriesOpen((current) => !current)}
-            />
-            {chatHistoriesOpen ? (
-              scopeId ? (
-                filteredChatConversations.length > 0 ? (
-                  filteredChatConversations.map((conversation: ConversationMeta) => (
+              <FolderToggle
+                label="workflows/"
+                open={workflowsOpen}
+                count={workflows.data?.length ?? 0}
+                onToggle={() => setWorkflowsOpen((current) => !current)}
+              />
+              {workflowsOpen ? (
+                filteredWorkflows.length > 0 ? (
+                  filteredWorkflows.map((workflow) => (
                     <TreeRow
-                      key={conversation.id}
-                      active={selectedFile === `chat-history:${conversation.id}`}
-                      icon={<MessageOutlined />}
+                      key={workflow.workflowId}
+                      active={selectedFile === `workflow:${workflow.workflowId}`}
+                      icon={<FileOutlined />}
                       indent
-                      label={conversation.actorId || conversation.id}
-                      meta={conversation.title || `${conversation.messageCount} messages`}
-                      onClick={() => setSelectedFile(`chat-history:${conversation.id}`)}
+                      label={workflow.fileName}
+                      meta={workflow.directoryLabel}
+                      onClick={() => setSelectedFile(`workflow:${workflow.workflowId}`)}
                     />
                   ))
                 ) : (
                   <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                    {chatConversations.isLoading
-                      ? 'Loading conversations...'
-                      : 'No conversations matched.'}
+                    {workflows.isLoading ? 'Loading workflows...' : 'No workflow files matched.'}
                   </Typography.Text>
                 )
-              ) : (
-                <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
-                  Resolve a project scope to browse chat histories.
-                </Typography.Text>
-              )
-            ) : null}
-          </div>
+              ) : null}
+
+              {scriptsEnabled ? (
+                <>
+                  <FolderToggle
+                    label="scripts/"
+                    open={scriptsOpen}
+                    count={scopeId ? scripts.data?.length ?? 0 : 0}
+                    onToggle={() => setScriptsOpen((current) => !current)}
+                  />
+                  {scriptsOpen ? (
+                    scopeId ? (
+                      filteredScripts.length > 0 ? (
+                        filteredScripts.map((detail) => (
+                          <TreeRow
+                            key={detail.script?.scriptId}
+                            active={selectedFile === `script:${detail.script?.scriptId || ''}`}
+                            icon={<CodeOutlined />}
+                            indent
+                            label={`${detail.script?.scriptId || 'script'}.cs`}
+                            meta={detail.script?.activeRevision || 'Draft'}
+                            onClick={() =>
+                              detail.script?.scriptId
+                                ? setSelectedFile(`script:${detail.script.scriptId}`)
+                                : undefined
+                            }
+                          />
+                        ))
+                      ) : (
+                        <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
+                          {scripts.isLoading ? 'Loading scripts...' : 'No script files matched.'}
+                        </Typography.Text>
+                      )
+                    ) : (
+                      <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
+                        Resolve a project scope to browse scripts.
+                      </Typography.Text>
+                    )
+                  ) : null}
+                </>
+              ) : null}
+
+              {visibleStaticFiles.length > 0 ? <div aria-hidden="true" style={treeDividerStyle} /> : null}
+
+              {visibleStaticFiles.map((fileName) => {
+                const descriptor = staticFiles.find((item) => item.file === fileName);
+                if (!descriptor) {
+                  return null;
+                }
+
+                return (
+                  <TreeRow
+                    key={descriptor.file}
+                    active={selectedFile === descriptor.file}
+                    icon={descriptor.icon}
+                    label={descriptor.label}
+                    onClick={() => setSelectedFile(descriptor.file)}
+                  />
+                );
+              })}
+
+              <div aria-hidden="true" style={treeDividerStyle} />
+              <FolderToggle
+                label="chat-histories/"
+                open={chatHistoriesOpen}
+                count={scopeId ? chatConversations.data?.length ?? 0 : 0}
+                onToggle={() => setChatHistoriesOpen((current) => !current)}
+              />
+              {chatHistoriesOpen ? (
+                scopeId ? (
+                  filteredChatConversations.length > 0 ? (
+                    filteredChatConversations.map((conversation: ConversationMeta) => (
+                      <TreeRow
+                        key={conversation.id}
+                        active={selectedFile === `chat-history:${conversation.id}`}
+                        icon={<MessageOutlined />}
+                        indent
+                        label={conversation.actorId || conversation.id}
+                        meta={conversation.title || `${conversation.messageCount} messages`}
+                        onClick={() => setSelectedFile(`chat-history:${conversation.id}`)}
+                      />
+                    ))
+                  ) : (
+                    <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
+                      {chatConversations.isLoading
+                        ? 'Loading conversations...'
+                        : 'No conversations matched.'}
+                    </Typography.Text>
+                  )
+                ) : (
+                  <Typography.Text style={{ ...treeMetaStyle, paddingInline: 40 }}>
+                    Resolve a project scope to browse chat histories.
+                  </Typography.Text>
+                )
+              ) : null}
+            </div>
+          )}
         </section>
       </Col>
 
       <Col xs={24} xl={16} xxl={17} style={filesColumnStyle}>
         <section style={panelShellStyle}>
-          <StudioFilesDetailPane
-            selectedFile={selectedFile}
-            workflows={workflows}
-            workspaceSettings={workspaceSettings}
-            roles={roles}
-            connectors={connectors}
-            settings={settings}
-            scripts={scripts}
-            chatConversations={chatConversations}
-            scopeId={scopeId}
-            workflowStorageMode={workflowStorageMode}
-            scriptsEnabled={scriptsEnabled}
-            onOpenWorkflowInStudio={onOpenWorkflowInStudio}
-            onOpenScriptInStudio={onOpenScriptInStudio}
-          />
+          {viewMode === 'explorer' ? (
+            <ExplorerDetailPane
+              content={explorer.selectedContent}
+              contentErrorMessage={explorer.contentErrorMessage}
+              contentLoading={explorer.contentLoading}
+              onDeleteFile={explorer.deleteFile}
+              onDirtyStateChange={setExplorerDirty}
+              errorMessage={explorer.errorMessage}
+              onOpenWorkflowInStudio={onOpenWorkflowInStudio}
+              onOpenScriptInStudio={onOpenScriptInStudio}
+              onSaveFile={explorer.saveFile}
+              scopeId={scopeId}
+              selectedEntry={explorer.selectedEntry}
+            />
+          ) : (
+            <StudioFilesDetailPane
+              selectedFile={selectedFile}
+              workflows={workflows}
+              workspaceSettings={workspaceSettings}
+              roles={roles}
+              connectors={connectors}
+              settings={settings}
+              scripts={scripts}
+              chatConversations={chatConversations}
+              scopeId={scopeId}
+              workflowStorageMode={workflowStorageMode}
+              scriptsEnabled={scriptsEnabled}
+              onOpenWorkflowInStudio={onOpenWorkflowInStudio}
+              onOpenScriptInStudio={onOpenScriptInStudio}
+            />
+          )}
         </section>
       </Col>
     </Row>

@@ -78,6 +78,7 @@ import {
   getStudioScopeBindingCurrentRevision,
   normalizeStudioScopeBindingImplementationKind,
 } from '@/shared/studio/models';
+import { createProviderDraft } from '@/shared/studio/providerDrafts';
 import type {
   WorkflowCatalogDefinition,
 } from '@/shared/models/runtime/catalog';
@@ -792,46 +793,6 @@ function createUserConfigDraft(
   return {
     defaultModel: trimOptional(config.defaultModel),
     runtimeBaseUrl: trimOptional(config.runtimeBaseUrl),
-  };
-}
-
-function createProviderDraft(
-  providerTypes: StudioProviderType[],
-  existingProviders: StudioProviderSettings[],
-): StudioProviderSettings {
-  const preferredType =
-    providerTypes.find((item) => item.recommended) ??
-    providerTypes[0] ?? {
-      id: 'openai',
-      displayName: 'OpenAI',
-      category: 'llm',
-      description: '',
-      recommended: true,
-      defaultEndpoint: '',
-      defaultModel: '',
-    };
-  const used = new Set(
-    existingProviders.map((provider) => provider.providerName.trim().toLowerCase()),
-  );
-  const baseName = preferredType.id || 'provider';
-  let index = 1;
-  let nextName = `${baseName}-${index}`;
-  while (used.has(nextName.toLowerCase())) {
-    index += 1;
-    nextName = `${baseName}-${index}`;
-  }
-
-  return {
-    providerName: nextName,
-    providerType: preferredType.id,
-    displayName: preferredType.displayName,
-    category: preferredType.category,
-    description: preferredType.description,
-    model: preferredType.defaultModel,
-    endpoint: preferredType.defaultEndpoint,
-    apiKey: '',
-    apiKeyConfigured: false,
-    clearApiKeyRequested: false,
   };
 }
 

@@ -1,5 +1,6 @@
 import type {
   RuntimeEvent,
+  RuntimeRunInterventionInfo,
   RuntimeStepInfo,
   RuntimeToolApprovalRequestInfo,
   RuntimeToolCallInfo,
@@ -16,6 +17,7 @@ export type ChatMessage = {
   error?: string;
   events?: RuntimeEvent[];
   pendingApproval?: PendingApprovalInfo;
+  pendingRunIntervention?: PendingRunInterventionInfo;
   steps?: StepInfo[];
   thinking?: string;
   toolCalls?: ToolCallInfo[];
@@ -26,6 +28,8 @@ export type StepInfo = RuntimeStepInfo;
 export type ToolCallInfo = RuntimeToolCallInfo;
 
 export type PendingApprovalInfo = RuntimeToolApprovalRequestInfo;
+
+export type PendingRunInterventionInfo = RuntimeRunInterventionInfo;
 
 export type ServiceEndpoint = {
   endpointId: string;
@@ -39,7 +43,7 @@ export type ServiceEndpoint = {
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: "nyxid-chat" | "service";
+  kind: "nyxid-chat" | "onboarding" | "service";
   endpoints: ServiceEndpoint[];
   deploymentStatus?: string;
   primaryActorId?: string;
@@ -50,6 +54,8 @@ export type ConversationMeta = {
   actorId?: string;
   commandId?: string;
   runId?: string;
+  llmModel?: string;
+  llmRoute?: string;
   title: string;
   serviceId: string;
   serviceKind: string;
@@ -67,6 +73,7 @@ export type StoredChatMessage = {
   error?: string;
   events?: RuntimeEvent[];
   pendingApproval?: PendingApprovalInfo;
+  pendingRunIntervention?: PendingRunInterventionInfo;
   steps?: StepInfo[];
   thinking?: string;
   toolCalls?: ToolCallInfo[];

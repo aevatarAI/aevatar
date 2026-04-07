@@ -207,6 +207,12 @@ function decodeStudioUserConfigModelsResponse(
               ["proxyUrl", "proxy_url"],
               `${resolvedProviderLabel}.proxyUrl`
             ) ?? "",
+          source:
+            readNullableString(
+              provider,
+              "source",
+              `${resolvedProviderLabel}.source`
+            ) ?? undefined,
         };
       }
     ),
@@ -221,6 +227,25 @@ function decodeStudioUserConfigModelsResponse(
       `${label}.supportedModels`,
       (entry, entryLabel) =>
         expectString(entry, entryLabel ?? `${label}.supportedModels[]`)
+    ),
+    modelsByProvider: Object.fromEntries(
+      Object.entries(
+        expectRecord(
+          record.modelsByProvider ?? record.models_by_provider ?? {},
+          `${label}.modelsByProvider`
+        )
+      ).map(([providerSlug, models]) => [
+        providerSlug,
+        expectArray(
+          models,
+          `${label}.modelsByProvider.${providerSlug}`,
+          (entry, entryLabel) =>
+            expectString(
+              entry,
+              entryLabel ?? `${label}.modelsByProvider.${providerSlug}[]`
+            )
+        ),
+      ])
     ),
   };
 }
@@ -1224,6 +1249,7 @@ export const studioApi = {
       headers: JSON_HEADERS,
       body: JSON.stringify({
         defaultModel: input.defaultModel.trim(),
+        preferredLlmRoute: trimOptional(input.preferredLlmRoute),
         runtimeBaseUrl: trimOptional(input.runtimeBaseUrl) ?? "",
       }),
     });

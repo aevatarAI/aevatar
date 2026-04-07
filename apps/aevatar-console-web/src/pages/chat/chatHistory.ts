@@ -167,6 +167,9 @@ export function serializeChatMessages(
       pendingApproval: message.pendingApproval
         ? { ...message.pendingApproval }
         : undefined,
+      pendingRunIntervention: message.pendingRunIntervention
+        ? { ...message.pendingRunIntervention }
+        : undefined,
       role: message.role,
       status: message.status === "streaming" ? "complete" : message.status,
       steps: message.steps ? [...message.steps] : undefined,
@@ -186,6 +189,9 @@ export function hydrateChatMessages(
     id: message.id,
     pendingApproval: message.pendingApproval
       ? { ...message.pendingApproval }
+      : undefined,
+    pendingRunIntervention: message.pendingRunIntervention
+      ? { ...message.pendingRunIntervention }
       : undefined,
     role: message.role,
     status: message.status,

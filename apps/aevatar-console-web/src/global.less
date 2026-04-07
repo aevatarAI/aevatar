@@ -101,6 +101,256 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+.scope-chat-llm-bar {
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
+  min-width: 0;
+  position: relative;
+}
+
+.scope-chat-llm-trigger {
+  align-items: center;
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb), 0.07) 0%, rgba(var(--accent-rgb), 0.12) 100%);
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  border-radius: 14px;
+  box-shadow:
+    0 6px 14px rgba(15, 23, 42, 0.03),
+    0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  color: #475569;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 600;
+  gap: 10px;
+  height: 38px;
+  max-width: 240px;
+  min-width: 0;
+  padding: 0 14px;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.scope-chat-llm-trigger:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.2);
+  box-shadow:
+    0 8px 18px rgba(15, 23, 42, 0.05),
+    0 1px 0 rgba(255, 255, 255, 0.7) inset;
+}
+
+.scope-chat-llm-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.scope-chat-llm-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-chat-llm-chevron {
+  color: #94a3b8;
+}
+
+.scope-chat-llm-inline-route {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-chat-llm-panel {
+  background: #ffffff;
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  border-radius: 18px;
+  box-shadow:
+    0 18px 42px rgba(15, 23, 42, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.82) inset;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.scope-chat-llm-reset {
+  background: rgba(var(--accent-rgb), 0.06);
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  border-radius: 999px;
+  color: var(--accent-text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  height: 28px;
+  padding: 0 10px;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.scope-chat-llm-reset:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.2);
+}
+
+.scope-chat-llm-panel-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+}
+
+.scope-chat-llm-panel-title {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.scope-chat-llm-search {
+  align-items: center;
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.08);
+  border-top: 1px solid rgba(var(--accent-rgb), 0.08);
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.scope-chat-llm-search-icon {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.scope-chat-llm-search-input {
+  background: transparent;
+  border: none;
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 500;
+  outline: none;
+  padding: 0;
+  width: 100%;
+}
+
+.scope-chat-llm-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.scope-chat-llm-route-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px 10px;
+}
+
+.scope-chat-llm-route-label {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scope-chat-llm-route-select {
+  appearance: none;
+  background: rgba(var(--accent-rgb), 0.05);
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  border-radius: 12px;
+  color: #334155;
+  flex: 1 1 auto;
+  font-size: 13px;
+  font-weight: 600;
+  height: 36px;
+  min-width: 0;
+  outline: none;
+  padding: 0 12px;
+}
+
+.scope-chat-llm-options {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 8px 8px;
+}
+
+.scope-chat-llm-group {
+  padding: 6px 0 2px;
+}
+
+.scope-chat-llm-group-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px 8px;
+}
+
+.scope-chat-llm-option {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: #1f2937;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 12px;
+  text-align: left;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+  width: 100%;
+}
+
+.scope-chat-llm-option:hover {
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.scope-chat-llm-option.is-active {
+  background: rgba(var(--accent-rgb), 0.1);
+  border-color: rgba(var(--accent-rgb), 0.14);
+}
+
+.scope-chat-llm-option--manual {
+  margin-bottom: 6px;
+}
+
+.scope-chat-llm-option-badge {
+  background: rgba(var(--accent-rgb), 0.08);
+  border-radius: 999px;
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 12px;
+  padding: 4px 8px;
+}
+
+.scope-chat-llm-option-main {
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.scope-chat-llm-option-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-chat-llm-empty {
+  color: #94a3b8;
+  font-size: 13px;
+  padding: 12px 10px 14px;
+}
+
 .workflow-library-table {
   .ant-pro-card {
     box-shadow: none;

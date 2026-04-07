@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { chatHistoryApi } from '@/pages/chat/chatHistoryApi';
+import { explorerApi } from '@/shared/api/explorerApi';
 import { studioApi } from '@/shared/studio/api';
 import { scriptsApi } from '@/shared/studio/scriptsApi';
 import { renderWithQueryClient } from '../../../../tests/reactQueryTestUtils';
@@ -22,6 +23,15 @@ jest.mock('@/shared/studio/api', () => ({
     saveConnectorCatalog: jest.fn(),
     addWorkflowDirectory: jest.fn(),
     removeWorkflowDirectory: jest.fn(),
+  },
+}));
+
+jest.mock('@/shared/api/explorerApi', () => ({
+  explorerApi: {
+    getManifest: jest.fn(),
+    getFile: jest.fn(),
+    putFile: jest.fn(),
+    deleteFile: jest.fn(),
   },
 }));
 
@@ -146,6 +156,7 @@ function createProps(overrides: Record<string, unknown> = {}) {
 
 describe('StudioFilesPage', () => {
   beforeEach(() => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
     (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
       workflowId: 'workflow-1',
       name: 'workspace-demo',
@@ -226,6 +237,76 @@ describe('StudioFilesPage', () => {
       },
     ]);
     (chatHistoryApi.deleteConversation as jest.Mock).mockResolvedValue(undefined);
+    (explorerApi.putFile as jest.Mock).mockResolvedValue(undefined);
+    (explorerApi.deleteFile as jest.Mock).mockResolvedValue(undefined);
+    (explorerApi.getManifest as jest.Mock).mockResolvedValue({
+      version: 1,
+      files: [
+        {
+          key: 'settings.json',
+          type: 'config',
+          name: 'settings.json',
+          updatedAt: '2026-03-18T00:00:00Z',
+        },
+        {
+          key: 'workflows/workflow-1.yaml',
+          type: 'workflow',
+          name: 'workflow-1.yaml',
+          updatedAt: '2026-03-18T00:00:00Z',
+        },
+        {
+          key: 'scripts/script-alpha.cs',
+          type: 'script',
+          name: 'script-alpha.cs',
+          updatedAt: '2026-03-18T00:00:00Z',
+        },
+        {
+          key: 'chat-histories/conversation-1.jsonl',
+          type: 'chat-history',
+          name: 'conversation-1.jsonl',
+          updatedAt: '2026-03-18T01:00:00Z',
+        },
+      ],
+    });
+    (explorerApi.getFile as jest.Mock).mockImplementation(async (key: string) => {
+      if (key === 'workflows/workflow-1.yaml') {
+        return 'name: workflow-1\nsteps: []\n';
+      }
+
+      if (key === 'scripts/script-alpha.cs') {
+        return JSON.stringify({
+          format: 'aevatar.scripting.package.v1',
+          entrySourcePath: 'Behavior.cs',
+          csharpSources: [{ path: 'Behavior.cs', content: 'public sealed class DraftBehavior {}' }],
+          protoFiles: [],
+        });
+      }
+
+      if (key === 'chat-histories/conversation-1.jsonl') {
+        return JSON.stringify([
+          {
+            id: 'message-1',
+            role: 'user',
+            content: 'hello from explorer',
+            timestamp: Date.parse('2026-03-18T01:00:00Z'),
+            status: 'complete',
+          },
+          {
+            id: 'message-2',
+            role: 'assistant',
+            content: 'explorer reply',
+            timestamp: Date.parse('2026-03-18T01:01:00Z'),
+            status: 'complete',
+          },
+        ]);
+      }
+
+      return '{\n  "runtimeBaseUrl": "https://runtime.example.test"\n}\n';
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   it('shows settings by default and saves edited settings.json content', async () => {
@@ -332,6 +413,94 @@ describe('StudioFilesPage', () => {
       expect(chatHistoryApi.deleteConversation).toHaveBeenCalledWith(
         'scope-1',
         'conversation-1',
+      );
+    });
+  });
+
+  it('switches to explorer and previews chrono-storage files', async () => {
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Storage Explorer' }));
+
+    expect(await screen.findByRole('button', { name: /workflow-1\.yaml/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /workflow-1\.yaml/i }));
+
+    expect(await screen.findByText('Read-only in Explorer')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Explorer file preview')).toHaveTextContent(
+      'name: workflow-1',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Studio' }));
+    expect(props.onOpenWorkflowInStudio).toHaveBeenCalledWith('workflow-1');
+
+    fireEvent.click(screen.getByRole('button', { name: /conversation-1\.jsonl/i }));
+    expect(await screen.findByLabelText('Explorer chat history preview')).toHaveTextContent(
+      'hello from explorer',
+    );
+    expect(screen.getByLabelText('Explorer chat history preview')).toHaveTextContent(
+      'explorer reply',
+    );
+  });
+
+  it('saves editable explorer files and blocks file switches with unsaved changes', async () => {
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Storage Explorer' }));
+
+    const editor = (await screen.findByLabelText(
+      'Explorer file editor',
+    )) as HTMLTextAreaElement;
+    expect(editor.value).toContain('runtime.example.test');
+
+    fireEvent.change(editor, {
+      target: {
+        value: editor.value.replace(
+          'https://runtime.example.test',
+          'https://runtime.changed.test',
+        ),
+      },
+    });
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    (window.confirm as jest.Mock).mockReturnValueOnce(false);
+    fireEvent.click(screen.getByRole('button', { name: /workflow-1\.yaml/i }));
+
+    expect(screen.queryByText('Read-only in Explorer')).not.toBeInTheDocument();
+    expect(
+      (screen.getByLabelText('Explorer file editor') as HTMLTextAreaElement).value,
+    ).toContain('runtime.changed.test');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(explorerApi.putFile).toHaveBeenCalledWith(
+        'settings.json',
+        expect.stringContaining('https://runtime.changed.test'),
+      );
+    });
+  });
+
+  it('deletes editable explorer files after confirmation', async () => {
+    const props = createProps();
+
+    renderWithQueryClient(React.createElement(StudioFilesPage, props));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Storage Explorer' }));
+    fireEvent.click(await screen.findByRole('button', { name: /conversation-1\.jsonl/i }));
+
+    await screen.findByLabelText('Explorer chat history preview');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(window.confirm).toHaveBeenCalled();
+      expect(explorerApi.deleteFile).toHaveBeenCalledWith(
+        'chat-histories/conversation-1.jsonl',
       );
     });
   });

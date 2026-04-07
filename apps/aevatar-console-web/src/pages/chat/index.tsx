@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
@@ -24,14 +24,25 @@ import {
   hydrateChatMessages,
   serializeChatMessages,
 } from "./chatHistory";
+import {
+  buildConversationHeaders,
+  buildConversationModelGroups,
+  buildConversationRouteOptions,
+  describeConversationRoute,
+  normalizeUserLlmRoute,
+  trimConversationValue,
+} from "./chatConversationConfig";
 import { ChatAdvancedConsole } from "./chatAdvancedConsole";
 import {
   applyRuntimeEvent,
   createRuntimeEventAccumulator,
   isRawObserved,
 } from "./chatEventAdapter";
+import { ChatOnboardingGuide } from "./chatOnboardingGuide";
 import {
   ChatInput,
+  ConversationLlmConfigBar,
+  ChatToolsMenu,
   ChatMetaStrip,
   ChatMessageBubble,
   ConversationSidebar,
@@ -40,11 +51,35 @@ import {
   LoadingState,
   ServiceSelector,
 } from "./chatPresentation";
+import {
+  buildOnboardingApiKeyErrorPrompt,
+  buildOnboardingApiKeyPrompt,
+  buildOnboardingCreatingMessage,
+  buildOnboardingCustomEndpointErrorPrompt,
+  buildOnboardingCustomEndpointPrompt,
+  buildOnboardingDonePrompt,
+  buildOnboardingEndpointModeErrorPrompt,
+  buildOnboardingEndpointModePrompt,
+  buildOnboardingProviderErrorPrompt,
+  buildOnboardingProviderPrompt,
+  buildOnboardingSaveSettingsInput,
+  buildOnboardingSuccessPrompt,
+  createOnboardingProviderSettings,
+  createOnboardingServiceOption,
+  hasConfiguredProviders,
+  isValidOnboardingEndpoint,
+  onboardingServiceId,
+  resolveOnboardingEndpointMode,
+  resolveOnboardingProviderType,
+  redactOnboardingSecret,
+  type OnboardingState,
+} from "./onboarding";
 import type {
   ChatMessage,
   ChatSessionState,
   ConversationMeta,
   PendingApprovalInfo,
+  PendingRunInterventionInfo,
   RuntimeEvent,
   ServiceOption,
   StepInfo,
@@ -62,6 +97,20 @@ function createClientId(): string {
   return globalThis.crypto?.randomUUID?.()
     ? globalThis.crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createChatMessage(
+  role: ChatMessage["role"],
+  content: string,
+  status: ChatMessage["status"] = "complete"
+): ChatMessage {
+  return {
+    content,
+    id: createClientId(),
+    role,
+    status,
+    timestamp: Date.now(),
+  };
 }
 
 function mapChatServiceOption(service: ScopeConsoleServiceOption): ServiceOption {
@@ -94,7 +143,11 @@ function buildConversationMeta(
   messages: readonly ChatMessage[],
   session: ChatSessionState,
   service: ServiceOption,
-  previousCreatedAt?: string
+  previousCreatedAt?: string,
+  options?: {
+    llmModel?: string;
+    llmRoute?: string;
+  }
 ): ConversationMeta {
   const firstUserMessage = messages.find((message) => message.role === "user");
   const title = (firstUserMessage?.content || "Untitled").trim().slice(0, 60);
@@ -108,6 +161,8 @@ function buildConversationMeta(
     commandId: session.commandId || undefined,
     createdAt: previousCreatedAt || now,
     id: conversationId,
+    llmModel: trimConversationValue(options?.llmModel),
+    llmRoute: options?.llmRoute,
     messageCount: existingMessages.length,
     runId: session.runId || undefined,
     serviceId: service.id,
@@ -162,6 +217,46 @@ function clonePendingApproval(
   return pendingApproval ? { ...pendingApproval } : undefined;
 }
 
+function clonePendingRunIntervention(
+  pendingRunIntervention?: PendingRunInterventionInfo
+): PendingRunInterventionInfo | undefined {
+  return pendingRunIntervention ? { ...pendingRunIntervention } : undefined;
+}
+
+type RunInterventionActionRequest =
+  | { kind: "resume"; value?: string }
+  | { kind: "approve"; value?: string }
+  | { kind: "reject"; value?: string }
+  | { kind: "signal"; value?: string };
+
+function createAssistantStatusMessage(content: string): ChatMessage {
+  return createChatMessage("assistant", content, "complete");
+}
+
+function createAssistantErrorMessage(error: string): ChatMessage {
+  return {
+    ...createChatMessage("assistant", "", "error"),
+    error,
+  };
+}
+
+function buildRunInterventionFeedback(
+  intervention: PendingRunInterventionInfo,
+  action: RunInterventionActionRequest["kind"]
+): string {
+  if (action === "signal") {
+    return `Signal ${intervention.signalName || "continue"} accepted for ${intervention.stepId}.`;
+  }
+
+  if (intervention.kind === "human_approval") {
+    return action === "reject"
+      ? `Rejection submitted for ${intervention.stepId}.`
+      : `Approval submitted for ${intervention.stepId}.`;
+  }
+
+  return `Input submitted for ${intervention.stepId}.`;
+}
+
 function resolveEventTimestamp(events: readonly RuntimeEvent[]): number {
   const lastTimestamp = events[events.length - 1]?.timestamp;
   return typeof lastTimestamp === "number" && Number.isFinite(lastTimestamp)
@@ -178,6 +273,9 @@ function buildAssistantMessagePatch(
     error: accumulator.errorText || undefined,
     events: [...accumulator.events],
     pendingApproval: clonePendingApproval(accumulator.pendingApproval),
+    pendingRunIntervention: clonePendingRunIntervention(
+      accumulator.pendingRunIntervention
+    ),
     status,
     steps: cloneStepInfo(accumulator.steps),
     thinking: accumulator.thinking,
@@ -207,6 +305,7 @@ function buildSessionFromAccumulator(
 }
 
 const ChatPage: React.FC = () => {
+  const queryClient = useQueryClient();
   const abortControllerRef = useRef<AbortController | null>(null);
   const previousServiceIdRef = useRef("");
   const restoringConversationRef = useRef(false);
@@ -222,12 +321,22 @@ const ChatPage: React.FC = () => {
   const [activeApprovalRequestId, setActiveApprovalRequestId] = useState<string | null>(
     null
   );
+  const [activeRunInterventionKey, setActiveRunInterventionKey] = useState<
+    string | null
+  >(null);
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [session, setSession] = useState<ChatSessionState>(createIdleSession());
   const [showDebug, setShowDebug] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [onboardingState, setOnboardingState] = useState<OnboardingState | null>(null);
+  const [conversationRoute, setConversationRoute] = useState<string | undefined>(
+    undefined
+  );
+  const [conversationModel, setConversationModel] = useState<string | undefined>(
+    undefined
+  );
 
   const authSessionQuery = useQuery({
     queryKey: ["chat", "auth-session"],
@@ -245,6 +354,21 @@ const ChatPage: React.FC = () => {
     [authSessionQuery.data]
   );
   const scopeId = routeScopeId || resolvedScope?.scopeId || "";
+  const settingsQuery = useQuery({
+    enabled: authSessionQuery.isSuccess,
+    queryKey: ["studio-settings"],
+    queryFn: () => studioApi.getSettings(),
+  });
+  const userConfigQuery = useQuery({
+    enabled: authSessionQuery.isSuccess,
+    queryKey: ["chat", "user-config"],
+    queryFn: () => studioApi.getUserConfig(),
+  });
+  const userConfigModelsQuery = useQuery({
+    enabled: authSessionQuery.isSuccess,
+    queryKey: ["chat", "user-config-models"],
+    queryFn: () => studioApi.getUserConfigModels(),
+  });
 
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -263,19 +387,66 @@ const ChatPage: React.FC = () => {
   });
 
   const services = useMemo(
-    () =>
-      buildScopeConsoleServiceOptions(
+    () => [
+      createOnboardingServiceOption(),
+      ...buildScopeConsoleServiceOptions(
         servicesQuery.data ?? [],
         bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
         {
           chatOnly: true,
         }
       ).map(mapChatServiceOption),
+    ],
     [bindingQuery.data?.available, bindingQuery.data?.serviceId, servicesQuery.data]
+  );
+  const providerConfigured = useMemo(
+    () => hasConfiguredProviders(settingsQuery.data?.providers ?? []),
+    [settingsQuery.data?.providers]
   );
 
   const selectedService =
     services.find((service) => service.id === selectedServiceId) ?? null;
+  const globalPreferredRoute = normalizeUserLlmRoute(
+    userConfigQuery.data?.preferredLlmRoute
+  );
+  const routeOptions = useMemo(
+    () =>
+      buildConversationRouteOptions(
+        userConfigModelsQuery.data,
+        globalPreferredRoute,
+        conversationRoute
+      ),
+    [conversationRoute, globalPreferredRoute, userConfigModelsQuery.data]
+  );
+  const effectiveRoute =
+    conversationRoute !== undefined ? conversationRoute : globalPreferredRoute;
+  const effectiveRouteLabel = useMemo(
+    () => describeConversationRoute(effectiveRoute, routeOptions),
+    [effectiveRoute, routeOptions]
+  );
+  const effectiveModel =
+    trimConversationValue(conversationModel) ||
+    trimConversationValue(userConfigQuery.data?.defaultModel) ||
+    "";
+  const modelGroups = useMemo(
+    () =>
+      buildConversationModelGroups({
+        conversationModel,
+        effectiveRoute,
+        globalDefaultModel: userConfigQuery.data?.defaultModel,
+        models: userConfigModelsQuery.data,
+      }),
+    [
+      conversationModel,
+      effectiveRoute,
+      userConfigModelsQuery.data,
+      userConfigQuery.data?.defaultModel,
+    ]
+  );
+  const conversationHeaders = useMemo(
+    () => buildConversationHeaders(conversationRoute, conversationModel),
+    [conversationModel, conversationRoute]
+  );
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView?.({
@@ -333,10 +504,14 @@ const ChatPage: React.FC = () => {
   useEffect(() => {
     if (!scopeId) {
       setActiveApprovalRequestId(null);
+      setActiveRunInterventionKey(null);
       setActiveConversationId(null);
+      setConversationModel(undefined);
+      setConversationRoute(undefined);
       setConversations([]);
       setDebugEvents([]);
       setMessages([]);
+      setOnboardingState(null);
       setAdvancedOpen(false);
       previousServiceIdRef.current = "";
       setSession(createIdleSession());
@@ -345,10 +520,14 @@ const ChatPage: React.FC = () => {
 
     let cancelled = false;
     setActiveApprovalRequestId(null);
+    setActiveRunInterventionKey(null);
     setActiveConversationId(null);
     setAdvancedOpen(false);
+    setConversationModel(undefined);
+    setConversationRoute(undefined);
     setDebugEvents([]);
     setMessages([]);
+    setOnboardingState(null);
     setSession(createIdleSession(scopeId));
     nyxIdChatBoundRef.current = false;
     previousServiceIdRef.current = "";
@@ -377,8 +556,16 @@ const ChatPage: React.FC = () => {
       routeServiceId && services.some((service) => service.id === routeServiceId)
         ? routeServiceId
         : "";
+    const onboardingPreferredServiceId =
+      settingsQuery.isSuccess &&
+      !providerConfigured &&
+      !bindingQuery.data?.available &&
+      services.some((service) => service.id === onboardingServiceId)
+        ? onboardingServiceId
+        : "";
     const preferredServiceId =
       routePreferredServiceId ||
+      onboardingPreferredServiceId ||
       (bindingQuery.data?.available ? bindingQuery.data.serviceId : "") ||
       services.find((service) => service.id === nyxIdChatServiceId)?.id ||
       services[0]?.id ||
@@ -387,6 +574,8 @@ const ChatPage: React.FC = () => {
     const hasSelectedService =
       selectedServiceId &&
       services.some((service) => service.id === selectedServiceId);
+    const canAutoReselect =
+      !activeConversationId && messages.length === 0 && !isStreaming;
 
     if (!hasSelectedService) {
       serviceSelectionSourceRef.current = "auto";
@@ -396,16 +585,22 @@ const ChatPage: React.FC = () => {
 
     if (
       serviceSelectionSourceRef.current === "auto" &&
+      canAutoReselect &&
       preferredServiceId &&
       selectedServiceId !== preferredServiceId
     ) {
       setSelectedServiceId(preferredServiceId);
     }
   }, [
+    activeConversationId,
     bindingQuery.data?.available,
     bindingQuery.data?.serviceId,
+    isStreaming,
+    messages.length,
+    providerConfigured,
     routeServiceId,
     selectedServiceId,
+    settingsQuery.isSuccess,
     services,
   ]);
 
@@ -440,11 +635,40 @@ const ChatPage: React.FC = () => {
 
     abortControllerRef.current?.abort();
     setActiveApprovalRequestId(null);
+    setActiveRunInterventionKey(null);
     setActiveConversationId(null);
+    setConversationModel(undefined);
+    setConversationRoute(undefined);
     setDebugEvents([]);
     setMessages([]);
     setSession(createIdleSession(scopeId, selectedServiceId));
   }, [scopeId, selectedServiceId]);
+
+  useEffect(() => {
+    if (selectedService?.kind !== "onboarding") {
+      setOnboardingState(null);
+      return;
+    }
+
+    if (messages.length > 0 || onboardingState) {
+      return;
+    }
+
+    setOnboardingState({ step: "select_provider" });
+    setMessages([
+      createChatMessage(
+        "assistant",
+        buildOnboardingProviderPrompt(settingsQuery.data?.providerTypes ?? [])
+      ),
+    ]);
+    setSession(createIdleSession(scopeId, onboardingServiceId));
+  }, [
+    messages.length,
+    onboardingState,
+    scopeId,
+    selectedService?.kind,
+    settingsQuery.data?.providerTypes,
+  ]);
 
   useEffect(
     () => () => {
@@ -490,7 +714,11 @@ const ChatPage: React.FC = () => {
         nextMessages,
         nextSession,
         service,
-        previousMeta?.createdAt
+        previousMeta?.createdAt,
+        {
+          llmModel: conversationModel,
+          llmRoute: conversationRoute,
+        }
       );
 
       setConversations((current) => {
@@ -504,7 +732,7 @@ const ChatPage: React.FC = () => {
         serializeChatMessages(nextMessages)
       );
     },
-    [conversations, scopeId]
+    [conversationModel, conversationRoute, conversations, scopeId]
   );
 
   const handleNewChat = useCallback(() => {
@@ -512,13 +740,97 @@ const ChatPage: React.FC = () => {
     setPrompt("");
     setAdvancedOpen(false);
     setActiveApprovalRequestId(null);
+    setActiveRunInterventionKey(null);
     setActiveConversationId(null);
     setDebugEvents([]);
     setMessages([]);
     setIsStreaming(false);
+    setConversationModel(undefined);
+    setConversationRoute(undefined);
+    setOnboardingState(null);
     setSession(createIdleSession(scopeId, selectedServiceId));
     nyxIdChatBoundRef.current = false;
   }, [scopeId, selectedServiceId]);
+
+  const handleStartOnboarding = useCallback(() => {
+    serviceSelectionSourceRef.current = "manual";
+    setSelectedServiceId(onboardingServiceId);
+  }, []);
+
+  const persistConversationOverrides = useCallback(
+    async (nextRoute: string | undefined, nextModel: string | undefined) => {
+      if (
+        !scopeId ||
+        !activeConversationId ||
+        !selectedService ||
+        isStreaming ||
+        messages.length === 0
+      ) {
+        return;
+      }
+
+      const existingMeta = conversations.find(
+        (conversation) => conversation.id === activeConversationId
+      );
+      const nextMeta = buildConversationMeta(
+        activeConversationId,
+        messages,
+        {
+          ...session,
+          updatedAt: Date.now(),
+        },
+        selectedService,
+        existingMeta?.createdAt,
+        {
+          llmModel: nextModel,
+          llmRoute: nextRoute,
+        }
+      );
+
+      setConversations((current) => [
+        nextMeta,
+        ...current.filter((conversation) => conversation.id !== activeConversationId),
+      ]);
+
+      await chatHistoryApi.saveConversation(
+        scopeId,
+        nextMeta,
+        serializeChatMessages(messages)
+      );
+    },
+    [
+      activeConversationId,
+      conversations,
+      isStreaming,
+      messages,
+      scopeId,
+      selectedService,
+      session,
+    ]
+  );
+
+  const handleConversationRouteChange = useCallback(
+    (value: string | undefined) => {
+      setConversationRoute(value);
+      void persistConversationOverrides(value, conversationModel);
+    },
+    [conversationModel, persistConversationOverrides]
+  );
+
+  const handleConversationModelChange = useCallback(
+    (value: string | undefined) => {
+      const normalized = trimConversationValue(value);
+      setConversationModel(normalized);
+      void persistConversationOverrides(conversationRoute, normalized);
+    },
+    [conversationRoute, persistConversationOverrides]
+  );
+
+  const handleResetConversationLlm = useCallback(() => {
+    setConversationModel(undefined);
+    setConversationRoute(undefined);
+    void persistConversationOverrides(undefined, undefined);
+  }, [persistConversationOverrides]);
 
   const handleCreate = useCallback(() => {
     history.push(
@@ -549,6 +861,9 @@ const ChatPage: React.FC = () => {
 
       setActiveConversationId(conversationId);
       setActiveApprovalRequestId(null);
+      setActiveRunInterventionKey(null);
+      setConversationModel(trimConversationValue(meta?.llmModel));
+      setConversationRoute(meta?.llmRoute);
       setMessages(restoredMessages);
       setDebugEvents(restoredEvents);
       setSession(deriveConversationSession(scopeId, meta, restoredMessages));
@@ -565,7 +880,10 @@ const ChatPage: React.FC = () => {
       setConversations((current) => current.filter((item) => item.id !== conversationId));
       if (activeConversationId === conversationId) {
         setActiveApprovalRequestId(null);
+        setActiveRunInterventionKey(null);
         setActiveConversationId(null);
+        setConversationModel(undefined);
+        setConversationRoute(undefined);
         setDebugEvents([]);
         setMessages([]);
         setSession(createIdleSession(scopeId, selectedServiceId));
@@ -576,21 +894,333 @@ const ChatPage: React.FC = () => {
     [activeConversationId, scopeId, selectedServiceId]
   );
 
+  const handleOnboardingSend = useCallback(
+    async (input: string) => {
+      if (!scopeId || !selectedService || selectedService.kind !== "onboarding") {
+        return false;
+      }
+
+      const conversationId = activeConversationId || createConversationId();
+      const providerTypes = settingsQuery.data?.providerTypes ?? [];
+      const currentState = onboardingState ?? { step: "select_provider" as const };
+      const trimmedInput = input.trim();
+      const createOnboardingSession = (
+        status: ChatSessionState["status"] = "success"
+      ): ChatSessionState => ({
+        ...createIdleSession(scopeId, selectedService.id),
+        status,
+        updatedAt: Date.now(),
+      });
+      const commitOnboardingMessages = async (
+        nextMessages: ChatMessage[],
+        nextSession: ChatSessionState = createOnboardingSession()
+      ) => {
+        setActiveConversationId(conversationId);
+        setMessages(nextMessages);
+        setSession(nextSession);
+        setDebugEvents([]);
+        setActiveApprovalRequestId(null);
+        await persistConversationState(
+          conversationId,
+          nextMessages,
+          nextSession,
+          selectedService
+        );
+      };
+
+      const selectedProviderType = currentState.providerTypeId
+        ? providerTypes.find(
+            (providerType) => providerType.id === currentState.providerTypeId
+          ) || null
+        : null;
+
+      const createAssistantReply = (content: string, status: ChatMessage["status"] = "complete") =>
+        createChatMessage("assistant", content, status);
+
+      if (currentState.step === "done") {
+        const shouldRestart = ["restart", "reset", "start over"].includes(
+          trimmedInput.toLowerCase()
+        );
+        const nextState = shouldRestart
+          ? { step: "select_provider" as const }
+          : currentState;
+        const nextMessages = [
+          ...messages,
+          createChatMessage("user", trimmedInput),
+          createAssistantReply(
+            shouldRestart
+              ? buildOnboardingProviderPrompt(providerTypes)
+              : buildOnboardingDonePrompt()
+          ),
+        ];
+        setOnboardingState(nextState);
+        await commitOnboardingMessages(nextMessages);
+        return true;
+      }
+
+      if (currentState.step === "select_provider") {
+        const providerType = resolveOnboardingProviderType(trimmedInput, providerTypes);
+        const nextMessages = [
+          ...messages,
+          createChatMessage("user", trimmedInput),
+          createAssistantReply(
+            providerType
+              ? providerType.defaultEndpoint.trim()
+                ? buildOnboardingEndpointModePrompt(providerType)
+                : buildOnboardingCustomEndpointPrompt(providerType.displayName)
+              : buildOnboardingProviderErrorPrompt(providerTypes)
+          ),
+        ];
+        setOnboardingState(
+          providerType
+            ? providerType.defaultEndpoint.trim()
+              ? {
+                  providerTypeId: providerType.id,
+                  providerTypeLabel: providerType.displayName,
+                  step: "select_endpoint_mode",
+                }
+              : {
+                  providerTypeId: providerType.id,
+                  providerTypeLabel: providerType.displayName,
+                  step: "ask_custom_endpoint",
+                }
+            : { step: "select_provider" }
+        );
+        await commitOnboardingMessages(nextMessages);
+        return true;
+      }
+
+      if (!selectedProviderType) {
+        const nextMessages = [
+          ...messages,
+          createChatMessage("user", trimmedInput),
+          createAssistantReply(buildOnboardingProviderPrompt(providerTypes)),
+        ];
+        setOnboardingState({ step: "select_provider" });
+        await commitOnboardingMessages(nextMessages);
+        return true;
+      }
+
+      if (currentState.step === "select_endpoint_mode") {
+        const endpointMode = resolveOnboardingEndpointMode(trimmedInput);
+        const nextState =
+          endpointMode === "default"
+            ? {
+                endpointUrl: selectedProviderType.defaultEndpoint,
+                providerTypeId: selectedProviderType.id,
+                providerTypeLabel: selectedProviderType.displayName,
+                step: "ask_api_key" as const,
+              }
+            : endpointMode === "custom"
+              ? {
+                  providerTypeId: selectedProviderType.id,
+                  providerTypeLabel: selectedProviderType.displayName,
+                  step: "ask_custom_endpoint" as const,
+                }
+              : currentState;
+        const nextMessages = [
+          ...messages,
+          createChatMessage("user", trimmedInput),
+          createAssistantReply(
+            endpointMode
+              ? endpointMode === "default"
+                ? buildOnboardingApiKeyPrompt(
+                    selectedProviderType.displayName,
+                    selectedProviderType.defaultEndpoint
+                  )
+                : buildOnboardingCustomEndpointPrompt(
+                    selectedProviderType.displayName
+                  )
+              : buildOnboardingEndpointModeErrorPrompt(selectedProviderType)
+          ),
+        ];
+        setOnboardingState(nextState);
+        await commitOnboardingMessages(nextMessages);
+        return true;
+      }
+
+      if (currentState.step === "ask_custom_endpoint") {
+        const nextMessages = [
+          ...messages,
+          createChatMessage("user", trimmedInput),
+          createAssistantReply(
+            isValidOnboardingEndpoint(trimmedInput)
+              ? buildOnboardingApiKeyPrompt(
+                  selectedProviderType.displayName,
+                  trimmedInput
+                )
+              : buildOnboardingCustomEndpointErrorPrompt(
+                  selectedProviderType.displayName
+                )
+          ),
+        ];
+        setOnboardingState(
+          isValidOnboardingEndpoint(trimmedInput)
+            ? {
+                endpointUrl: trimmedInput,
+                providerTypeId: selectedProviderType.id,
+                providerTypeLabel: selectedProviderType.displayName,
+                step: "ask_api_key",
+              }
+            : currentState
+        );
+        await commitOnboardingMessages(nextMessages);
+        return true;
+      }
+
+      if (currentState.step === "ask_api_key") {
+        if (!trimmedInput) {
+          const nextMessages = [
+            ...messages,
+            createChatMessage("user", "API key provided"),
+            createAssistantReply(
+              buildOnboardingApiKeyErrorPrompt(
+                currentState.providerTypeLabel || selectedProviderType.displayName,
+                currentState.endpointUrl || selectedProviderType.defaultEndpoint,
+                "The API key cannot be empty."
+              )
+            ),
+          ];
+          await commitOnboardingMessages(nextMessages);
+          return true;
+        }
+
+        if (!settingsQuery.data) {
+          const nextMessages = [
+            ...messages,
+            createChatMessage("user", redactOnboardingSecret(trimmedInput)),
+            createAssistantReply(
+              buildOnboardingApiKeyErrorPrompt(
+                currentState.providerTypeLabel || selectedProviderType.displayName,
+                currentState.endpointUrl || selectedProviderType.defaultEndpoint,
+                "Studio Settings are still loading. Try again in a moment."
+              )
+            ),
+          ];
+          await commitOnboardingMessages(nextMessages);
+          return true;
+        }
+
+        const creatingMessage = createAssistantReply(
+          buildOnboardingCreatingMessage(
+            currentState.providerTypeLabel || selectedProviderType.displayName
+          ),
+          "streaming"
+        );
+        const creatingMessages = [
+          ...messages,
+          createChatMessage("user", redactOnboardingSecret(trimmedInput)),
+          creatingMessage,
+        ];
+        const creatingSession = createOnboardingSession("running");
+        setOnboardingState({
+          ...currentState,
+          step: "creating",
+        });
+        setPrompt("");
+        setIsStreaming(true);
+        await commitOnboardingMessages(creatingMessages, creatingSession);
+
+        try {
+          const nextProvider = createOnboardingProviderSettings(
+            settingsQuery.data,
+            selectedProviderType.id,
+            trimmedInput,
+            currentState.endpointUrl || selectedProviderType.defaultEndpoint
+          );
+          const response = await studioApi.saveSettings(
+            buildOnboardingSaveSettingsInput(settingsQuery.data, nextProvider)
+          );
+          queryClient.setQueryData(["studio-settings"], response);
+          serviceSelectionSourceRef.current = "manual";
+          const completedMessages = creatingMessages.map((message) =>
+            message.id === creatingMessage.id
+              ? {
+                  ...message,
+                  content: buildOnboardingSuccessPrompt(
+                    nextProvider.providerName,
+                    currentState.providerTypeLabel || selectedProviderType.displayName
+                  ),
+                  status: "complete" as const,
+                }
+              : message
+          );
+          setOnboardingState({
+            endpointUrl:
+              currentState.endpointUrl || selectedProviderType.defaultEndpoint,
+            providerTypeId: selectedProviderType.id,
+            providerTypeLabel:
+              currentState.providerTypeLabel || selectedProviderType.displayName,
+            step: "done",
+          });
+          setIsStreaming(false);
+          await commitOnboardingMessages(
+            completedMessages,
+            createOnboardingSession("success")
+          );
+        } catch (error) {
+          const completedMessages = creatingMessages.map((message) =>
+            message.id === creatingMessage.id
+              ? {
+                  ...message,
+                  content: buildOnboardingApiKeyErrorPrompt(
+                    currentState.providerTypeLabel || selectedProviderType.displayName,
+                    currentState.endpointUrl || selectedProviderType.defaultEndpoint,
+                    error instanceof Error
+                      ? error.message
+                      : "Saving the provider failed."
+                  ),
+                  status: "complete" as const,
+                }
+              : message
+          );
+          setOnboardingState({
+            endpointUrl:
+              currentState.endpointUrl || selectedProviderType.defaultEndpoint,
+            providerTypeId: selectedProviderType.id,
+            providerTypeLabel:
+              currentState.providerTypeLabel || selectedProviderType.displayName,
+            step: "ask_api_key",
+          });
+          setIsStreaming(false);
+          await commitOnboardingMessages(
+            completedMessages,
+            createOnboardingSession("error")
+          );
+        }
+
+        return true;
+      }
+
+      return false;
+    },
+    [
+      activeConversationId,
+      messages,
+      onboardingState,
+      persistConversationState,
+      queryClient,
+      scopeId,
+      selectedService,
+      settingsQuery.data,
+    ]
+  );
+
   const handleSend = useCallback(async () => {
     const trimmedPrompt = prompt.trim();
     if (!scopeId || !selectedService || !trimmedPrompt || isStreaming) {
       return;
     }
 
-    const conversationId =
-      activeConversationId || createConversationId();
-    const userMessage: ChatMessage = {
-      content: trimmedPrompt,
-      id: createClientId(),
-      role: "user",
-      status: "complete",
-      timestamp: Date.now(),
-    };
+    setPrompt("");
+
+    if (selectedService.kind === "onboarding") {
+      await handleOnboardingSend(trimmedPrompt);
+      return;
+    }
+
+    const conversationId = activeConversationId || createConversationId();
+    const userMessage = createChatMessage("user", trimmedPrompt);
     const assistantMessageId = createClientId();
     const assistantMessage: ChatMessage = {
       content: "",
@@ -611,10 +1241,10 @@ const ChatPage: React.FC = () => {
     const nextMessages = [...messages, userMessage, assistantMessage];
     setActiveConversationId(conversationId);
     setMessages(nextMessages);
-    setPrompt("");
     setDebugEvents([]);
     setIsStreaming(true);
     setActiveApprovalRequestId(null);
+    setActiveRunInterventionKey(null);
     setSession({
       ...createIdleSession(scopeId, selectedService.id),
       status: "running",
@@ -632,6 +1262,7 @@ const ChatPage: React.FC = () => {
       const response = await runtimeRunsApi.streamChat(
         scopeId,
         {
+          metadata: conversationHeaders,
           prompt: trimmedPrompt,
           sessionId:
             selectedService.kind === "nyxid-chat" ? undefined : conversationId,
@@ -742,6 +1373,8 @@ const ChatPage: React.FC = () => {
     }
   }, [
     activeConversationId,
+    conversationHeaders,
+    handleOnboardingSend,
     ensureNyxIdChatBound,
     isStreaming,
     messages,
@@ -751,6 +1384,43 @@ const ChatPage: React.FC = () => {
     selectedService,
     updateAssistantMessage,
   ]);
+
+  const handleSelectOnboardingProvider = useCallback(
+    (providerTypeId: string) => {
+      void handleOnboardingSend(providerTypeId);
+    },
+    [handleOnboardingSend]
+  );
+
+  const handleSelectOnboardingEndpointMode = useCallback(
+    (mode: "custom" | "default") => {
+      void handleOnboardingSend(mode);
+    },
+    [handleOnboardingSend]
+  );
+
+  const handleSubmitOnboardingCustomEndpoint = useCallback(
+    (value: string) => {
+      void handleOnboardingSend(value);
+    },
+    [handleOnboardingSend]
+  );
+
+  const handleSubmitOnboardingApiKey = useCallback(
+    (value: string) => {
+      void handleOnboardingSend(value);
+    },
+    [handleOnboardingSend]
+  );
+
+  const handleRestartOnboarding = useCallback(() => {
+    void handleOnboardingSend("restart");
+  }, [handleOnboardingSend]);
+
+  const handleOpenNyxIdChat = useCallback(() => {
+    serviceSelectionSourceRef.current = "manual";
+    setSelectedServiceId(nyxIdChatServiceId);
+  }, []);
 
   const handleApprovalDecision = useCallback(
     async (requestId: string, approved: boolean) => {
@@ -972,6 +1642,297 @@ const ChatPage: React.FC = () => {
     ]
   );
 
+  const handleRunInterventionAction = useCallback(
+    async (
+      messageId: string,
+      intervention: PendingRunInterventionInfo,
+      action: RunInterventionActionRequest
+    ) => {
+      if (!scopeId || !selectedService) {
+        return;
+      }
+
+      const conversationId = activeConversationId || createConversationId();
+      const actorId =
+        intervention.actorId ||
+        session.actorId ||
+        conversations.find((conversation) => conversation.id === conversationId)
+          ?.actorId ||
+        "";
+      const runId = intervention.runId || session.runId;
+
+      if (intervention.kind === "human_input" && !trimConversationValue(action.value)) {
+        return;
+      }
+
+      if (!runId || !intervention.stepId || !actorId) {
+        const unavailableMessage =
+          "Unable to submit the runtime action because the run identity is incomplete.";
+        const errorNote = createAssistantErrorMessage(unavailableMessage);
+        const nextSession = {
+          ...session,
+          updatedAt: Date.now(),
+        };
+
+        setActiveConversationId(conversationId);
+        setMessages((current) => {
+          const updated = [...current, errorNote];
+          void persistConversationState(
+            conversationId,
+            updated,
+            nextSession,
+            selectedService
+          );
+          return updated;
+        });
+        setSession(nextSession);
+        return;
+      }
+
+      setActiveRunInterventionKey(intervention.key);
+
+      try {
+        if (action.kind === "signal") {
+          const result = await runtimeRunsApi.signal(
+            scopeId,
+            {
+              actorId,
+              payload: trimConversationValue(action.value),
+              runId,
+              signalName: intervention.signalName || "continue",
+              stepId: intervention.stepId,
+            },
+            {
+              serviceId: selectedService.id,
+            }
+          );
+
+          if (!result.accepted) {
+            throw new Error("Runtime did not accept the signal request.");
+          }
+
+          const nextSession: ChatSessionState = {
+            ...session,
+            actorId: result.actorId || actorId,
+            commandId: result.commandId || session.commandId,
+            error: undefined,
+            runId: result.runId || runId,
+            scopeId,
+            serviceId: selectedService.id,
+            status: "running",
+            updatedAt: Date.now(),
+          };
+          const note = createAssistantStatusMessage(
+            buildRunInterventionFeedback(intervention, action.kind)
+          );
+
+          setActiveConversationId(conversationId);
+          setMessages((current) => {
+            const updated = current.map((message) =>
+              message.id === messageId
+                ? {
+                    ...message,
+                    pendingRunIntervention: undefined,
+                  }
+                : message
+            ) as ChatMessage[];
+            updated.push(note);
+            void persistConversationState(
+              conversationId,
+              updated,
+              nextSession,
+              selectedService
+            );
+            return updated;
+          });
+          setSession(nextSession);
+          return;
+        }
+
+        const result = await runtimeRunsApi.resume(
+          scopeId,
+          {
+            actorId,
+            approved: action.kind !== "reject",
+            runId,
+            stepId: intervention.stepId,
+            userInput: trimConversationValue(action.value),
+          },
+          {
+            serviceId: selectedService.id,
+          }
+        );
+
+        if (!result.accepted) {
+          throw new Error("Runtime did not accept the resume request.");
+        }
+
+        const nextSession: ChatSessionState = {
+          ...session,
+          actorId: result.actorId || actorId,
+          commandId: result.commandId || session.commandId,
+          error: undefined,
+          runId: result.runId || runId,
+          scopeId,
+          serviceId: selectedService.id,
+          status: "running",
+          updatedAt: Date.now(),
+        };
+        const note = createAssistantStatusMessage(
+          buildRunInterventionFeedback(intervention, action.kind)
+        );
+
+        setActiveConversationId(conversationId);
+        setMessages((current) => {
+          const updated = current.map((message) =>
+            message.id === messageId
+              ? {
+                  ...message,
+                  pendingRunIntervention: undefined,
+                }
+              : message
+          ) as ChatMessage[];
+          updated.push(note);
+          void persistConversationState(
+            conversationId,
+            updated,
+            nextSession,
+            selectedService
+          );
+          return updated;
+        });
+        setSession(nextSession);
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : "Failed to submit the runtime action.";
+        const errorNote = createAssistantErrorMessage(errorMessage);
+        const nextSession = {
+          ...session,
+          updatedAt: Date.now(),
+        };
+
+        setActiveConversationId(conversationId);
+        setMessages((current) => {
+          const updated = [...current, errorNote];
+          void persistConversationState(
+            conversationId,
+            updated,
+            nextSession,
+            selectedService
+          );
+          return updated;
+        });
+        setSession(nextSession);
+      } finally {
+        setActiveRunInterventionKey((current) =>
+          current === intervention.key ? null : current
+        );
+      }
+    },
+    [
+      activeConversationId,
+      conversations,
+      persistConversationState,
+      scopeId,
+      selectedService,
+      session,
+    ]
+  );
+
+  const handleAdvancedTimelineActionResult = useCallback(
+    (result: {
+      action: "resume" | "approve" | "reject" | "signal";
+      actorId: string;
+      commandId?: string;
+      content: string;
+      error?: string;
+      kind: "human_input" | "human_approval" | "wait_signal";
+      runId: string;
+      serviceId: string;
+      signalName?: string;
+      stepId: string;
+      success: boolean;
+    }) => {
+      if (!scopeId) {
+        return;
+      }
+
+      const conversationId = activeConversationId || createConversationId();
+      const matchedService =
+        services.find((service) => service.id === result.serviceId) ||
+        (selectedService?.id === result.serviceId ? selectedService : undefined);
+      const targetService: ServiceOption =
+        matchedService ||
+        selectedService || {
+          endpoints: [],
+          id: result.serviceId,
+          kind: "service",
+          label: result.serviceId,
+        };
+      const nextSession: ChatSessionState = {
+        ...session,
+        actorId: result.actorId || session.actorId,
+        commandId: result.commandId || session.commandId,
+        error: result.success ? undefined : result.error || result.content,
+        runId: result.runId || session.runId,
+        scopeId,
+        serviceId: targetService.id,
+        status: result.success ? "running" : "error",
+        updatedAt: Date.now(),
+      };
+      const note = result.success
+        ? createAssistantStatusMessage(result.content)
+        : createAssistantErrorMessage(result.error || result.content);
+
+      setActiveConversationId(conversationId);
+      setActiveRunInterventionKey(null);
+      setMessages((current) => {
+        const updated = current.map((message) => {
+          const pending = message.pendingRunIntervention;
+          if (!pending) {
+            return message;
+          }
+
+          const sameSignal =
+            result.kind !== "wait_signal" ||
+            pending.signalName === result.signalName;
+          const sameIntervention =
+            pending.kind === result.kind &&
+            pending.runId === result.runId &&
+            pending.stepId === result.stepId &&
+            sameSignal;
+
+          return sameIntervention
+            ? {
+                ...message,
+                pendingRunIntervention: undefined,
+              }
+            : message;
+        }) as ChatMessage[];
+
+        updated.push(note);
+        void persistConversationState(
+          conversationId,
+          updated,
+          nextSession,
+          targetService
+        );
+        return updated;
+      });
+      setSession(nextSession);
+    },
+    [
+      activeConversationId,
+      persistConversationState,
+      scopeId,
+      selectedService,
+      services,
+      session,
+    ]
+  );
+
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
@@ -1083,38 +2044,12 @@ const ChatPage: React.FC = () => {
               >
                 New Chat
               </button>
-              <button
-                onClick={() => setAdvancedOpen((value) => !value)}
-                style={{
-                  background: advancedOpen ? "#eff6ff" : "#ffffff",
-                  border: `1px solid ${advancedOpen ? "#93c5fd" : "#e7e5e4"}`,
-                  borderRadius: 10,
-                  color: advancedOpen ? "#2563eb" : "#6b7280",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  padding: "8px 12px",
-                }}
-                type="button"
-              >
-                Advanced
-              </button>
-              <button
-                onClick={() => setShowDebug((value) => !value)}
-                style={{
-                  background: showDebug ? "#eff6ff" : "#ffffff",
-                  border: `1px solid ${showDebug ? "#93c5fd" : "#e7e5e4"}`,
-                  borderRadius: 10,
-                  color: showDebug ? "#2563eb" : "#9ca3af",
-                  cursor: "pointer",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  padding: "8px 12px",
-                }}
-                type="button"
-              >
-                Debug
-              </button>
+              <ChatToolsMenu
+                advancedOpen={advancedOpen}
+                eventStreamOpen={showDebug}
+                onToggleAdvanced={() => setAdvancedOpen((value) => !value)}
+                onToggleEventStream={() => setShowDebug((value) => !value)}
+              />
             </div>
           </div>
 
@@ -1151,21 +2086,34 @@ const ChatPage: React.FC = () => {
                 overflow: "auto",
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 20,
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 20,
                   margin: "0 auto",
                   maxWidth: 840,
-                  padding: "24px 20px",
-                }}
-              >
-                {isLoadingScope ? (
-                  <LoadingState />
-                ) : !scopeId ? (
-                  <Alert
-                    showIcon
+                    padding: "24px 20px",
+                  }}
+                >
+                  {scopeId && selectedService?.kind === "onboarding" ? (
+                    <ChatOnboardingGuide
+                      loading={settingsQuery.isLoading}
+                      onChooseEndpointMode={handleSelectOnboardingEndpointMode}
+                      onRestart={handleRestartOnboarding}
+                      onSelectProvider={handleSelectOnboardingProvider}
+                      onSubmitApiKey={handleSubmitOnboardingApiKey}
+                      onSubmitCustomEndpoint={handleSubmitOnboardingCustomEndpoint}
+                      onSwitchToChat={handleOpenNyxIdChat}
+                      providerTypes={settingsQuery.data?.providerTypes ?? []}
+                      state={onboardingState}
+                    />
+                  ) : null}
+                  {isLoadingScope ? (
+                    <LoadingState />
+                  ) : !scopeId ? (
+                    <Alert
+                      showIcon
                     title="No project scope is currently available."
                     type="warning"
                   />
@@ -1175,12 +2123,29 @@ const ChatPage: React.FC = () => {
                     title="No chat-capable services are currently available."
                     type="info"
                   />
-                ) : messages.length === 0 ? (
+                ) : messages.length === 0 &&
+                  selectedService.kind !== "onboarding" ? (
                   <EmptyChatState
+                    actionLabel={
+                      settingsQuery.isSuccess &&
+                      !providerConfigured &&
+                      selectedService.kind === "nyxid-chat"
+                        ? "Start onboarding"
+                        : undefined
+                    }
                     description={
                       selectedService.kind === "nyxid-chat"
-                        ? "Chat with NyxID about services, credentials, and configuration."
+                        ? settingsQuery.isSuccess && !providerConfigured
+                          ? "Connect a provider and save it to Studio Settings before starting your first NyxID conversation."
+                          : "Chat with NyxID about services, credentials, and configuration."
                         : `Invoke the "${selectedService.label}" service with a chat message.`
+                    }
+                    onAction={
+                      settingsQuery.isSuccess &&
+                      !providerConfigured &&
+                      selectedService.kind === "nyxid-chat"
+                        ? handleStartOnboarding
+                        : undefined
                     }
                     title={selectedService.label}
                   />
@@ -1188,10 +2153,18 @@ const ChatPage: React.FC = () => {
                   messages.map((message) => (
                     <ChatMessageBubble
                       activeApprovalRequestId={activeApprovalRequestId}
+                      activeRunInterventionKey={activeRunInterventionKey}
                       key={message.id}
                       message={message}
                       onApprovalDecision={(requestId, approved) => {
                         void handleApprovalDecision(requestId, approved);
+                      }}
+                      onRunInterventionAction={(messageId, intervention, action) => {
+                        void handleRunInterventionAction(
+                          messageId,
+                          intervention,
+                          action
+                        );
                       }}
                     />
                   ))
@@ -1217,32 +2190,55 @@ const ChatPage: React.FC = () => {
               </div>
             ) : null}
 
-            <div
-              style={{
-                background: "#ffffff",
-                borderTop: "1px solid #e7e5e4",
-                flexShrink: 0,
-                padding: "14px 20px",
-              }}
-            >
-              <div style={{ margin: "0 auto", maxWidth: 840 }}>
-                <ChatInput
-                  disabled={!scopeId || !selectedService}
-                  isStreaming={isStreaming}
-                  onChange={setPrompt}
-                  onSend={() => void handleSend()}
-                  onStop={handleStop}
-                  value={prompt}
-                />
-                <ChatMetaStrip
-                  actorId={session.actorId}
-                  commandId={session.commandId}
-                  runId={session.runId}
-                  scopeId={scopeId}
-                  serviceId={selectedService?.id}
-                />
+            {selectedService?.kind === "onboarding" ? null : (
+              <div
+                style={{
+                  background: "#ffffff",
+                  borderTop: "1px solid #e7e5e4",
+                  flexShrink: 0,
+                  padding: "14px 20px",
+                }}
+              >
+                <div style={{ margin: "0 auto", maxWidth: 840 }}>
+                  <ChatInput
+                    disabled={!scopeId || !selectedService}
+                    footer={
+                      <ConversationLlmConfigBar
+                        disabled={isStreaming || !scopeId || !selectedService}
+                        effectiveModel={effectiveModel}
+                        effectiveRoute={effectiveRoute}
+                        effectiveRouteLabel={effectiveRouteLabel}
+                        modelGroups={modelGroups}
+                        modelValue={conversationModel}
+                        modelsLoading={
+                          userConfigModelsQuery.isLoading ||
+                          Boolean(userConfigModelsQuery.isFetching)
+                        }
+                        onModelChange={handleConversationModelChange}
+                        onReset={handleResetConversationLlm}
+                        onRouteChange={handleConversationRouteChange}
+                        routeOptions={routeOptions}
+                        routeValue={conversationRoute}
+                      />
+                    }
+                    isStreaming={isStreaming}
+                    onChange={setPrompt}
+                    onSend={() => void handleSend()}
+                    onStop={handleStop}
+                    value={prompt}
+                  />
+                  <ChatMetaStrip
+                    actorId={session.actorId}
+                    commandId={session.commandId}
+                    modelLabel={effectiveModel || "provider default"}
+                    runId={session.runId}
+                    routeLabel={effectiveRouteLabel}
+                    scopeId={scopeId}
+                    serviceId={selectedService?.id}
+                  />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
@@ -1250,6 +2246,7 @@ const ChatPage: React.FC = () => {
         defaultServiceId={selectedServiceId}
         onClose={() => setAdvancedOpen(false)}
         onEnsureNyxIdBound={ensureNyxIdChatBound}
+        onTimelineActionResult={handleAdvancedTimelineActionResult}
         open={advancedOpen}
         scopeId={scopeId}
         services={servicesQuery.data ?? []}
