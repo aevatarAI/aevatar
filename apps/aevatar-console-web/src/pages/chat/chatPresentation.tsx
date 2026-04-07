@@ -2,22 +2,32 @@ import React, { useCallback, useRef, useState } from "react";
 import { Empty } from "antd";
 import { RuntimeEventPreviewPanel } from "@/shared/agui/runtimeConversationPresentation";
 import { AevatarHeaderSelect } from "@/shared/ui/AevatarHeaderSelect";
+import {
+  parseMarkdownBlocks,
+  sanitizeAssistantMessageContent,
+  tokenizeInlineContent,
+  type InlineContentToken,
+  type MarkdownBlock,
+} from "./chatContent";
 import type {
   ChatMessage,
   ConversationMeta,
+  PendingApprovalInfo,
   RuntimeEvent,
   ServiceOption,
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
 
-function renderInline(text: string): React.ReactNode[] {
-  const parts = text.split(/(`[^`]+`)/g);
-  return parts.flatMap((part, index) => {
-    if (part.startsWith("`") && part.endsWith("`")) {
+function renderInlineTokens(
+  tokens: readonly InlineContentToken[],
+  keyPrefix: string
+): React.ReactNode[] {
+  return tokens.map((token, index) => {
+    if (token.kind === "code") {
       return (
         <code
-          key={`code-${index}`}
+          key={`${keyPrefix}-code-${index}`}
           style={{
             background: "#f3f4f6",
             borderRadius: 6,
@@ -28,39 +38,134 @@ function renderInline(text: string): React.ReactNode[] {
             padding: "2px 6px",
           }}
         >
-          {part.slice(1, -1)}
+          {token.text}
         </code>
       );
     }
 
-    return part.split(/(\*\*[^*]+\*\*)/g).map((segment, segmentIndex) => {
-      if (segment.startsWith("**") && segment.endsWith("**")) {
-        return (
-          <strong key={`strong-${index}-${segmentIndex}`}>
-            {segment.slice(2, -2)}
-          </strong>
-        );
-      }
-
-      return (
-        <span key={`span-${index}-${segmentIndex}`}>{segment}</span>
+    const content =
+      token.kind === "link" ? (
+        <a
+          href={token.href}
+          key={`${keyPrefix}-link-${index}`}
+          rel="noreferrer"
+          style={{
+            color: "#2563eb",
+            textDecoration: "underline",
+            textUnderlineOffset: 3,
+          }}
+          target="_blank"
+        >
+          {token.text}
+        </a>
+      ) : (
+        <span key={`${keyPrefix}-text-${index}`}>{token.text}</span>
       );
-    });
+
+    return token.bold ? (
+      <strong key={`${keyPrefix}-strong-${index}`}>{content}</strong>
+    ) : (
+      content
+    );
   });
 }
 
-function renderContent(text: string): React.ReactNode {
-  if (!text) {
-    return null;
-  }
+function renderLineCollection(
+  lines: readonly string[],
+  keyPrefix: string
+): React.ReactNode {
+  return lines.map((line, lineIndex) => (
+    <span key={`${keyPrefix}-line-${lineIndex}`}>
+      {renderInlineTokens(
+        tokenizeInlineContent(line),
+        `${keyPrefix}-inline-${lineIndex}`
+      )}
+      {lineIndex < lines.length - 1 ? <br /> : null}
+    </span>
+  ));
+}
 
-  const blocks = text.split(/(```[\s\S]*?```)/g);
-  return blocks.map((block, blockIndex) => {
-    if (block.startsWith("```") && block.endsWith("```")) {
-      const inner = block.slice(3, -3);
-      const newlineIndex = inner.indexOf("\n");
-      const language = newlineIndex > 0 ? inner.slice(0, newlineIndex).trim() : "";
-      const code = newlineIndex > 0 ? inner.slice(newlineIndex + 1) : inner;
+function renderMarkdownBlock(
+  block: MarkdownBlock,
+  blockIndex: number
+): React.ReactNode {
+  switch (block.kind) {
+    case "heading":
+      return (
+        <div
+          key={`block-${blockIndex}`}
+          style={{
+            color: "#111827",
+            fontSize: Math.max(18 - (block.level - 1) * 2, 14),
+            fontWeight: 700,
+            lineHeight: 1.4,
+            margin: blockIndex === 0 ? "0 0 10px" : "14px 0 10px",
+          }}
+        >
+          {renderInlineTokens(
+            tokenizeInlineContent(block.text),
+            `heading-${blockIndex}`
+          )}
+        </div>
+      );
+    case "paragraph":
+      return (
+        <div key={`block-${blockIndex}`} style={{ margin: "0 0 10px" }}>
+          {renderLineCollection(block.lines, `paragraph-${blockIndex}`)}
+        </div>
+      );
+    case "blockquote":
+      return (
+        <div
+          key={`block-${blockIndex}`}
+          style={{
+            background: "#f8fafc",
+            borderLeft: "3px solid #cbd5e1",
+            borderRadius: 10,
+            color: "#475569",
+            margin: "0 0 12px",
+            padding: "10px 12px",
+          }}
+        >
+          {renderLineCollection(block.lines, `blockquote-${blockIndex}`)}
+        </div>
+      );
+    case "unordered-list":
+    case "ordered-list":
+      return (
+        <div key={`block-${blockIndex}`} style={{ margin: "0 0 10px" }}>
+          {block.items.map((item, itemIndex) => (
+            <div
+              key={`list-${blockIndex}-${itemIndex}`}
+              style={{
+                alignItems: "flex-start",
+                display: "flex",
+                gap: 8,
+                marginTop: itemIndex === 0 ? 0 : 6,
+              }}
+            >
+              <span
+                style={{
+                  color: "#6b7280",
+                  flexShrink: 0,
+                  fontSize: 13,
+                  lineHeight: "24px",
+                  width: 18,
+                }}
+              >
+                {block.kind === "ordered-list" ? `${itemIndex + 1}.` : "•"}
+              </span>
+              <span style={{ minWidth: 0 }}>
+                {renderInlineTokens(
+                  tokenizeInlineContent(item),
+                  `list-${blockIndex}-${itemIndex}`
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    case "code":
       return (
         <div
           key={`block-${blockIndex}`}
@@ -68,11 +173,11 @@ function renderContent(text: string): React.ReactNode {
             background: "#f8fafc",
             border: "1px solid #e5e7eb",
             borderRadius: 14,
-            margin: "8px 0",
+            margin: "8px 0 12px",
             overflow: "hidden",
           }}
         >
-          {language ? (
+          {block.lang ? (
             <div
               style={{
                 background: "#f3f4f6",
@@ -84,7 +189,7 @@ function renderContent(text: string): React.ReactNode {
                 padding: "8px 12px",
               }}
             >
-              {language}
+              {block.lang}
             </div>
           ) : null}
           <pre
@@ -98,23 +203,32 @@ function renderContent(text: string): React.ReactNode {
               whiteSpace: "pre-wrap",
             }}
           >
-            {code}
+            {block.code}
           </pre>
         </div>
       );
-    }
+    case "thematic-break":
+      return (
+        <div
+          key={`block-${blockIndex}`}
+          style={{
+            borderTop: "1px solid #e5e7eb",
+            margin: "14px 0",
+          }}
+        />
+      );
+    default:
+      return null;
+  }
+}
 
-    return (
-      <span key={`text-${blockIndex}`}>
-        {block.split("\n").map((line, lineIndex, lines) => (
-          <span key={`line-${blockIndex}-${lineIndex}`}>
-            {renderInline(line)}
-            {lineIndex < lines.length - 1 ? <br /> : null}
-          </span>
-        ))}
-      </span>
-    );
-  });
+function renderContent(text: string): React.ReactNode {
+  const sanitized = sanitizeAssistantMessageContent(text);
+  if (!sanitized) {
+    return null;
+  }
+
+  return parseMarkdownBlocks(sanitized).map(renderMarkdownBlock);
 }
 
 function formatRelativeTime(isoString: string): string {
@@ -415,15 +529,170 @@ function ThinkingBlock({
   );
 }
 
-export function ChatMessageBubble({
-  message,
+function ApprovalActionButton({
+  busy,
+  label,
+  onClick,
+  tone,
 }: {
+  busy: boolean;
+  label: string;
+  onClick: () => void;
+  tone: "approve" | "reject";
+}): React.ReactElement {
+  const isApprove = tone === "approve";
+  return (
+    <button
+      disabled={busy}
+      onClick={onClick}
+      style={{
+        background: isApprove ? "#f59e0b" : "#ffffff",
+        border: `1px solid ${isApprove ? "#f59e0b" : "#d1d5db"}`,
+        borderRadius: 10,
+        color: isApprove ? "#111827" : "#4b5563",
+        cursor: busy ? "wait" : "pointer",
+        fontSize: 12,
+        fontWeight: 600,
+        opacity: busy ? 0.7 : 1,
+        padding: "8px 12px",
+      }}
+      type="button"
+    >
+      {label}
+    </button>
+  );
+}
+
+function ApprovalCard({
+  approval,
+  busy,
+  onDecision,
+}: {
+  approval: PendingApprovalInfo;
+  busy: boolean;
+  onDecision?: (requestId: string, approved: boolean) => void;
+}): React.ReactElement {
+  return (
+    <div
+      style={{
+        background: "#fff7ed",
+        border: "1px solid #fdba74",
+        borderRadius: 14,
+        color: "#7c2d12",
+        marginBottom: 12,
+        padding: "12px 14px",
+      }}
+    >
+      <div
+        style={{
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em" }}>
+          TOOL APPROVAL
+        </span>
+        <span
+          style={{
+            background: "#ffedd5",
+            borderRadius: 999,
+            fontFamily:
+              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 11,
+            padding: "3px 8px",
+          }}
+        >
+          {approval.toolName || approval.toolCallId || approval.requestId}
+        </span>
+        {approval.isDestructive ? (
+          <span
+            style={{
+              background: "#fee2e2",
+              borderRadius: 999,
+              color: "#b91c1c",
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "3px 8px",
+            }}
+          >
+            Destructive
+          </span>
+        ) : null}
+      </div>
+
+      <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+        Review the tool call and decide whether NyxID can continue.
+      </div>
+
+      {approval.argumentsJson ? (
+        <pre
+          style={{
+            background: "rgba(255,255,255,0.72)",
+            border: "1px solid #fed7aa",
+            borderRadius: 10,
+            color: "#7c2d12",
+            fontFamily:
+              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 12,
+            margin: "10px 0 0",
+            maxHeight: 180,
+            overflow: "auto",
+            padding: "10px 12px",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {approval.argumentsJson}
+        </pre>
+      ) : null}
+
+      <div
+        style={{
+          alignItems: "center",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          marginTop: 12,
+        }}
+      >
+        <ApprovalActionButton
+          busy={busy}
+          label={busy ? "Applying..." : "Approve"}
+          onClick={() => onDecision?.(approval.requestId, true)}
+          tone="approve"
+        />
+        <ApprovalActionButton
+          busy={busy}
+          label="Reject"
+          onClick={() => onDecision?.(approval.requestId, false)}
+          tone="reject"
+        />
+        <span style={{ color: "#9a3412", fontSize: 12 }}>
+          Timeout: {approval.timeoutSeconds}s
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function ChatMessageBubble({
+  activeApprovalRequestId,
+  message,
+  onApprovalDecision,
+}: {
+  activeApprovalRequestId?: string | null;
   message: ChatMessage;
+  onApprovalDecision?: (requestId: string, approved: boolean) => void;
 }): React.ReactElement {
   const isUser = message.role === "user";
   const [actionsOpen, setActionsOpen] = useState(false);
   const hasSteps = (message.steps?.length ?? 0) > 0;
   const hasTools = (message.toolCalls?.length ?? 0) > 0;
+  const isProcessingApproval =
+    activeApprovalRequestId &&
+    message.pendingApproval?.requestId === activeApprovalRequestId;
 
   if (isUser) {
     return (
@@ -485,6 +754,14 @@ export function ChatMessageBubble({
           <ThinkingBlock
             isStreaming={message.status === "streaming"}
             text={message.thinking}
+          />
+        ) : null}
+
+        {message.pendingApproval ? (
+          <ApprovalCard
+            approval={message.pendingApproval}
+            busy={Boolean(isProcessingApproval)}
+            onDecision={onApprovalDecision}
           />
         ) : null}
 

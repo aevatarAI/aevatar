@@ -4,6 +4,29 @@ import { AGUIEventType, CustomEventName } from "@aevatar-react-sdk/types";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import ChatPage from "./index";
 
+jest.mock("@/shared/ui/aevatarPageShells", () => {
+  const mockReact = require("react");
+
+  return {
+    AevatarContextDrawer: ({ children, open, title }: any) =>
+      open
+        ? mockReact.createElement(
+            "section",
+            null,
+            title ? mockReact.createElement("h2", null, title) : null,
+            children
+          )
+        : null,
+    AevatarPageShell: ({ children, title }: any) =>
+      mockReact.createElement(
+        "section",
+        null,
+        title ? mockReact.createElement("h1", null, title) : null,
+        children
+      ),
+  };
+});
+
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     bindScopeGAgent: jest.fn(async () => ({
@@ -69,6 +92,11 @@ jest.mock("@/shared/api/servicesApi", () => ({
 
 jest.mock("@/shared/api/runtimeRunsApi", () => ({
   runtimeRunsApi: {
+    invokeEndpoint: jest.fn(async () => ({
+      commandId: "cmd-execute",
+      requestId: "run-execute-command",
+      targetActorId: "actor://support-command",
+    })),
     streamChat: jest.fn(async () => ({
       body: {},
       ok: true,
@@ -78,6 +106,56 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
       body: {},
       ok: true,
       streamKind: "execute",
+    })),
+  },
+}));
+
+jest.mock("@/shared/api/runtimeActorsApi", () => ({
+  runtimeActorsApi: {
+    getActorSnapshot: jest.fn(async () => ({
+      actorId: "actor://support",
+      completedSteps: 3,
+      completionStatusValue: 1,
+      lastCommandId: "cmd-1",
+      lastError: "",
+      lastEventId: "evt-1",
+      lastOutput: "done",
+      lastSuccess: true,
+      lastUpdatedAt: "2026-04-01T09:00:00Z",
+      requestedSteps: 3,
+      roleReplyCount: 1,
+      stateVersion: 7,
+      totalSteps: 3,
+      workflowName: "support",
+    })),
+  },
+}));
+
+jest.mock("@/shared/api/scopesApi", () => ({
+  scopesApi: {
+    listWorkflows: jest.fn(async () => [
+      {
+        activeRevisionId: "rev-workflow",
+        actorId: "actor://workflow",
+        deploymentId: "deploy-workflow",
+        deploymentStatus: "Active",
+        displayName: "Support workflow",
+        scopeId: "scope-a",
+        serviceKey: "scope-a:default:default:support-service",
+        updatedAt: "2026-04-01T09:00:00Z",
+        workflowId: "workflow-1",
+        workflowName: "SupportWorkflow",
+      },
+    ]),
+  },
+}));
+
+jest.mock("@/shared/api/nyxIdChatApi", () => ({
+  nyxIdChatApi: {
+    approveToolCall: jest.fn(async () => ({
+      body: {},
+      ok: true,
+      streamKind: "approval",
     })),
   },
 }));
@@ -96,6 +174,7 @@ jest.mock("./chatHistoryApi", () => ({
 }));
 
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { studioApi } from "@/shared/studio/api";
 import { chatHistoryApi } from "./chatHistoryApi";
@@ -174,6 +253,37 @@ function createExecuteEventStream() {
   })();
 }
 
+function createApprovalRequestEventStream() {
+  return (async function* () {
+    yield {
+      actorId: "actor://nyxid",
+      timestamp: 1,
+      type: AGUIEventType.RUN_STARTED,
+    };
+    yield {
+      argumentsJson: "{\"scopeId\":\"scope-a\"}",
+      isDestructive: false,
+      requestId: "approval-1",
+      timestamp: 2,
+      timeoutSeconds: 30,
+      toolCallId: "tool-approval-1",
+      toolName: "scope.bind",
+      type: "TOOL_APPROVAL_REQUEST",
+    };
+  })();
+}
+
+function createApprovalContinuationEventStream() {
+  return (async function* () {
+    yield {
+      delta: "Approval applied successfully.",
+      messageId: "msg-approval",
+      timestamp: 3,
+      type: AGUIEventType.TEXT_MESSAGE_CONTENT,
+    };
+  })();
+}
+
 describe("ChatPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -181,8 +291,19 @@ describe("ChatPage", () => {
     window.scrollTo = jest.fn();
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([]);
-    (parseBackendSSEStream as jest.Mock).mockImplementation((response: { streamKind?: string }) =>
-      response?.streamKind === "execute" ? createExecuteEventStream() : createChatEventStream()
+    (parseBackendSSEStream as jest.Mock).mockImplementation(
+      (response: { streamKind?: string }) => {
+        switch (response?.streamKind) {
+          case "approval":
+            return createApprovalContinuationEventStream();
+          case "approval-request":
+            return createApprovalRequestEventStream();
+          case "execute":
+            return createExecuteEventStream();
+          default:
+            return createChatEventStream();
+        }
+      }
     );
   });
 
@@ -324,6 +445,119 @@ describe("ChatPage", () => {
         }
       );
     });
+  });
+
+  it("opens the advanced console and queries the current scope binding", async () => {
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    await waitFor(() => {
+      expect(serviceSelector.textContent).toContain("Support service");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced" }));
+    expect(await screen.findByText("Advanced Console")).toBeTruthy();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Query Scope Binding" })
+    );
+
+    expect(
+      await screen.findByText((content) =>
+        content.includes('"serviceId": "support-service"')
+      )
+    ).toBeTruthy();
+  });
+
+  it("executes a non-chat endpoint from the advanced console", async () => {
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    await waitFor(() => {
+      expect(serviceSelector.textContent).toContain("Support service");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    const serviceSelect = await screen.findByLabelText(
+      "Advanced execute service"
+    );
+    fireEvent.change(serviceSelect, { target: { value: "support-service" } });
+
+    const endpointSelect = await screen.findByLabelText(
+      "Advanced execute endpoint"
+    );
+    fireEvent.change(endpointSelect, { target: { value: "assist" } });
+    await screen.findByLabelText("Advanced execute payload type URL");
+
+    const promptInput = await screen.findByLabelText("Advanced execute prompt");
+    fireEvent.change(promptInput, {
+      target: { value: "Need structured help." },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
+        "scope-a",
+        expect.objectContaining({
+          endpointId: "assist",
+          prompt: "Need structured help.",
+        }),
+        {
+          serviceId: "support-service",
+        }
+      );
+    });
+
+    expect(
+      await screen.findByText((content) =>
+        content.includes('"targetActorId": "actor://support-command"')
+      )
+    ).toBeTruthy();
+  });
+
+  it("approves NyxID tool requests and streams the continuation", async () => {
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValueOnce({
+      body: {},
+      ok: true,
+      streamKind: "approval-request",
+    });
+
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    fireEvent.click(serviceSelector);
+    fireEvent.click(await screen.findByRole("option", { name: /NyxID Chat/i }));
+
+    const promptInput = await screen.findByPlaceholderText(
+      "Describe the task, ask a question, or paste the next operator instruction."
+    );
+    fireEvent.change(promptInput, {
+      target: { value: "Bind the current scope for me." },
+    });
+    fireEvent.click(await screen.findByLabelText("Send"));
+
+    expect(await screen.findByText("TOOL APPROVAL")).toBeTruthy();
+    expect(screen.getByText("scope.bind")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(nyxIdChatApi.approveToolCall).toHaveBeenCalledWith(
+        "scope-a",
+        "actor://nyxid",
+        expect.objectContaining({
+          approved: true,
+          requestId: "approval-1",
+        }),
+        expect.any(AbortSignal)
+      );
+    });
+
+    expect(await screen.findByText("Approval applied successfully.")).toBeTruthy();
+    expect(screen.queryByText("TOOL APPROVAL")).toBeNull();
   });
 
   it("restores chat history through the remote history API", async () => {

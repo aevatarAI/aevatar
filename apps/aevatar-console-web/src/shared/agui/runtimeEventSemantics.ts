@@ -62,12 +62,22 @@ export type RuntimeToolCallInfo = {
   error?: string;
 };
 
+export type RuntimeToolApprovalRequestInfo = {
+  requestId: string;
+  toolName: string;
+  toolCallId: string;
+  argumentsJson: string;
+  isDestructive: boolean;
+  timeoutSeconds: number;
+};
+
 export type RuntimeEventAccumulator = {
   actorId: string;
   assistantText: string;
   commandId: string;
   errorText: string;
   events: RuntimeEvent[];
+  pendingApproval?: RuntimeToolApprovalRequestInfo;
   runId: string;
   steps: RuntimeStepInfo[];
   thinking: string;
@@ -187,6 +197,86 @@ export function extractStepRequest(
   };
 }
 
+export function extractToolApprovalRequest(
+  event: RuntimeEvent
+): RuntimeToolApprovalRequestInfo | null {
+  if (String(event.type) === "TOOL_APPROVAL_REQUEST") {
+    const requestId = readOptionalString(
+      event as unknown as JsonRecord,
+      "requestId",
+      "request_id"
+    );
+    if (!requestId) {
+      return null;
+    }
+
+    return {
+      argumentsJson: readOptionalString(
+        event as unknown as JsonRecord,
+        "argumentsJson",
+        "arguments_json"
+      ),
+      isDestructive: Boolean(
+        (event as unknown as JsonRecord).isDestructive ??
+          (event as unknown as JsonRecord).is_destructive
+      ),
+      requestId,
+      timeoutSeconds:
+        typeof (event as unknown as JsonRecord).timeoutSeconds === "number"
+          ? ((event as unknown as JsonRecord).timeoutSeconds as number)
+          : typeof (event as unknown as JsonRecord).timeout_seconds === "number"
+            ? ((event as unknown as JsonRecord).timeout_seconds as number)
+            : 15,
+      toolCallId: readOptionalString(
+        event as unknown as JsonRecord,
+        "toolCallId",
+        "tool_call_id"
+      ),
+      toolName: readOptionalString(
+        event as unknown as JsonRecord,
+        "toolName",
+        "tool_name"
+      ),
+    };
+  }
+
+  if (event.type !== AGUIEventType.CUSTOM) {
+    return null;
+  }
+
+  const custom = parseCustomEvent(event);
+  if (custom.name !== "TOOL_APPROVAL_REQUEST") {
+    return null;
+  }
+
+  const raw = asRecord(custom.data);
+  const payload = asRecord(raw?.value) ?? raw;
+  if (!payload) {
+    return null;
+  }
+
+  const requestId = readOptionalString(payload, "requestId", "request_id");
+  if (!requestId) {
+    return null;
+  }
+
+  return {
+    argumentsJson: readOptionalString(payload, "argumentsJson", "arguments_json"),
+    isDestructive: Boolean(
+      payload.isDestructive ?? payload.is_destructive ?? false
+    ),
+    requestId,
+    timeoutSeconds:
+      typeof payload.timeoutSeconds === "number"
+        ? payload.timeoutSeconds
+        : typeof payload.timeout_seconds === "number"
+          ? payload.timeout_seconds
+          : 15,
+    toolCallId: readOptionalString(payload, "toolCallId", "tool_call_id"),
+    toolName: readOptionalString(payload, "toolName", "tool_name"),
+  };
+}
+
 export function isRawObserved(event: RuntimeEvent): boolean {
   if (event.type !== AGUIEventType.CUSTOM) {
     return false;
@@ -204,6 +294,7 @@ export function createRuntimeEventAccumulator(input?: {
     commandId: "",
     errorText: "",
     events: [],
+    pendingApproval: undefined,
     runId: "",
     steps: [],
     thinking: "",
@@ -218,6 +309,9 @@ export function applyRuntimeEvent(
   accumulator.events.push(event);
 
   if (event.type === AGUIEventType.RUN_STARTED) {
+    accumulator.actorId =
+      readOptionalString(event as unknown as JsonRecord, "actorId", "threadId") ||
+      accumulator.actorId;
     accumulator.runId = event.runId || accumulator.runId;
   }
 
@@ -343,6 +437,11 @@ export function applyRuntimeEvent(
   const reasoningDelta = extractReasoningDelta(event);
   if (reasoningDelta) {
     accumulator.thinking += reasoningDelta;
+  }
+
+  const toolApprovalRequest = extractToolApprovalRequest(event);
+  if (toolApprovalRequest) {
+    accumulator.pendingApproval = toolApprovalRequest;
   }
 
   return accumulator;

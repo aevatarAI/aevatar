@@ -2,13 +2,18 @@ import { useQuery } from "@tanstack/react-query";
 import { Alert } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
+import { nyxIdChatApi } from "@/shared/api/nyxIdChatApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { history } from "@/shared/navigation/history";
-import type {
-  ServiceCatalogSnapshot,
-  ServiceEndpointSnapshot,
-} from "@/shared/models/services";
+import {
+  buildScopeConsoleServiceOptions,
+  createNyxIdChatBindingInput,
+  nyxIdChatServiceId,
+  scopeServiceAppId,
+  scopeServiceNamespace,
+  type ScopeConsoleServiceOption,
+} from "@/shared/runs/scopeConsole";
 import { studioApi } from "@/shared/studio/api";
 import { buildStudioWorkflowEditorRoute } from "@/shared/studio/navigation";
 import { AevatarPageShell } from "@/shared/ui/aevatarPageShells";
@@ -19,12 +24,10 @@ import {
   hydrateChatMessages,
   serializeChatMessages,
 } from "./chatHistory";
+import { ChatAdvancedConsole } from "./chatAdvancedConsole";
 import {
-  extractReasoningDelta,
-  extractRunContext,
-  extractStepCompleted,
-  extractStepCompletedOutput,
-  extractStepRequest,
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
   isRawObserved,
 } from "./chatEventAdapter";
 import {
@@ -41,17 +44,12 @@ import type {
   ChatMessage,
   ChatSessionState,
   ConversationMeta,
+  PendingApprovalInfo,
   RuntimeEvent,
   ServiceOption,
   StepInfo,
   ToolCallInfo,
 } from "./chatTypes";
-
-const scopeServiceAppId = "default";
-const scopeServiceNamespace = "default";
-const nyxIdChatActorTypeName = "Aevatar.GAgents.NyxidChat.NyxIdChatGAgent";
-const nyxIdChatServiceId = "nyxid-chat";
-const nyxIdChatLabel = "NyxID Chat";
 
 function readChatQueryValue(
   key: string,
@@ -66,66 +64,15 @@ function createClientId(): string {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function isChatEndpoint(endpoint: ServiceEndpointSnapshot | undefined): boolean {
-  if (!endpoint) {
-    return false;
-  }
-
-  return endpoint.kind === "chat" || endpoint.endpointId.trim() === "chat";
-}
-
-function createNyxIdServiceOption(): ServiceOption {
+function mapChatServiceOption(service: ScopeConsoleServiceOption): ServiceOption {
   return {
-    endpoints: [
-      {
-        description: "Chat with NyxID about services, credentials, and configuration.",
-        displayName: "Chat",
-        endpointId: "chat",
-        kind: "chat",
-      },
-    ],
-    id: nyxIdChatServiceId,
-    kind: "nyxid-chat",
-    label: nyxIdChatLabel,
+    deploymentStatus: service.deploymentStatus,
+    endpoints: service.endpoints,
+    id: service.serviceId,
+    kind: service.kind,
+    label: service.displayName,
+    primaryActorId: service.primaryActorId,
   };
-}
-
-function buildServiceOptions(
-  services: readonly ServiceCatalogSnapshot[],
-  defaultServiceId?: string
-): ServiceOption[] {
-  const builtIn = createNyxIdServiceOption();
-  const remoteServices = services
-    .filter((service) => service.endpoints.some(isChatEndpoint))
-    .filter((service) => service.serviceId !== builtIn.id)
-    .map((service) => ({
-      deploymentStatus: service.deploymentStatus,
-      endpoints: service.endpoints
-        .filter(isChatEndpoint)
-        .map((endpoint) => ({
-          description: endpoint.description,
-          displayName: endpoint.displayName,
-          endpointId: endpoint.endpointId,
-          kind: endpoint.kind,
-          requestTypeUrl: endpoint.requestTypeUrl,
-          responseTypeUrl: endpoint.responseTypeUrl,
-        })),
-      id: service.serviceId,
-      kind: "service" as const,
-      label: service.displayName || service.serviceId,
-      primaryActorId: service.primaryActorId,
-    }))
-    .sort((left, right) => {
-      const leftIsDefault = left.id === defaultServiceId ? 1 : 0;
-      const rightIsDefault = right.id === defaultServiceId ? 1 : 0;
-      if (leftIsDefault !== rightIsDefault) {
-        return rightIsDefault - leftIsDefault;
-      }
-
-      return left.label.localeCompare(right.label);
-    });
-
-  return [builtIn, ...remoteServices];
 }
 
 function createIdleSession(scopeId = "", serviceId = ""): ChatSessionState {
@@ -201,6 +148,64 @@ function deriveConversationSession(
   };
 }
 
+function cloneStepInfo(steps?: readonly StepInfo[]): StepInfo[] {
+  return (steps ?? []).map((step) => ({ ...step }));
+}
+
+function cloneToolCallInfo(toolCalls?: readonly ToolCallInfo[]): ToolCallInfo[] {
+  return (toolCalls ?? []).map((toolCall) => ({ ...toolCall }));
+}
+
+function clonePendingApproval(
+  pendingApproval?: PendingApprovalInfo
+): PendingApprovalInfo | undefined {
+  return pendingApproval ? { ...pendingApproval } : undefined;
+}
+
+function resolveEventTimestamp(events: readonly RuntimeEvent[]): number {
+  const lastTimestamp = events[events.length - 1]?.timestamp;
+  return typeof lastTimestamp === "number" && Number.isFinite(lastTimestamp)
+    ? lastTimestamp
+    : Date.now();
+}
+
+function buildAssistantMessagePatch(
+  accumulator: ReturnType<typeof createRuntimeEventAccumulator>,
+  status: ChatMessage["status"]
+): Partial<ChatMessage> {
+  return {
+    content: accumulator.assistantText,
+    error: accumulator.errorText || undefined,
+    events: [...accumulator.events],
+    pendingApproval: clonePendingApproval(accumulator.pendingApproval),
+    status,
+    steps: cloneStepInfo(accumulator.steps),
+    thinking: accumulator.thinking,
+    toolCalls: cloneToolCallInfo(accumulator.toolCalls),
+  };
+}
+
+function buildSessionFromAccumulator(
+  scopeId: string,
+  serviceId: string,
+  accumulator: ReturnType<typeof createRuntimeEventAccumulator>,
+  status: ChatSessionState["status"],
+  fallback?: Partial<Pick<ChatSessionState, "actorId" | "commandId" | "runId">>
+): ChatSessionState {
+  return {
+    actorId: accumulator.actorId || fallback?.actorId || "",
+    commandId: accumulator.commandId || fallback?.commandId || "",
+    endpointId: "chat",
+    error: accumulator.errorText || undefined,
+    eventCount: accumulator.events.length,
+    runId: accumulator.runId || fallback?.runId || "",
+    scopeId,
+    serviceId,
+    status,
+    updatedAt: resolveEventTimestamp(accumulator.events),
+  };
+}
+
 const ChatPage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const previousServiceIdRef = useRef("");
@@ -214,11 +219,15 @@ const ChatPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [debugEvents, setDebugEvents] = useState<RuntimeEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [activeApprovalRequestId, setActiveApprovalRequestId] = useState<string | null>(
+    null
+  );
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [session, setSession] = useState<ChatSessionState>(createIdleSession());
   const [showDebug, setShowDebug] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const authSessionQuery = useQuery({
     queryKey: ["chat", "auth-session"],
@@ -255,10 +264,13 @@ const ChatPage: React.FC = () => {
 
   const services = useMemo(
     () =>
-      buildServiceOptions(
+      buildScopeConsoleServiceOptions(
         servicesQuery.data ?? [],
-        bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined
-      ),
+        bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
+        {
+          chatOnly: true,
+        }
+      ).map(mapChatServiceOption),
     [bindingQuery.data?.available, bindingQuery.data?.serviceId, servicesQuery.data]
   );
 
@@ -320,17 +332,21 @@ const ChatPage: React.FC = () => {
 
   useEffect(() => {
     if (!scopeId) {
+      setActiveApprovalRequestId(null);
       setActiveConversationId(null);
       setConversations([]);
       setDebugEvents([]);
       setMessages([]);
+      setAdvancedOpen(false);
       previousServiceIdRef.current = "";
       setSession(createIdleSession());
       return;
     }
 
     let cancelled = false;
+    setActiveApprovalRequestId(null);
     setActiveConversationId(null);
+    setAdvancedOpen(false);
     setDebugEvents([]);
     setMessages([]);
     setSession(createIdleSession(scopeId));
@@ -423,6 +439,7 @@ const ChatPage: React.FC = () => {
     }
 
     abortControllerRef.current?.abort();
+    setActiveApprovalRequestId(null);
     setActiveConversationId(null);
     setDebugEvents([]);
     setMessages([]);
@@ -452,20 +469,7 @@ const ChatPage: React.FC = () => {
       return;
     }
 
-    await studioApi.bindScopeGAgent({
-      actorTypeName: nyxIdChatActorTypeName,
-      displayName: nyxIdChatLabel,
-      endpoints: [
-        {
-          description: "Chat with NyxID about services, credentials, and configuration.",
-          displayName: "Chat",
-          endpointId: "chat",
-          kind: "chat",
-        },
-      ],
-      scopeId,
-      serviceId: nyxIdChatServiceId,
-    });
+    await studioApi.bindScopeGAgent(createNyxIdChatBindingInput(scopeId));
     nyxIdChatBoundRef.current = true;
   }, [scopeId]);
 
@@ -506,6 +510,8 @@ const ChatPage: React.FC = () => {
   const handleNewChat = useCallback(() => {
     abortControllerRef.current?.abort();
     setPrompt("");
+    setAdvancedOpen(false);
+    setActiveApprovalRequestId(null);
     setActiveConversationId(null);
     setDebugEvents([]);
     setMessages([]);
@@ -542,6 +548,7 @@ const ChatPage: React.FC = () => {
       }
 
       setActiveConversationId(conversationId);
+      setActiveApprovalRequestId(null);
       setMessages(restoredMessages);
       setDebugEvents(restoredEvents);
       setSession(deriveConversationSession(scopeId, meta, restoredMessages));
@@ -557,6 +564,7 @@ const ChatPage: React.FC = () => {
 
       setConversations((current) => current.filter((item) => item.id !== conversationId));
       if (activeConversationId === conversationId) {
+        setActiveApprovalRequestId(null);
         setActiveConversationId(null);
         setDebugEvents([]);
         setMessages([]);
@@ -606,21 +614,15 @@ const ChatPage: React.FC = () => {
     setPrompt("");
     setDebugEvents([]);
     setIsStreaming(true);
+    setActiveApprovalRequestId(null);
     setSession({
       ...createIdleSession(scopeId, selectedService.id),
       status: "running",
       updatedAt: Date.now(),
     });
-
-    const events: RuntimeEvent[] = [];
-    const steps: StepInfo[] = [];
-    const toolCalls: ToolCallInfo[] = [];
-    let assistantContent = "";
-    let thinking = "";
-    let runId = "";
-    let actorId = selectedService.kind === "nyxid-chat" ? conversationId : "";
-    let commandId = "";
-    let errorText = "";
+    const accumulator = createRuntimeEventAccumulator({
+      actorId: selectedService.kind === "nyxid-chat" ? conversationId : "",
+    });
 
     try {
       if (selectedService.kind === "nyxid-chat") {
@@ -643,184 +645,50 @@ const ChatPage: React.FC = () => {
       for await (const event of parseBackendSSEStream(response, {
         signal: controller.signal,
       })) {
-        events.push(event);
-        setDebugEvents([...events]);
-
-        if (event.type === "RUN_STARTED") {
-          runId = event.runId || runId;
-        }
-
-        if (event.type === "TEXT_MESSAGE_CONTENT") {
-          assistantContent += String(event.delta || "");
-        }
-
-        if (event.type === "STEP_STARTED") {
-          const stepName = String(event.stepName || "").trim() || `Step ${steps.length + 1}`;
-          steps.push({
-            id: stepName,
-            name: stepName,
-            startedAt: event.timestamp || Date.now(),
-            status: "running",
-          });
-        }
-
-        if (event.type === "STEP_FINISHED") {
-          const stepName = String(event.stepName || "").trim();
-          const existingStep = steps.find(
-            (step) =>
-              step.status === "running" &&
-              (!stepName || step.name === stepName || step.id === stepName)
-          );
-          if (existingStep) {
-            existingStep.finishedAt = event.timestamp || Date.now();
-            existingStep.status = "done";
-          }
-        }
-
-        if (event.type === "TOOL_CALL_START") {
-          const toolName = String(event.toolName || "").trim() || "Tool";
-          const toolId =
-            String(event.toolCallId || "").trim() || `${toolName}-${toolCalls.length + 1}`;
-          toolCalls.push({
-            id: toolId,
-            name: toolName,
-            startedAt: event.timestamp || Date.now(),
-            status: "running",
-          });
-        }
-
-        if (event.type === "TOOL_CALL_END") {
-          const toolId = String(event.toolCallId || "").trim();
-          const existingTool = toolCalls.find(
-            (tool) => tool.status === "running" && (!toolId || tool.id === toolId)
-          );
-          if (existingTool) {
-            existingTool.finishedAt = event.timestamp || Date.now();
-            existingTool.result =
-              "result" in event && typeof event.result === "string"
-                ? event.result.trim()
-                : "";
-            existingTool.status = "done";
-          }
-        }
-
-        if (event.type === "RUN_ERROR") {
-          errorText = String(event.message || "Assistant run failed.").trim();
-        }
-
-        const runContext = extractRunContext(event);
-        if (runContext) {
-          actorId = runContext.actorId || actorId;
-          commandId = runContext.commandId || commandId;
-        }
-
-        const stepRequest = extractStepRequest(event);
-        if (stepRequest) {
-          const stepIdentity = stepRequest.stepId || stepRequest.stepType || `Step ${steps.length + 1}`;
-          const existingStep = steps.find(
-            (step) => step.id === stepIdentity || step.name === stepIdentity
-          );
-          if (!existingStep) {
-            steps.push({
-              id: stepRequest.stepId || stepIdentity,
-              name: stepRequest.stepId || stepRequest.stepType || stepIdentity,
-              startedAt: event.timestamp || Date.now(),
-              status: "running",
-              stepType: stepRequest.stepType || undefined,
-            });
-          }
-        }
-
-        const completedStep = extractStepCompleted(event);
-        if (completedStep) {
-          const existingStep = steps.find(
-            (step) =>
-              step.id === completedStep.stepId || step.name === completedStep.stepId
-          );
-          if (existingStep) {
-            existingStep.error = completedStep.error;
-            existingStep.finishedAt = event.timestamp || Date.now();
-            existingStep.output = completedStep.output;
-            existingStep.status = completedStep.success === false ? "error" : "done";
-          } else {
-            steps.push({
-              error: completedStep.error,
-              finishedAt: event.timestamp || Date.now(),
-              id: completedStep.stepId,
-              name: completedStep.stepId,
-              output: completedStep.output,
-              startedAt: event.timestamp || Date.now(),
-              status: completedStep.success === false ? "error" : "done",
-            });
-          }
-        }
-
-        const stepOutput = extractStepCompletedOutput(event);
-        if (stepOutput && !assistantContent) {
-          assistantContent = stepOutput;
-        }
-
-        const reasoningDelta = extractReasoningDelta(event);
-        if (reasoningDelta) {
-          thinking += reasoningDelta;
-        }
+        applyRuntimeEvent(accumulator, event);
+        setDebugEvents([...accumulator.events]);
 
         if (isRawObserved(event)) {
           continue;
         }
 
-        updateAssistantMessage(assistantMessageId, {
-          content: assistantContent,
-          error: errorText || undefined,
-          events: [...events],
-          status: errorText ? "error" : "streaming",
-          steps: [...steps],
-          thinking,
-          toolCalls: [...toolCalls],
-        });
+        updateAssistantMessage(
+          assistantMessageId,
+          buildAssistantMessagePatch(
+            accumulator,
+            accumulator.errorText ? "error" : "streaming"
+          )
+        );
 
-        setSession({
-          actorId,
-          commandId,
-          endpointId: "chat",
-          error: errorText || undefined,
-          eventCount: events.length,
-          runId,
-          scopeId,
-          serviceId: selectedService.id,
-          status: errorText ? "error" : "running",
-          updatedAt: event.timestamp || Date.now(),
-        });
+        setSession(
+          buildSessionFromAccumulator(
+            scopeId,
+            selectedService.id,
+            accumulator,
+            accumulator.errorText ? "error" : "running"
+          )
+        );
       }
 
-      const finalAssistantStatus: ChatMessage["status"] = errorText
+      const finalAssistantStatus: ChatMessage["status"] = accumulator.errorText
         ? "error"
         : "complete";
-      const finalSession: ChatSessionState = {
-        actorId,
-        commandId,
-        endpointId: "chat",
-        error: errorText || undefined,
-        eventCount: events.length,
-        runId,
+      const finalSession = buildSessionFromAccumulator(
         scopeId,
-        serviceId: selectedService.id,
-        status: errorText ? "error" : "success",
-        updatedAt: Date.now(),
-      };
+        selectedService.id,
+        accumulator,
+        accumulator.errorText ? "error" : "success"
+      );
 
       setMessages((current) => {
         const completedMessages = current.map((message) =>
           message.id === assistantMessageId
             ? {
                 ...message,
-                content: assistantContent,
-                error: errorText || undefined,
-                events: [...events],
-                status: finalAssistantStatus,
-                steps: [...steps],
-                thinking,
-                toolCalls: [...toolCalls],
+                ...buildAssistantMessagePatch(
+                  accumulator,
+                  finalAssistantStatus
+                ),
               }
             : message
         ) as ChatMessage[];
@@ -835,35 +703,24 @@ const ChatPage: React.FC = () => {
       setSession(finalSession);
     } catch (error) {
       const message =
-        controller.signal.aborted && !errorText
+        controller.signal.aborted && !accumulator.errorText
           ? "Chat stopped by operator."
           : error instanceof Error
             ? error.message
             : String(error);
-      const finalSession: ChatSessionState = {
-        actorId,
-        commandId,
-        endpointId: "chat",
-        error: message,
-        eventCount: events.length,
-        runId,
+      accumulator.errorText = message;
+      const finalSession = buildSessionFromAccumulator(
         scopeId,
-        serviceId: selectedService.id,
-        status: "error",
-        updatedAt: Date.now(),
-      };
+        selectedService.id,
+        accumulator,
+        "error"
+      );
       setMessages((current) => {
         const erroredMessages = current.map((entry) =>
           entry.id === assistantMessageId
             ? {
                 ...entry,
-                content: assistantContent,
-                error: message,
-                events: [...events],
-                status: "error" as const,
-                steps: [...steps],
-                thinking,
-                toolCalls: [...toolCalls],
+                ...buildAssistantMessagePatch(accumulator, "error"),
               }
             : entry
         ) as ChatMessage[];
@@ -894,6 +751,226 @@ const ChatPage: React.FC = () => {
     selectedService,
     updateAssistantMessage,
   ]);
+
+  const handleApprovalDecision = useCallback(
+    async (requestId: string, approved: boolean) => {
+      if (
+        !scopeId ||
+        !selectedService ||
+        selectedService.kind !== "nyxid-chat" ||
+        !activeConversationId
+      ) {
+        return;
+      }
+
+      const targetMessage = messages.find(
+        (message) =>
+          message.role === "assistant" &&
+          message.pendingApproval?.requestId === requestId
+      );
+      if (!targetMessage) {
+        return;
+      }
+
+      const actorId =
+        session.actorId ||
+        conversations.find((conversation) => conversation.id === activeConversationId)
+          ?.actorId ||
+        activeConversationId;
+
+      if (!actorId) {
+        const unavailableMessage =
+          "Unable to resume approval because the NyxID conversation actor is unavailable.";
+        const finalSession: ChatSessionState = {
+          ...session,
+          error: unavailableMessage,
+          status: "error",
+          updatedAt: Date.now(),
+        };
+        setMessages((current) => {
+          const updated = current.map((message) =>
+            message.id === targetMessage.id
+              ? {
+                  ...message,
+                  error: unavailableMessage,
+                  pendingApproval: undefined,
+                  status: "error" as const,
+                }
+              : message
+          ) as ChatMessage[];
+          void persistConversationState(
+            activeConversationId,
+            updated,
+            finalSession,
+            selectedService
+          );
+          return updated;
+        });
+        setSession(finalSession);
+        return;
+      }
+
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      setActiveApprovalRequestId(requestId);
+      setIsStreaming(true);
+
+      const accumulator = createRuntimeEventAccumulator({
+        actorId,
+      });
+      accumulator.assistantText = targetMessage.content;
+      accumulator.commandId = session.commandId;
+      accumulator.events = [...(targetMessage.events ?? [])];
+      accumulator.runId = session.runId;
+      accumulator.steps = cloneStepInfo(targetMessage.steps);
+      accumulator.thinking = targetMessage.thinking ?? "";
+      accumulator.toolCalls = cloneToolCallInfo(targetMessage.toolCalls);
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === targetMessage.id
+            ? {
+                ...message,
+                error: undefined,
+                pendingApproval: undefined,
+                status: "streaming" as const,
+              }
+            : message
+        )
+      );
+      setSession((current) => ({
+        ...current,
+        error: undefined,
+        status: "running",
+        updatedAt: Date.now(),
+      }));
+
+      try {
+        const response = await nyxIdChatApi.approveToolCall(
+          scopeId,
+          actorId,
+          {
+            approved,
+            reason: approved ? undefined : "Rejected by console operator.",
+            requestId,
+            sessionId: activeConversationId,
+          },
+          controller.signal
+        );
+
+        for await (const event of parseBackendSSEStream(response, {
+          signal: controller.signal,
+        })) {
+          applyRuntimeEvent(accumulator, event);
+          setDebugEvents([...accumulator.events]);
+
+          if (isRawObserved(event)) {
+            continue;
+          }
+
+          updateAssistantMessage(
+            targetMessage.id,
+            buildAssistantMessagePatch(
+              accumulator,
+              accumulator.errorText ? "error" : "streaming"
+            )
+          );
+          setSession(
+            buildSessionFromAccumulator(
+              scopeId,
+              selectedService.id,
+              accumulator,
+              accumulator.errorText ? "error" : "running",
+              session
+            )
+          );
+        }
+
+        const finalStatus: ChatMessage["status"] = accumulator.errorText
+          ? "error"
+          : "complete";
+        const finalSession = buildSessionFromAccumulator(
+          scopeId,
+          selectedService.id,
+          accumulator,
+          accumulator.errorText ? "error" : "success",
+          session
+        );
+
+        setMessages((current) => {
+          const updated = current.map((message) =>
+            message.id === targetMessage.id
+              ? {
+                  ...message,
+                  ...buildAssistantMessagePatch(accumulator, finalStatus),
+                }
+              : message
+          ) as ChatMessage[];
+          void persistConversationState(
+            activeConversationId,
+            updated,
+            finalSession,
+            selectedService
+          );
+          return updated;
+        });
+        setSession(finalSession);
+      } catch (error) {
+        const message =
+          controller.signal.aborted && !accumulator.errorText
+            ? "Approval continuation stopped by operator."
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        accumulator.errorText = message;
+        const finalSession = buildSessionFromAccumulator(
+          scopeId,
+          selectedService.id,
+          accumulator,
+          "error",
+          session
+        );
+        setMessages((current) => {
+          const updated = current.map((entry) =>
+            entry.id === targetMessage.id
+              ? {
+                  ...entry,
+                  ...buildAssistantMessagePatch(accumulator, "error"),
+                }
+              : entry
+          ) as ChatMessage[];
+          void persistConversationState(
+            activeConversationId,
+            updated,
+            finalSession,
+            selectedService
+          );
+          return updated;
+        });
+        setSession(finalSession);
+      } finally {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+
+        setActiveApprovalRequestId((current) =>
+          current === requestId ? null : current
+        );
+        setIsStreaming(false);
+      }
+    },
+    [
+      activeConversationId,
+      conversations,
+      messages,
+      persistConversationState,
+      scopeId,
+      selectedService,
+      session,
+      updateAssistantMessage,
+    ]
+  );
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -1007,6 +1084,22 @@ const ChatPage: React.FC = () => {
                 New Chat
               </button>
               <button
+                onClick={() => setAdvancedOpen((value) => !value)}
+                style={{
+                  background: advancedOpen ? "#eff6ff" : "#ffffff",
+                  border: `1px solid ${advancedOpen ? "#93c5fd" : "#e7e5e4"}`,
+                  borderRadius: 10,
+                  color: advancedOpen ? "#2563eb" : "#6b7280",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "8px 12px",
+                }}
+                type="button"
+              >
+                Advanced
+              </button>
+              <button
                 onClick={() => setShowDebug((value) => !value)}
                 style={{
                   background: showDebug ? "#eff6ff" : "#ffffff",
@@ -1093,7 +1186,14 @@ const ChatPage: React.FC = () => {
                   />
                 ) : (
                   messages.map((message) => (
-                    <ChatMessageBubble key={message.id} message={message} />
+                    <ChatMessageBubble
+                      activeApprovalRequestId={activeApprovalRequestId}
+                      key={message.id}
+                      message={message}
+                      onApprovalDecision={(requestId, approved) => {
+                        void handleApprovalDecision(requestId, approved);
+                      }}
+                    />
                   ))
                 )}
                 <div ref={scrollAnchorRef} />
@@ -1146,6 +1246,15 @@ const ChatPage: React.FC = () => {
           </div>
         </div>
       </div>
+      <ChatAdvancedConsole
+        defaultServiceId={selectedServiceId}
+        onClose={() => setAdvancedOpen(false)}
+        onEnsureNyxIdBound={ensureNyxIdChatBound}
+        open={advancedOpen}
+        scopeId={scopeId}
+        services={servicesQuery.data ?? []}
+        sessionActorId={session.actorId || undefined}
+      />
     </AevatarPageShell>
   );
 };

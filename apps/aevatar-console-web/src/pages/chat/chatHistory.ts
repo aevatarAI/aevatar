@@ -164,6 +164,9 @@ export function serializeChatMessages(
       error: message.error,
       events: message.events ? [...message.events] : undefined,
       id: message.id,
+      pendingApproval: message.pendingApproval
+        ? { ...message.pendingApproval }
+        : undefined,
       role: message.role,
       status: message.status === "streaming" ? "complete" : message.status,
       steps: message.steps ? [...message.steps] : undefined,
@@ -181,6 +184,9 @@ export function hydrateChatMessages(
     error: message.error,
     events: message.events ? [...message.events] : undefined,
     id: message.id,
+    pendingApproval: message.pendingApproval
+      ? { ...message.pendingApproval }
+      : undefined,
     role: message.role,
     status: message.status,
     steps: message.steps ? [...message.steps] : undefined,
@@ -189,4 +195,3 @@ export function hydrateChatMessages(
     toolCalls: message.toolCalls ? [...message.toolCalls] : undefined,
   }));
 }
-

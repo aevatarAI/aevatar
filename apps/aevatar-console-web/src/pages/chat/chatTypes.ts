@@ -1,6 +1,7 @@
 import type {
   RuntimeEvent,
   RuntimeStepInfo,
+  RuntimeToolApprovalRequestInfo,
   RuntimeToolCallInfo,
 } from "@/shared/agui/runtimeEventSemantics";
 
@@ -14,6 +15,7 @@ export type ChatMessage = {
   status: "complete" | "streaming" | "error";
   error?: string;
   events?: RuntimeEvent[];
+  pendingApproval?: PendingApprovalInfo;
   steps?: StepInfo[];
   thinking?: string;
   toolCalls?: ToolCallInfo[];
@@ -22,6 +24,8 @@ export type ChatMessage = {
 export type StepInfo = RuntimeStepInfo;
 
 export type ToolCallInfo = RuntimeToolCallInfo;
+
+export type PendingApprovalInfo = RuntimeToolApprovalRequestInfo;
 
 export type ServiceEndpoint = {
   endpointId: string;
@@ -62,6 +66,7 @@ export type StoredChatMessage = {
   status: "complete" | "error";
   error?: string;
   events?: RuntimeEvent[];
+  pendingApproval?: PendingApprovalInfo;
   steps?: StepInfo[];
   thinking?: string;
   toolCalls?: ToolCallInfo[];

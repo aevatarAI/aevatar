@@ -688,9 +688,10 @@ describe('ScopeInvokePage', () => {
             displayName: 'Chat',
             endpointId: 'chat',
             kind: 'chat',
+            requestTypeUrl: '',
+            responseTypeUrl: '',
           },
         ],
-        preferredActorId: 'NyxIdChat:scope-a',
         scopeId: 'scope-a',
         serviceId: 'nyxid-chat',
       });
