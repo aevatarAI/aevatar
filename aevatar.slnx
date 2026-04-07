@@ -4,6 +4,7 @@
     <Project Path="agents\Aevatar.GAgents.StreamingProxy\Aevatar.GAgents.StreamingProxy.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChatbotClassifier\Aevatar.GAgents.ChatbotClassifier.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
+    <Project Path="agents\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
   </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
@@ -147,6 +148,7 @@
     <Project Path="test\Aevatar.Workflow.Sdk.Tests\Aevatar.Workflow.Sdk.Tests.csproj" />
     <Project Path="test\Aevatar.Architecture.Tests\Aevatar.Architecture.Tests.csproj" />
     <Project Path="test\Aevatar.GAgents.ChannelRuntime.Tests\Aevatar.GAgents.ChannelRuntime.Tests.csproj" />
+    <Project Path="test\Aevatar.GAgents.Household.Tests\Aevatar.GAgents.Household.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools\Aevatar.Tools.Config\Aevatar.Tools.Config.csproj" />
