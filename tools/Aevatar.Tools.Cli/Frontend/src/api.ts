@@ -90,6 +90,7 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
     headers,
+    credentials: 'include',
   });
 
   const contentType = res.headers.get('content-type');
@@ -140,6 +141,7 @@ async function requestText(path: string, opts?: RequestInit): Promise<string> {
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
     headers,
+    credentials: 'include',
   });
 
   const contentType = res.headers.get('content-type');
@@ -191,6 +193,7 @@ async function streamSse(
       ...getAuthHeaders(),
     },
     body: JSON.stringify(body),
+    credentials: 'include',
     signal,
   });
 
@@ -785,6 +788,7 @@ export const explorer = {
   getFileBlob: async (key: string): Promise<Blob> => {
     const resp = await fetch(`${BASE}/explorer/files/${encodeExplorerKey(key)}`, {
       headers: getAuthHeaders(),
+      credentials: 'include',
     });
     if (!resp.ok) throw new Error(`Failed to fetch file: ${resp.status}`);
     return resp.blob();
@@ -801,6 +805,7 @@ export const explorer = {
       method: 'POST',
       headers: getAuthHeaders(),
       body: form,
+      credentials: 'include',
     });
     if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
     return resp.json();

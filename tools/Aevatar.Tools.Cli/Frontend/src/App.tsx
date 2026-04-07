@@ -1048,6 +1048,37 @@ function App() {
 
   useEffect(() => {
     void bootstrap();
+
+    // In Electron, listen for OAuth callback from the loopback server
+    const cleanup = nyxid.setupElectronAuthListener(
+      ({ session: oauthSession, returnTo }) => {
+        setAuthSession({
+          loading: false,
+          enabled: true,
+          authenticated: true,
+          providerDisplayName: 'NyxID',
+          loginUrl: '',
+          logoutUrl: '',
+          name: oauthSession.user.name || '',
+          email: oauthSession.user.email || '',
+          picture: oauthSession.user.picture || '',
+          errorMessage: '',
+        });
+        if (oauthSession.user.sub) setRunScopeId(oauthSession.user.sub);
+        // Re-bootstrap to load workspace data now that we're authenticated
+        void bootstrap();
+      },
+      (err) => {
+        setAuthSession(prev => ({
+          ...prev,
+          loading: false,
+          enabled: true,
+          authenticated: false,
+          errorMessage: err?.message || 'OAuth callback failed.',
+        }));
+      },
+    );
+    return cleanup || undefined;
   }, []);
 
   useEffect(() => api.onAuthRequired(detail => {
