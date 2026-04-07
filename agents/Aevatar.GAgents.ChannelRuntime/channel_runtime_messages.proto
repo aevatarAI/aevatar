@@ -20,3 +20,43 @@ message ChannelBotRegistrationEntry {
 message ChannelBotRegistrationStoreState {
   repeated ChannelBotRegistrationEntry registrations = 1;
 }
+
+// ─── Channel User Identity (per platform sender, coordinator actor) ───
+
+message ChannelUserState {
+  string platform = 1;
+  string platform_user_id = 2;
+  string display_name = 3;
+  string nyxid_user_id = 4;           // empty = 未绑定
+  string nyxid_access_token = 5;      // empty = 用 registration fallback token
+  google.protobuf.Timestamp first_seen = 6;
+  google.protobuf.Timestamp last_seen = 7;
+}
+
+// Domain event: track sender identity on each inbound message
+message ChannelUserTrackedEvent {
+  string platform = 1;
+  string platform_user_id = 2;
+  string display_name = 3;
+}
+
+// Domain event: user binds NyxID identity
+message ChannelUserBoundEvent {
+  string nyxid_user_id = 1;
+  string nyxid_access_token = 2;
+}
+
+// Callback endpoint → ChannelUserGAgent inbound dispatch
+message ChannelInboundEvent {
+  string text = 1;
+  string sender_id = 2;
+  string sender_name = 3;
+  string conversation_id = 4;
+  string message_id = 5;
+  string chat_type = 6;
+  string platform = 7;
+  string registration_id = 8;
+  string registration_token = 9;      // fallback token from registration
+  string registration_scope_id = 10;
+  string nyx_provider_slug = 11;
+}
