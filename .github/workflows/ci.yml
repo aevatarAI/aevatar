@@ -111,6 +111,12 @@ jobs:
           GITHUB_SHA: ${{ github.sha }}
         run: bash tools/ci/architecture_guards.sh
 
+      - name: PR Size Guard (advisory)
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: bash tools/ci/pr_size_guard.sh
+
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
 
