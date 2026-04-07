@@ -1,6 +1,3 @@
-<<<<<<<< HEAD:docs/history/2026-03/STREAM_FORWARD_ARCHITECTURE.md
-# Aevatar Stream Forward 架构说明
-========
 ---
 title: "Aevatar Stream Forward 架构说明（2026-02-22）"
 status: active
@@ -8,7 +5,6 @@ owner: eanzhao
 ---
 
 # Aevatar Stream Forward 架构说明（2026-02-22）
->>>>>>>> c20fc87ec173e49be645ea287f4bb54ecd975935:docs/decisions/0007-stream-forward.md
 
 > Last updated: 2026-04-03. Active runtime paths: `InMemory` (dev/test) and `Orleans` with `KafkaProvider` (production).
 
