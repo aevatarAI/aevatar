@@ -45,10 +45,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             DisplayName = evt.SenderName,
         });
 
-        // 2. Resolve effective token: bound token > registration fallback
-        var effectiveToken = !string.IsNullOrEmpty(State.NyxidAccessToken)
+        // 2. Resolve tokens: user token (if bound) + org token (always from registration)
+        var userToken = !string.IsNullOrEmpty(State.NyxidAccessToken)
             ? State.NyxidAccessToken
-            : evt.RegistrationToken;
+            : null;
+        var orgToken = evt.RegistrationToken;
+        // Primary token: user's own if bound, otherwise org's
+        var effectiveToken = userToken ?? orgToken;
 
         // 3. Get or create chat actor (per sender)
         var chatActorId = $"channel-{evt.Platform}-{evt.RegistrationId}-{evt.SenderId}";
@@ -65,6 +68,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ScopeId = evt.RegistrationScopeId,
         };
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken;
+        // Always pass org token so proxy tool can fallback for org-level services
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = orgToken;
         chatRequest.Metadata["scope_id"] = evt.RegistrationScopeId;
         chatRequest.Metadata["channel.platform"] = evt.Platform;
         chatRequest.Metadata["channel.sender_id"] = evt.SenderId;

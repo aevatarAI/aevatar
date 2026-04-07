@@ -1,6 +1,7 @@
 using Aevatar.Foundation.Runtime.Hosting;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.DependencyInjection;
 using Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Orleans.Configuration;
 using Orleans.Hosting;
 using System.Net;
@@ -13,6 +14,11 @@ public static class MainnetDistributedHostBuilderExtensions
     public static WebApplicationBuilder AddMainnetDistributedOrleansHost(this WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Configuration.AddJsonFile(
+            Path.Combine(AppContext.BaseDirectory, "appsettings.Distributed.json"),
+            optional: true,
+            reloadOnChange: false);
 
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
         if (!string.Equals(runtimeOptions.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
