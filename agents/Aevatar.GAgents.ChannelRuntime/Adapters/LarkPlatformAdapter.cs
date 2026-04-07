@@ -33,8 +33,23 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         if (root.TryGetProperty("type", out var typeProp) &&
             typeProp.GetString() == "url_verification")
         {
+            // Verify the token matches the registration before echoing the challenge.
+            // Without this check, any caller who can reach the callback URL could
+            // forge Lark payloads and drive bot traffic.
+            var incomingToken = root.TryGetProperty("token", out var tokenProp)
+                ? tokenProp.GetString()
+                : null;
+
+            if (!string.IsNullOrWhiteSpace(registration.VerificationToken) &&
+                !string.Equals(incomingToken, registration.VerificationToken, StringComparison.Ordinal))
+            {
+                _logger.LogWarning(
+                    "Lark URL verification token mismatch — rejecting challenge");
+                return Results.Unauthorized();
+            }
+
             var challenge = root.TryGetProperty("challenge", out var ch) ? ch.GetString() : null;
-            _logger.LogInformation("Lark URL verification challenge received");
+            _logger.LogInformation("Lark URL verification challenge accepted");
             return Results.Json(new { challenge });
         }
 
@@ -58,6 +73,17 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         {
             _logger.LogDebug("Lark callback missing 'header' field, skipping");
             return null;
+        }
+
+        // Verify token on v2 event callbacks (header.token) to reject forged payloads.
+        if (!string.IsNullOrWhiteSpace(registration.VerificationToken))
+        {
+            var headerToken = header.TryGetProperty("token", out var ht) ? ht.GetString() : null;
+            if (!string.Equals(headerToken, registration.VerificationToken, StringComparison.Ordinal))
+            {
+                _logger.LogWarning("Lark event callback token mismatch — ignoring");
+                return null;
+            }
         }
 
         var eventType = header.TryGetProperty("event_type", out var et) ? et.GetString() : null;

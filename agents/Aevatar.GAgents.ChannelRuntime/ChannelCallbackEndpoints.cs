@@ -117,13 +117,21 @@ public static class ChannelCallbackEndpoints
 
         try
         {
-            var actorId = $"channel-{inbound.Platform}-{inbound.ConversationId}";
+            // Include registration ID to isolate actors per-registration.
+            // Without this, two registrations (different scope/token) sharing the
+            // same platform chat ID would reuse one actor, leaking history and context.
+            var actorId = $"channel-{inbound.Platform}-{registration.Id}-{inbound.ConversationId}";
 
             // Get or create actor (reuses NyxIdChatGAgent for AI processing)
             var actor = await actorRuntime.GetAsync(actorId)
                         ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, cts.Token);
 
-            // Subscribe to collect response
+            // Use a unique session ID so we can correlate the response stream
+            // to this specific request. Without this, overlapping callbacks for
+            // the same actor could consume each other's response events.
+            var sessionId = Guid.NewGuid().ToString("N");
+
+            // Subscribe to collect response — filter by session_id
             var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             var responseBuilder = new StringBuilder();
             using var ctr = cts.Token.Register(() => responseTcs.TrySetCanceled());
@@ -138,12 +146,15 @@ public static class ChannelCallbackEndpoints
                     if (payload.Is(TextMessageContentEvent.Descriptor))
                     {
                         var evt = payload.Unpack<TextMessageContentEvent>();
-                        if (!string.IsNullOrEmpty(evt.Delta))
+                        // Only collect deltas for our session
+                        if (evt.SessionId == sessionId && !string.IsNullOrEmpty(evt.Delta))
                             responseBuilder.Append(evt.Delta);
                     }
                     else if (payload.Is(TextMessageEndEvent.Descriptor))
                     {
-                        responseTcs.TrySetResult(responseBuilder.ToString());
+                        var evt = payload.Unpack<TextMessageEndEvent>();
+                        if (evt.SessionId == sessionId)
+                            responseTcs.TrySetResult(responseBuilder.ToString());
                     }
 
                     return Task.CompletedTask;
@@ -154,7 +165,7 @@ public static class ChannelCallbackEndpoints
             var chatRequest = new ChatRequestEvent
             {
                 Prompt = inbound.Text,
-                SessionId = inbound.ConversationId,
+                SessionId = sessionId,
                 ScopeId = registration.ScopeId,
             };
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = registration.NyxUserToken;

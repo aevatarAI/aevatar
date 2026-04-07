@@ -57,6 +57,96 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
+    public async Task TryHandleVerification_rejects_mismatched_token()
+    {
+        var payload = new
+        {
+            type = "url_verification",
+            challenge = "test-challenge-123",
+            token = "wrong-token",
+        };
+
+        var http = CreateHttpContext(payload);
+        var result = await _adapter.TryHandleVerificationAsync(http, MakeRegistration());
+
+        // Should return an IResult (Unauthorized), not null
+        result.Should().NotBeNull();
+        // The result should be an UnauthorizedHttpResult (401)
+        result.Should().BeOfType(typeof(Microsoft.AspNetCore.Http.HttpResults.UnauthorizedHttpResult));
+    }
+
+    [Fact]
+    public async Task TryHandleVerification_accepts_matching_token()
+    {
+        var payload = new
+        {
+            type = "url_verification",
+            challenge = "test-challenge-ok",
+            token = "verify-token",
+        };
+
+        var http = CreateHttpContext(payload);
+        var result = await _adapter.TryHandleVerificationAsync(http, MakeRegistration());
+
+        // Should return a JsonHttpResult (the challenge echo), not Unauthorized
+        result.Should().NotBeNull();
+        result.Should().NotBeOfType(typeof(Microsoft.AspNetCore.Http.HttpResults.UnauthorizedHttpResult));
+    }
+
+    [Fact]
+    public async Task TryHandleVerification_allows_when_no_verification_token_configured()
+    {
+        var payload = new
+        {
+            type = "url_verification",
+            challenge = "test-challenge-no-verify",
+            token = "any-token",
+        };
+
+        // Registration with empty verification token — should skip check
+        var reg = new ChannelBotRegistrationEntry
+        {
+            Id = "test-reg-no-verify",
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "test-token",
+            VerificationToken = "",
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        var http = CreateHttpContext(payload);
+        var result = await _adapter.TryHandleVerificationAsync(http, reg);
+
+        result.Should().NotBeNull();
+        result.Should().NotBeOfType(typeof(Microsoft.AspNetCore.Http.HttpResults.UnauthorizedHttpResult));
+    }
+
+    [Fact]
+    public async Task ParseInbound_rejects_mismatched_event_token()
+    {
+        var payload = new
+        {
+            schema = "2.0",
+            header = new { event_type = "im.message.receive_v1", token = "wrong-token" },
+            @event = new
+            {
+                sender = new { sender_id = new { open_id = "ou_abc" }, sender_type = "user" },
+                message = new
+                {
+                    chat_id = "oc_chat1",
+                    message_type = "text",
+                    content = JsonSerializer.Serialize(new { text = "hello" }),
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
+
+        inbound.Should().BeNull();
+    }
+
+    [Fact]
     public async Task TryHandleVerification_returns_null_for_normal_event()
     {
         var payload = new
@@ -78,7 +168,7 @@ public class LarkPlatformAdapterTests
         var payload = new
         {
             schema = "2.0",
-            header = new { event_type = "im.message.receive_v1" },
+            header = new { event_type = "im.message.receive_v1", token = "verify-token" },
             @event = new
             {
                 sender = new
