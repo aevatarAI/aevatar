@@ -205,7 +205,7 @@ if (needsLlm)
     if (!string.IsNullOrEmpty(apiKey))
     {
         providerName = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY") != null ? "deepseek" : "openai";
-        modelName = providerName == "deepseek" ? "deepseek-chat" : "gpt-4o-mini";
+        modelName = providerName == "deepseek" ? "deepseek-chat" : "gpt-5.4";
     }
     else
     {

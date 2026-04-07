@@ -16,7 +16,7 @@ public class AIFeatureBootstrapRealProviderIntegrationTests
         var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")!.Trim();
         var model = Environment.GetEnvironmentVariable("AEVATAR_TEST_OPENAI_MODEL");
         if (string.IsNullOrWhiteSpace(model))
-            model = "gpt-4o-mini";
+            model = "gpt-5.4";
 
         var baseUrl = Environment.GetEnvironmentVariable("AEVATAR_TEST_OPENAI_BASE_URL");
 

@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { usePretextEstimator, estimateTextareaHeight } from './usePretextEstimator';
 import {
   AlignLeft,
   Brain,
@@ -7,10 +9,12 @@ import {
   Copy as CopyIcon,
   FileText,
   MoreHorizontal,
+  Paperclip,
   Pencil,
   RotateCcw,
   Search,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   normalizeBackendSseFrame,
@@ -20,7 +24,7 @@ import {
   type RuntimeEvent,
 } from './sseUtils';
 import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
-import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta } from './chatTypes';
+import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta, AttachmentInfo, ContentPartDto } from './chatTypes';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
 import { NYXID_API_URL } from '../auth/nyxid';
@@ -127,6 +131,38 @@ function tryParseStreamingProxyRoomId(conversationId?: string | null) {
   if (!conversationId) return null;
   const prefix = `${STREAMING_PROXY_SERVICE_ID}:`;
   return conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : null;
+}
+
+/**
+ * Parse numbered/lettered choices from a prompt string.
+ * Detects patterns like: "1. Option" / "1) Option" / "A. Option" / "a) Option"
+ * Also handles indented variants (leading whitespace).
+ */
+function parseChoicesFromPrompt(prompt: string): { questionText: string; choices: { key: string; label: string }[] } {
+  const lines = prompt.split('\n');
+  const choicePattern = /^\s*([0-9]+|[A-Za-z])[.)]\s+(.+)$/;
+  const choices: { key: string; label: string }[] = [];
+  let firstChoiceIndex = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(choicePattern);
+    if (match) {
+      if (firstChoiceIndex < 0) firstChoiceIndex = i;
+      choices.push({ key: match[1], label: match[2].trim() });
+    } else if (choices.length > 0 && lines[i].trim() === '') {
+      // Allow blank lines between choices
+    } else if (choices.length > 0) {
+      // Non-choice, non-blank line after choices started — stop parsing
+      break;
+    }
+  }
+
+  if (choices.length < 2) {
+    return { questionText: prompt, choices: [] };
+  }
+
+  const questionText = lines.slice(0, firstChoiceIndex).join('\n').trim();
+  return { questionText, choices };
 }
 
 function buildConversationHeaders(
@@ -731,6 +767,100 @@ function MessageMenuItem(props: {
   );
 }
 
+// ── Media Rendering ──────────────────────────────────────────────────────────
+
+function buildMediaSrc(part: ContentPartDto): string | undefined {
+  if (part.uri) {
+    // Only allow safe URI schemes
+    const lower = part.uri.toLowerCase();
+    if (lower.startsWith('https://') || lower.startsWith('http://') || lower.startsWith('data:'))
+      return part.uri;
+    return undefined; // reject javascript:, etc.
+  }
+  if (part.dataBase64 && part.mediaType) return `data:${part.mediaType};base64,${part.dataBase64}`;
+  if (part.dataBase64) return `data:application/octet-stream;base64,${part.dataBase64}`;
+  return undefined;
+}
+
+function MediaPartRenderer({ part }: { part: ContentPartDto }) {
+  const src = buildMediaSrc(part);
+  if (!src) return null;
+
+  switch (part.type) {
+    case 'image':
+      return (
+        <div className="my-2">
+          <img src={src} alt={part.name || 'image'} className="max-w-full max-h-[400px] rounded-lg border border-gray-200" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    case 'audio':
+      return (
+        <div className="my-2">
+          <audio controls src={src} className="max-w-full" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    case 'video':
+      return (
+        <div className="my-2">
+          <video controls src={src} className="max-w-full max-h-[400px] rounded-lg" />
+          {part.name && <div className="text-[11px] text-gray-400 mt-1">{part.name}</div>}
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+function AttachmentPreview({ att }: { att: AttachmentInfo }) {
+  const isImage = att.mediaType.startsWith('image/');
+  const isAudio = att.mediaType.startsWith('audio/');
+  const isVideo = att.mediaType.startsWith('video/');
+  const isPdf = att.mediaType === 'application/pdf';
+
+  if (isImage && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <img src={att.previewUrl} alt={att.name} className="max-w-full max-h-[300px] rounded-lg" />
+      </div>
+    );
+  }
+
+  if (isAudio && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <audio controls src={att.previewUrl} className="max-w-full" />
+      </div>
+    );
+  }
+
+  if (isVideo && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <video controls src={att.previewUrl} className="max-w-full max-h-[300px] rounded-lg" />
+      </div>
+    );
+  }
+
+  if (isPdf && att.previewUrl) {
+    return (
+      <div className="my-1.5">
+        <a href={att.previewUrl} target="_blank" rel="noopener noreferrer"
+           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-[13px] text-blue-600 hover:bg-gray-100">
+          <FileText size={14} /> {att.name}
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-1.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 bg-gray-50 text-[13px] text-gray-600">
+      <Paperclip size={14} /> {att.name} <span className="text-[11px] text-gray-400">({Math.round(att.size / 1024)}KB)</span>
+    </div>
+  );
+}
+
 function ChatBubble({
   msg,
   canRegenerate,
@@ -742,6 +872,7 @@ function ChatBubble({
   onEdit,
   onDelete,
   onApprove,
+  onResumeHumanInput,
 }: {
   msg: ChatMessage;
   canRegenerate: boolean;
@@ -753,6 +884,7 @@ function ChatBubble({
   onEdit: () => void;
   onDelete: () => void;
   onApprove?: (requestId: string, approved: boolean) => void;
+  onResumeHumanInput?: (msg: ChatMessage, userInput: string) => void;
 }) {
   const isUser = msg.role === 'user';
   const [stepsOpen, setStepsOpen] = useState(false);
@@ -874,6 +1006,9 @@ function ChatBubble({
       return null;
     }
 
+    // Portal into .studio-shell (not document.body) to preserve CSS variable scope
+    const portalTarget = document.querySelector('.studio-shell') || document.body;
+
     return createPortal(
       <div
         ref={menuRef}
@@ -910,7 +1045,7 @@ function ChatBubble({
           />
         </div>
       </div>,
-      document.body,
+      portalTarget,
     );
   }
 
@@ -918,7 +1053,12 @@ function ChatBubble({
     return (
       <div className="flex flex-col items-end">
         <div className="scope-chat-user-bubble max-w-[80%] rounded-[30px] rounded-br-[14px] px-5 py-3.5 text-[14px] leading-relaxed text-white">
-          <div className="break-words">{renderContent(msg.content, 'user')}</div>
+          {msg.attachments?.map(att => (
+            <div key={att.id} className="mb-2">
+              <AttachmentPreview att={att} />
+            </div>
+          ))}
+          {msg.content && <div className="break-words">{renderContent(msg.content, 'user')}</div>}
         </div>
         <div className="relative mt-2.5 flex items-center gap-1.5">
           <MessageIconButton
@@ -1029,7 +1169,10 @@ function ChatBubble({
               <span className="ml-0.5 inline-block h-[18px] w-[2px] animate-blink align-text-bottom bg-gray-400" />
             )}
           </div>
-          {!displayContent && msg.status === 'streaming' && (
+          {msg.mediaParts?.map((part, i) => (
+            <MediaPartRenderer key={`media-${i}`} part={part} />
+          ))}
+          {!displayContent && !msg.mediaParts?.length && msg.status === 'streaming' && (
             <div className="flex items-center gap-1.5 py-2">
               <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
               <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />
@@ -1047,11 +1190,50 @@ function ChatBubble({
           </div>
         )}
 
-        {msg.pendingHumanInput && (
-          <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
-            <span className="text-[12px] text-blue-600">Waiting for your input...</span>
-          </div>
-        )}
+        {msg.pendingHumanInput && (() => {
+          const structuredOptions = msg.pendingHumanInput.options;
+          const parsed = structuredOptions && structuredOptions.length >= 2
+            ? { questionText: msg.pendingHumanInput.prompt, choices: structuredOptions.map((option, index) => ({ key: String(index + 1), label: option })) }
+            : parseChoicesFromPrompt(msg.pendingHumanInput.prompt);
+          const hasChoices = parsed.choices.length >= 2;
+
+          return hasChoices ? (
+            <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+              <div className="mb-2.5 flex items-center gap-2">
+                <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-[13px] font-medium text-blue-700">Choose an option</span>
+              </div>
+              {parsed.questionText && (
+                <div className="mb-3 whitespace-pre-wrap text-[13px] text-blue-600">{parsed.questionText}</div>
+              )}
+              <div className="flex flex-col gap-1.5">
+                {parsed.choices.map(choice => (
+                  <button
+                    key={choice.key}
+                    onClick={() => onResumeHumanInput?.(msg, choice.key)}
+                    className="flex w-full items-center gap-2.5 rounded-xl border border-blue-200 bg-white px-3 py-2 text-left text-[13px] text-gray-700 transition-colors hover:border-blue-300 hover:bg-blue-100"
+                  >
+                    <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg bg-blue-100 text-[12px] font-semibold text-blue-600">
+                      {choice.key}
+                    </span>
+                    <span>{choice.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <svg className="h-4 w-4 animate-pulse text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+                </svg>
+                <span className="text-[13px] text-blue-600">Waiting for your input — type your answer below</span>
+              </div>
+            </div>
+          );
+        })()}
 
         {msg.pendingApproval && (
           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
@@ -1401,30 +1583,41 @@ function ChatInput({
   disabled,
   focusToken,
   footer,
+  pendingAttachments,
+  onAttach,
+  onRemoveAttachment,
 }: {
   value: string;
   onChange: (text: string) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments?: AttachmentInfo[]) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled: boolean;
   focusToken: number;
   footer?: ReactNode;
+  pendingAttachments?: AttachmentInfo[];
+  onAttach?: (files: FileList) => void;
+  onRemoveAttachment?: (id: string) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const canSend = (value.trim() || (pendingAttachments && pendingAttachments.length > 0)) && !isStreaming && !disabled;
 
   const handleSend = useCallback(() => {
-    const trimmed = value.trim();
-    if (!trimmed || isStreaming || disabled) return;
-    onSend(trimmed);
+    if (!canSend) return;
+    onSend(value.trim(), pendingAttachments);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [value, isStreaming, disabled, onSend]);
+  }, [value, canSend, onSend, pendingAttachments]);
 
+  // Pretext-powered textarea height (no DOM reflow)
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    // Use content width for estimation (minus px-4 = 32px padding)
+    const widthPx = el.clientWidth || 600;
+    const estimated = estimateTextareaHeight(value, widthPx);
+    el.style.height = estimated + 'px';
   }, [value]);
 
   useEffect(() => {
@@ -1442,13 +1635,48 @@ function ChatInput({
   const handleInput = () => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+    const widthPx = el.clientWidth || 600;
+    const estimated = estimateTextareaHeight(value, widthPx);
+    el.style.height = estimated + 'px';
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0 && onAttach) {
+      onAttach(e.target.files);
+    }
+    e.target.value = '';
   };
 
   return (
     <div className="relative">
       <div className="rounded-2xl border border-[#E6E3DE] bg-white shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent">
+        {/* Attachment preview bar */}
+        {pendingAttachments && pendingAttachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-3">
+            {pendingAttachments.map(att => (
+              <div key={att.id} className="relative group flex items-center gap-1.5 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-[12px] text-gray-600">
+                {att.mediaType.startsWith('image/') && att.previewUrl ? (
+                  <img src={att.previewUrl} alt={att.name} className="h-8 w-8 rounded object-cover" />
+                ) : (
+                  <span className="text-[16px]">
+                    {att.mediaType.startsWith('audio/') ? '\u{1F3B5}' :
+                     att.mediaType.startsWith('video/') ? '\u{1F3AC}' :
+                     att.mediaType === 'application/pdf' ? '\u{1F4C4}' : '\u{1F4CE}'}
+                  </span>
+                )}
+                <span className="max-w-[120px] truncate">{att.name}</span>
+                {onRemoveAttachment && (
+                  <button
+                    onClick={() => onRemoveAttachment(att.id)}
+                    className="ml-0.5 rounded-full p-0.5 hover:bg-gray-200 transition-colors"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-end">
           <textarea
             ref={textareaRef}
@@ -1460,7 +1688,25 @@ function ChatInput({
             placeholder="Send a message..."
             disabled={disabled}
           />
-          <div className="flex-shrink-0 p-2">
+          <div className="flex-shrink-0 flex items-center gap-1 p-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,audio/*,video/*,.pdf,.md"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            {!isStreaming && (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled}
+                className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-20 transition-colors"
+                title="Attach file"
+              >
+                <Paperclip size={16} />
+              </button>
+            )}
             {isStreaming ? (
               <button
                 onClick={onStop}
@@ -1474,7 +1720,7 @@ function ChatInput({
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!value.trim() || disabled}
+                disabled={!canSend}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#18181B] text-white hover:bg-[#333] disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
                 title="Send"
               >
@@ -1671,8 +1917,12 @@ export default function ScopePage() {
   const [showDebug, setShowDebug] = useState(false);
   const [composerText, setComposerText] = useState('');
   const [composerFocusToken, setComposerFocusToken] = useState(0);
+  const [pendingAttachments, setPendingAttachments] = useState<AttachmentInfo[]>([]);
   const abortRef = useRef<AbortController | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollParentRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+  const [chatContainerWidth, setChatContainerWidth] = useState(700);
+  const pretextEstimate = usePretextEstimator();
 
   // Chat history persistence
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
@@ -1752,10 +2002,43 @@ export default function ScopePage() {
     };
   }, [scopeId]);
 
-  // Auto-scroll on new messages
+  // ── Virtualizer for chat messages ──
+  const chatVirtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: (index) => pretextEstimate(messages[index], chatContainerWidth),
+    overscan: 5,
+    getItemKey: (index) => messages[index].id,
+  });
+
+  // Track container width for Pretext estimation
   useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const el = scrollParentRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // max-w-3xl = 768px, minus px-4 (32px) padding
+        const w = Math.min(entry.contentRect.width, 768) - 32;
+        if (w > 0) setChatContainerWidth(w);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Stick-to-bottom: auto-scroll when at bottom
+  const handleChatScroll = useCallback(() => {
+    const el = scrollParentRef.current;
+    if (!el) return;
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
+
+  // Auto-scroll on new messages or content changes (streaming)
+  useLayoutEffect(() => {
+    if (messages.length > 0 && isAtBottomRef.current) {
+      chatVirtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'smooth' });
+    }
+  }, [messages, messages.length > 0 ? messages[messages.length - 1].content.length : 0]);
 
   const activeService = services.find(s => s.id === selectedService) || services[0];
   const readyProviders = useMemo(
@@ -1882,6 +2165,8 @@ export default function ScopePage() {
         ...(m.authorName ? { authorName: m.authorName } : {}),
         ...(m.error ? { error: m.error } : {}),
         ...(m.thinking ? { thinking: m.thinking } : {}),
+        ...(m.attachments?.length ? { attachments: m.attachments.map(({ file, previewUrl, ...rest }) => rest) } : {}),
+        ...(m.mediaParts?.length ? { mediaParts: m.mediaParts } : {}),
       }));
     const meta: ConversationMeta = {
       id: convId,
@@ -1944,6 +2229,8 @@ export default function ScopePage() {
         ...(message.authorName ? { authorName: message.authorName } : {}),
         ...(message.error ? { error: message.error } : {}),
         ...(message.thinking ? { thinking: message.thinking } : {}),
+        ...(message.attachments?.length ? { attachments: message.attachments.map(({ file, previewUrl, ...rest }) => rest) } : {}),
+        ...(message.mediaParts?.length ? { mediaParts: message.mediaParts } : {}),
       }));
     const meta: ConversationMeta = {
       id: activeConvId,
@@ -1988,6 +2275,8 @@ export default function ScopePage() {
     options?: {
       baseMessages?: ChatMessage[];
       includeUserMessage?: boolean;
+      attachments?: AttachmentInfo[];
+      inputParts?: ContentPartDto[];
     },
   ) => {
     if (!scopeId || isStreaming) return;
@@ -2001,6 +2290,7 @@ export default function ScopePage() {
           content: text,
           timestamp: Date.now(),
           status: 'complete' as const,
+          attachments: options?.attachments,
         }
       : null;
     const assistantMsg: ChatMessage = {
@@ -2251,8 +2541,33 @@ export default function ScopePage() {
           break;
         }
 
+        case 'MEDIA_CONTENT': {
+          const mediaPart: ContentPartDto = {
+            type: (String(evt.kind || 'image')) as ContentPartDto['type'],
+            dataBase64: evt.dataBase64 ? String(evt.dataBase64) : undefined,
+            mediaType: evt.mediaType ? String(evt.mediaType) : undefined,
+            uri: evt.uri ? String(evt.uri) : undefined,
+            name: evt.name ? String(evt.name) : undefined,
+            text: evt.text ? String(evt.text) : undefined,
+          };
+          setMessages(prev => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last?.role === 'assistant') {
+              updated[updated.length - 1] = {
+                ...last,
+                mediaParts: [...(last.mediaParts || []), mediaPart],
+              };
+            }
+            return updated;
+          });
+          break;
+        }
+
         case 'HUMAN_INPUT_REQUEST': {
           const prompt = String(evt.prompt || '');
+          const rawOpts = evt.options;
+          const options = Array.isArray(rawOpts) ? rawOpts.filter((o): o is string => typeof o === 'string') : undefined;
           setIsStreaming(false);
           updateCurrentAssistant({
             content: prompt || 'Waiting for your input...',
@@ -2263,6 +2578,7 @@ export default function ScopePage() {
               prompt,
               serviceId: activeService.id,
               actorId: trimOptional(activeConvId ?? undefined) || undefined,
+              ...(options && options.length > 0 ? { options } : {}),
             },
           });
           break;
@@ -2303,6 +2619,8 @@ export default function ScopePage() {
             const raw = (evt.payload ?? evt.value ?? {}) as any;
             const p = (raw?.value ?? raw) as any;
             const prompt = String(p?.prompt ?? p?.Prompt ?? '');
+            const rawOpts = p?.options ?? p?.Options;
+            const options = Array.isArray(rawOpts) ? rawOpts.filter((o: unknown): o is string => typeof o === 'string') : undefined;
             setIsStreaming(false);
             updateCurrentAssistant({
               content: prompt || 'Waiting for your input...',
@@ -2313,6 +2631,7 @@ export default function ScopePage() {
                 prompt,
                 serviceId: activeService.id,
                 actorId: trimOptional(activeConvId ?? undefined) || undefined,
+                ...(options && options.length > 0 ? { options } : {}),
               },
             });
             break;
@@ -2361,9 +2680,9 @@ export default function ScopePage() {
           );
           nyxidChatBoundRef.current = true;
         }
-        await api.scope.streamInvoke(scopeId, NYXID_CHAT_SERVICE_ID, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
+        await api.scope.streamInvoke(scopeId, NYXID_CHAT_SERVICE_ID, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
       } else {
-        await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId);
+        await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
       }
 
       setMessages(prev => {
@@ -2457,8 +2776,106 @@ export default function ScopePage() {
     }
   }, [scopeId, isStreaming, messages, activeService, activeConvId, conversationHeaders, saveCurrentConversation, ensureStreamingProxyRoom]);
 
-  const handleSend = useCallback((text: string) => {
+  const handleAttach = useCallback((files: FileList) => {
+    const maxSize = 50 * 1024 * 1024; // 50 MB
+    const newAttachments: AttachmentInfo[] = Array.from(files)
+      .filter(file => file.size <= maxSize)
+      .map(file => {
+        const id = crypto.randomUUID();
+        const ext = file.name.split('.').pop() || 'bin';
+        return {
+          id,
+          name: file.name,
+          mediaType: file.type || 'application/octet-stream',
+          size: file.size,
+          storageKey: `chat-media/${id}.${ext}`,
+          previewUrl: URL.createObjectURL(file),
+          file,
+        };
+      });
+    setPendingAttachments(prev => [...prev, ...newAttachments]);
+  }, []);
+
+  const handleRemoveAttachment = useCallback((id: string) => {
+    setPendingAttachments(prev => {
+      const removed = prev.find(a => a.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter(a => a.id !== id);
+    });
+  }, []);
+
+  const handleResumeHumanInput = useCallback(async (targetMsg: ChatMessage, userInput: string) => {
+    if (!scopeId || isStreaming) return;
+    const hi = targetMsg.pendingHumanInput;
+    if (!hi) return;
+
+    const serviceId = hi.serviceId || services.find(s => s.id === selectedService)?.id;
+    if (!serviceId || !hi.runId) return;
+
+    // Add user message and clear pending state
+    const userMsg: ChatMessage = {
+      id: genId(), role: 'user', content: userInput,
+      timestamp: Date.now(), status: 'complete',
+    };
+    const assistantMsg: ChatMessage = {
+      id: genId(), role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming',
+    };
+
+    setMessages(prev => {
+      const updated = prev.map(m =>
+        m.id === targetMsg.id ? { ...m, pendingHumanInput: undefined } : m,
+      );
+      return [...updated, userMsg, assistantMsg];
+    });
+    setIsStreaming(true);
+    setDebugEvents([]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const updateAssistant = (patch: Partial<ChatMessage>) => {
+      setMessages(prev => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === 'assistant') {
+          updated[updated.length - 1] = { ...last, ...patch };
+        }
+        return updated;
+      });
+    };
+
+    try {
+      await api.scope.resumeRun(
+        scopeId,
+        serviceId,
+        hi.runId,
+        {
+          stepId: hi.stepId,
+          userInput,
+          approved: true,
+          actorId: hi.actorId,
+        },
+      );
+
+      // resumeRun is a POST (not SSE) — continuation comes via the existing SSE stream
+      updateAssistant({ status: 'complete' });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Resume failed';
+      updateAssistant({ status: 'error', error: errorMsg });
+    } finally {
+      setIsStreaming(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+    }
+  }, [scopeId, isStreaming, services, selectedService]);
+
+  const handleSend = useCallback(async (text: string, attachments?: AttachmentInfo[]) => {
     setComposerText('');
+    const atts = attachments || pendingAttachments;
+    // Don't revoke object URLs — they're still needed for display in sent messages.
+    // Cleanup happens on conversation switch or component unmount.
+    setPendingAttachments([]);
 
     // ── Onboarding state machine ──
     if (onboardingState && selectedService === 'onboarding') {
@@ -2565,8 +2982,50 @@ export default function ScopePage() {
       }
     }
 
-    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true });
-  }, [messages, streamChatTurn, scopeId, onboardingState, selectedService]);
+    // ── Resume suspended workflow if pendingHumanInput is active ──
+    const lastAssistant = [...messages].reverse().find((m: ChatMessage) => m.role === 'assistant');
+    if (lastAssistant?.pendingHumanInput) {
+      void handleResumeHumanInput(lastAssistant, text);
+      return;
+    }
+
+    // Build inputParts from attachments
+    const inputParts: ContentPartDto[] = [];
+    if (atts.length > 0) {
+      for (const att of atts) {
+        const fileRef = att.file;
+        if (!fileRef) continue;
+
+        // Upload to chrono-storage for persistence
+        try {
+          await api.explorer.uploadFile(att.storageKey, fileRef);
+        } catch (err) {
+          console.warn('Upload to chrono-storage failed, falling back to inline base64:', err);
+        }
+
+        // Only send media types the LLM can handle as inline base64
+        const isMedia = att.mediaType.startsWith('image/') || att.mediaType.startsWith('audio/') || att.mediaType.startsWith('video/');
+        if (!isMedia) continue; // Skip PDF/markdown for inline LLM input
+
+        // Convert to base64 ContentPart for LLM
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            resolve(result.split(',')[1] || '');
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(fileRef);
+        });
+        const kind: ContentPartDto['type'] = att.mediaType.startsWith('image/') ? 'image'
+          : att.mediaType.startsWith('audio/') ? 'audio'
+          : 'video';
+        inputParts.push({ type: kind, dataBase64: base64, mediaType: att.mediaType, name: att.name });
+      }
+    }
+
+    void streamChatTurn(text, { baseMessages: messages, includeUserMessage: true, attachments: atts, inputParts: inputParts.length > 0 ? inputParts : undefined });
+  }, [messages, streamChatTurn, handleResumeHumanInput, scopeId, onboardingState, selectedService, pendingAttachments]);
 
   const handleRegenerate = useCallback((messageIndex: number) => {
     if (isStreaming) return;
@@ -3355,10 +3814,14 @@ export default function ScopePage() {
         {/* Chat Column */}
         <div className="flex-1 min-h-0 flex flex-col">
 
-      {/* Chat Area */}
-      <div className="flex-1 min-h-0 overflow-auto bg-[#FAFAF8]">
-        <div className="max-w-3xl mx-auto py-6 px-4 space-y-5">
-          {messages.length === 0 && (
+      {/* Chat Area — virtualized with Pretext height estimation */}
+      <div
+        ref={scrollParentRef}
+        className="flex-1 min-h-0 overflow-auto bg-[#FAFAF8]"
+        onScroll={handleChatScroll}
+      >
+        {messages.length === 0 ? (
+          <div className="max-w-3xl mx-auto py-6 px-4">
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <div
                 className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4 shadow-lg"
@@ -3380,24 +3843,49 @@ export default function ScopePage() {
                   : `Invoke the "${activeService.label}" service with a chat message.`}
               </div>
             </div>
-          )}
-          {messages.map((msg, index) => (
-            <ChatBubble
-              key={msg.id}
-              msg={msg}
-              canRegenerate={!isStreaming && (msg.role === 'user' || findPreviousUserMessageIndex(messages, index) >= 0)}
-              canEdit={msg.role === 'user'}
-              onCopy={handleCopyMessage}
-              onCopyMarkdown={handleCopyMessageMarkdown}
-              onCopyPlainText={handleCopyMessagePlainText}
-              onRegenerate={() => handleRegenerate(index)}
-              onEdit={() => handleEditMessage(index)}
-              onDelete={() => { void handleDeleteMessage(index); }}
-              onApprove={handleToolApproval}
-            />
-          ))}
-          <div ref={scrollRef} />
-        </div>
+          </div>
+        ) : (
+          <div
+            style={{ height: chatVirtualizer.getTotalSize() + 48, position: 'relative' }}
+          >
+            <div className="max-w-3xl mx-auto px-4">
+              {chatVirtualizer.getVirtualItems().map((virtualRow) => {
+                const msg = messages[virtualRow.index];
+                const index = virtualRow.index;
+                return (
+                  <div
+                    key={msg.id}
+                    data-index={virtualRow.index}
+                    ref={chatVirtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start + 24}px)`,
+                    }}
+                  >
+                    <div className="pb-5 max-w-3xl mx-auto px-4">
+                      <ChatBubble
+                        msg={msg}
+                        canRegenerate={!isStreaming && (msg.role === 'user' || findPreviousUserMessageIndex(messages, index) >= 0)}
+                        canEdit={msg.role === 'user'}
+                        onCopy={handleCopyMessage}
+                        onCopyMarkdown={handleCopyMessageMarkdown}
+                        onCopyPlainText={handleCopyMessagePlainText}
+                        onRegenerate={() => handleRegenerate(index)}
+                        onEdit={() => handleEditMessage(index)}
+                        onDelete={() => { void handleDeleteMessage(index); }}
+                        onApprove={handleToolApproval}
+                        onResumeHumanInput={handleResumeHumanInput}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Debug Panel (collapsible) */}
@@ -3418,6 +3906,9 @@ export default function ScopePage() {
             isStreaming={isStreaming}
             disabled={!scopeId}
             focusToken={composerFocusToken}
+            pendingAttachments={pendingAttachments}
+            onAttach={handleAttach}
+            onRemoveAttachment={handleRemoveAttachment}
             footer={(
               <ConversationLlmConfigBar
                 routeValue={conversationRoute}

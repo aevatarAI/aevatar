@@ -3,10 +3,9 @@
   "configurations": [
     {
       "name": "frontend-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["-c", "export PATH=/opt/homebrew/bin:$PATH && cd tools/Aevatar.Tools.Cli/Frontend && npm run dev"],
       "port": 5173,
-      "cwd": "tools/Aevatar.Tools.Cli/Frontend",
       "autoPort": true
     }
   ]

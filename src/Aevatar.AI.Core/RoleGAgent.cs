@@ -454,6 +454,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             {
                 SessionId = request.SessionId,
                 Prompt = request.Prompt,
+                InputParts = { request.InputParts },
             });
         }
         else if (trackedSession != null)
@@ -464,9 +465,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 request.SessionId);
         }
 
-        var promptPreview = request.Prompt.Length > 200
-            ? request.Prompt[..200] + "..."
-            : request.Prompt;
+        var promptPreview = BuildRequestPreview(request);
         Logger.LogInformation("[{Role}] LLM request: {Preview}", RoleName, promptPreview);
         var timeoutMs = ResolveLlmTimeoutMs(request);
         var useWorkflowFailureMarker = timeoutMs > 0;
@@ -504,10 +503,13 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 EffectiveConfig.ProviderName,
                 EffectiveConfig.Model ?? "<default>",
                 request.Metadata.Count > 0 ? string.Join(",", request.Metadata.Keys) : "<none>");
+            var toolNames = Tools.HasTools
+                ? string.Join(",", Tools.GetAll().Select(t => t.Name ?? "<null>"))
+                : "none";
             replayRecord = SessionReplayRecord.FromFailure(
                 useWorkflowFailureMarker
                     ? BuildLlmFailureContent(ex.Message)
-                    : $"LLM request failed: {SanitizeFailureMessage(ex.Message)}");
+                    : $"LLM request failed [tools={toolNames}]: {SanitizeFailureMessage(ex.Message)}");
         }
 
         // ─── Detect approval-pending tool result and set up continuation ───
@@ -559,11 +561,19 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         var fullContent = new StringBuilder();
         var fullReasoning = new StringBuilder();
         var toolCalls = new StreamingToolCallAccumulator();
-        IReadOnlyDictionary<string, string>? metadata = request.Metadata.Count == 0
-            ? null
-            : new Dictionary<string, string>(request.Metadata, StringComparer.Ordinal);
+        var contentParts = new List<ContentPart>();
+        IReadOnlyDictionary<string, string>? metadata = null;
+        if (request.Headers.Count > 0 || request.Metadata.Count > 0)
+        {
+            var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var kv in request.Headers) merged[kv.Key] = kv.Value;
+            // Metadata takes precedence (contains NyxID token, model override, etc.)
+            foreach (var kv in request.Metadata) merged[kv.Key] = kv.Value;
+            metadata = merged;
+        }
+        var inputParts = ResolveRequestInputParts(request);
 
-        await foreach (var chunk in ChatStreamAsync(request.Prompt, request.SessionId, metadata, streamCt))
+        await foreach (var chunk in ChatStreamAsync(inputParts, request.SessionId, metadata, streamCt))
         {
             if (!string.IsNullOrEmpty(chunk.DeltaContent))
             {
@@ -572,6 +582,17 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
                 {
                     Delta = chunk.DeltaContent,
                     SessionId = request.SessionId,
+                }, TopologyAudience.Parent);
+            }
+
+            if (chunk.DeltaContentPart != null)
+            {
+                contentParts.Add(chunk.DeltaContentPart);
+                await PublishAsync(new MediaContentEvent
+                {
+                    SessionId = request.SessionId,
+                    AgentId = Id,
+                    Part = ContentPartProtoMapper.ToProto(chunk.DeltaContentPart),
                 }, TopologyAudience.Parent);
             }
 
@@ -648,6 +669,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             response,
             fullReasoning.ToString(),
             toolCalls.BuildToolCalls(),
+            contentParts,
             ContentEmitted: fullContent.Length > 0);
     }
 
@@ -664,6 +686,7 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             Prompt = request.Prompt,
             ContentEmitted = replayRecord.ContentEmitted,
             ToolCalls = { ToToolCallEvents(replayRecord.ToolCalls) },
+            OutputParts = { ContentPartProtoMapper.ToProtoList(replayRecord.ContentParts) },
         });
     }
 
@@ -703,6 +726,16 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             }, TopologyAudience.Parent);
         }
 
+        foreach (var contentPart in trackedSession.OutputParts)
+        {
+            await PublishAsync(new MediaContentEvent
+            {
+                SessionId = sessionId,
+                AgentId = Id,
+                Part = contentPart.Clone(),
+            }, TopologyAudience.Parent);
+        }
+
         await PublishCompletionAsync(sessionId, trackedSession.FinalContent);
     }
 
@@ -727,6 +760,12 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         {
             throw new InvalidOperationException(
                 $"Session '{request.SessionId}' already exists with a different prompt.");
+        }
+
+        if (!HaveMatchingInputParts(trackedSession.InputParts, request.InputParts))
+        {
+            throw new InvalidOperationException(
+                $"Session '{request.SessionId}' already exists with different multimodal input.");
         }
 
         return trackedSession;
@@ -801,6 +840,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         }
 
         session.Prompt = evt.Prompt ?? string.Empty;
+        session.InputParts.Clear();
+        session.InputParts.Add(evt.InputParts);
         sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
@@ -833,6 +874,8 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
         session.ContentEmitted = evt.ContentEmitted;
         session.ToolCalls.Clear();
         session.ToolCalls.Add(evt.ToolCalls);
+        session.OutputParts.Clear();
+        session.OutputParts.Add(evt.OutputParts);
         next.Sessions[evt.SessionId] = session;
         TrimTrackedSessions(next);
         return next;
@@ -943,14 +986,57 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
     private static string NormalizeModuleExtensionText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
 
+    private static IReadOnlyList<ContentPart> ResolveRequestInputParts(ChatRequestEvent request)
+    {
+        if (request.InputParts.Count > 0)
+        {
+            var parts = new List<ContentPart>();
+            // Include the text prompt as a TextPart alongside media parts
+            if (!string.IsNullOrWhiteSpace(request.Prompt))
+                parts.Add(ContentPart.TextPart(request.Prompt));
+            parts.AddRange(ContentPartProtoMapper.FromProtoList(request.InputParts));
+            return parts;
+        }
+
+        return [ContentPart.TextPart(request.Prompt ?? string.Empty)];
+    }
+
+    private static string BuildRequestPreview(ChatRequestEvent request)
+    {
+        var previewSource = string.IsNullOrWhiteSpace(request.Prompt)
+            ? string.Join(", ", ResolveRequestInputParts(request).Select(part => part.Kind.ToString().ToLowerInvariant()))
+            : request.Prompt;
+
+        return previewSource.Length > 200
+            ? previewSource[..200] + "..."
+            : previewSource;
+    }
+
+    private static bool HaveMatchingInputParts(
+        Google.Protobuf.Collections.RepeatedField<ChatContentPart> existing,
+        Google.Protobuf.Collections.RepeatedField<ChatContentPart> incoming)
+    {
+        if (existing.Count != incoming.Count)
+            return false;
+
+        for (var i = 0; i < existing.Count; i++)
+        {
+            if (!existing[i].Equals(incoming[i]))
+                return false;
+        }
+
+        return true;
+    }
+
     private sealed record SessionReplayRecord(
         string Content,
         string ReasoningContent,
         IReadOnlyList<ToolCall> ToolCalls,
+        IReadOnlyList<ContentPart> ContentParts,
         bool ContentEmitted)
     {
         public static SessionReplayRecord FromFailure(string content) =>
-            new(content, string.Empty, [], ContentEmitted: false);
+            new(content, string.Empty, [], [], ContentEmitted: false);
     }
 
 }

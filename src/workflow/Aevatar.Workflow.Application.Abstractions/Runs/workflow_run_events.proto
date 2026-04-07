@@ -180,6 +180,7 @@ message WorkflowHumanInputRequestCustomPayload {
   int32 timeout_seconds = 5;
   string variable_name = 6;
   map<string, string> metadata = 7;
+  repeated string options = 8;
 }
 
 message WorkflowHumanInputResponseCustomPayload {

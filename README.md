@@ -344,19 +344,16 @@ sequenceDiagram
 
 ## 文档与进阶
 
-- **底层设计**： [docs/FOUNDATION.md](docs/FOUNDATION.md) — 事件模型与 Pipeline。
-- **系统架构总览**： [docs/PROJECT_ARCHITECTURE.md](docs/PROJECT_ARCHITECTURE.md) — 分层、能力装配、宿主边界。
-- **CQRS 架构**： [docs/CQRS_ARCHITECTURE.md](docs/CQRS_ARCHITECTURE.md) — 写侧/读侧、统一投影链路、接入约束。
+- **文档索引**： [docs/README.md](docs/README.md) — 全部文档自动生成索引。
+- **底层设计**： [docs/canon/architecture.md](docs/canon/architecture.md) — 事件模型与 Pipeline。
+- **系统架构总览**： [docs/canon/overview.md](docs/canon/overview.md) — 分层、能力装配、宿主边界。
+- **CQRS 架构**： [docs/canon/cqrs-projection.md](docs/canon/cqrs-projection.md) — 写侧/读侧、统一投影链路、接入约束。
 - **CQRS 投影架构**： [src/Aevatar.CQRS.Projection.Core/README.md](src/Aevatar.CQRS.Projection.Core/README.md) / [src/workflow/Aevatar.Workflow.Projection/README.md](src/workflow/Aevatar.Workflow.Projection/README.md) — 统一 Projection Lifecycle、Coordinator 与 ReadModel。
-- **Role 与 Connector**： [docs/ROLE.md](docs/ROLE.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
-- **分布式 Runtime 与持久化规划**： [docs/DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md](docs/DISTRIBUTED_RUNTIME_PERSISTENCE_PLAN.md) — 目标态与迁移步骤。
-- **Orleans Kafka Transport**： [docs/ORLEANS_KAFKA_TRANSPORT_GUIDE.md](docs/ORLEANS_KAFKA_TRANSPORT_GUIDE.md) — Orleans 可选 Kafka transport 接入与配置。
-- **Event Sourcing**： [docs/EVENT_SOURCING.md](docs/EVENT_SOURCING.md) — 如何开启事件溯源。
-- **Connector 配置详解**： [src/Aevatar.Configuration/README.md](src/Aevatar.Configuration/README.md#connector-作用与配置) — 配置格式与示例。
+- **Role 与 Connector**： [docs/canon/role-model.md](docs/canon/role-model.md) — Workflow YAML 中的角色、Connector 配置、把 MCP/CLI/API 当角色能力。
+- **Event Sourcing**： [docs/canon/event-sourcing.md](docs/canon/event-sourcing.md) — 如何开启事件溯源。
+- **Connector 配置详解**： [docs/canon/connector.md](docs/canon/connector.md) — 配置格式与示例。
 - **Maker 示例**： [demos/Aevatar.Demos.Maker](demos/Aevatar.Demos.Maker) — 自定义步骤类型与 MAKER 工作流。
-- **架构审计评分**： [docs/audit-scorecard/architecture-scorecard-2026-02-20.md](docs/audit-scorecard/architecture-scorecard-2026-02-20.md) — 当前实现分与目标态评分口径。
-- **项目拆分策略**： [docs/PROJECT_SPLIT_STRATEGY.md](docs/PROJECT_SPLIT_STRATEGY.md) — 分片与拆仓路径。
-- **拆分细节审计**： [docs/audit-scorecard/project-split-scorecard-2026-02-21.md](docs/audit-scorecard/project-split-scorecard-2026-02-21.md) — 拆分就绪度评分与问题清单。
+- **项目拆分策略**： [docs/decisions/0001-project-split-strategy.md](docs/decisions/0001-project-split-strategy.md) — 分片与拆仓路径。
 
 ---
 

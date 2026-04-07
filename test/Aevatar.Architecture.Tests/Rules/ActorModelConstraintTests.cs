@@ -37,7 +37,7 @@ public class ActorModelConstraintTests
         rule.Check(Arch);
     }
 
-    [Fact(Skip = "Known violation - _liveSinkGate in EventSinkProjectionRuntimeLeaseBase")]
+    [Fact]
     public void LeaseClasses_ShouldNot_Declare_Lock_Fields()
     {
         // Lease 类禁止持有 lock/gate 字段

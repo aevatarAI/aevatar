@@ -72,7 +72,7 @@ This agent's relay callback URL is: `{relayUrl}`
 
 When setting up channel bots, use this URL as the `callback_url` for API keys:
 ```
-nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_url="{relayUrl}"
+nyxid_api_keys action=create name="telegram-relay" scopes="read write proxy" callback_url="{relayUrl}"
 ```
 Then create a default conversation route linking the bot to this API key.
 """;

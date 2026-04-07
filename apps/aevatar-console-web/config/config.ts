@@ -9,12 +9,24 @@ import routes from './routes';
 
 const { UMI_ENV = 'dev' } = process.env;
 
+function resolvePublicPath(value?: string): string {
+  const normalized = value?.trim();
+  if (!normalized || normalized === '/') {
+    return '/';
+  }
+
+  const rootRelative = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  return rootRelative.endsWith('/') ? rootRelative : `${rootRelative}/`;
+}
+
 /**
  * @name 使用公共路径
  * @description 部署时的路径，如果部署在非根目录下，需要配置这个变量
  * @doc https://umijs.org/docs/api/config#publicpath
  */
-const PUBLIC_PATH: string = '/';
+const PUBLIC_PATH: string = resolvePublicPath(
+  process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
+);
 
 const config: ReturnType<typeof defineConfig> = defineConfig({
   /**
@@ -24,6 +36,7 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
    */
   hash: true,
 
+  base: PUBLIC_PATH,
   publicPath: PUBLIC_PATH,
 
   /**
@@ -143,6 +156,9 @@ const config: ReturnType<typeof defineConfig> = defineConfig({
     ),
     'process.env.NYXID_SCOPE': JSON.stringify(process.env.NYXID_SCOPE),
     'process.env.ORNN_BASE_URL': JSON.stringify(process.env.ORNN_BASE_URL),
+    'process.env.AEVATAR_CONSOLE_PUBLIC_PATH': JSON.stringify(
+      process.env.AEVATAR_CONSOLE_PUBLIC_PATH,
+    ),
   },
 });
 

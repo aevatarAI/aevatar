@@ -53,7 +53,7 @@ public class AIFeatureBootstrapCoverageTests
     {
         var options = new AevatarAIFeatureOptions
         {
-            OpenAIModel = "gpt-4o-mini",
+            OpenAIModel = "gpt-5.4",
             DefaultProvider = "nyxid",
         };
         var secretsStore = new InMemorySecretsStore(new Dictionary<string, string>
@@ -233,7 +233,7 @@ public class AIFeatureBootstrapCoverageTests
                 {
                     ["LLMProviders:Providers:openai:ApiKey"] = "openai-key",
                     ["LLMProviders:Providers:openai:ProviderType"] = "openai",
-                    ["LLMProviders:Providers:openai:Model"] = "gpt-4o-mini",
+                    ["LLMProviders:Providers:openai:Model"] = "gpt-5.4",
                     ["LLMProviders:Default"] = "openai",
                 });
 

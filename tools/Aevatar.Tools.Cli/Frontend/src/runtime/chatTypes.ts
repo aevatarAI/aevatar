@@ -1,5 +1,25 @@
 import type { RuntimeEvent } from './sseUtils';
 
+export type ContentPartDto = {
+  type: 'text' | 'image' | 'audio' | 'video';
+  text?: string;
+  dataBase64?: string;
+  mediaType?: string;
+  uri?: string;
+  name?: string;
+};
+
+export type AttachmentInfo = {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  storageKey: string;
+  previewUrl?: string;
+  /** Transient File reference for upload — not serialized to history */
+  file?: File;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -20,6 +40,10 @@ export type ChatMessage = {
   pendingApproval?: PendingApprovalInfo;
   /** Pending human_input request from a workflow */
   pendingHumanInput?: PendingHumanInputInfo;
+  /** User-uploaded file attachments */
+  attachments?: AttachmentInfo[];
+  /** LLM-generated media parts from MEDIA_CONTENT events */
+  mediaParts?: ContentPartDto[];
 };
 
 export type PendingApprovalInfo = {
@@ -37,6 +61,8 @@ export type PendingHumanInputInfo = {
   prompt: string;
   serviceId?: string;
   actorId?: string;
+  /** Structured options from backend (if provided) */
+  options?: string[];
 };
 
 export type StepInfo = {
@@ -92,4 +118,6 @@ export type StoredChatMessage = {
   status: 'complete' | 'error';
   error?: string;
   thinking?: string;
+  attachments?: AttachmentInfo[];
+  mediaParts?: ContentPartDto[];
 };
