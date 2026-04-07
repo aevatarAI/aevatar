@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -144,5 +145,48 @@ public class AgentToolSchemaGeneratorTests
         var typed = AgentToolSchemaGenerator.GenerateSchemaString(typeof(SimpleParams));
 
         generic.Should().Be(typed);
+    }
+
+    [Fact]
+    public void GenerateSchema_ElementAndString_AreConsistent()
+    {
+        var schemaString = AgentToolSchemaGenerator.GenerateSchemaString<SimpleParams>();
+        var schemaElement = AgentToolSchemaGenerator.GenerateSchema<SimpleParams>();
+
+        var fromString = JsonDocument.Parse(schemaString).RootElement;
+        fromString.GetProperty("type").GetString()
+            .Should().Be(schemaElement.GetProperty("type").GetString());
+        fromString.GetProperty("properties").EnumerateObject().Count()
+            .Should().Be(schemaElement.GetProperty("properties").EnumerateObject().Count());
+    }
+
+    [Fact]
+    public void GenerateSchemaString_ConcurrentAccess_ProducesSameResult()
+    {
+        var results = new ConcurrentBag<string>();
+
+        Parallel.For(0, 10, _ =>
+        {
+            results.Add(AgentToolSchemaGenerator.GenerateSchemaString<OptionalParams>());
+        });
+
+        results.Distinct().Should().HaveCount(1, "all concurrent calls should return the same cached schema");
+    }
+
+    private class NullableParams
+    {
+        public string? Name { get; set; }
+        public int? Value { get; set; }
+    }
+
+    [Fact]
+    public void GenerateSchemaString_NullableProperties_GeneratesValidSchema()
+    {
+        var schema = AgentToolSchemaGenerator.GenerateSchemaString<NullableParams>();
+        var doc = JsonDocument.Parse(schema);
+
+        doc.RootElement.GetProperty("type").GetString().Should().Be("object");
+        doc.RootElement.GetProperty("properties").TryGetProperty("name", out _).Should().BeTrue();
+        doc.RootElement.GetProperty("properties").TryGetProperty("value", out _).Should().BeTrue();
     }
 }

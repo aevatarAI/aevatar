@@ -163,4 +163,168 @@ public class JsonRpcModelTests
         ((TextPart)sendParams.Message.Parts[0]).Text.Should().Be("hello agent");
         sendParams.Metadata!["agentId"].Should().Be("actor-123");
     }
+
+    // ─── Additional coverage ───
+
+    [Fact]
+    public void JsonRpcResponse_WithNullId_Serializes()
+    {
+        var response = JsonRpcResponse.Success(null, new { ok = true });
+        var json = JsonSerializer.Serialize(response, JsonOptions);
+
+        json.Should().Contain("\"result\"");
+        // id should be null in the output
+        var deserialized = JsonSerializer.Deserialize<JsonRpcResponse>(json, JsonOptions);
+        deserialized!.Id.Should().BeNull();
+    }
+
+    [Fact]
+    public void JsonRpcResponse_Fail_WithData_IncludesData()
+    {
+        var response = JsonRpcResponse.Fail(null, A2AErrorCodes.InternalError, "error", new { detail = "stack" });
+        var json = JsonSerializer.Serialize(response, JsonOptions);
+
+        json.Should().Contain("\"data\"");
+        json.Should().Contain("stack");
+    }
+
+    [Fact]
+    public void A2AErrorCodes_MatchJsonRpcSpec()
+    {
+        A2AErrorCodes.ParseError.Should().Be(-32700);
+        A2AErrorCodes.InvalidRequest.Should().Be(-32600);
+        A2AErrorCodes.MethodNotFound.Should().Be(-32601);
+        A2AErrorCodes.InvalidParams.Should().Be(-32602);
+        A2AErrorCodes.InternalError.Should().Be(-32603);
+    }
+
+    [Fact]
+    public void A2ATask_JsonRoundtrip_PreservesAllProperties()
+    {
+        var task = new A2ATask
+        {
+            Id = "t-1",
+            SessionId = "s-1",
+            Status = new A2ATaskStatus
+            {
+                State = TaskState.Working,
+                Timestamp = "2026-04-07T00:00:00Z",
+            },
+            History = [new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] }],
+            Artifacts = [new Artifact { Parts = [new TextPart { Text = "result" }], Index = 0 }],
+            Metadata = new() { ["key"] = "value" },
+        };
+
+        var json = JsonSerializer.Serialize(task, JsonOptions);
+        var deserialized = JsonSerializer.Deserialize<A2ATask>(json, JsonOptions);
+
+        deserialized.Should().NotBeNull();
+        deserialized!.Id.Should().Be("t-1");
+        deserialized.SessionId.Should().Be("s-1");
+        deserialized.Status.State.Should().Be(TaskState.Working);
+        deserialized.History.Should().HaveCount(1);
+        deserialized.Artifacts.Should().HaveCount(1);
+        deserialized.Metadata!["key"].Should().Be("value");
+    }
+
+    [Fact]
+    public void A2ATask_WithNullCollections_SerializesCorrectly()
+    {
+        var task = new A2ATask
+        {
+            Id = "t-2",
+            Status = new A2ATaskStatus { State = TaskState.Submitted },
+        };
+
+        var json = JsonSerializer.Serialize(task, JsonOptions);
+        var deserialized = JsonSerializer.Deserialize<A2ATask>(json, JsonOptions);
+
+        deserialized!.History.Should().BeNull();
+        deserialized.Artifacts.Should().BeNull();
+        deserialized.Metadata.Should().BeNull();
+    }
+
+    [Fact]
+    public void DataPart_Roundtrips()
+    {
+        Part part = new DataPart
+        {
+            Data = new Dictionary<string, object?> { ["score"] = 42 },
+        };
+
+        var json = JsonSerializer.Serialize(part, JsonOptions);
+        json.Should().Contain("\"type\":\"data\"");
+
+        var deserialized = JsonSerializer.Deserialize<Part>(json, JsonOptions);
+        deserialized.Should().BeOfType<DataPart>();
+    }
+
+    [Fact]
+    public void AgentCard_JsonRoundtrip_PreservesAllProperties()
+    {
+        var card = new AgentCard
+        {
+            Name = "Agent",
+            Description = "Desc",
+            Url = "http://localhost/a2a",
+            Version = "2.0.0",
+            Capabilities = new AgentCapabilities
+            {
+                Streaming = true,
+                PushNotifications = false,
+                StateTransitionHistory = true,
+            },
+            Skills = [new AgentSkill
+            {
+                Id = "chat",
+                Name = "Chat",
+                Description = "General chat",
+                Tags = ["chat", "ai"],
+                Examples = ["Hello"],
+            }],
+            DefaultInputModes = ["text", "image"],
+            DefaultOutputModes = ["text"],
+        };
+
+        var json = JsonSerializer.Serialize(card, JsonOptions);
+        var deserialized = JsonSerializer.Deserialize<AgentCard>(json, JsonOptions);
+
+        deserialized!.Name.Should().Be("Agent");
+        deserialized.Version.Should().Be("2.0.0");
+        deserialized.Capabilities.Streaming.Should().BeTrue();
+        deserialized.Skills.Should().HaveCount(1);
+        deserialized.Skills[0].Tags.Should().Contain("ai");
+        deserialized.Skills[0].Examples.Should().Contain("Hello");
+        deserialized.DefaultInputModes.Should().Contain("image");
+    }
+
+    [Fact]
+    public void TaskState_AllValues_SerializeAsStrings()
+    {
+        foreach (var state in Enum.GetValues<TaskState>())
+        {
+            var status = new A2ATaskStatus { State = state };
+            var json = JsonSerializer.Serialize(status, JsonOptions);
+
+            // Should not contain numeric enum values
+            json.Should().NotMatchRegex("\"state\":\\d");
+        }
+    }
+
+    [Fact]
+    public void TextPart_WithMetadata_Roundtrips()
+    {
+        Part part = new TextPart
+        {
+            Text = "hello",
+            Metadata = new() { ["source"] = "user" },
+        };
+
+        var json = JsonSerializer.Serialize(part, JsonOptions);
+        json.Should().Contain("\"metadata\"");
+
+        var deserialized = JsonSerializer.Deserialize<Part>(json, JsonOptions);
+        deserialized.Should().BeOfType<TextPart>();
+        deserialized!.Metadata.Should().ContainKey("source");
+    }
 }

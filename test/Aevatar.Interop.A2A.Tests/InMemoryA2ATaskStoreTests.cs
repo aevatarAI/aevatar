@@ -159,4 +159,85 @@ public class InMemoryA2ATaskStoreTests
         updates[0].Status.State.Should().Be(TaskState.Completed);
         updates[0].IsFinal.Should().BeTrue();
     }
+
+    [Fact]
+    public async Task Subscribe_MultipleSubscribers_AllReceiveUpdates()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        var reader1 = _store.SubscribeAsync("t1");
+        var reader2 = _store.SubscribeAsync("t1");
+
+        await _store.UpdateTaskStateAsync("t1", TaskState.Working);
+
+        reader1.TryRead(out var u1).Should().BeTrue();
+        reader2.TryRead(out var u2).Should().BeTrue();
+        u1!.Status.State.Should().Be(TaskState.Working);
+        u2!.Status.State.Should().Be(TaskState.Working);
+    }
+
+    [Fact]
+    public async Task Subscribe_ArtifactUpdate_IncludesArtifact()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        var reader = _store.SubscribeAsync("t1");
+
+        var artifact = new Artifact
+        {
+            Parts = [new TextPart { Text = "result" }],
+            Index = 0,
+        };
+        await _store.AddArtifactAsync("t1", artifact);
+
+        reader.TryRead(out var update).Should().BeTrue();
+        update!.Artifact.Should().NotBeNull();
+        update.Artifact!.Index.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UpdateTaskState_WithMessage_AppendsToHistory()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        var agentMsg = new Message { Role = "agent", Parts = [new TextPart { Text = "Reply 1" }] };
+        await _store.UpdateTaskStateAsync("t1", TaskState.Working, agentMsg);
+
+        var agentMsg2 = new Message { Role = "agent", Parts = [new TextPart { Text = "Reply 2" }] };
+        await _store.UpdateTaskStateAsync("t1", TaskState.Completed, agentMsg2);
+
+        var task = await _store.GetTaskAsync("t1");
+        task!.History.Should().HaveCount(3, "initial + 2 agent messages");
+    }
+
+    [Fact]
+    public async Task UpdateTaskState_WithoutMessage_DoesNotModifyHistory()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        await _store.UpdateTaskStateAsync("t1", TaskState.Working);
+
+        var task = await _store.GetTaskAsync("t1");
+        task!.History.Should().HaveCount(1, "only the initial message");
+    }
+
+    [Fact]
+    public async Task AddArtifact_MultipleTimes_AccumulatesArtifacts()
+    {
+        await _store.CreateTaskAsync("t1", null, MakeMessage("hello"));
+        await _store.AddArtifactAsync("t1", new Artifact { Parts = [new TextPart { Text = "a" }], Index = 0 });
+        await _store.AddArtifactAsync("t1", new Artifact { Parts = [new TextPart { Text = "b" }], Index = 1 });
+
+        var task = await _store.GetTaskAsync("t1");
+        task!.Artifacts.Should().HaveCount(2);
+        task.Artifacts![0].Index.Should().Be(0);
+        task.Artifacts[1].Index.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AddArtifact_NonExistent_Throws()
+    {
+        var act = () => _store.AddArtifactAsync("missing", new Artifact
+        {
+            Parts = [new TextPart { Text = "a" }],
+            Index = 0,
+        });
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
 }

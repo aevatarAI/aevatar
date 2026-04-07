@@ -139,4 +139,33 @@ public class AgentToolBaseTests
         tool.ApprovalMode.Should().Be(ToolApprovalMode.NeverRequire);
         tool.RequiresApproval("{}").Should().BeNull();
     }
+
+    [Fact]
+    public async Task ExecuteAsync_WhitespaceOnly_ReturnsError()
+    {
+        var tool = new TestSearchTool();
+        var result = await tool.ExecuteAsync("   ");
+
+        result.Should().Contain("error").And.Contain("Parameters are required");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithExtraProperties_IgnoresAndExecutes()
+    {
+        var tool = new TestSearchTool();
+        var result = await tool.ExecuteAsync("""{"query":"test","max_results":2,"unknown_field":"ignored"}""");
+
+        tool.LastParams.Should().NotBeNull();
+        tool.LastParams!.Query.Should().Be("test");
+        tool.LastParams.MaxResults.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ToolThrows_PropagatesException()
+    {
+        var tool = new FailingTool();
+        var act = () => tool.ExecuteAsync("""{"query":"x"}""");
+
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("boom");
+    }
 }

@@ -1,4 +1,5 @@
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.MultiAgent;
 using Aevatar.Interop.A2A.Abstractions;
 using Aevatar.Interop.A2A.Abstractions.Models;
 using Aevatar.Interop.A2A.Application;
@@ -177,12 +178,117 @@ public class A2AAdapterServiceTests
         card.Skills.Should().NotBeEmpty();
     }
 
+    [Fact]
+    public async Task SendTask_MultipleTextParts_JoinsWithNewline()
+    {
+        var sendParams = new TaskSendParams
+        {
+            Id = "task-multi",
+            Message = new Message
+            {
+                Role = "user",
+                Parts = [new TextPart { Text = "Hello" }, new TextPart { Text = "World" }],
+            },
+            Metadata = new() { ["agentId"] = "actor-1" },
+        };
+
+        var task = await _adapter.SendTaskAsync(sendParams);
+
+        task.Status.State.Should().Be(TaskState.Working);
+        _dispatchPort.LastPayloadContent.Should().Be("Hello\nWorld");
+    }
+
+    [Fact]
+    public async Task GetTask_WithNegativeHistoryLength_ReturnsAllHistory()
+    {
+        await _adapter.SendTaskAsync(new TaskSendParams
+        {
+            Id = "t-neg",
+            Message = MakeUserMessage("Hello"),
+            Metadata = new() { ["agentId"] = "a1" },
+        });
+
+        var task = await _adapter.GetTaskAsync(new TaskQueryParams { Id = "t-neg", HistoryLength = -1 });
+        task!.History.Should().NotBeEmpty("negative historyLength should not trim");
+    }
+
+    [Fact]
+    public async Task GetTask_WithHistoryLengthExceedingCount_ReturnsAllHistory()
+    {
+        await _adapter.SendTaskAsync(new TaskSendParams
+        {
+            Id = "t-large",
+            Message = MakeUserMessage("Hello"),
+            Metadata = new() { ["agentId"] = "a1" },
+        });
+
+        var task = await _adapter.GetTaskAsync(new TaskQueryParams { Id = "t-large", HistoryLength = 100 });
+        task!.History.Should().HaveCount(1, "historyLength > count returns all");
+    }
+
+    [Fact]
+    public async Task CancelTask_CompletedTask_Throws()
+    {
+        await _adapter.SendTaskAsync(new TaskSendParams
+        {
+            Id = "t-done",
+            Message = MakeUserMessage("Hello"),
+            Metadata = new() { ["agentId"] = "a1" },
+        });
+        await _taskStore.UpdateTaskStateAsync("t-done", TaskState.Completed);
+
+        var act = () => _adapter.CancelTaskAsync(new TaskIdParams { Id = "t-done" });
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*terminal*");
+    }
+
+    [Fact]
+    public async Task CancelTask_FailedTask_Throws()
+    {
+        _dispatchPort.ShouldThrow = true;
+        await _adapter.SendTaskAsync(new TaskSendParams
+        {
+            Id = "t-fail",
+            Message = MakeUserMessage("Hello"),
+            Metadata = new() { ["agentId"] = "a1" },
+        });
+
+        var act = () => _adapter.CancelTaskAsync(new TaskIdParams { Id = "t-fail" });
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*terminal*");
+    }
+
+    [Fact]
+    public async Task SendTask_DispatchFails_PreservesExceptionMessage()
+    {
+        _dispatchPort.ShouldThrow = true;
+        var sendParams = new TaskSendParams
+        {
+            Id = "task-err",
+            Message = MakeUserMessage("Hi"),
+            Metadata = new() { ["agentId"] = "actor-1" },
+        };
+
+        var task = await _adapter.SendTaskAsync(sendParams);
+
+        task.Status.State.Should().Be(TaskState.Failed);
+        task.Status.Message.Should().NotBeNull();
+        var text = ((TextPart)task.Status.Message!.Parts[0]).Text;
+        text.Should().Contain("Dispatch failed");
+    }
+
+    [Fact]
+    public void GetAgentCard_TrailingSlash_NormalizesUrl()
+    {
+        var card = _adapter.GetAgentCard("https://example.com/");
+        card.Url.Should().Be("https://example.com/a2a");
+    }
+
     // ─── Stub ───
 
     private sealed class StubDispatchPort : IActorDispatchPort
     {
         public int DispatchedCount { get; private set; }
         public string? LastTargetActorId { get; private set; }
+        public string? LastPayloadContent { get; private set; }
         public bool ShouldThrow { get; set; }
 
         public Task DispatchAsync(string actorId, EventEnvelope envelope, CancellationToken ct = default)
@@ -190,6 +296,13 @@ public class A2AAdapterServiceTests
             if (ShouldThrow) throw new InvalidOperationException("Dispatch failed");
             DispatchedCount++;
             LastTargetActorId = actorId;
+
+            if (envelope.Payload != null)
+            {
+                var agentMessage = envelope.Payload.Unpack<AgentMessage>();
+                LastPayloadContent = agentMessage.Content;
+            }
+
             return Task.CompletedTask;
         }
     }

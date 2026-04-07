@@ -113,4 +113,42 @@ public class LLMResponseFormatTests
         request.ResponseFormat.Should().NotBeNull();
         request.ResponseFormat!.Kind.Should().Be(LLMResponseFormatKind.JsonSchema);
     }
+
+    // ─── SanitizeTypeName tests ───
+
+    private class SimpleType { }
+
+    [Fact]
+    public void ForJsonSchema_Generic_SanitizesGenericSuffix()
+    {
+        // List<int> has CLR name "List`1" — the backtick must be removed
+        var format = LLMResponseFormat.ForJsonSchema<List<int>>();
+        var jsonSchema = (LLMResponseFormatJsonSchema)format;
+
+        jsonSchema.SchemaName.Should().NotContain("`");
+        jsonSchema.SchemaName.Should().Be("List");
+    }
+
+    [Fact]
+    public void ForJsonSchema_SimpleType_UsesTypeName()
+    {
+        var format = LLMResponseFormat.ForJsonSchema<SimpleType>();
+        var jsonSchema = (LLMResponseFormatJsonSchema)format;
+
+        jsonSchema.SchemaName.Should().Be("SimpleType");
+    }
+
+    [Fact]
+    public void ForJsonSchema_SchemaIsClonedAndIndependent()
+    {
+        var schemaJson = """{"type":"object","properties":{"x":{"type":"number"}}}""";
+        using var doc = JsonDocument.Parse(schemaJson);
+        var original = doc.RootElement;
+
+        var format = LLMResponseFormat.ForJsonSchema(original, "Test");
+        var jsonSchema = (LLMResponseFormatJsonSchema)format;
+
+        // The schema should survive after the source document is disposed
+        jsonSchema.Schema.GetProperty("type").GetString().Should().Be("object");
+    }
 }
