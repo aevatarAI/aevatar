@@ -26,9 +26,7 @@ Reviewed by: arch-audit skill, 5 parallel exploration agents
 | Actor 生命周期 | 5/10 | StreamingProxyGAgent 影子状态机 + agents/ 3 个 ConcurrentDictionary 单例 |
 | 前端可构建性 | 2/10 | CLI Frontend + Console Web 均构建失败 |
 | 测试覆盖 (agents/) | 0/10 | agents/ 零测试；集成测试 3/51 失败 |
-| Governance 实质 | 3/10 | 有事件溯源 + admission 评估引擎，但无目标函数/自适应/递归组合 |
-
-**综合架构健康度: 4.9 / 10**
+**综合架构健康度: 5.1 / 10** (8 dimensions)
 
 ---
 
@@ -344,44 +342,7 @@ Task.Run 直接修改状态:      0 matches
 
 ---
 
-## 8. Governance 实质 — 深度分析 (3/10)
-
-### 8.1 现有能力
-
-**ServiceConfigurationGAgent** 处理 8 种命令:
-- Binding CRUD: Create/Update/Retire ServiceBinding
-- Endpoint CRUD: Create/Update ServiceEndpointCatalog
-- Policy CRUD: Create/Update/Retire ServicePolicy
-
-所有命令走完整事件溯源（Protobuf state + domain events），这比之前评估的 "纯 CRUD" 稍好。
-
-**InvokeAdmissionService** 实现运行时策略评估:
-- 检查目标服务定义存在性
-- 验证端点发布状态
-- 策略引用完整性
-- 委托 `IInvokeAdmissionEvaluator` 做 4 项违规检查:
-  1. `missing_policy` — 引用策略不存在
-  2. `endpoint_disabled` — 端点暴露被禁用
-  3. `inactive_deployment` — 需活跃 deployment 但无
-  4. `caller_not_allowed` — 调用方不在白名单
-
-**因此从 2/10 上调至 3/10** — 有运行时策略引擎，不是纯 config CRUD。
-
-### 8.2 缺失的治理抽象
-
-```bash
-rg "Goal|Scope|Governance|Harness|Optimization|Adaptability" src/ --type cs
-# 域模型层无匹配（仅在 Governance 命名空间名中出现）
-```
-
-缺失:
-- **Goal/ObjectiveFunction** — 无目标函数建模
-- **三层治理** (order definition / optimization / adaptability) — 只有 order definition (binding/policy)
-- **递归组合** — 策略是扁平列表，无层级/继承/组合
-- **自适应反馈环** — 无 optimization/adaptability 机制
-- **Harness Theory** — 仅在 CEO 库文档中，代码层无体现
-
-### 8.3 序列化合规
+## 8. 序列化合规
 
 ```
 Proto 定义文件: 12 个
@@ -420,7 +381,6 @@ JSON 仅在边界: ChatWebSocketCommandParser, SseChatTransport, EventQueryTool 
 | 16 | `NyxidChat.csproj` | 依赖反转 | Medium | 直接引用 Aevatar.Studio.Infrastructure |
 | 17 | `EndpointSchemaProvider.cs:20-21` | 缓存无 TTL | Low | 500 项上限但无过期 |
 | 18 | `FileBackedWorkflowCatalogPort.cs:80` | 缓存无 TTL | Low | Dictionary 无过期机制 |
-| 19 | Governance 子系统 | 产品 thesis | Low | 无 Goal/ObjectiveFunction/三层治理 |
 
 ---
 
@@ -487,5 +447,4 @@ agents/
 | 投影一致性 | 3 处绕过 | 6 处绕过 (agents/ 新发现) | -0 (分数不变, 证据更充分) |
 | Actor 生命周期 | ConcurrentDictionary 违规 | + 影子状态机 + 18 处状态字段全量清单 | 更完整 |
 | 分层合规 | Host 耦合度高 | + God Class 量化 + 3 处直操 actor + 依赖方向分析 | 8→6 |
-| Governance | 0-2/10 config CRUD | 3/10 有 admission 评估引擎 | 上调 |
 | CI Guards | 1 个盲区 | agents/ + apps/ 双盲区 + 规则覆盖矩阵 | 更完整 |
