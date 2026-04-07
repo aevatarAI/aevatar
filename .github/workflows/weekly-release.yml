@@ -1,0 +1,104 @@
+name: weekly-release
+
+on:
+  # Every Friday at 15:00 UTC (23:00 CST)
+  schedule:
+    - cron: "0 15 * * 5"
+  workflow_dispatch:
+    inputs:
+      skip_ci_check:
+        description: "Skip CI green check (emergency release)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: weekly-release
+  cancel-in-progress: false
+
+jobs:
+  weekly-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for new commits since last tag
+        id: check
+        run: |
+          LAST_TAG=$(git tag --sort=-creatordate | head -1)
+          if [ -z "$LAST_TAG" ]; then
+            echo "No previous tags found. Will create baseline."
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "version=v0.1.0" >> "$GITHUB_OUTPUT"
+          else
+            COMMITS_SINCE=$(git rev-list --count "${LAST_TAG}..HEAD")
+            echo "Commits since ${LAST_TAG}: ${COMMITS_SINCE}"
+            if [ "$COMMITS_SINCE" -eq 0 ]; then
+              echo "No new commits. Skipping."
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            else
+              # Bump patch version
+              CURRENT=$(echo "$LAST_TAG" | sed 's/^v//')
+              MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+              MINOR=$(echo "$CURRENT" | cut -d. -f2)
+              PATCH=$(echo "$CURRENT" | cut -d. -f3)
+              NEW_PATCH=$((PATCH + 1))
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+              echo "version=v${MAJOR}.${MINOR}.${NEW_PATCH}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Verify CI is green on dev
+        if: steps.check.outputs.has_changes == 'true' && !inputs.skip_ci_check
+        run: |
+          # Check the latest commit on dev has passing status
+          STATUS=$(gh api repos/${{ github.repository }}/commits/dev/status --jq '.state' 2>/dev/null || echo "unknown")
+          if [ "$STATUS" != "success" ] && [ "$STATUS" != "unknown" ]; then
+            echo "::error::CI is not green on dev (status: ${STATUS}). Fix CI before releasing."
+            echo "::error::Use workflow_dispatch with skip_ci_check=true for emergency releases."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge dev into master and tag
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          VERSION="${{ steps.check.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout master
+          git merge dev --no-edit --ff-only || {
+            echo "::error::Cannot fast-forward master to dev. Manual merge required."
+            exit 1
+          }
+
+          git tag -a "${VERSION}" -m "Weekly release ${VERSION}"
+          git push origin master --tags
+
+          echo "Tagged ${VERSION} on master."
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          VERSION="${{ steps.check.outputs.version }}"
+          LAST_TAG=$(git tag --sort=-creatordate | sed -n '2p')
+
+          if [ -n "$LAST_TAG" ]; then
+            BODY=$(git log --oneline "${LAST_TAG}..${VERSION}" | head -30)
+          else
+            BODY="Baseline release."
+          fi
+
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --notes "${BODY}" \
+            --target master
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
