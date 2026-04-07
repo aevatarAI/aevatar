@@ -1,3 +1,4 @@
+import { AGUIEventType, CustomEventName } from "@aevatar-react-sdk/types";
 import { Alert, Space, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
@@ -7,6 +8,12 @@ import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import type { ServiceCatalogSnapshot } from "@/shared/models/services";
+import { history } from "@/shared/navigation/history";
+import {
+  buildRuntimeExplorerHref,
+  buildRuntimeRunsHref,
+} from "@/shared/navigation/runtimeRoutes";
+import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import {
   buildScopeConsoleServiceOptions,
   extractRuntimeInvokeReceipt,
@@ -34,6 +41,15 @@ type ChatAdvancedConsoleProps = {
   scopeId: string;
   services: readonly ServiceCatalogSnapshot[];
   sessionActorId?: string;
+};
+
+type ExecuteLaunchContext = {
+  endpointId: string;
+  endpointKind: string;
+  payloadBase64: string;
+  payloadTypeUrl: string;
+  prompt: string;
+  serviceId: string;
 };
 
 const monoFontFamily =
@@ -165,6 +181,41 @@ function createResultPanel(
   );
 }
 
+function createObservedExecutionEvents(context: {
+  actorId?: string;
+  commandId?: string;
+  correlationId?: string;
+  runId?: string;
+}): RuntimeEvent[] {
+  const events: RuntimeEvent[] = [];
+
+  if (context.runId?.trim()) {
+    events.push({
+      runId: context.runId.trim(),
+      threadId:
+        context.correlationId?.trim() ||
+        context.commandId?.trim() ||
+        context.runId.trim(),
+      timestamp: Date.now(),
+      type: AGUIEventType.RUN_STARTED,
+    } as RuntimeEvent);
+  }
+
+  if (context.actorId?.trim() || context.commandId?.trim()) {
+    events.push({
+      name: CustomEventName.RunContext,
+      timestamp: Date.now(),
+      type: AGUIEventType.CUSTOM,
+      value: {
+        actorId: context.actorId?.trim() || undefined,
+        commandId: context.commandId?.trim() || undefined,
+      },
+    } as RuntimeEvent);
+  }
+
+  return events;
+}
+
 export function ChatAdvancedConsole({
   defaultServiceId,
   onClose,
@@ -199,7 +250,10 @@ export function ChatAdvancedConsole({
   const [executeResponseText, setExecuteResponseText] = useState("");
   const [executeActorId, setExecuteActorId] = useState("");
   const [executeCommandId, setExecuteCommandId] = useState("");
+  const [executeCorrelationId, setExecuteCorrelationId] = useState("");
   const [executeRunId, setExecuteRunId] = useState("");
+  const [executeLaunchContext, setExecuteLaunchContext] =
+    useState<ExecuteLaunchContext | null>(null);
   const [executeStatus, setExecuteStatus] = useState<
     "idle" | "running" | "success" | "error"
   >("idle");
@@ -384,8 +438,18 @@ export function ChatAdvancedConsole({
     setExecuteAssistantText("");
     setExecuteActorId("");
     setExecuteCommandId("");
+    setExecuteCorrelationId("");
     setExecuteError("");
     setExecuteEvents([]);
+    const launchContext: ExecuteLaunchContext = {
+      endpointId: activeExecuteEndpoint.endpointId,
+      endpointKind: activeExecuteEndpoint.kind,
+      payloadBase64: executePayloadBase64.trim(),
+      payloadTypeUrl: executePayloadTypeUrl.trim(),
+      prompt: executePrompt.trim(),
+      serviceId: activeExecuteService.serviceId,
+    };
+    setExecuteLaunchContext(launchContext);
     setExecuteResponseText("");
     setExecuteRunId("");
     setExecuteStatus("running");
@@ -444,11 +508,13 @@ export function ChatAdvancedConsole({
       const {
         actorId: responseActorId,
         commandId: responseCommandId,
+        correlationId: responseCorrelationId,
         runId: responseRunId,
       } = extractRuntimeInvokeReceipt(response);
 
       setExecuteActorId(responseActorId);
       setExecuteCommandId(responseCommandId);
+      setExecuteCorrelationId(responseCorrelationId);
       setExecuteRunId(responseRunId);
       setExecuteResponseText(safeJson(response));
       setExecuteStatus("success");
@@ -473,6 +539,90 @@ export function ChatAdvancedConsole({
     onEnsureNyxIdBound,
     scopeId,
   ]);
+
+  const handleOpenRuns = useCallback(() => {
+    if (!scopeId || !executeLaunchContext) {
+      return;
+    }
+
+    const observedEvents =
+      executeEvents.length > 0
+        ? executeEvents
+        : createObservedExecutionEvents({
+            actorId: executeActorId,
+            commandId: executeCommandId,
+            correlationId: executeCorrelationId,
+            runId: executeRunId,
+          });
+    const draftKey =
+      observedEvents.length > 0
+        ? saveObservedRunSessionPayload({
+            actorId: executeActorId || undefined,
+            commandId: executeCommandId || undefined,
+            endpointId: executeLaunchContext.endpointId,
+            endpointKind: executeLaunchContext.endpointKind as
+              | "chat"
+              | "command"
+              | undefined,
+            events: observedEvents,
+            payloadBase64:
+              executeLaunchContext.endpointKind !== "chat"
+                ? executeLaunchContext.payloadBase64 || undefined
+                : undefined,
+            payloadTypeUrl:
+              executeLaunchContext.endpointKind !== "chat"
+                ? executeLaunchContext.payloadTypeUrl || undefined
+                : undefined,
+            prompt: executeLaunchContext.prompt,
+            runId: executeRunId || undefined,
+            scopeId,
+            serviceOverrideId: executeLaunchContext.serviceId,
+          })
+        : "";
+
+    history.push(
+      buildRuntimeRunsHref({
+        actorId: executeActorId || undefined,
+        draftKey: draftKey || undefined,
+        endpointId: executeLaunchContext.endpointId,
+        endpointKind: executeLaunchContext.endpointKind,
+        payloadBase64:
+          executeLaunchContext.endpointKind !== "chat"
+            ? executeLaunchContext.payloadBase64 || undefined
+            : undefined,
+        payloadTypeUrl:
+          executeLaunchContext.endpointKind !== "chat"
+            ? executeLaunchContext.payloadTypeUrl || undefined
+            : undefined,
+        prompt: executeLaunchContext.prompt || undefined,
+        scopeId,
+        serviceId: executeLaunchContext.serviceId,
+      })
+    );
+  }, [
+    executeActorId,
+    executeCommandId,
+    executeCorrelationId,
+    executeEvents,
+    executeLaunchContext,
+    executeRunId,
+    scopeId,
+  ]);
+
+  const handleOpenExplorer = useCallback(() => {
+    if (!scopeId || !executeLaunchContext) {
+      return;
+    }
+
+    history.push(
+      buildRuntimeExplorerHref({
+        actorId: executeActorId || undefined,
+        runId: executeRunId || undefined,
+        scopeId,
+        serviceId: executeLaunchContext.serviceId,
+      })
+    );
+  }, [executeActorId, executeLaunchContext, executeRunId, scopeId]);
 
   const handleRawSubmit = useCallback(async () => {
     const normalizedPath = rawPath.trim();
@@ -790,6 +940,26 @@ export function ChatAdvancedConsole({
               {executeActorId || executeCommandId || executeRunId ? (
                 <div style={drawerSectionStyle}>
                   <Typography.Text strong>Execution Metadata</Typography.Text>
+                  <Space wrap>
+                    <button
+                      onClick={handleOpenRuns}
+                      style={actionButtonStyle("secondary")}
+                      type="button"
+                    >
+                      Open Runs
+                    </button>
+                    <button
+                      disabled={!executeActorId && !executeRunId}
+                      onClick={handleOpenExplorer}
+                      style={actionButtonStyle(
+                        "secondary",
+                        !executeActorId && !executeRunId
+                      )}
+                      type="button"
+                    >
+                      Open Explorer
+                    </button>
+                  </Space>
                   <div
                     style={{
                       color: "#4b5563",

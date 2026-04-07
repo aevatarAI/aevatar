@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { AGUIEventType, CustomEventName } from "@aevatar-react-sdk/types";
+import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import ChatPage from "./index";
 
@@ -516,6 +517,87 @@ describe("ChatPage", () => {
         content.includes('"targetActorId": "actor://support-command"')
       )
     ).toBeTruthy();
+  });
+
+  it("opens runtime runs from the advanced console execution metadata", async () => {
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    await waitFor(() => {
+      expect(serviceSelector.textContent).toContain("Support service");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    fireEvent.change(await screen.findByLabelText("Advanced execute service"), {
+      target: { value: "support-service" },
+    });
+    fireEvent.change(await screen.findByLabelText("Advanced execute endpoint"), {
+      target: { value: "assist" },
+    });
+    fireEvent.change(await screen.findByLabelText("Advanced execute prompt"), {
+      target: { value: "Need structured help." },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await screen.findByText((content) =>
+      content.includes('"targetActorId": "actor://support-command"')
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Runs" }));
+
+    expect(window.location.pathname).toBe("/runtime/runs");
+    const draftKey = new URLSearchParams(window.location.search).get("draftKey");
+    expect(draftKey).toBeTruthy();
+    expect(loadDraftRunPayload(draftKey)).toEqual(
+      expect.objectContaining({
+        actorId: "actor://support-command",
+        commandId: "cmd-execute",
+        endpointId: "assist",
+        kind: "observed_run_session",
+        prompt: "Need structured help.",
+        runId: "run-execute-command",
+        scopeId: "scope-a",
+        serviceOverrideId: "support-service",
+      })
+    );
+  });
+
+  it("opens runtime explorer from the advanced console execution metadata", async () => {
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    await waitFor(() => {
+      expect(serviceSelector.textContent).toContain("Support service");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Advanced" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Execute" }));
+
+    fireEvent.change(await screen.findByLabelText("Advanced execute service"), {
+      target: { value: "support-service" },
+    });
+    fireEvent.change(await screen.findByLabelText("Advanced execute endpoint"), {
+      target: { value: "assist" },
+    });
+    fireEvent.change(await screen.findByLabelText("Advanced execute prompt"), {
+      target: { value: "Need structured help." },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await screen.findByText((content) =>
+      content.includes('"targetActorId": "actor://support-command"')
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Explorer" }));
+
+    expect(window.location.pathname).toBe("/runtime/explorer");
+    const query = new URLSearchParams(window.location.search);
+    expect(query.get("actorId")).toBe("actor://support-command");
+    expect(query.get("runId")).toBe("run-execute-command");
+    expect(query.get("scopeId")).toBe("scope-a");
+    expect(query.get("serviceId")).toBe("support-service");
   });
 
   it("approves NyxID tool requests and streams the continuation", async () => {
