@@ -241,6 +241,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
         [FromServices] ChannelBotRegistrationStore store,
+        [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -265,19 +266,52 @@ public static class ChannelCallbackEndpoints
             return Results.BadRequest(new { error = "platform, nyx_provider_slug, and nyx_user_token are required" });
         }
 
+        // Build callback URL for webhook configuration
+        var callbackPath = $"/api/channels/{request.Platform.Trim().ToLowerInvariant()}/callback";
+        string? webhookUrl = null;
+        if (!string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
+        {
+            var baseUrl = request.WebhookBaseUrl.Trim().TrimEnd('/');
+            // Will be completed with /{registrationId} after registration
+            webhookUrl = baseUrl + callbackPath;
+        }
+
         var entry = store.Register(
             request.Platform.Trim().ToLowerInvariant(),
             request.NyxProviderSlug.Trim(),
             request.NyxUserToken.Trim(),
             request.VerificationToken?.Trim(),
-            request.ScopeId?.Trim());
+            request.ScopeId?.Trim(),
+            webhookUrl: webhookUrl != null ? $"{webhookUrl}/{null}" : null);
+
+        // Complete the webhook URL with the registration ID
+        var fullCallbackUrl = $"{callbackPath}/{entry.Id}";
+        if (webhookUrl != null)
+        {
+            var fullWebhookUrl = $"{webhookUrl}/{entry.Id}";
+
+            // Auto-configure platform webhook via NyxID proxy
+            try
+            {
+                await ConfigureWebhookAsync(
+                    entry, fullWebhookUrl, nyxClient, logger, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Failed to auto-configure webhook for {Platform} registration {Id}. " +
+                    "Webhook can be configured manually later.",
+                    entry.Platform, entry.Id);
+            }
+        }
 
         return Results.Ok(new
         {
             id = entry.Id,
             platform = entry.Platform,
             nyx_provider_slug = entry.NyxProviderSlug,
-            callback_url = $"/api/channels/{entry.Platform}/callback/{entry.Id}",
+            callback_url = fullCallbackUrl,
+            webhook_url = webhookUrl != null ? $"{webhookUrl}/{entry.Id}" : (string?)null,
             created_at = entry.CreatedAt.ToDateTimeOffset(),
         });
     }
@@ -308,10 +342,47 @@ public static class ChannelCallbackEndpoints
             : Results.NotFound(new { error = "Registration not found" }));
     }
 
+    /// <summary>
+    /// Auto-configure platform webhook via NyxID proxy.
+    /// For Telegram: calls setWebhook to register the callback URL.
+    /// </summary>
+    private static async Task ConfigureWebhookAsync(
+        ChannelBotRegistrationEntry entry,
+        string webhookUrl,
+        NyxIdApiClient nyxClient,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (string.Equals(entry.Platform, "telegram", StringComparison.OrdinalIgnoreCase))
+        {
+            // Call Telegram Bot API setWebhook via NyxID proxy.
+            // NyxID injects the bot token into the path: bot/setWebhook → bot<TOKEN>/setWebhook
+            var body = JsonSerializer.Serialize(new { url = webhookUrl });
+            var result = await nyxClient.ProxyRequestAsync(
+                entry.NyxUserToken,
+                entry.NyxProviderSlug,
+                "bot/setWebhook",
+                "POST",
+                body,
+                extraHeaders: null,
+                ct);
+
+            logger.LogInformation(
+                "Telegram setWebhook configured: registration={Id}, url={Url}, result={Result}",
+                entry.Id, webhookUrl, result?.Length > 200 ? result[..200] : result);
+        }
+        else
+        {
+            logger.LogDebug(
+                "No auto-webhook configuration for platform {Platform}", entry.Platform);
+        }
+    }
+
     private sealed record RegistrationRequest(
         string? Platform,
         string? NyxProviderSlug,
         string? NyxUserToken,
         string? VerificationToken,
-        string? ScopeId);
+        string? ScopeId,
+        string? WebhookBaseUrl);
 }

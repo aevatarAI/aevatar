@@ -46,7 +46,8 @@ public sealed class ChannelBotRegistrationStore
         string nyxProviderSlug,
         string nyxUserToken,
         string? verificationToken,
-        string? scopeId)
+        string? scopeId,
+        string? webhookUrl = null)
     {
         var entry = new ChannelBotRegistrationEntry
         {
@@ -56,6 +57,7 @@ public sealed class ChannelBotRegistrationStore
             NyxUserToken = nyxUserToken,
             VerificationToken = verificationToken ?? string.Empty,
             ScopeId = scopeId ?? string.Empty,
+            WebhookUrl = webhookUrl ?? string.Empty,
             CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 

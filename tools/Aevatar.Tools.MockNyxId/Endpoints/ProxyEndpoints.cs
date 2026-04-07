@@ -68,6 +68,16 @@ public static class ProxyEndpoints
             });
         }
 
+        if (slug == "api-telegram-bot" && normalizedPath.Contains("setWebhook"))
+        {
+            return Results.Json(new
+            {
+                ok = true,
+                result = true,
+                description = "Webhook was set",
+            });
+        }
+
         if (slug == "api-telegram-bot" && normalizedPath.Contains("sendMessage"))
         {
             return Results.Json(new

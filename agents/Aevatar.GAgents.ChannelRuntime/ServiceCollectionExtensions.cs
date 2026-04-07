@@ -12,6 +12,7 @@ public static class ServiceCollectionExtensions
 
         // Register platform adapters (add more as platforms are onboarded)
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, TelegramPlatformAdapter>());
 
         return services;
     }
