@@ -4,6 +4,8 @@ export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  authorId?: string;
+  authorName?: string;
   timestamp: number;
   status: 'complete' | 'streaming' | 'error';
   error?: string;
@@ -40,7 +42,7 @@ export type ServiceEndpoint = {
 export type ServiceOption = {
   id: string;
   label: string;
-  kind: 'nyxid-chat' | 'service';
+  kind: 'nyxid-chat' | 'streaming-proxy' | 'service';
   endpoints: ServiceEndpoint[];
 };
 
@@ -61,6 +63,8 @@ export type StoredChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  authorId?: string;
+  authorName?: string;
   timestamp: number;
   status: 'complete' | 'error';
   error?: string;

@@ -13,10 +13,88 @@ import * as nyxid from '../auth/nyxid';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+const NYXID_CHAT_SERVICE_ID = 'nyxid-chat';
+const STREAMING_PROXY_SERVICE_ID = 'streaming-proxy';
+const STREAMING_PROXY_FIRST_REPLY_BASE_DELAY_MS = 1500;
+const STREAMING_PROXY_BETWEEN_REPLY_BASE_DELAY_MS = 2200;
+const STREAMING_PROXY_MAX_REPLY_DELAY_MS = 4200;
+
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
 function genId() {
   return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
+}
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function buildStreamingProxyConversationId(roomId: string) {
+  return `${STREAMING_PROXY_SERVICE_ID}:${roomId}`;
+}
+
+function tryParseStreamingProxyRoomId(conversationId?: string | null) {
+  if (!conversationId) return null;
+  const prefix = `${STREAMING_PROXY_SERVICE_ID}:`;
+  return conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : null;
+}
+
+function buildStreamingProxyProgressMessage(
+  joinedParticipants: Iterable<string>,
+  phase: 'starting' | 'topic-started' | 'participants-joined',
+) {
+  const participants = Array.from(joinedParticipants).filter(Boolean);
+  if (participants.length > 0) {
+    return `正在让这些 participants 参与讨论：${participants.join('、')}。回复生成中...`;
+  }
+
+  if (phase === 'topic-started') {
+    return '话题已经发到 room 里了，正在连接 Nyx participants...';
+  }
+
+  return '正在初始化 Streaming Proxy 讨论...';
+}
+
+function buildStreamingProxyTurnMessage(participantName: string, turnIndex: number) {
+  const name = participantName.trim() || '下一位 participant';
+  if (turnIndex <= 0) {
+    return `${name} 正在整理开场观点...`;
+  }
+
+  return `${name} 正在斟酌上一轮观点，准备继续回应...`;
+}
+
+function buildStreamingProxyWaitingMessage() {
+  return '房间里短暂停顿了一下，下一位 participant 正在组织回应...';
+}
+
+function getStreamingProxyRevealDelay(content: string, turnIndex: number) {
+  const trimmed = content.trim();
+  const baseDelay = turnIndex <= 0
+    ? STREAMING_PROXY_FIRST_REPLY_BASE_DELAY_MS
+    : STREAMING_PROXY_BETWEEN_REPLY_BASE_DELAY_MS;
+  const lengthDelay = Math.min(1400, trimmed.length * 4);
+  const punctuationMatches = trimmed.match(/[，。！？；：,.!?;:]/g);
+  const punctuationDelay = Math.min(500, (punctuationMatches?.length ?? 0) * 70);
+  return Math.min(STREAMING_PROXY_MAX_REPLY_DELAY_MS, baseDelay + lengthDelay + punctuationDelay);
+}
+
+function isStreamingProxyServiceCandidate(
+  serviceId: string,
+  label: string,
+  endpoints: Array<{ endpointId: string; displayName: string; kind: string }>,
+) {
+  if (serviceId === STREAMING_PROXY_SERVICE_ID) return true;
+
+  const normalizedLabel = label.trim().toLowerCase();
+  if (normalizedLabel.includes('streamingproxy') || normalizedLabel.includes('streaming proxy')) {
+    return true;
+  }
+
+  const endpointIds = new Set(endpoints.map(endpoint => endpoint.endpointId.trim().toLowerCase()));
+  return endpointIds.has('initializeroom')
+    && endpointIds.has('postmessage')
+    && endpointIds.has('joinroom');
 }
 
 /** Lightweight markdown rendering for chat content */
@@ -175,6 +253,45 @@ function renderLines(lines: string[], tone: RenderTone) {
   ));
 }
 
+function hashAssistantIdentity(value: string) {
+  let hash = 0;
+  for (const ch of value) {
+    hash = ((hash << 5) - hash) + ch.charCodeAt(0);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function getAssistantBadgeClasses(seed: string) {
+  const variants = [
+    'bg-gradient-to-br from-sky-500 to-cyan-500 text-white',
+    'bg-gradient-to-br from-emerald-500 to-teal-500 text-white',
+    'bg-gradient-to-br from-amber-500 to-orange-500 text-white',
+    'bg-gradient-to-br from-rose-500 to-pink-500 text-white',
+    'bg-gradient-to-br from-indigo-500 to-violet-500 text-white',
+    'bg-gradient-to-br from-fuchsia-500 to-purple-500 text-white',
+  ];
+  return variants[hashAssistantIdentity(seed) % variants.length];
+}
+
+function getAssistantBadgeLabel(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return 'AI';
+  }
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return words
+      .slice(0, 2)
+      .map(word => Array.from(word)[0] ?? '')
+      .join('')
+      .toUpperCase();
+  }
+
+  return Array.from(trimmed).slice(0, 2).join('').toUpperCase();
+}
+
 // ── Step Indicator ─────────────────────────────────────────────────────────────
 
 function StepIndicator({ step }: { step: StepInfo }) {
@@ -269,6 +386,18 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
   const hasSteps = msg.steps && msg.steps.length > 0;
   const hasTools = msg.toolCalls && msg.toolCalls.length > 0;
   const displayContent = isUser ? msg.content : sanitizeAssistantMessageContent(msg.content);
+  const authorName = !isUser ? msg.authorName?.trim() : '';
+  const isParticipantMessage = !isUser && !!authorName && !/^streaming proxy$/i.test(authorName);
+  const assistantIdentity = msg.authorId?.trim() || authorName || 'assistant';
+  const assistantBadgeClass = isParticipantMessage
+    ? getAssistantBadgeClasses(assistantIdentity)
+    : 'bg-gradient-to-br from-violet-500 to-indigo-600 text-white';
+  const assistantBadgeLabel = isParticipantMessage
+    ? getAssistantBadgeLabel(authorName)
+    : '';
+  const assistantCardClass = isParticipantMessage
+    ? 'rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-200/70'
+    : 'rounded-2xl border border-[#E6E3DE] bg-white/90 px-4 py-3 shadow-sm shadow-stone-200/60';
 
   if (isUser) {
     return (
@@ -282,13 +411,28 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
 
   return (
     <div className="flex gap-3">
-      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mt-1">
-        <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
-        </svg>
+      <div className={`flex-shrink-0 mt-1 flex h-8 w-8 items-center justify-center rounded-full ${assistantBadgeClass}`}>
+        {isParticipantMessage ? (
+          <span className="text-[10px] font-semibold tracking-wide">{assistantBadgeLabel}</span>
+        ) : (
+          <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+          </svg>
+        )}
       </div>
 
-      <div className="flex-1 min-w-0 max-w-[85%]">
+      <div className={`flex-1 min-w-0 max-w-[85%] ${assistantCardClass}`}>
+        {authorName && (
+          <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-gray-900">
+            <span>{authorName}</span>
+            {isParticipantMessage && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                Participant
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Thinking */}
         {msg.thinking && (
           <ThinkingBlock text={msg.thinking} isStreaming={msg.status === 'streaming'} />
@@ -382,25 +526,32 @@ function ServiceSelector({
 
 function ChatInput({
   onSend,
+  onInterruptSend,
   onStop,
   isStreaming,
   disabled,
 }: {
   onSend: (text: string) => void;
+  onInterruptSend: (text: string) => void;
   onStop: () => void;
   isStreaming: boolean;
   disabled: boolean;
 }) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hasText = text.trim().length > 0;
 
   const handleSend = useCallback(() => {
     const trimmed = text.trim();
-    if (!trimmed || isStreaming || disabled) return;
-    onSend(trimmed);
+    if (!trimmed || disabled) return;
+    if (isStreaming) {
+      onInterruptSend(trimmed);
+    } else {
+      onSend(trimmed);
+    }
     setText('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  }, [text, isStreaming, disabled, onSend]);
+  }, [text, isStreaming, disabled, onSend, onInterruptSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -430,7 +581,7 @@ function ChatInput({
           disabled={disabled}
         />
         <div className="flex-shrink-0 p-1.5">
-          {isStreaming ? (
+          {isStreaming && !hasText ? (
             <button
               onClick={onStop}
               className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
@@ -443,9 +594,13 @@ function ChatInput({
           ) : (
             <button
               onClick={handleSend}
-              disabled={!text.trim() || disabled}
-              className="w-8 h-8 flex items-center justify-center rounded-lg bg-[#18181B] text-white hover:bg-[#333] disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
-              title="Send"
+              disabled={!hasText || disabled}
+              className={`w-8 h-8 flex items-center justify-center rounded-lg text-white transition-colors disabled:opacity-20 disabled:cursor-not-allowed ${
+                isStreaming
+                  ? 'bg-amber-500 hover:bg-amber-600'
+                  : 'bg-[#18181B] hover:bg-[#333]'
+              }`}
+              title={isStreaming ? 'Stop current debate and send' : 'Send'}
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
@@ -612,13 +767,15 @@ export default function ScopePage() {
 
   // Services
   const [services, setServices] = useState<ServiceOption[]>([
-    { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+    { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+    { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
   ]);
-  const [selectedService, setSelectedService] = useState('nyxid-chat');
+  const [selectedService, setSelectedService] = useState(NYXID_CHAT_SERVICE_ID);
 
 
   // NyxID Chat: track whether we've ensured the scope binding this session
   const nyxidChatBoundRef = useRef(false);
+  const streamingProxyRoomRef = useRef<string | null>(null);
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -627,6 +784,7 @@ export default function ScopePage() {
   const [showDebug, setShowDebug] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingUserSendRef = useRef<string | null>(null);
 
   // Chat history persistence
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
@@ -639,7 +797,8 @@ export default function ScopePage() {
     if (!scopeId) return;
     api.scope.listServices(scopeId).then(svcList => {
       const base: ServiceOption[] = [
-        { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+        { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+        { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
       ];
       if (Array.isArray(svcList)) {
         const builtinIds = new Set(base.map(b => b.id));
@@ -651,9 +810,12 @@ export default function ScopePage() {
             displayName: ep?.displayName || ep?.DisplayName || ep?.endpointId || '',
             kind: ep?.kind || ep?.Kind || 'command',
           }));
+          const kind: ServiceOption['kind'] = isStreamingProxyServiceCandidate(String(sid || ''), String(name || ''), eps)
+            ? 'streaming-proxy'
+            : 'service';
           const isDuplicate = builtinIds.has(sid)
             || base.some(b => b.label === name);
-          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind: 'service', endpoints: eps });
+          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind, endpoints: eps });
         }
       }
       setServices(base);
@@ -675,12 +837,14 @@ export default function ScopePage() {
       setMessages([]);
       setDebugEvents([]);
       setActiveConvId(null);
+      streamingProxyRoomRef.current = null;
     }
   }, [selectedService]);
 
   // Reset NyxID Chat binding flag when scope changes
   useEffect(() => {
     nyxidChatBoundRef.current = false;
+    streamingProxyRoomRef.current = null;
   }, [scopeId]);
 
   // Load conversation index when scope changes
@@ -694,12 +858,11 @@ export default function ScopePage() {
   // Save current conversation to chrono-storage (called after streaming completes)
   const saveCurrentConversation = useCallback((msgs: ChatMessage[]) => {
     if (!scopeId || msgs.length === 0) return;
-    // Actor ID = conversation identity.
-    // nyxid-chat: deterministic (same actor reused, server-side history).
-    // Other services: unique per conversation (new actor per chat session).
     const actorId = activeService.kind === 'nyxid-chat'
       ? `NyxIdChat:${scopeId}`
-      : `${activeService.id}:${genId()}`;
+      : activeService.kind === 'streaming-proxy'
+        ? buildStreamingProxyConversationId(streamingProxyRoomRef.current || genId())
+        : `${activeService.id}:${genId()}`;
     // Conversation ID = actor ID
     const convId = activeConvId || actorId;
     const firstUserMsg = msgs.find(m => m.role === 'user');
@@ -710,6 +873,8 @@ export default function ScopePage() {
       .map(m => ({
         id: m.id, role: m.role, content: m.content, timestamp: m.timestamp,
         status: m.status === 'streaming' ? 'complete' : m.status,
+        ...(m.authorId ? { authorId: m.authorId } : {}),
+        ...(m.authorName ? { authorName: m.authorName } : {}),
         ...(m.error ? { error: m.error } : {}),
         ...(m.thinking ? { thinking: m.thinking } : {}),
       }));
@@ -736,6 +901,18 @@ export default function ScopePage() {
     }, 500);
   }, [scopeId, activeConvId, activeService, conversations]);
 
+  const ensureStreamingProxyRoom = useCallback(async () => {
+    const existingRoomId = streamingProxyRoomRef.current || tryParseStreamingProxyRoomId(activeConvId);
+    if (existingRoomId) {
+      streamingProxyRoomRef.current = existingRoomId;
+      return existingRoomId;
+    }
+
+    const created = await api.streamingProxy.createRoom(scopeId, 'Console Chat');
+    streamingProxyRoomRef.current = created.roomId;
+    return created.roomId;
+  }, [scopeId, activeConvId]);
+
   // ── Send message ──
   const handleSend = useCallback(async (text: string) => {
     if (!scopeId || isStreaming) return;
@@ -747,6 +924,10 @@ export default function ScopePage() {
       id: genId(), role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming',
       steps: [], toolCalls: [], thinking: '',
     };
+    if (activeService.kind === 'streaming-proxy') {
+      assistantMsg.authorName = 'Streaming Proxy';
+      assistantMsg.content = buildStreamingProxyProgressMessage([], 'starting');
+    }
 
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setIsStreaming(true);
@@ -758,6 +939,16 @@ export default function ScopePage() {
     const events: RuntimeEvent[] = [];
     const steps: StepInfo[] = [];
     const toolCalls: ToolCallInfo[] = [];
+    const joinedParticipants = new Set<string>();
+    const progressMessageId = assistantMsg.id;
+    const pendingParticipantMessages: ChatMessage[] = [];
+    let streamingProxyPhase: 'starting' | 'topic-started' | 'participants-joined' = 'starting';
+    let activeProgressMessageId: string | null = progressMessageId;
+    let hasParticipantReply = false;
+    let displayedParticipantReplyCount = 0;
+    let streamFinished = false;
+    let pendingStreamError: string | null = null;
+    let participantQueueTask: Promise<void> | null = null;
     let thinking = '';
     let contentText = '';
 
@@ -772,6 +963,81 @@ export default function ScopePage() {
       });
     };
 
+    const updateMessageById = (messageId: string | null, patch: Partial<ChatMessage>) => {
+      if (!messageId) {
+        return;
+      }
+
+      setMessages(prev => prev.map(message => (
+        message.id === messageId
+          ? { ...message, ...patch }
+          : message
+      )));
+    };
+
+    const flushParticipantQueue = async () => {
+      if (participantQueueTask) {
+        await participantQueueTask;
+      }
+    };
+
+    const queueParticipantMessage = (message: ChatMessage) => {
+      pendingParticipantMessages.push(message);
+      if (!participantQueueTask) {
+        participantQueueTask = (async () => {
+          while (pendingParticipantMessages.length > 0) {
+            const nextMessage = pendingParticipantMessages.shift();
+            if (!nextMessage) {
+              continue;
+            }
+
+            const currentProgressMessageId = activeProgressMessageId;
+
+            updateMessageById(currentProgressMessageId, {
+              authorName: 'Streaming Proxy',
+              status: 'streaming',
+              content: buildStreamingProxyTurnMessage(nextMessage.authorName || 'Participant', displayedParticipantReplyCount),
+            });
+
+            await sleep(getStreamingProxyRevealDelay(nextMessage.content, displayedParticipantReplyCount));
+
+            if (controller.signal.aborted) {
+              pendingParticipantMessages.length = 0;
+              break;
+            }
+
+            const shouldAppendNextProgress = !streamFinished || pendingParticipantMessages.length > 0;
+            const nextProgressId = shouldAppendNextProgress ? genId() : null;
+            setMessages(prev => {
+              const updated = prev.flatMap(existing => (
+                existing.id === currentProgressMessageId
+                  ? [{ ...nextMessage, timestamp: Date.now() }]
+                  : [existing]
+              ));
+
+              if (shouldAppendNextProgress && nextProgressId) {
+                updated.push({
+                  id: nextProgressId,
+                  role: 'assistant',
+                  content: buildStreamingProxyWaitingMessage(),
+                  authorName: 'Streaming Proxy',
+                  timestamp: Date.now(),
+                  status: 'streaming',
+                });
+              }
+
+              return updated;
+            });
+
+            activeProgressMessageId = nextProgressId;
+            displayedParticipantReplyCount += 1;
+          }
+        })().finally(() => {
+          participantQueueTask = null;
+        });
+      }
+    };
+
     const onFrame = (frame: any) => {
       const evt = normalizeBackendSseFrame(frame);
       if (!evt) return;
@@ -779,10 +1045,53 @@ export default function ScopePage() {
       setDebugEvents([...events]);
 
       switch (evt.type) {
+        case 'TOPIC_STARTED': {
+          if (activeService.kind === 'streaming-proxy' && !contentText) {
+            streamingProxyPhase = 'topic-started';
+            updateMessageById(activeProgressMessageId, { content: buildStreamingProxyProgressMessage(joinedParticipants, streamingProxyPhase) });
+          }
+          break;
+        }
+
         case 'TEXT_MESSAGE_CONTENT': {
           const delta = String(evt.delta || '');
           contentText += delta;
-          updateAssistant({ content: contentText });
+          if (activeService.kind === 'streaming-proxy') {
+            updateMessageById(activeProgressMessageId, { content: contentText });
+          } else {
+            updateAssistant({ content: contentText });
+          }
+          break;
+        }
+
+        case 'AGENT_MESSAGE': {
+          const agentName = String(evt.agentName || evt.agentId || 'Agent');
+          const agentContent = String(evt.content || '');
+          if (activeService.kind === 'streaming-proxy') {
+            hasParticipantReply = true;
+            queueParticipantMessage({
+              id: genId(),
+              role: 'assistant',
+              content: agentContent,
+              authorId: String(evt.agentId || ''),
+              authorName: agentName,
+              timestamp: Date.now(),
+              status: 'complete',
+            });
+          } else {
+            contentText = agentContent;
+            updateAssistant({ content: contentText });
+          }
+          break;
+        }
+
+        case 'PARTICIPANT_JOINED': {
+          const displayName = String(evt.displayName || evt.agentId || '').trim();
+          if (displayName) joinedParticipants.add(displayName);
+          if (activeService.kind === 'streaming-proxy' && !contentText) {
+            streamingProxyPhase = 'participants-joined';
+            updateMessageById(activeProgressMessageId, { content: buildStreamingProxyProgressMessage(joinedParticipants, streamingProxyPhase) });
+          }
           break;
         }
 
@@ -824,7 +1133,12 @@ export default function ScopePage() {
         }
 
         case 'RUN_ERROR': {
-          updateAssistant({ status: 'error', error: String(evt.message || 'Unknown error') });
+          const errorText = String(evt.message || 'Unknown error');
+          if (activeService.kind === 'streaming-proxy' && (hasParticipantReply || pendingParticipantMessages.length > 0)) {
+            pendingStreamError = errorText;
+          } else {
+            updateMessageById(activeProgressMessageId, { status: 'error', error: errorText });
+          }
           break;
         }
 
@@ -834,7 +1148,11 @@ export default function ScopePage() {
           if (stepOutput && !contentText) {
             // Use step output as the response text if no streaming text was received
             contentText = stepOutput;
-            updateAssistant({ content: contentText });
+            if (activeService.kind === 'streaming-proxy') {
+              updateMessageById(activeProgressMessageId, { content: contentText });
+            } else {
+              updateAssistant({ content: contentText });
+            }
             break;
           }
 
@@ -842,7 +1160,11 @@ export default function ScopePage() {
           const reasoningDelta = extractReasoningDelta(evt);
           if (reasoningDelta) {
             thinking += reasoningDelta;
-            updateAssistant({ thinking });
+            if (activeService.kind === 'streaming-proxy') {
+              updateMessageById(activeProgressMessageId, { thinking });
+            } else {
+              updateAssistant({ thinking });
+            }
             break;
           }
 
@@ -855,7 +1177,10 @@ export default function ScopePage() {
     };
 
     try {
-      if (activeService.kind === 'nyxid-chat') {
+      if (activeService.kind === 'streaming-proxy') {
+        const roomId = await ensureStreamingProxyRoom();
+        await api.streamingProxy.streamChat(scopeId, roomId, text, onFrame, controller.signal, activeConvId || undefined);
+      } else if (activeService.kind === 'nyxid-chat') {
         // Bind NyxIdChatGAgent as a named service on first use (idempotent PUT).
         // serviceId='nyxid-chat' ensures it doesn't overwrite other bindings.
         // preferredActorId ensures the same actor is reused for conversation history.
@@ -865,20 +1190,67 @@ export default function ScopePage() {
             'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
             `NyxIdChat:${scopeId}`,
             'NyxID Chat',
-            'nyxid-chat',
+            NYXID_CHAT_SERVICE_ID,
           );
           nyxidChatBoundRef.current = true;
         }
-        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal);
+        await api.scope.streamInvoke(scopeId, NYXID_CHAT_SERVICE_ID, text, onFrame, controller.signal);
       } else {
         await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal);
       }
+      if (activeService.kind === 'streaming-proxy') {
+        streamFinished = true;
+        await flushParticipantQueue();
+      }
       // Only mark complete if no error was already set by RUN_ERROR during streaming.
       setMessages(prev => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last?.role === 'assistant' && last.status !== 'error') {
-          updated[updated.length - 1] = { ...last, status: 'complete', events, steps: [...steps], toolCalls: [...toolCalls], thinking };
+        let updated = [...prev];
+        if (activeService.kind === 'streaming-proxy') {
+          if (hasParticipantReply) {
+            if (activeProgressMessageId) {
+              updated = updated.filter(message => message.id !== activeProgressMessageId);
+            }
+            if (pendingStreamError) {
+              updated = [...updated, {
+                id: genId(),
+                role: 'assistant',
+                content: '',
+                authorName: 'Streaming Proxy',
+                timestamp: Date.now(),
+                status: 'error',
+                error: pendingStreamError || 'Unknown error',
+              }];
+            }
+          } else {
+            updated = updated.map(message => (
+              message.id === activeProgressMessageId && message.status !== 'error'
+                ? {
+                    ...message,
+                    status: 'complete',
+                    events,
+                    steps: [...steps],
+                    toolCalls: [...toolCalls],
+                    thinking,
+                    content: joinedParticipants.size > 0
+                      ? `Streaming Proxy 已经把消息发到 room 里了，但当前还没有 participant 回复。已加入: ${Array.from(joinedParticipants).join(', ')}`
+                      : 'Streaming Proxy 已经把消息发到 room 里了，但当前没有 participant 回复。它本身不会直接回答，只有 joinRoom/postMessage 的 agent 回消息后，这里才会显示内容。',
+                  }
+                : message
+            ));
+          }
+        } else {
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant' && last.status !== 'error') {
+            updated[updated.length - 1] = {
+              ...last,
+              status: 'complete',
+              events,
+              steps: [...steps],
+              toolCalls: [...toolCalls],
+              thinking,
+              content: contentText,
+            };
+          }
         }
         saveCurrentConversation(updated);
         return updated;
@@ -886,26 +1258,78 @@ export default function ScopePage() {
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
         const errorText = e?.message || e?.code || JSON.stringify(e);
-        updateAssistant({
-          status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
-        });
-        setMessages(prev => { saveCurrentConversation(prev); return prev; });
+        if (activeService.kind === 'streaming-proxy' && (hasParticipantReply || pendingParticipantMessages.length > 0)) {
+          pendingStreamError = errorText;
+          streamFinished = true;
+          await flushParticipantQueue();
+          setMessages(prev => {
+            const withoutProgress = activeProgressMessageId
+              ? prev.filter(message => message.id !== activeProgressMessageId)
+              : [...prev];
+            const updated = [...withoutProgress, {
+              id: genId(),
+              role: 'assistant' as const,
+              content: '',
+              authorName: 'Streaming Proxy',
+              timestamp: Date.now(),
+              status: 'error' as const,
+              error: pendingStreamError || 'Unknown error',
+            }];
+            saveCurrentConversation(updated);
+            return updated;
+          });
+        } else {
+          updateMessageById(activeProgressMessageId, {
+            status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
+          });
+          setMessages(prev => { saveCurrentConversation(prev); return prev; });
+        }
       }
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, activeService, saveCurrentConversation]);
+  }, [scopeId, isStreaming, activeService, activeConvId, ensureStreamingProxyRoom, saveCurrentConversation]);
 
   const handleStop = useCallback(() => {
+    pendingUserSendRef.current = null;
     abortRef.current?.abort();
   }, []);
+
+  const handleInterruptSend = useCallback((text: string) => {
+    if (!text.trim()) {
+      return;
+    }
+
+    if (!isStreaming) {
+      void handleSend(text);
+      return;
+    }
+
+    pendingUserSendRef.current = text;
+    abortRef.current?.abort();
+  }, [isStreaming, handleSend]);
+
+  useEffect(() => {
+    if (isStreaming) {
+      return;
+    }
+
+    const queuedText = pendingUserSendRef.current;
+    if (!queuedText) {
+      return;
+    }
+
+    pendingUserSendRef.current = null;
+    void handleSend(queuedText);
+  }, [isStreaming, handleSend]);
 
   const handleNewChat = useCallback(() => {
     setMessages([]);
     setDebugEvents([]);
     setActiveConvId(null);
     nyxidChatBoundRef.current = false;
+    streamingProxyRoomRef.current = null;
   }, []);
 
   const handleSelectConversation = useCallback(async (convId: string) => {
@@ -917,9 +1341,14 @@ export default function ScopePage() {
         prevServiceRef.current = conv.serviceId; // prevent auto-clear
         setSelectedService(conv.serviceId);
       }
+      streamingProxyRoomRef.current = conv?.serviceId === STREAMING_PROXY_SERVICE_ID || conv?.serviceKind === 'streaming-proxy'
+        ? tryParseStreamingProxyRoomId(conv.id)
+        : null;
       const msgs = await api.chatHistory.getConversation(scopeId, convId);
       setMessages(msgs.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+        authorId: m.authorId ?? undefined,
+        authorName: m.authorName ?? undefined,
         timestamp: m.timestamp, status: (m.status || 'complete') as ChatMessage['status'],
         error: m.error ?? undefined, thinking: m.thinking ?? undefined,
       })));
@@ -931,12 +1360,17 @@ export default function ScopePage() {
   const handleDeleteConversation = useCallback(async (convId: string) => {
     if (!scopeId) return;
     try {
+      const roomId = tryParseStreamingProxyRoomId(convId);
+      if (roomId) {
+        await api.streamingProxy.deleteRoom(scopeId, roomId).catch(() => {});
+      }
       await api.chatHistory.deleteConversation(scopeId, convId);
       setConversations(prev => prev.filter(c => c.id !== convId));
       if (activeConvId === convId) {
         setMessages([]);
         setActiveConvId(null);
         setDebugEvents([]);
+        streamingProxyRoomRef.current = null;
       }
     } catch { /* ignore */ }
   }, [scopeId, activeConvId]);
@@ -1017,15 +1451,21 @@ export default function ScopePage() {
     try {
       const parsed = JSON.parse(invokeBody);
       const prompt = parsed.prompt || '';
-      const serviceId = activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id;
-      if (activeService.kind === 'nyxid-chat' && !nyxidChatBoundRef.current) {
-        await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', `NyxIdChat:${scopeId}`, 'NyxID Chat', 'nyxid-chat');
-        nyxidChatBoundRef.current = true;
-      }
-      await api.scope.streamInvoke(scopeId, serviceId, prompt, (frame) => {
+      const serviceId = activeService.kind === 'nyxid-chat' ? NYXID_CHAT_SERVICE_ID : activeService.id;
+      const pushFrame = (frame: any) => {
         const evt = normalizeBackendSseFrame(frame);
         if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
-      }, controller.signal, invokeEndpointId);
+      };
+      if (activeService.kind === 'streaming-proxy') {
+        const roomId = await ensureStreamingProxyRoom();
+        await api.streamingProxy.streamChat(scopeId, roomId, prompt, pushFrame, controller.signal, activeConvId || undefined);
+      } else {
+        if (activeService.kind === 'nyxid-chat' && !nyxidChatBoundRef.current) {
+          await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', `NyxIdChat:${scopeId}`, 'NyxID Chat', NYXID_CHAT_SERVICE_ID);
+          nyxidChatBoundRef.current = true;
+        }
+        await api.scope.streamInvoke(scopeId, serviceId, prompt, pushFrame, controller.signal, invokeEndpointId);
+      }
       if (collected.length === 0) collected.push({ type: 'info', data: { message: 'No events received' } });
       setInvokeEvents([...collected]);
     } catch (e: any) {
@@ -1454,6 +1894,7 @@ export default function ScopePage() {
         <div className="max-w-3xl mx-auto">
           <ChatInput
             onSend={handleSend}
+            onInterruptSend={handleInterruptSend}
             onStop={handleStop}
             isStreaming={isStreaming}
             disabled={!scopeId}

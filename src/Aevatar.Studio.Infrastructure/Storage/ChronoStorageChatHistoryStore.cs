@@ -12,6 +12,7 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
     private const string ChatHistoriesDir = "chat-histories";
     private const string LegacyIndexKey = $"{ChatHistoriesDir}/index.json";
     private const string NyxIdChatActorPrefix = "nyxid-chat-";
+    private const string StreamingProxyConversationPrefix = "streaming-proxy-";
     private const string LegacyConversationPrefix = "conv-";
 
     private static readonly ChatHistoryIndex EmptyIndex = new([]);
@@ -283,10 +284,18 @@ internal sealed class ChronoStorageChatHistoryStore : IChatHistoryStore
             return ("nyxid-chat", "nyxid-chat");
         }
 
+        if (conversationId.StartsWith("streaming-proxy:", StringComparison.OrdinalIgnoreCase) ||
+            conversationId.StartsWith(StreamingProxyConversationPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return ("streaming-proxy", "streaming-proxy");
+        }
+
         var separatorIndex = conversationId.IndexOf(':');
         if (separatorIndex > 0)
         {
             var serviceId = conversationId[..separatorIndex];
+            if (string.Equals(serviceId, "streaming-proxy", StringComparison.OrdinalIgnoreCase))
+                return ("streaming-proxy", "streaming-proxy");
             var isNyxIdChat = string.Equals(serviceId, "nyxid-chat", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(conversationId, $"NyxIdChat:{scopeId}", StringComparison.OrdinalIgnoreCase);
             return (serviceId, isNyxIdChat ? "nyxid-chat" : "service");

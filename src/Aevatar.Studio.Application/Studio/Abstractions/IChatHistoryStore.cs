@@ -26,4 +26,6 @@ public sealed record StoredChatMessage(
     long Timestamp,
     string Status,
     string? Error = null,
-    string? Thinking = null);
+    string? Thinking = null,
+    string? AuthorId = null,
+    string? AuthorName = null);

@@ -7,14 +7,13 @@ export default defineConfig({
     outDir: '../wwwroot',
     emptyOutDir: true,
     assetsDir: '',
-    cssCodeSplit: false,
     rollupOptions: {
       output: {
         inlineDynamicImports: true,
-        entryFileNames: 'app.js',
+        entryFileNames: 'app-[hash].js',
         assetFileNames: assetInfo => {
           const assetName = assetInfo.name || '';
-          return assetName.slice(-4) === '.css' ? 'app.css' : '[name][extname]';
+          return assetName.slice(-4) === '.css' ? 'app-[hash][extname]' : '[name]-[hash][extname]';
         },
       },
     },
