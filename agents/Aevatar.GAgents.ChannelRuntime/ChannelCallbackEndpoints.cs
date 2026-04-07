@@ -356,12 +356,12 @@ public static class ChannelCallbackEndpoints
         if (string.Equals(entry.Platform, "telegram", StringComparison.OrdinalIgnoreCase))
         {
             // Call Telegram Bot API setWebhook via NyxID proxy.
-            // NyxID injects the bot token into the path: bot/setWebhook → bot<TOKEN>/setWebhook
+            // NyxID proxy auto-prepends "bot<TOKEN>/" so we pass the bare method name.
             var body = JsonSerializer.Serialize(new { url = webhookUrl });
             var result = await nyxClient.ProxyRequestAsync(
                 entry.NyxUserToken,
                 entry.NyxProviderSlug,
-                "bot/setWebhook",
+                "setWebhook",
                 "POST",
                 body,
                 extraHeaders: null,
