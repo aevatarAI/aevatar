@@ -4,11 +4,51 @@ const logger = pino({ name: "runner:aevatar-client" });
 
 const AEVATAR_API = process.env["AEVATAR_API_URL"] ?? "http://localhost:6688";
 const WORKFLOW_SERVICE_URL = process.env["WORKFLOW_SERVICE_URL"] ?? "http://localhost:8081";
-const SCOPE_ID = process.env["SCOPE_ID"] ?? "76fe9d91-1f1d-4234-9352-819a7c28f709";
 
 export interface StartResult {
   executionId: string;
   status: string;
+}
+
+interface AuthMeResponse {
+  enabled?: boolean;
+  authenticated?: boolean;
+  scopeId?: string | null;
+}
+
+function buildHeaders(authorization?: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (authorization) headers["Authorization"] = authorization;
+  return headers;
+}
+
+async function resolveAuthenticatedScopeId(authorization?: string): Promise<string> {
+  if (!authorization) {
+    throw new Error("Workflow start requires Authorization.");
+  }
+
+  const url = `${AEVATAR_API}/api/auth/me`;
+  logger.info({ url }, "Resolving authenticated scope for deployed workflow start");
+
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: buildHeaders(authorization),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.text();
+    logger.error({ status: resp.status, body }, "Failed to resolve authenticated scope");
+    throw new Error(`Resolve authenticated scope failed: HTTP ${resp.status} — ${body}`);
+  }
+
+  const payload = await resp.json() as AuthMeResponse;
+  if (!payload.authenticated || !payload.scopeId?.trim()) {
+    logger.error({ payload }, "Authenticated scope is unavailable for deployed workflow start");
+    throw new Error("Authenticated scope is unavailable.");
+  }
+
+  return payload.scopeId.trim();
 }
 
 /**
@@ -118,11 +158,14 @@ export async function startDeployedExecution(
   authorization?: string,
   signal?: AbortSignal,
 ): Promise<{ executionId: string; stream: ReadableStream<Uint8Array> | null }> {
-  const url = `${AEVATAR_API}/api/scopes/${SCOPE_ID}/invoke/chat:stream`;
-  logger.info({ url, workflowName, scopeId: SCOPE_ID }, "Starting deployed workflow execution (SSE stream)");
+  const scopeId = await resolveAuthenticatedScopeId(authorization);
+  const url = `${AEVATAR_API}/api/scopes/${scopeId}/invoke/chat:stream`;
+  logger.info({ url, workflowName, scopeId }, "Starting deployed workflow execution (SSE stream)");
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (authorization) headers["Authorization"] = authorization;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...buildHeaders(authorization),
+  };
 
   const resp = await fetch(url, {
     method: "POST",
