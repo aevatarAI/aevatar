@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 using System.Threading.Channels;
 
@@ -45,18 +46,20 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         [FromBody] CreateRoomRequest? request,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         var roomName = request?.RoomName?.Trim();
         if (string.IsNullOrWhiteSpace(roomName))
             roomName = "Group Chat";
 
-        var entry = await store.CreateRoomAsync(scopeId, roomName, ct);
+        var roomId = StreamingProxyDefaults.GenerateRoomId();
 
         // Create the actor and initialize it
-        var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(entry.RoomId, ct);
+        var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
 
         var initEvent = new GroupChatRoomInitializedEvent { RoomName = roomName };
         var envelope = new EventEnvelope
@@ -68,28 +71,73 @@ public static class StreamingProxyEndpoints
         };
         await actor.HandleEventAsync(envelope, ct);
 
-        return Results.Ok(new { roomId = entry.RoomId, roomName = entry.RoomName, createdAt = entry.CreatedAt });
+        try
+        {
+            await actorStore.AddActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // chrono-storage unavailable (timeout/403/network) — actor still usable via runtime
+            logger.LogWarning(ex, "Failed to persist room {RoomId} to actor store; room is usable via runtime", roomId);
+        }
+
+        return Results.Ok(new { roomId, roomName });
     }
 
     private static async Task<IResult> HandleListRoomsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var rooms = await store.ListRoomsAsync(scopeId, ct);
-        return Results.Ok(rooms);
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        try
+        {
+            var groups = await actorStore.GetAsync(ct);
+            var group = groups.FirstOrDefault(g =>
+                string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal));
+            var roomIds = group?.ActorIds ?? [];
+            return Results.Ok(roomIds.Select(id => new { roomId = id }));
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to list rooms from actor store");
+            return Results.Ok(Array.Empty<object>());
+        }
     }
 
     private static async Task<IResult> HandleDeleteRoomAsync(
         HttpContext http,
         string scopeId,
         string roomId,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var removed = await store.DeleteRoomAsync(scopeId, roomId, ct);
-        return removed ? Results.Ok() : Results.NotFound();
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        try
+        {
+            await actorStore.RemoveActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to remove room {RoomId} from actor store", roomId);
+        }
+        try
+        {
+            await participantStore.RemoveRoomAsync(roomId, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to remove participants for room {RoomId}", roomId);
+        }
+        return Results.Ok();
     }
 
     // ─── User Chat (trigger topic + SSE stream) ───
@@ -101,7 +149,7 @@ public static class StreamingProxyEndpoints
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] StreamingProxyNyxParticipantCoordinator participantCoordinator,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -163,7 +211,7 @@ public static class StreamingProxyEndpoints
 
             IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
                 ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
-                : await participantCoordinator.EnsureParticipantsJoinedAsync(scopeId, roomId, actor, store, accessToken, ct);
+                : await participantCoordinator.EnsureParticipantsJoinedAsync(scopeId, roomId, actor, participantStore, accessToken, ct);
 
             if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
             {
@@ -315,15 +363,26 @@ public static class StreamingProxyEndpoints
 
     // ─── Participant management ───
 
-    private static Task<IResult> HandleListParticipantsAsync(
+    private static async Task<IResult> HandleListParticipantsAsync(
         HttpContext http,
         string scopeId,
         string roomId,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        var participants = store.ListParticipants(scopeId, roomId);
-        return Task.FromResult<IResult>(Results.Ok(participants));
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        try
+        {
+            var participants = await participantStore.ListAsync(roomId, ct);
+            return Results.Ok(participants);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to list participants for room {RoomId}", roomId);
+            return Results.Ok(Array.Empty<object>());
+        }
     }
 
     private static async Task<IResult> HandleJoinAsync(
@@ -332,7 +391,8 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.AgentId))
@@ -360,8 +420,16 @@ public static class StreamingProxyEndpoints
         };
         await actor.HandleEventAsync(envelope, ct);
 
-        // Track participant in the store for query endpoints
-        store.AddParticipant(scopeId, roomId, agentId, displayName);
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        try
+        {
+            await participantStore.AddAsync(roomId, agentId, displayName, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to persist participant {AgentId} in room {RoomId}", agentId, roomId);
+        }
 
         return Results.Ok(new { status = "joined", agentId });
     }

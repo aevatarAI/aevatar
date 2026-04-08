@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Configuration;
@@ -78,7 +79,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         string scopeId,
         string roomId,
         IActor actor,
-        StreamingProxyActorStore store,
+        IStreamingProxyParticipantStore participantStore,
         string accessToken,
         CancellationToken ct)
     {
@@ -86,7 +87,8 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
         if (participants.Count == 0)
             return participants;
 
-        var existingIds = store.ListParticipants(scopeId, roomId)
+        var existing = await participantStore.ListAsync(roomId, ct);
+        var existingIds = existing
             .Select(entry => entry.AgentId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -101,7 +103,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                 DisplayName = participant.DisplayName,
             }, ct);
 
-            store.AddParticipant(scopeId, roomId, participant.RouteSlug, participant.DisplayName);
+            await participantStore.AddAsync(roomId, participant.RouteSlug, participant.DisplayName, ct);
         }
 
         return participants;
