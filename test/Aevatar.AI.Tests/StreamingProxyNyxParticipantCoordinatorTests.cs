@@ -1,0 +1,337 @@
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.GAgents.StreamingProxy;
+using FluentAssertions;
+using Google.Protobuf;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace Aevatar.AI.Tests;
+
+public sealed class StreamingProxyNyxParticipantCoordinatorTests
+{
+    [Fact]
+    public async Task EnsureParticipantsJoinedAsync_ShouldPreserveDistinctNodesWithSharedSlug()
+    {
+        var (coordinator, actor, store, _) = CreateCoordinator();
+
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            "scope-1",
+            "room-1",
+            actor,
+            store,
+            "test-token",
+            CancellationToken.None);
+
+        participants.Should().HaveCount(3);
+        participants.Select(participant => participant.ParticipantId).Should().OnlyHaveUniqueItems();
+        participants.Select(participant => participant.DisplayName).Should().OnlyHaveUniqueItems();
+        participants.Select(participant => participant.DisplayName).Should().OnlyContain(name => name.StartsWith("OpenClaw-Node", StringComparison.Ordinal));
+
+        var joinedEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantJoinedEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantJoinedEvent>())
+            .ToList();
+
+        joinedEvents.Should().HaveCount(3);
+        joinedEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
+
+        store.ListParticipants("scope-1", "room-1").Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task GenerateRepliesAsync_ShouldSkipUnavailableOpenerAndContinueWithHealthyParticipant()
+    {
+        var (coordinator, actor, store, llmProvider) = CreateCoordinator();
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            "scope-1",
+            "room-1",
+            actor,
+            store,
+            "test-token",
+            CancellationToken.None,
+            preferredRoute: "/api/v1/proxy/s/openclaw/node-a");
+
+        var roomParticipants = participants.Take(2).ToList();
+
+        await coordinator.GenerateRepliesAsync(
+            roomParticipants,
+            actor,
+            "Discuss the roadmap for the next release.",
+            "session-1",
+            "test-token",
+            CancellationToken.None,
+            store,
+            "scope-1",
+            "room-1");
+
+        llmProvider.Requests.Should().HaveCount(2);
+        llmProvider.Requests[0].RequestId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
+        llmProvider.Requests[1].RequestId.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+
+        var messageEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
+            .ToList();
+
+        var leftEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
+            .ToList();
+
+        messageEvents.Should().HaveCount(1);
+        messageEvents.Should().NotContain(evt => evt.Content.StartsWith("当前暂时不可用", StringComparison.Ordinal));
+        messageEvents.Single().Content.Should().Contain("reply from", StringComparison.OrdinalIgnoreCase);
+        messageEvents.Single().Content.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+        messageEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
+        leftEvents.Should().HaveCount(1);
+        leftEvents.Single().AgentId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
+        store.ListParticipants("scope-1", "room-1").Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GenerateRepliesAsync_ShouldIgnoreUnavailableTextResponseAndContinueWithHealthyParticipant()
+    {
+        var (coordinator, actor, store, llmProvider) = CreateCoordinator(request =>
+        {
+            if (request.RequestId?.Contains("node-a", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return new LLMResponse
+                {
+                    Content = "当前暂时不可用: Service request failed.\nStatus: 503 (Service Unavailable)",
+                };
+            }
+
+            return new LLMResponse
+            {
+                Content = $"reply from {request.RequestId}",
+            };
+        });
+
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            "scope-1",
+            "room-1",
+            actor,
+            store,
+            "test-token",
+            CancellationToken.None,
+            preferredRoute: "/api/v1/proxy/s/openclaw/node-a");
+
+        var roomParticipants = participants.Take(2).ToList();
+
+        await coordinator.GenerateRepliesAsync(
+            roomParticipants,
+            actor,
+            "Discuss the roadmap for the next release.",
+            "session-1",
+            "test-token",
+            CancellationToken.None,
+            store,
+            "scope-1",
+            "room-1");
+
+        llmProvider.Requests.Should().HaveCount(2);
+        llmProvider.Requests[0].RequestId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
+        llmProvider.Requests[1].RequestId.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+
+        var messageEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
+            .ToList();
+
+        var leftEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
+            .ToList();
+
+        messageEvents.Should().HaveCount(1);
+        messageEvents.Single().Content.Should().Contain("reply from", StringComparison.OrdinalIgnoreCase);
+        messageEvents.Single().Content.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+        messageEvents.Should().NotContain(evt => evt.Content.Contains("503", StringComparison.OrdinalIgnoreCase));
+        leftEvents.Should().HaveCount(1);
+        leftEvents.Single().AgentId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
+        store.ListParticipants("scope-1", "room-1").Should().HaveCount(2);
+    }
+
+    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, StreamingProxyActorStore Store, RecordingLlmProvider Provider) CreateCoordinator()
+        => CreateCoordinator(null);
+
+    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, StreamingProxyActorStore Store, RecordingLlmProvider Provider) CreateCoordinator(
+        Func<LLMRequest, LLMResponse>? responseFactory)
+    {
+        var handler = new StreamingProxyHttpHandler();
+        var httpClient = new HttpClient(handler);
+        var httpClientFactory = new StubHttpClientFactory(httpClient);
+        var provider = new RecordingLlmProvider(responseFactory);
+        var llmFactory = new StubLlmProviderFactory(provider);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:Authority"] = "https://nyx.example.com",
+            })
+            .Build();
+
+        var coordinator = new StreamingProxyNyxParticipantCoordinator(
+            llmFactory,
+            configuration,
+            httpClientFactory,
+            NullLogger<StreamingProxyNyxParticipantCoordinator>.Instance);
+
+        return (coordinator, new RecordingActor("room-1"), new StreamingProxyActorStore(), provider);
+    }
+
+    private sealed class StreamingProxyHttpHandler : HttpMessageHandler
+    {
+        private static readonly string StatusJson = """
+            {
+              "providers": [
+                {
+                  "provider_slug": "openclaw",
+                  "provider_name": "OpenClaw-Node",
+                  "status": "ready",
+                  "proxy_url": "/api/v1/proxy/s/openclaw/node-a",
+                  "node_id": "node-a"
+                },
+                {
+                  "provider_slug": "openclaw",
+                  "provider_name": "OpenClaw-Node",
+                  "status": "ready",
+                  "proxy_url": "/api/v1/proxy/s/openclaw/node-b",
+                  "node_id": "node-b"
+                },
+                {
+                  "provider_slug": "openclaw",
+                  "provider_name": "OpenClaw-Node",
+                  "status": "ready",
+                  "proxy_url": "/api/v1/proxy/s/openclaw/node-c",
+                  "node_id": "node-c"
+                }
+              ]
+            }
+            """;
+
+        private static readonly string KeysJson = """
+            {
+              "keys": []
+            }
+            """;
+
+        private static readonly string ModelsJson = """
+            {
+              "data": [
+                { "id": "claude-sonnet-4-5-20250929" }
+              ]
+            }
+            """;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (path.EndsWith("/api/v1/llm/status", StringComparison.Ordinal))
+                return Task.FromResult(JsonResponse(StatusJson));
+
+            if (path.EndsWith("/api/v1/keys", StringComparison.Ordinal))
+                return Task.FromResult(JsonResponse(KeysJson));
+
+            if (path.EndsWith("/models", StringComparison.Ordinal))
+                return Task.FromResult(JsonResponse(ModelsJson));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                Content = new StringContent("""{"error":"not found"}""", Encoding.UTF8, "application/json"),
+            });
+        }
+
+        private static HttpResponseMessage JsonResponse(string json) =>
+            new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+    }
+
+    private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => client;
+    }
+
+    private sealed class StubLlmProviderFactory(RecordingLlmProvider provider) : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) => provider;
+
+        public ILLMProvider GetDefault() => provider;
+
+        public IReadOnlyList<string> GetAvailableProviders() => ["nyxid"];
+    }
+
+    private sealed class RecordingLlmProvider(Func<LLMRequest, LLMResponse>? responseFactory = null) : ILLMProvider
+    {
+        private readonly Func<LLMRequest, LLMResponse>? _responseFactory = responseFactory;
+
+        public string Name => "nyxid";
+
+        public List<LLMRequest> Requests { get; } = [];
+
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+        {
+            Requests.Add(request);
+
+            if (_responseFactory != null)
+                return Task.FromResult(_responseFactory(request));
+
+            if (request.RequestId?.Contains("node-a", StringComparison.OrdinalIgnoreCase) == true)
+                throw new InvalidOperationException("node-a is unavailable");
+
+            return Task.FromResult(new LLMResponse
+            {
+                Content = $"reply from {request.RequestId}",
+            });
+        }
+
+        public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class RecordingActor(string id) : IActor
+    {
+        private readonly IAgent _agent = new RecordingAgent(id);
+
+        public List<EventEnvelope> Events { get; } = [];
+
+        public string Id { get; } = id;
+
+        public IAgent Agent => _agent;
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            Events.Add(envelope);
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class RecordingAgent(string id) : IAgent
+    {
+        public string Id { get; } = id;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("recording-agent");
+
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+}

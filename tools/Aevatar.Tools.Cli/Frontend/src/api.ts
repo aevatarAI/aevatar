@@ -680,9 +680,13 @@ export const streamingProxy = {
     onFrame?: (frame: any) => void,
     signal?: AbortSignal,
     sessionId?: string,
+    llmRoute?: string,
+    llmModel?: string,
   ) => {
     const body: any = { prompt };
     if (sessionId) body.sessionId = sessionId;
+    if (llmRoute !== undefined) body.llmRoute = llmRoute;
+    if (llmModel !== undefined) body.llmModel = llmModel;
     return streamSse(
       `/scopes/${enc(scopeId)}/streaming-proxy/rooms/${enc(roomId)}:chat`,
       body,

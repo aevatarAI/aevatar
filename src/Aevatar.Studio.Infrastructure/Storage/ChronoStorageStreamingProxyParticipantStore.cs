@@ -61,6 +61,27 @@ internal sealed class ChronoStorageStreamingProxyParticipantStore : IStreamingPr
         await UploadAsync(remoteContext, rooms, cancellationToken);
     }
 
+    public async Task RemoveParticipantAsync(
+        string roomId, string agentId, CancellationToken cancellationToken = default)
+    {
+        var remoteContext = TryResolve();
+        if (remoteContext is null)
+            return;
+
+        var rooms = await DownloadAsync(cancellationToken);
+        if (!rooms.TryGetValue(roomId, out var participants))
+            return;
+
+        var removedCount = participants.RemoveAll(p => string.Equals(p.AgentId, agentId, StringComparison.Ordinal));
+        if (removedCount == 0)
+            return;
+
+        if (participants.Count == 0)
+            rooms.Remove(roomId);
+
+        await UploadAsync(remoteContext, rooms, cancellationToken);
+    }
+
     public async Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
     {
         var remoteContext = TryResolve();

@@ -164,6 +164,10 @@ sequenceDiagram
 2. 并行拉取可用 provider 和用户 service。
 3. 再对每个 provider 拉 `/models`，为每个 participant 选择 model。
 
+这里的 participant 身份不再只看 `provider_slug`，而是优先使用 Nyx 返回的节点/服务级稳定标识，再单独保存 route preference 供 LLM 路由使用。这样同一个 slug 下的多个 node 不会被合并成一个 participant。
+当会话显式选择了 `llmRoute` / `llmModel` 时，Streaming Proxy 会优先用该会话偏好来排序 participant 和选 model；某个 participant 503 时只会被跳过，不再当成一条正常的 participant 发言。
+失败的 participant 会同时发出 `GroupChatParticipantLeftEvent`，让 actor 状态、查询索引和前端已加入列表同步移除该节点，避免 UI 继续把 503 节点显示成仍在发言的 participant。
+
 ```mermaid
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart LR

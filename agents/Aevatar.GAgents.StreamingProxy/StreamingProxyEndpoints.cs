@@ -191,6 +191,8 @@ public static class StreamingProxyEndpoints
 
             var sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
             var accessToken = ExtractBearerToken(http);
+            var preferredRoute = request.LlmRoute?.Trim();
+            var defaultModel = request.LlmModel?.Trim();
 
             // Emit the room topic immediately so the client sees visible progress
             // even when Nyx participant discovery is slow.
@@ -211,11 +213,27 @@ public static class StreamingProxyEndpoints
 
             IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
                 ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
-                : await participantCoordinator.EnsureParticipantsJoinedAsync(scopeId, roomId, actor, participantStore, accessToken, ct);
+                : await participantCoordinator.EnsureParticipantsJoinedAsync(
+                    scopeId,
+                    roomId,
+                    actor,
+                    participantStore,
+                    accessToken,
+                    ct,
+                    preferredRoute,
+                    defaultModel);
 
             if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
             {
-                await participantCoordinator.GenerateRepliesAsync(participants, actor, prompt, sessionId, accessToken, ct);
+                await participantCoordinator.GenerateRepliesAsync(
+                    participants,
+                    actor,
+                    prompt,
+                    sessionId,
+                    accessToken,
+                    ct,
+                    participantStore,
+                    roomId);
                 await writer.WriteRunFinishedAsync(CancellationToken.None);
                 return;
             }
@@ -471,7 +489,11 @@ public static class StreamingProxyEndpoints
     // ─── Request DTOs ───
 
     public sealed record CreateRoomRequest(string? RoomName);
-    public sealed record ChatTopicRequest(string? Prompt, string? SessionId = null);
+    public sealed record ChatTopicRequest(
+        string? Prompt,
+        string? SessionId = null,
+        string? LlmRoute = null,
+        string? LlmModel = null);
     public sealed record PostMessageRequest(string? AgentId, string? AgentName, string? Content, string? SessionId = null);
     public sealed record JoinRoomRequest(string? AgentId, string? DisplayName);
 

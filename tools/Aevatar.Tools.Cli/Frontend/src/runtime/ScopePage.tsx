@@ -2319,7 +2319,7 @@ export default function ScopePage() {
     let thinking = '';
     let contentText = '';
     let lastWasReasoning = false;
-    const joinedParticipants = new Set<string>();
+    const joinedParticipants = new Map<string, string>();
     const progressMessageId = assistantMsg.id;
     const pendingParticipantMessages: ChatMessage[] = [];
     let streamingProxyPhase: 'starting' | 'topic-started' | 'participants-joined' = 'starting';
@@ -2444,7 +2444,7 @@ export default function ScopePage() {
           if (activeService.kind === 'streaming-proxy' && !contentText) {
             streamingProxyPhase = 'topic-started';
             updateMessageById(activeProgressMessageId, {
-              content: buildStreamingProxyProgressMessage(joinedParticipants, streamingProxyPhase),
+              content: buildStreamingProxyProgressMessage(joinedParticipants.values(), streamingProxyPhase),
             });
           }
           break;
@@ -2479,12 +2479,25 @@ export default function ScopePage() {
         }
 
         case 'PARTICIPANT_JOINED': {
+          const agentId = String(evt.agentId || '').trim();
           const displayName = String(evt.displayName || evt.agentId || '').trim();
-          if (displayName) joinedParticipants.add(displayName);
+          if (agentId && displayName) joinedParticipants.set(agentId, displayName);
           if (activeService.kind === 'streaming-proxy' && !contentText) {
             streamingProxyPhase = 'participants-joined';
             updateMessageById(activeProgressMessageId, {
-              content: buildStreamingProxyProgressMessage(joinedParticipants, streamingProxyPhase),
+              content: buildStreamingProxyProgressMessage(joinedParticipants.values(), streamingProxyPhase),
+            });
+          }
+          break;
+        }
+
+        case 'PARTICIPANT_LEFT': {
+          const agentId = String(evt.agentId || '').trim();
+          if (agentId) joinedParticipants.delete(agentId);
+          if (activeService.kind === 'streaming-proxy' && !contentText) {
+            streamingProxyPhase = 'participants-joined';
+            updateMessageById(activeProgressMessageId, {
+              content: buildStreamingProxyProgressMessage(joinedParticipants.values(), streamingProxyPhase),
             });
           }
           break;
@@ -2667,7 +2680,16 @@ export default function ScopePage() {
       if (activeService.kind === 'streaming-proxy') {
         const roomId = await ensureStreamingProxyRoom();
         resolvedActorId = buildStreamingProxyConversationId(roomId);
-        await api.streamingProxy.streamChat(scopeId, roomId, text, onFrame, controller.signal, activeConvId || undefined);
+        await api.streamingProxy.streamChat(
+          scopeId,
+          roomId,
+          text,
+          onFrame,
+          controller.signal,
+          activeConvId || undefined,
+          conversationRoute,
+          conversationModel,
+        );
         streamFinished = true;
         await flushParticipantQueue();
       } else if (activeService.kind === 'nyxid-chat') {
@@ -2713,10 +2735,10 @@ export default function ScopePage() {
                     steps: [...steps],
                     toolCalls: [...toolCalls],
                     thinking,
-                    content: joinedParticipants.size > 0
-                      ? `Streaming Proxy 已经把消息发到 room 里了，但当前还没有 participant 回复。已加入: ${Array.from(joinedParticipants).join(', ')}`
+                  content: joinedParticipants.size > 0
+                      ? `Streaming Proxy 已经把消息发到 room 里了，但当前还没有 participant 回复。已加入: ${Array.from(joinedParticipants.values()).join(', ')}`
                       : 'Streaming Proxy 已经把消息发到 room 里了，但当前没有 participant 回复。它本身不会直接回答，只有 joinRoom/postMessage 的 agent 回消息后，这里才会显示内容。',
-                  }
+                }
                 : message
             ));
           }
@@ -3416,7 +3438,16 @@ export default function ScopePage() {
       };
       if (activeService.kind === 'streaming-proxy') {
         const roomId = await ensureStreamingProxyRoom();
-        await api.streamingProxy.streamChat(scopeId, roomId, prompt, pushFrame, controller.signal, activeConvId || undefined);
+        await api.streamingProxy.streamChat(
+          scopeId,
+          roomId,
+          prompt,
+          pushFrame,
+          controller.signal,
+          activeConvId || undefined,
+          conversationRoute,
+          conversationModel,
+        );
       } else {
         await api.scope.streamInvoke(scopeId, serviceId, prompt, pushFrame, controller.signal, invokeEndpointId);
       }
