@@ -49,10 +49,12 @@ type ConsoleTab = "query" | "execute" | "timeline" | "raw";
 type QueryTarget = "binding" | "services" | "workflows" | "actor";
 
 type ConsoleFlow = {
+  badge?: string;
   description: string;
   group: "developer" | "operate" | "understand";
   id: ConsoleTab;
   label: string;
+  priority: "primary" | "secondary";
 };
 
 type ChatAdvancedConsoleProps = {
@@ -115,11 +117,13 @@ const queryTargets: { description: string; id: QueryTarget; label: string }[] = 
 
 const consoleFlows: readonly ConsoleFlow[] = [
   {
+    badge: "Recommended first",
     description:
       "Check the scope binding, published services, deployed workflows, or inspect an actor directly.",
     group: "understand",
     id: "query",
     label: "Query",
+    priority: "primary",
   },
   {
     description:
@@ -127,20 +131,25 @@ const consoleFlows: readonly ConsoleFlow[] = [
     group: "understand",
     id: "timeline",
     label: "Timeline",
+    priority: "secondary",
   },
   {
+    badge: "Common next step",
     description:
       "Launch a service endpoint, capture the run receipt, and continue into Runs or Explorer when needed.",
     group: "operate",
     id: "execute",
     label: "Execute",
+    priority: "primary",
   },
   {
+    badge: "Expert",
     description:
       "Send direct API requests only when you need low-level integration or protocol debugging.",
     group: "developer",
     id: "raw",
     label: "Raw API",
+    priority: "secondary",
   },
 ];
 
@@ -1158,6 +1167,23 @@ export function ChatAdvancedConsole({
               developer tooling in one drawer. Start from the task you are
               trying to complete.
             </Typography.Text>
+            <div
+              style={{
+                background: "#fafaf8",
+                border: "1px solid #ece8e1",
+                borderRadius: 12,
+                color: "#57534e",
+                fontSize: 12,
+                lineHeight: 1.6,
+                padding: "10px 12px",
+              }}
+            >
+              Suggested path: start with <strong>Query</strong> to orient the
+              scope, move to <strong>Execute</strong> when you are ready to act,
+              then use <strong>Timeline</strong> if the run needs evidence or
+              operator input. Keep <strong>Raw API</strong> for protocol-level
+              debugging.
+            </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {consoleFlowGroups.map((group) => (
@@ -1217,15 +1243,46 @@ export function ChatAdvancedConsole({
                               justifyContent: "space-between",
                             }}
                           >
-                            <span
+                            <div
                               style={{
-                                color: "#111827",
-                                fontSize: 14,
-                                fontWeight: 700,
+                                alignItems: "center",
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: 8,
                               }}
                             >
-                              {flow.label}
-                            </span>
+                              <span
+                                style={{
+                                  color: "#111827",
+                                  fontSize: 14,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {flow.label}
+                              </span>
+                              {flow.badge ? (
+                                <span
+                                  style={{
+                                    background:
+                                      flow.priority === "primary"
+                                        ? "#fef3c7"
+                                        : "#f5f5f4",
+                                    borderRadius: 999,
+                                    color:
+                                      flow.priority === "primary"
+                                        ? "#92400e"
+                                        : "#57534e",
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    letterSpacing: "0.04em",
+                                    padding: "3px 8px",
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  {flow.badge}
+                                </span>
+                              ) : null}
+                            </div>
                             {active ? (
                               <span
                                 style={{
@@ -1963,32 +2020,154 @@ export function ChatAdvancedConsole({
               {timelineBlockingSummary ? (
                 <div style={drawerSectionStyle}>
                   <Typography.Text strong>Blocking State</Typography.Text>
-                  <Alert
-                    description={
+                  <div
+                    style={{
+                      background: "#fffbeb",
+                      border: "1px solid #fde68a",
+                      borderRadius: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 12,
+                      padding: 14,
+                    }}
+                  >
+                    <div
+                      style={{
+                        alignItems: "flex-start",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 10,
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <span
+                          style={{
+                            color: "#92400e",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {timelineBlockingSummary.kind === "wait_signal"
+                            ? "Waiting on signal"
+                            : timelineBlockingSummary.kind === "human_approval"
+                              ? "Approval required"
+                              : "Input required"}
+                        </span>
+                        <Typography.Text strong style={{ fontSize: 16 }}>
+                          {timelineBlockingSummary.title}
+                        </Typography.Text>
+                      </div>
+                      <Space wrap size={[8, 8]}>
+                        <span
+                          style={{
+                            background: "#fef3c7",
+                            borderRadius: 999,
+                            color: "#92400e",
+                            fontFamily: monoFontFamily,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: "4px 8px",
+                          }}
+                        >
+                          {timelineBlockingSummary.stepId}
+                        </span>
+                        {timelineBlockingSummary.signalName ? (
+                          <span
+                            style={{
+                              background: "#ffffff",
+                              border: "1px solid #fde68a",
+                              borderRadius: 999,
+                              color: "#92400e",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              padding: "4px 8px",
+                            }}
+                          >
+                            Signal {timelineBlockingSummary.signalName}
+                          </span>
+                        ) : null}
+                        {timelineBlockingSummary.timeoutLabel ? (
+                          <span
+                            style={{
+                              background: "#ffffff",
+                              border: "1px solid #fde68a",
+                              borderRadius: 999,
+                              color: "#92400e",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              padding: "4px 8px",
+                            }}
+                          >
+                            {timelineBlockingSummary.timeoutLabel}
+                          </span>
+                        ) : null}
+                      </Space>
+                    </div>
+
+                    <Alert
+                      description={
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 8,
+                          }}
+                        >
+                          <span>{timelineBlockingSummary.summary}</span>
+                          <span>{timelineBlockingSummary.prompt}</span>
+                        </div>
+                      }
+                      message="Current runtime gate"
+                      showIcon
+                      type="warning"
+                    />
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 10,
+                        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      }}
+                    >
                       <div
                         style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 8,
+                          background: "#ffffff",
+                          border: "1px solid #fde68a",
+                          borderRadius: 12,
+                          padding: 12,
                         }}
                       >
-                        <span>{timelineBlockingSummary.summary}</span>
-                        <span>{timelineBlockingSummary.prompt}</span>
-                        <span style={{ color: "#6b7280", fontSize: 12 }}>
-                          Step: {timelineBlockingSummary.stepId}
-                          {timelineBlockingSummary.signalName
-                            ? ` · Signal: ${timelineBlockingSummary.signalName}`
-                            : ""}
-                          {timelineBlockingSummary.timeoutLabel
-                            ? ` · ${timelineBlockingSummary.timeoutLabel}`
-                            : ""}
-                        </span>
+                        <div style={fieldLabelStyle}>Recommended next step</div>
+                        <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
+                          {timelineBlockingSummary.kind === "wait_signal"
+                            ? "Send the signal payload that the runtime is waiting for."
+                            : timelineBlockingSummary.kind === "human_approval"
+                              ? "Review the gate and approve or reject it."
+                              : "Provide the missing value, then resume the run."}
+                        </div>
                       </div>
-                    }
-                    message={timelineBlockingSummary.title}
-                    showIcon
-                    type="warning"
-                  />
+                      <div
+                        style={{
+                          background: "#ffffff",
+                          border: "1px solid #fde68a",
+                          borderRadius: 12,
+                          padding: 12,
+                        }}
+                      >
+                        <div style={fieldLabelStyle}>Action context</div>
+                        <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
+                          {timelineBlockingSummary.kind === "wait_signal"
+                            ? "Signal payload is optional unless your workflow expects a value."
+                            : timelineBlockingSummary.kind === "human_approval"
+                              ? "Approval notes are optional and will be sent with the decision."
+                              : "Input is required before the workflow can continue."}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   <label
                     style={{ display: "flex", flexDirection: "column", gap: 8 }}
                   >

@@ -804,6 +804,7 @@ describe("ChatPage", () => {
         "scope-a",
         expect.objectContaining({
           prompt: "Help me inspect my service binding.",
+          sessionId: expect.any(String),
         }),
         expect.any(AbortSignal),
         {
@@ -1423,7 +1424,7 @@ describe("ChatPage", () => {
     fireEvent.click(await screen.findByLabelText("Send"));
 
     expect(await screen.findByText("TOOL APPROVAL")).toBeTruthy();
-    expect(screen.getByText("scope.bind")).toBeTruthy();
+    expect(screen.getAllByText("scope.bind").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
 
@@ -1463,7 +1464,7 @@ describe("ChatPage", () => {
     fireEvent.click(await screen.findByLabelText("Send"));
 
     expect(await screen.findByText("INPUT REQUIRED")).toBeTruthy();
-    expect(screen.getByText("triage_input")).toBeTruthy();
+    expect(screen.getAllByText("triage_input").length).toBeGreaterThan(0);
 
     fireEvent.change(
       await screen.findByLabelText(/Run intervention input human_input:run-1:triage_input/i),
@@ -1640,6 +1641,86 @@ describe("ChatPage", () => {
     expect(screen.getByText("stored reasoning")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Runtime details" }));
     expect(screen.getByText("run-history")).toBeTruthy();
+  });
+
+  it("restores NyxID approval identity from stored runtime events", async () => {
+    (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([
+      {
+        createdAt: "2026-04-01T08:00:00.000Z",
+        id: "conversation-nyxid",
+        messageCount: 2,
+        serviceId: "nyxid-chat",
+        serviceKind: "nyxid-chat",
+        title: "Pending NyxID approval",
+        updatedAt: "2026-04-01T08:10:00.000Z",
+      },
+    ]);
+    (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([
+      {
+        content: "Bind the current scope for me.",
+        id: "user-1",
+        role: "user",
+        status: "complete",
+        timestamp: 1,
+      },
+      {
+        content: "Approval required before NyxID can continue.",
+        events: [
+          {
+            runId: "run-restore-1",
+            threadId: "thread-restore-1",
+            timestamp: 1,
+            type: AGUIEventType.RUN_STARTED,
+          },
+          {
+            name: CustomEventName.RunContext,
+            timestamp: 2,
+            type: AGUIEventType.CUSTOM,
+            value: {
+              actorId: "actor://nyxid-restored",
+              commandId: "cmd-restore-1",
+            },
+          },
+        ],
+        id: "assistant-1",
+        pendingApproval: {
+          argumentsJson: "{\"scopeId\":\"scope-a\"}",
+          isDestructive: false,
+          requestId: "approval-restored-1",
+          timeoutSeconds: 60,
+          toolCallId: "call-restored-1",
+          toolName: "scope.bind",
+        },
+        role: "assistant",
+        status: "complete",
+        timestamp: 2,
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    fireEvent.click(await screen.findByText("Pending NyxID approval"));
+    await screen.findByText("Approval required before NyxID can continue.");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Chat service").textContent).toContain(
+        "NyxID Chat"
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(nyxIdChatApi.approveToolCall).toHaveBeenCalledWith(
+        "scope-a",
+        "actor://nyxid-restored",
+        expect.objectContaining({
+          approved: true,
+          requestId: "approval-restored-1",
+          sessionId: "conversation-nyxid",
+        }),
+        expect.any(AbortSignal)
+      );
+    });
   });
 
   it("shows the raw debug stream for the active conversation", async () => {

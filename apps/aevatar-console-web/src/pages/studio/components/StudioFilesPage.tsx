@@ -13,7 +13,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Col, Input, Row, Space, Typography } from 'antd';
+import { Alert, Button, Col, Input, Row, Space, Typography } from 'antd';
 import React from 'react';
 import { chatHistoryApi } from '@/pages/chat/chatHistoryApi';
 import type { ConversationMeta } from '@/pages/chat/chatTypes';
@@ -57,6 +57,9 @@ type StaticFileDescriptor = {
 };
 
 type FilesViewMode = 'curated' | 'explorer';
+type PendingExplorerAction =
+  | { kind: 'select-file'; nextKey: string }
+  | { kind: 'switch-view'; nextMode: FilesViewMode };
 
 type StudioFilesPageProps = {
   readonly workflows: QueryState<StudioWorkflowSummary[]>;
@@ -261,6 +264,8 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
   const [selectedFile, setSelectedFile] = React.useState<StudioFileKey>('settings.json');
   const [viewMode, setViewMode] = React.useState<FilesViewMode>('curated');
   const [explorerDirty, setExplorerDirty] = React.useState(false);
+  const [pendingExplorerAction, setPendingExplorerAction] =
+    React.useState<PendingExplorerAction | null>(null);
   const [search, setSearch] = React.useState('');
   const [workflowsOpen, setWorkflowsOpen] = React.useState(true);
   const [scriptsOpen, setScriptsOpen] = React.useState(true);
@@ -422,20 +427,24 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
     visibleExplorerKeys,
   ]);
 
+  React.useEffect(() => {
+    if (!explorerDirty) {
+      setPendingExplorerAction(null);
+    }
+  }, [explorerDirty]);
+
   const handleViewModeChange = React.useCallback(
     (nextMode: FilesViewMode) => {
       if (nextMode === viewMode) {
         return;
       }
 
-      if (
-        viewMode === 'explorer' &&
-        explorerDirty &&
-        !window.confirm('Discard unsaved Explorer changes?')
-      ) {
+      if (viewMode === 'explorer' && explorerDirty) {
+        setPendingExplorerAction({ kind: 'switch-view', nextMode });
         return;
       }
 
+      setPendingExplorerAction(null);
       setViewMode(nextMode);
       if (nextMode !== 'explorer') {
         setExplorerDirty(false);
@@ -450,18 +459,39 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
         return;
       }
 
-      if (
-        explorerDirty &&
-        !window.confirm('Discard unsaved Explorer changes before switching files?')
-      ) {
+      if (explorerDirty) {
+        setPendingExplorerAction({ kind: 'select-file', nextKey: key });
         return;
       }
 
+      setPendingExplorerAction(null);
       explorer.setSelectedKey(key);
       setExplorerDirty(false);
     },
     [explorer.selectedKey, explorer.setSelectedKey, explorerDirty],
   );
+
+  const handleDiscardExplorerChanges = React.useCallback(() => {
+    if (!pendingExplorerAction) {
+      return;
+    }
+
+    if (pendingExplorerAction.kind === 'switch-view') {
+      setViewMode(pendingExplorerAction.nextMode);
+      if (pendingExplorerAction.nextMode !== 'explorer') {
+        setExplorerDirty(false);
+      }
+    } else {
+      explorer.setSelectedKey(pendingExplorerAction.nextKey);
+      setExplorerDirty(false);
+    }
+
+    setPendingExplorerAction(null);
+  }, [explorer, pendingExplorerAction]);
+
+  const handleKeepEditingExplorer = React.useCallback(() => {
+    setPendingExplorerAction(null);
+  }, []);
 
   const rootLabel = viewMode === 'explorer' ? scopeId || 'chrono-storage' : scopeId || 'workspace';
 
@@ -508,6 +538,29 @@ const StudioFilesPage: React.FC<StudioFilesPageProps> = ({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
+
+          {pendingExplorerAction ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="You have unsaved Explorer changes"
+              description={
+                pendingExplorerAction.kind === 'switch-view'
+                  ? 'Discard the current edits before leaving Storage Explorer.'
+                  : 'Discard the current edits before opening another storage file.'
+              }
+              action={
+                <Space wrap size={[8, 8]}>
+                  <Button size="small" onClick={handleKeepEditingExplorer}>
+                    Keep editing
+                  </Button>
+                  <Button danger size="small" onClick={handleDiscardExplorerChanges}>
+                    Discard changes
+                  </Button>
+                </Space>
+              }
+            />
+          ) : null}
 
           {viewMode === 'explorer' ? (
             <ExplorerTree

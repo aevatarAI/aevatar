@@ -49,6 +49,22 @@ export type ServiceOption = {
   primaryActorId?: string;
 };
 
+export type ConversationRuntimeIdentity = {
+  actorId?: string;
+  commandId?: string;
+  runId?: string;
+};
+
+export type ConversationLlmPreferences = {
+  llmModel?: string;
+  llmRoute?: string;
+};
+
+export type ConversationSessionSnapshot = {
+  preferences?: ConversationLlmPreferences;
+  runtime?: ConversationRuntimeIdentity;
+};
+
 export type ConversationMeta = {
   id: string;
   actorId?: string;
@@ -56,6 +72,7 @@ export type ConversationMeta = {
   runId?: string;
   llmModel?: string;
   llmRoute?: string;
+  session?: ConversationSessionSnapshot;
   title: string;
   serviceId: string;
   serviceKind: string;

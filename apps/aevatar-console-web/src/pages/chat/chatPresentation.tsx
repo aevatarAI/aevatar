@@ -568,10 +568,10 @@ function ApprovalActionButton({
       disabled={busy}
       onClick={onClick}
       style={{
-        background: isApprove ? "#f59e0b" : "#ffffff",
-        border: `1px solid ${isApprove ? "#f59e0b" : "#d1d5db"}`,
+        background: isApprove ? "#111827" : "#ffffff",
+        border: `1px solid ${isApprove ? "#111827" : "#fca5a5"}`,
         borderRadius: 10,
-        color: isApprove ? "#111827" : "#4b5563",
+        color: isApprove ? "#ffffff" : "#b91c1c",
         cursor: busy ? "wait" : "pointer",
         fontSize: 12,
         fontWeight: 600,
@@ -594,106 +594,242 @@ function ApprovalCard({
   busy: boolean;
   onDecision?: (requestId: string, approved: boolean) => void;
 }): React.ReactElement {
+  const statusLabel = approval.isDestructive
+    ? "Operator decision required"
+    : "Review before continuing";
+
   return (
     <div
       style={{
-        background: "#fff7ed",
+        background: "#fffaf0",
         border: "1px solid #fdba74",
-        borderRadius: 14,
+        borderRadius: 16,
+        boxShadow: "0 14px 30px rgba(245, 158, 11, 0.08)",
         color: "#7c2d12",
         marginBottom: 12,
-        padding: "12px 14px",
+        overflow: "hidden",
+        padding: "0",
       }}
     >
       <div
         style={{
-          alignItems: "center",
+          alignItems: "flex-start",
+          background: "linear-gradient(180deg, rgba(255,237,213,0.85) 0%, rgba(255,250,240,0.92) 100%)",
+          borderBottom: "1px solid #fed7aa",
           display: "flex",
           flexWrap: "wrap",
-          gap: 8,
-          marginBottom: 8,
+          gap: 10,
+          justifyContent: "space-between",
+          padding: "14px 14px 12px",
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em" }}>
-          TOOL APPROVAL
-        </span>
-        <span
-          style={{
-            background: "#ffedd5",
-            borderRadius: 999,
-            fontFamily:
-              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 11,
-            padding: "3px 8px",
-          }}
-        >
-          {approval.toolName || approval.toolCallId || approval.requestId}
-        </span>
-        {approval.isDestructive ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <span
             style={{
-              background: "#fee2e2",
+              color: "#9a3412",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+            }}
+          >
+            TOOL APPROVAL
+          </span>
+          <div
+            style={{
+              color: "#111827",
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            {approval.toolName || approval.toolCallId || approval.requestId}
+          </div>
+          <span style={{ color: "#9a3412", fontSize: 12, lineHeight: 1.6 }}>
+            {statusLabel}
+          </span>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <span
+            style={{
+              background: "#ffedd5",
               borderRadius: 999,
-              color: "#b91c1c",
+              fontFamily:
+                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 11,
+              padding: "3px 8px",
+            }}
+          >
+            {approval.toolCallId || approval.requestId}
+          </span>
+          {approval.isDestructive ? (
+            <span
+              style={{
+                background: "#fee2e2",
+                borderRadius: 999,
+                color: "#b91c1c",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "3px 8px",
+              }}
+            >
+              Destructive
+            </span>
+          ) : (
+            <span
+              style={{
+                background: "#ecfdf5",
+                borderRadius: 999,
+                color: "#047857",
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "3px 8px",
+              }}
+            >
+              Safe to review
+            </span>
+          )}
+          <span
+            style={{
+              background: "#ffffff",
+              border: "1px solid #fed7aa",
+              borderRadius: 999,
+              color: "#9a3412",
               fontSize: 11,
               fontWeight: 600,
               padding: "3px 8px",
             }}
           >
-            Destructive
+            Timeout {approval.timeoutSeconds}s
           </span>
-        ) : null}
+        </div>
       </div>
 
-      <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-        Review the tool call and decide whether NyxID can continue.
-      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px" }}>
+        <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+          Review the tool call and decide whether NyxID can continue.
+        </div>
 
-      {approval.argumentsJson ? (
-        <pre
+        <div
           style={{
-            background: "rgba(255,255,255,0.72)",
-            border: "1px solid #fed7aa",
-            borderRadius: 10,
-            color: "#7c2d12",
-            fontFamily:
-              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 12,
-            margin: "10px 0 0",
-            maxHeight: 180,
-            overflow: "auto",
-            padding: "10px 12px",
-            whiteSpace: "pre-wrap",
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
           }}
         >
-          {approval.argumentsJson}
-        </pre>
-      ) : null}
+          <div
+            style={{
+              background: "rgba(255,255,255,0.78)",
+              border: "1px solid #fed7aa",
+              borderRadius: 12,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
+              Tool
+            </div>
+            <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
+              {approval.toolName || "Tool call"}
+            </div>
+          </div>
+          <div
+            style={{
+              background: "rgba(255,255,255,0.78)",
+              border: "1px solid #fed7aa",
+              borderRadius: 12,
+              padding: "10px 12px",
+            }}
+          >
+            <div style={{ color: "#9a3412", fontSize: 11, fontWeight: 700 }}>
+              Impact
+            </div>
+            <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 4 }}>
+              {approval.isDestructive
+                ? "This tool may change runtime state."
+                : "This tool only needs operator confirmation."}
+            </div>
+          </div>
+        </div>
 
-      <div
-        style={{
-          alignItems: "center",
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-          marginTop: 12,
-        }}
-      >
-        <ApprovalActionButton
-          busy={busy}
-          label={busy ? "Applying..." : "Approve"}
-          onClick={() => onDecision?.(approval.requestId, true)}
-          tone="approve"
-        />
-        <ApprovalActionButton
-          busy={busy}
-          label="Reject"
-          onClick={() => onDecision?.(approval.requestId, false)}
-          tone="reject"
-        />
-        <span style={{ color: "#9a3412", fontSize: 12 }}>
-          Timeout: {approval.timeoutSeconds}s
-        </span>
+        <div
+          style={{
+            color: "#9a3412",
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          Request payload
+        </div>
+
+        {approval.argumentsJson ? (
+          <pre
+            style={{
+              background: "rgba(255,255,255,0.72)",
+              border: "1px solid #fed7aa",
+              borderRadius: 10,
+              color: "#7c2d12",
+              fontFamily:
+                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 12,
+              margin: 0,
+              maxHeight: 180,
+              overflow: "auto",
+              padding: "10px 12px",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {approval.argumentsJson}
+          </pre>
+        ) : (
+          <div
+            style={{
+              background: "rgba(255,255,255,0.72)",
+              border: "1px dashed #fdba74",
+              borderRadius: 10,
+              color: "#9a3412",
+              fontSize: 12,
+              padding: "10px 12px",
+            }}
+          >
+            No additional arguments were provided with this request.
+          </div>
+        )}
+
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            justifyContent: "space-between",
+            marginTop: 2,
+          }}
+        >
+          <span style={{ color: "#9a3412", fontSize: 12 }}>
+            Approve to let NyxID continue, or reject to stop this tool call.
+          </span>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <ApprovalActionButton
+              busy={busy}
+              label={busy ? "Applying..." : "Approve"}
+              onClick={() => onDecision?.(approval.requestId, true)}
+              tone="approve"
+            />
+            <ApprovalActionButton
+              busy={busy}
+              label="Reject"
+              onClick={() => onDecision?.(approval.requestId, false)}
+              tone="reject"
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -756,141 +892,258 @@ function RunInterventionCard({
         ? `Provide ${intervention.variableName}`
         : "Provide the missing input";
   const trimmedValue = value.trim();
+  const statusLabel = isSignal
+    ? "Waiting on an external signal"
+    : isApproval
+      ? "Operator approval is blocking progress"
+      : "Operator input is required to continue";
 
   return (
     <div
       style={{
-        background: cardTone.background,
+        background: "#ffffff",
         border: `1px solid ${cardTone.border}`,
-        borderRadius: 14,
+        borderRadius: 16,
+        boxShadow: "0 14px 28px rgba(15, 23, 42, 0.06)",
         color: cardTone.text,
         marginBottom: 12,
-        padding: "12px 14px",
+        overflow: "hidden",
+        padding: 0,
       }}
     >
       <div
         style={{
-          alignItems: "center",
+          alignItems: "flex-start",
+          background: `${cardTone.background}`,
+          borderBottom: `1px solid ${cardTone.border}`,
           display: "flex",
           flexWrap: "wrap",
-          gap: 8,
-          marginBottom: 8,
+          gap: 10,
+          justifyContent: "space-between",
+          padding: "14px 14px 12px",
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.06em" }}>
-          {isSignal
-            ? "WAIT SIGNAL"
-            : isApproval
-              ? "HUMAN APPROVAL"
-              : "INPUT REQUIRED"}
-        </span>
-        <span
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+            }}
+          >
+            {isSignal
+              ? "WAIT SIGNAL"
+              : isApproval
+                ? "HUMAN APPROVAL"
+                : "INPUT REQUIRED"}
+          </span>
+          <div
+            style={{
+              color: "#111827",
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            {intervention.stepId}
+          </div>
+          <span style={{ fontSize: 12, lineHeight: 1.6 }}>{statusLabel}</span>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <span
+            style={{
+              background: cardTone.badge,
+              borderRadius: 999,
+              fontFamily:
+                "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: 11,
+              padding: "3px 8px",
+            }}
+          >
+            {intervention.stepId}
+          </span>
+          {intervention.signalName ? (
+            <span
+              style={{
+                background: "rgba(255,255,255,0.72)",
+                borderRadius: 999,
+                fontSize: 11,
+                padding: "3px 8px",
+              }}
+            >
+              Signal: {intervention.signalName}
+            </span>
+          ) : null}
+          {intervention.variableName ? (
+            <span
+              style={{
+                background: "rgba(255,255,255,0.72)",
+                borderRadius: 999,
+                fontSize: 11,
+                padding: "3px 8px",
+              }}
+            >
+              Variable: {intervention.variableName}
+            </span>
+          ) : null}
+          {intervention.timeoutSeconds ? (
+            <span
+              style={{
+                background: "#ffffff",
+                border: `1px solid ${cardTone.border}`,
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 600,
+                padding: "3px 8px",
+              }}
+            >
+              Timeout {intervention.timeoutSeconds}s
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px" }}>
+        <div style={{ color: "#374151", fontSize: 13, lineHeight: 1.7 }}>
+          {intervention.prompt}
+        </div>
+
+        <div
           style={{
-            background: cardTone.badge,
-            borderRadius: 999,
-            fontFamily:
-              "SFMono-Regular, ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 11,
-            padding: "3px 8px",
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
           }}
         >
-          {intervention.stepId}
-        </span>
-        {intervention.signalName ? (
-          <span
+          <div
             style={{
-              background: "rgba(255,255,255,0.72)",
-              borderRadius: 999,
-              fontSize: 11,
-              padding: "3px 8px",
+              background: "#fafaf8",
+              border: "1px solid #ece8e1",
+              borderRadius: 12,
+              padding: "10px 12px",
             }}
           >
-            Signal: {intervention.signalName}
-          </span>
-        ) : null}
-        {intervention.variableName ? (
-          <span
+            <div style={{ color: "#78716c", fontSize: 11, fontWeight: 700 }}>
+              Next action
+            </div>
+            <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
+              {isSignal
+                ? "Send the signal to unblock the run."
+                : isApproval
+                  ? "Approve or reject this gate."
+                  : "Provide the missing value and resume."}
+            </div>
+          </div>
+          <div
             style={{
-              background: "rgba(255,255,255,0.72)",
-              borderRadius: 999,
-              fontSize: 11,
-              padding: "3px 8px",
+              background: "#fafaf8",
+              border: "1px solid #ece8e1",
+              borderRadius: 12,
+              padding: "10px 12px",
             }}
           >
-            Variable: {intervention.variableName}
-          </span>
-        ) : null}
-      </div>
+            <div style={{ color: "#78716c", fontSize: 11, fontWeight: 700 }}>
+              Context
+            </div>
+            <div style={{ color: "#111827", fontSize: 12, marginTop: 4 }}>
+              {helperText}
+            </div>
+          </div>
+        </div>
 
-      <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-        {intervention.prompt}
-      </div>
-
-      <textarea
-        aria-label={`Run intervention input ${intervention.key}`}
-        disabled={busy}
-        placeholder={placeholder}
-        style={{
-          background: "rgba(255,255,255,0.78)",
-          border: `1px solid ${cardTone.border}`,
-          borderRadius: 10,
-          color: "#1f2937",
-          fontFamily: "inherit",
-          fontSize: 13,
-          lineHeight: 1.6,
-          marginTop: 10,
-          minHeight: 84,
-          padding: "10px 12px",
-          resize: "vertical",
-          width: "100%",
-        }}
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-      />
-
-      <div style={{ color: cardTone.text, fontSize: 12, marginTop: 8, opacity: 0.9 }}>
-        {helperText}
-        {intervention.timeoutSeconds ? ` Timeout: ${intervention.timeoutSeconds}s.` : ""}
-      </div>
-
-      <div
-        style={{
-          alignItems: "center",
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 8,
-          marginTop: 12,
-        }}
-      >
-        <ApprovalActionButton
-          busy={busy || (requiresInput && !trimmedValue)}
-          label={busy ? "Applying..." : primaryLabel}
-          onClick={() =>
-            onSubmit?.({
-              kind: isSignal ? "signal" : isApproval ? "approve" : "resume",
-              value: trimmedValue || undefined,
-            })
-          }
-          tone="approve"
-        />
-        {isApproval ? (
-          <ApprovalActionButton
-            busy={busy}
-            label="Reject"
-            onClick={() =>
-              onSubmit?.({
-                kind: "reject",
-                value: trimmedValue || undefined,
-              })
-            }
-            tone="reject"
+        <label
+          style={{
+            color: "#6b7280",
+            display: "flex",
+            flexDirection: "column",
+            fontSize: 12,
+            fontWeight: 700,
+            gap: 8,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          {isSignal
+            ? "Signal payload"
+            : isApproval
+              ? "Operator note"
+              : "Required input"}
+          <textarea
+            aria-label={`Run intervention input ${intervention.key}`}
+            disabled={busy}
+            placeholder={placeholder}
+            style={{
+              background: "#ffffff",
+              border: `1px solid ${cardTone.border}`,
+              borderRadius: 12,
+              color: "#1f2937",
+              fontFamily: "inherit",
+              fontSize: 13,
+              fontWeight: 400,
+              letterSpacing: "normal",
+              lineHeight: 1.6,
+              minHeight: 84,
+              padding: "10px 12px",
+              resize: "vertical",
+              textTransform: "none",
+              width: "100%",
+            }}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
           />
-        ) : null}
-        {requiresInput && !trimmedValue ? (
-          <span style={{ color: cardTone.text, fontSize: 12 }}>
-            A value is required before the run can continue.
+        </label>
+
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            justifyContent: "space-between",
+          }}
+        >
+          <span style={{ color: "#6b7280", fontSize: 12 }}>
+            {requiresInput && !trimmedValue
+              ? "A value is required before the run can continue."
+              : isSignal
+                ? "Sending the signal will unblock this wait state."
+                : isApproval
+                  ? "Reject only when the run should stop at this gate."
+                  : "Resume will continue the run with the value above."}
           </span>
-        ) : null}
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <ApprovalActionButton
+              busy={busy || (requiresInput && !trimmedValue)}
+              label={busy ? "Applying..." : primaryLabel}
+              onClick={() =>
+                onSubmit?.({
+                  kind: isSignal ? "signal" : isApproval ? "approve" : "resume",
+                  value: trimmedValue || undefined,
+                })
+              }
+              tone="approve"
+            />
+            {isApproval ? (
+              <ApprovalActionButton
+                busy={busy}
+                label="Reject"
+                onClick={() =>
+                  onSubmit?.({
+                    kind: "reject",
+                    value: trimmedValue || undefined,
+                  })
+                }
+                tone="reject"
+              />
+            ) : null}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -2346,11 +2599,15 @@ export function ChatMetaStrip({
 export function EmptyChatState({
   actionLabel,
   description,
+  footnote,
+  highlights,
   onAction,
   title,
 }: {
   actionLabel?: string;
   description: string;
+  footnote?: string;
+  highlights?: readonly string[];
   onAction?: () => void;
   title: string;
 }): React.ReactElement {
@@ -2442,6 +2699,35 @@ export function EmptyChatState({
         >
           {description}
         </div>
+        {highlights && highlights.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gap: 10,
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              marginTop: 20,
+              textAlign: "left",
+            }}
+          >
+            {highlights.map((item) => (
+              <div
+                key={item}
+                style={{
+                  background: "#fafaf8",
+                  border: "1px solid #ece8e1",
+                  borderRadius: 16,
+                  color: "#57534e",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                  minHeight: 74,
+                  padding: "12px 14px",
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {actionLabel && onAction ? (
           <button
             onClick={onAction}
@@ -2460,6 +2746,18 @@ export function EmptyChatState({
           >
             {actionLabel}
           </button>
+        ) : null}
+        {footnote ? (
+          <div
+            style={{
+              color: "#9ca3af",
+              fontSize: 12,
+              lineHeight: 1.6,
+              marginTop: actionLabel && onAction ? 14 : 18,
+            }}
+          >
+            {footnote}
+          </div>
         ) : null}
       </div>
     </div>

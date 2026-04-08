@@ -32,6 +32,11 @@ import {
   normalizeUserLlmRoute,
   trimConversationValue,
 } from "./chatConversationConfig";
+import {
+  buildConversationSessionSnapshot,
+  readConversationPreferences,
+  resolveConversationRuntimeIdentity,
+} from "./chatSessionIdentity";
 import { ChatAdvancedConsole } from "./chatAdvancedConsole";
 import {
   applyRuntimeEvent,
@@ -153,18 +158,23 @@ function buildConversationMeta(
   const title = (firstUserMessage?.content || "Untitled").trim().slice(0, 60);
   const existingMessages = messages.filter((message) => message.status !== "streaming");
   const now = new Date(session.updatedAt || Date.now()).toISOString();
+  const sessionSnapshot = buildConversationSessionSnapshot(messages, session, {
+    llmModel: options?.llmModel,
+    llmRoute: options?.llmRoute,
+  });
+  const runtimeIdentity = sessionSnapshot?.runtime;
+  const preferences = sessionSnapshot?.preferences;
 
   return {
-    actorId:
-      session.actorId ||
-      (service.kind === "nyxid-chat" ? conversationId : undefined),
-    commandId: session.commandId || undefined,
+    actorId: runtimeIdentity?.actorId,
+    commandId: runtimeIdentity?.commandId,
     createdAt: previousCreatedAt || now,
     id: conversationId,
-    llmModel: trimConversationValue(options?.llmModel),
-    llmRoute: options?.llmRoute,
+    llmModel: preferences?.llmModel,
+    llmRoute: preferences?.llmRoute,
     messageCount: existingMessages.length,
-    runId: session.runId || undefined,
+    runId: runtimeIdentity?.runId,
+    session: sessionSnapshot,
     serviceId: service.id,
     serviceKind: service.kind,
     title: title || "Untitled",
@@ -183,14 +193,18 @@ function deriveConversationSession(
 ): ChatSessionState {
   const events = collectConversationEvents(messages);
   const lastAssistant = [...messages].reverse().find((message) => message.role === "assistant");
+  const runtimeIdentity = resolveConversationRuntimeIdentity({
+    messages,
+    meta,
+  });
 
   return {
-    actorId: meta?.actorId || "",
-    commandId: meta?.commandId || "",
+    actorId: runtimeIdentity.actorId || "",
+    commandId: runtimeIdentity.commandId || "",
     endpointId: "chat",
     error: lastAssistant?.status === "error" ? lastAssistant.error : undefined,
     eventCount: events.length,
-    runId: meta?.runId || "",
+    runId: runtimeIdentity.runId || "",
     scopeId,
     serviceId: meta?.serviceId || "",
     status:
@@ -858,12 +872,13 @@ const ChatPage: React.FC = () => {
         previousServiceIdRef.current = meta.serviceId;
         setSelectedServiceId(meta.serviceId);
       }
+      const preferences = readConversationPreferences(meta);
 
       setActiveConversationId(conversationId);
       setActiveApprovalRequestId(null);
       setActiveRunInterventionKey(null);
-      setConversationModel(trimConversationValue(meta?.llmModel));
-      setConversationRoute(meta?.llmRoute);
+      setConversationModel(preferences.llmModel);
+      setConversationRoute(preferences.llmRoute);
       setMessages(restoredMessages);
       setDebugEvents(restoredEvents);
       setSession(deriveConversationSession(scopeId, meta, restoredMessages));
@@ -1250,9 +1265,7 @@ const ChatPage: React.FC = () => {
       status: "running",
       updatedAt: Date.now(),
     });
-    const accumulator = createRuntimeEventAccumulator({
-      actorId: selectedService.kind === "nyxid-chat" ? conversationId : "",
-    });
+    const accumulator = createRuntimeEventAccumulator();
 
     try {
       if (selectedService.kind === "nyxid-chat") {
@@ -1264,8 +1277,7 @@ const ChatPage: React.FC = () => {
         {
           metadata: conversationHeaders,
           prompt: trimmedPrompt,
-          sessionId:
-            selectedService.kind === "nyxid-chat" ? undefined : conversationId,
+          sessionId: conversationId,
         } as Parameters<typeof runtimeRunsApi.streamChat>[1],
         controller.signal,
         {
@@ -1443,10 +1455,13 @@ const ChatPage: React.FC = () => {
       }
 
       const actorId =
-        session.actorId ||
-        conversations.find((conversation) => conversation.id === activeConversationId)
-          ?.actorId ||
-        activeConversationId;
+        resolveConversationRuntimeIdentity({
+          messages,
+          meta: conversations.find(
+            (conversation) => conversation.id === activeConversationId
+          ),
+          session,
+        }).actorId || "";
 
       if (!actorId) {
         const unavailableMessage =
@@ -1489,10 +1504,18 @@ const ChatPage: React.FC = () => {
       const accumulator = createRuntimeEventAccumulator({
         actorId,
       });
+      const approvalRuntimeIdentity = resolveConversationRuntimeIdentity({
+        messages,
+        meta: conversations.find(
+          (conversation) => conversation.id === activeConversationId
+        ),
+        session,
+      });
       accumulator.assistantText = targetMessage.content;
-      accumulator.commandId = session.commandId;
+      accumulator.commandId =
+        approvalRuntimeIdentity.commandId || session.commandId;
       accumulator.events = [...(targetMessage.events ?? [])];
-      accumulator.runId = session.runId;
+      accumulator.runId = approvalRuntimeIdentity.runId || session.runId;
       accumulator.steps = cloneStepInfo(targetMessage.steps);
       accumulator.thinking = targetMessage.thinking ?? "";
       accumulator.toolCalls = cloneToolCallInfo(targetMessage.toolCalls);
@@ -1655,11 +1678,24 @@ const ChatPage: React.FC = () => {
       const conversationId = activeConversationId || createConversationId();
       const actorId =
         intervention.actorId ||
-        session.actorId ||
-        conversations.find((conversation) => conversation.id === conversationId)
-          ?.actorId ||
+        resolveConversationRuntimeIdentity({
+          messages,
+          meta: conversations.find(
+            (conversation) => conversation.id === conversationId
+          ),
+          session,
+        }).actorId ||
         "";
-      const runId = intervention.runId || session.runId;
+      const runId =
+        intervention.runId ||
+        resolveConversationRuntimeIdentity({
+          messages,
+          meta: conversations.find(
+            (conversation) => conversation.id === conversationId
+          ),
+          session,
+        }).runId ||
+        session.runId;
 
       if (intervention.kind === "human_input" && !trimConversationValue(action.value)) {
         return;
@@ -2139,6 +2175,30 @@ const ChatPage: React.FC = () => {
                           ? "Connect a provider and save it to Studio Settings before starting your first NyxID conversation."
                           : "Chat with NyxID about services, credentials, and configuration."
                         : `Invoke the "${selectedService.label}" service with a chat message.`
+                    }
+                    footnote={
+                      selectedService.kind === "nyxid-chat"
+                        ? "Use Tools when you need runtime evidence, timeline context, or low-level event inspection."
+                        : "Open Tools for deeper runtime inspection when a normal chat message is not enough."
+                    }
+                    highlights={
+                      selectedService.kind === "nyxid-chat"
+                        ? settingsQuery.isSuccess && !providerConfigured
+                          ? [
+                              "Connect a provider before starting the first NyxID conversation.",
+                              "Once configured, ask NyxID for help with services, credentials, or runtime setup.",
+                              "Open Tools only when you need audit evidence or protocol-level detail.",
+                            ]
+                          : [
+                              "Ask NyxID to inspect services, credentials, or scope bindings.",
+                              "Use natural-language prompts first, then open Tools for deeper runtime evidence.",
+                              "Keep model and route overrides in the composer footer when you need a specific provider path.",
+                            ]
+                        : [
+                            `Start with a natural-language prompt for ${selectedService.label}.`,
+                            "Use Advanced Console when you need a specific endpoint, actor, or audit trail.",
+                            "Open Event Stream only when you need raw AGUI evidence for debugging.",
+                          ]
                     }
                     onAction={
                       settingsQuery.isSuccess &&

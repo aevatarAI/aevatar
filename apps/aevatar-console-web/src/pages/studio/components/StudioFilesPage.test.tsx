@@ -156,7 +156,6 @@ function createProps(overrides: Record<string, unknown> = {}) {
 
 describe('StudioFilesPage', () => {
   beforeEach(() => {
-    jest.spyOn(window, 'confirm').mockReturnValue(true);
     (studioApi.getWorkflow as jest.Mock).mockResolvedValue({
       workflowId: 'workflow-1',
       name: 'workspace-demo',
@@ -468,13 +467,18 @@ describe('StudioFilesPage', () => {
 
     expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
 
-    (window.confirm as jest.Mock).mockReturnValueOnce(false);
     fireEvent.click(screen.getByRole('button', { name: /workflow-1\.yaml/i }));
 
     expect(screen.queryByText('Read-only in Explorer')).not.toBeInTheDocument();
     expect(
       (screen.getByLabelText('Explorer file editor') as HTMLTextAreaElement).value,
     ).toContain('runtime.changed.test');
+    expect(
+      screen.getByText('You have unsaved Explorer changes'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.queryByText('You have unsaved Explorer changes')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -496,9 +500,12 @@ describe('StudioFilesPage', () => {
 
     await screen.findByLabelText('Explorer chat history preview');
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(
+      screen.getByText('Delete this file from Storage Explorer?'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete now' }));
 
     await waitFor(() => {
-      expect(window.confirm).toHaveBeenCalled();
       expect(explorerApi.deleteFile).toHaveBeenCalledWith(
         'chat-histories/conversation-1.jsonl',
       );

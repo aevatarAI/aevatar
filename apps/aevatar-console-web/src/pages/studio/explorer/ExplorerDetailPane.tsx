@@ -118,6 +118,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
   const [draft, setDraft] = React.useState("");
   const [saveError, setSaveError] = React.useState<string | null>(null);
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [mode, setMode] = React.useState<ExplorerEditorMode>("edit");
@@ -139,6 +140,7 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
   React.useEffect(() => {
     setSaveError(null);
     setDeleteError(null);
+    setConfirmDelete(false);
     setDraft(content ?? "");
     if (selectedEntry?.type === "chat-history") {
       setMode("preview");
@@ -290,32 +292,59 @@ const ExplorerDetailPane: React.FC<ExplorerDetailPaneProps> = ({
                 danger
                 loading={isDeleting}
                 disabled={isSaving || !onDeleteFile}
-                onClick={async () => {
-                  if (!onDeleteFile) {
-                    return;
-                  }
-
-                  if (!window.confirm(`Delete ${selectedEntry.key}? This cannot be undone.`)) {
-                    return;
-                  }
-
+                onClick={() => {
                   setDeleteError(null);
-                  setIsDeleting(true);
-                  try {
-                    await onDeleteFile(selectedEntry.key);
-                  } catch (error) {
-                    setDeleteError(
-                      error instanceof Error ? error.message : "Failed to delete explorer file."
-                    );
-                  } finally {
-                    setIsDeleting(false);
-                  }
+                  setConfirmDelete(true);
                 }}
               >
                 Delete
               </Button>
             </Space>
           </div>
+        ) : null}
+        {confirmDelete ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="Delete this file from Storage Explorer?"
+            description={`${selectedEntry.key} will be removed from storage immediately and cannot be recovered from this view.`}
+            action={
+              <Space wrap size={[8, 8]}>
+                <Button
+                  size="small"
+                  onClick={() => setConfirmDelete(false)}
+                  disabled={isDeleting}
+                >
+                  Keep file
+                </Button>
+                <Button
+                  danger
+                  size="small"
+                  loading={isDeleting}
+                  onClick={async () => {
+                    if (!onDeleteFile) {
+                      return;
+                    }
+
+                    setDeleteError(null);
+                    setIsDeleting(true);
+                    try {
+                      await onDeleteFile(selectedEntry.key);
+                      setConfirmDelete(false);
+                    } catch (error) {
+                      setDeleteError(
+                        error instanceof Error ? error.message : "Failed to delete explorer file."
+                      );
+                    } finally {
+                      setIsDeleting(false);
+                    }
+                  }}
+                >
+                  Delete now
+                </Button>
+              </Space>
+            }
+          />
         ) : null}
         {saveError ? (
           <Alert type="error" showIcon message="Could not save file" description={saveError} />
