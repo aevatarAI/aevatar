@@ -17,13 +17,13 @@ public static class ChannelCallbackEndpoints
     {
         var group = app.MapGroup("/api/channels").WithTags("ChannelRuntime");
 
-        // Platform callback — receives webhooks directly from platforms
+        // Platform callback — receives webhooks directly from platforms (anonymous: platforms call this)
         group.MapPost("/{platform}/callback/{registrationId}", HandleCallbackAsync);
 
-        // Registration CRUD
-        group.MapPost("/registrations", HandleRegisterAsync);
-        group.MapGet("/registrations", HandleListRegistrationsAsync);
-        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync);
+        // Registration CRUD — requires authentication
+        group.MapPost("/registrations", HandleRegisterAsync).RequireAuthorization();
+        group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
+        group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
         return app;
     }
@@ -160,6 +160,7 @@ public static class ChannelCallbackEndpoints
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
         [FromServices] ChannelBotRegistrationStore store,
+        [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -183,6 +184,16 @@ public static class ChannelCallbackEndpoints
             string.IsNullOrWhiteSpace(request.NyxUserToken))
         {
             return Results.BadRequest(new { error = "platform, nyx_provider_slug, and nyx_user_token are required" });
+        }
+
+        // Validate platform has a registered adapter
+        var platformNormalized = request.Platform.Trim().ToLowerInvariant();
+        var hasAdapter = adapters.Any(a =>
+            string.Equals(a.Platform, platformNormalized, StringComparison.OrdinalIgnoreCase));
+        if (!hasAdapter)
+        {
+            var supported = string.Join(", ", adapters.Select(a => a.Platform));
+            return Results.BadRequest(new { error = $"Unsupported platform: '{platformNormalized}'. Supported: {supported}" });
         }
 
         // Build callback URL for webhook configuration

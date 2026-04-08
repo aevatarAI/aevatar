@@ -50,16 +50,25 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ? State.NyxidAccessToken
             : null;
         var orgToken = evt.RegistrationToken;
-        // Primary token: user's own if bound, otherwise org's
+        // Primary token for LLM/tool calls: user's own if bound, otherwise org's
         var effectiveToken = userToken ?? orgToken;
 
-        // 3. Get or create chat actor (per sender)
+        // 3. Dispatch to chat actor and send reply
+        await DispatchChatAndReplyAsync(evt, effectiveToken, orgToken);
+    }
+
+    // ─── Chat dispatch + reply ───
+
+    private async Task DispatchChatAndReplyAsync(
+        ChannelInboundEvent evt, string effectiveToken, string orgToken)
+    {
+        // Get or create chat actor (per sender)
         var chatActorId = $"channel-{evt.Platform}-{evt.RegistrationId}-{evt.SenderId}";
         var actorRuntime = Services.GetRequiredService<IActorRuntime>();
         var chatActor = await actorRuntime.GetAsync(chatActorId)
                         ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(chatActorId);
 
-        // 4. Build and dispatch ChatRequestEvent
+        // Build and dispatch ChatRequestEvent
         var sessionId = Guid.NewGuid().ToString("N");
         var chatRequest = new ChatRequestEvent
         {
@@ -68,7 +77,6 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ScopeId = evt.RegistrationScopeId,
         };
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken;
-        // Always pass org token so proxy tool can fallback for org-level services
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = orgToken;
         chatRequest.Metadata["scope_id"] = evt.RegistrationScopeId;
         chatRequest.Metadata["channel.platform"] = evt.Platform;
@@ -78,7 +86,16 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         chatRequest.Metadata["channel.chat_type"] = evt.ChatType;
         chatRequest.Metadata["channel.user_actor_id"] = Id;
 
-        // 5. Subscribe to response stream
+        // Subscribe to response stream and wait
+        var replyText = await CollectChatResponseAsync(chatActor, chatRequest, sessionId);
+
+        // Send reply via platform adapter — always uses org token for bot API
+        await SendReplyAsync(evt, replyText, orgToken);
+    }
+
+    private async Task<string> CollectChatResponseAsync(
+        IActor chatActor, ChatRequestEvent chatRequest, string sessionId)
+    {
         var subscriptionProvider = Services.GetRequiredService<IActorEventSubscriptionProvider>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
 
@@ -123,32 +140,33 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         await chatActor.HandleEventAsync(chatEnvelope, cts.Token);
 
-        // 6. Wait for response
+        // Wait for response
         var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(120_000, cts.Token));
 
-        string replyText;
         if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
         {
-            replyText = responseTcs.Task.Result;
+            var text = responseTcs.Task.Result;
             Logger.LogInformation(
-                "Channel response ready: platform={Platform}, sender={SenderId}, length={Length}",
-                evt.Platform, evt.SenderId, replyText.Length);
-        }
-        else
-        {
-            var partial = responseBuilder.ToString();
-            replyText = partial.Length > 0
-                ? partial
-                : "Sorry, it's taking too long to respond. Please try again.";
-            Logger.LogWarning(
-                "Channel response timed out: platform={Platform}, sender={SenderId}",
-                evt.Platform, evt.SenderId);
+                "Channel response ready: platform={Platform}, length={Length}",
+                chatRequest.Metadata["channel.platform"], text.Length);
+            return text;
         }
 
+        var partial = responseBuilder.ToString();
+        Logger.LogWarning(
+            "Channel response timed out: platform={Platform}",
+            chatRequest.Metadata["channel.platform"]);
+        return partial.Length > 0
+            ? partial
+            : "Sorry, it's taking too long to respond. Please try again.";
+    }
+
+    private async Task SendReplyAsync(
+        ChannelInboundEvent evt, string replyText, string orgToken)
+    {
         if (string.IsNullOrWhiteSpace(replyText))
             replyText = "Sorry, I wasn't able to generate a response. Please try again.";
 
-        // 7. Send reply via platform adapter
         var adapters = Services.GetRequiredService<IEnumerable<IPlatformAdapter>>();
         var adapter = adapters.FirstOrDefault(a =>
             string.Equals(a.Platform, evt.Platform, StringComparison.OrdinalIgnoreCase));
@@ -171,16 +189,18 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ChatType = evt.ChatType,
         };
 
-        // Reconstruct a minimal registration entry for the adapter's SendReply
+        // Reply via bot API — always uses org token, not user's personal token.
+        // The bot credentials (api-telegram-bot, api-lark-bot) belong to the org.
         var registration = new ChannelBotRegistrationEntry
         {
             Id = evt.RegistrationId,
             Platform = evt.Platform,
             NyxProviderSlug = evt.NyxProviderSlug,
-            NyxUserToken = effectiveToken,
+            NyxUserToken = orgToken,
             ScopeId = evt.RegistrationScopeId,
         };
 
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
     }
 
