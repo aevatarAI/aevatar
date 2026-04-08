@@ -2,7 +2,27 @@
 
 import { getAccessToken } from './auth/nyxid';
 
-const BASE = '/api';
+let BASE = '/api';
+
+async function resolveBaseUrl(): Promise<string> {
+  if (typeof window === 'undefined') return BASE;
+  const api = (window as any).electronAPI;
+  if (api?.getApiUrl) {
+    try {
+      const url = await api.getApiUrl();
+      if (url) BASE = url;
+    } catch { /* fall back to /api for web mode */ }
+  }
+  return BASE;
+}
+
+/** Return the current API base URL (synchronous — returns cached value). */
+export function getApiBase(): string {
+  return BASE;
+}
+
+// Resolve once at module load for Electron
+resolveBaseUrl();
 const AUTH_REQUIRED_EVENT = 'aevatar:auth-required';
 const CHRONO_STORAGE_SERVICE_ERROR_CODE = 'chrono_storage_service_unavailable';
 const CHRONO_STORAGE_SERVICE_DEPENDENCY = 'chrono-storage-service';

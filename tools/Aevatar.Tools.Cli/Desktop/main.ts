@@ -113,15 +113,14 @@ function startAuthServer(): Promise<string> {
       }, 1000);
     });
 
-    const AUTH_PORT = 17218;
-    server.listen(AUTH_PORT, '127.0.0.1', () => {
+    server.listen(0, '127.0.0.1', () => {
       const addr = server.address();
       if (!addr || typeof addr === 'string') {
         reject(new Error('Failed to start auth server'));
         return;
       }
       authServer = server;
-      authRedirectUri = `http://localhost:${addr.port}/auth/callback`;
+      authRedirectUri = `http://127.0.0.1:${addr.port}/auth/callback`;
       resolve(authRedirectUri);
     });
 

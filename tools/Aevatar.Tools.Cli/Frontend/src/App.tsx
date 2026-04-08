@@ -1051,7 +1051,7 @@ function App() {
 
     // In Electron, listen for OAuth callback from the loopback server
     const cleanup = nyxid.setupElectronAuthListener(
-      ({ session: oauthSession, returnTo }) => {
+      ({ session: oauthSession }) => {
         setAuthSession({
           loading: false,
           enabled: true,
@@ -1595,7 +1595,7 @@ function App() {
 
       const runtimeConfig = resolveUserRuntimeConfig(userConfigData);
       const nextRuntime = runtimeConfig.activeRuntimeUrl;
-      fetch('/api/_proxy/runtime-url', {
+      fetch(`${api.getApiBase()}/_proxy/runtime-url`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runtimeBaseUrl: nextRuntime }),
@@ -2781,7 +2781,7 @@ function App() {
       await userConfigSaveAll;
 
       // Update the local proxy target so subsequent requests go to the new URL
-      await fetch('/api/_proxy/runtime-url', {
+      await fetch(`${api.getApiBase()}/_proxy/runtime-url`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runtimeBaseUrl: activeRuntimeUrl }),
