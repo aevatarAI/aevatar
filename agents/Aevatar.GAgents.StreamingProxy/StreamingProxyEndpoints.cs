@@ -309,17 +309,26 @@ public static class StreamingProxyEndpoints
 
     // ─── Participant management ───
 
-    // TODO: participant snapshot query requires an actor-scoped current-state readmodel
-    // projected from committed GroupChatParticipantJoined/Left events. The authoritative
-    // state lives in StreamingProxyGAgentState; direct actor state reads violate read/write
-    // separation. Real-time participant changes are visible via the SSE stream.
-    private static Task<IResult> HandleListParticipantsAsync(
+    private static async Task<IResult> HandleListParticipantsAsync(
         HttpContext http,
         string scopeId,
         string roomId,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
-        return Task.FromResult<IResult>(Results.Ok(Array.Empty<object>()));
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        try
+        {
+            var participants = await participantStore.ListAsync(roomId, ct);
+            return Results.Ok(participants);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to list participants for room {RoomId}", roomId);
+            return Results.Ok(Array.Empty<object>());
+        }
     }
 
     private static async Task<IResult> HandleJoinAsync(
@@ -328,6 +337,8 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.AgentId))
@@ -354,6 +365,17 @@ public static class StreamingProxyEndpoints
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
         };
         await actor.HandleEventAsync(envelope, ct);
+
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
+        try
+        {
+            await participantStore.AddAsync(roomId, agentId, displayName, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to persist participant {AgentId} in room {RoomId}", agentId, roomId);
+        }
 
         return Results.Ok(new { status = "joined", agentId });
     }

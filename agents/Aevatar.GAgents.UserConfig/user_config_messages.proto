@@ -1,0 +1,33 @@
+syntax = "proto3";
+package aevatar.gagents.user_config;
+option csharp_namespace = "Aevatar.GAgents.UserConfig";
+
+// ─── State ───
+
+message UserConfigGAgentState {
+  string default_model = 1;
+  string preferred_llm_route = 2;
+  string runtime_mode = 3;
+  string local_runtime_base_url = 4;
+  string remote_runtime_base_url = 5;
+  int32 max_tool_rounds = 6;
+}
+
+// ─── Events ───
+
+message UserConfigUpdatedEvent {
+  string default_model = 1;
+  string preferred_llm_route = 2;
+  string runtime_mode = 3;
+  string local_runtime_base_url = 4;
+  string remote_runtime_base_url = 5;
+  int32 max_tool_rounds = 6;
+}
+
+// ─── Readmodel ───
+
+// Published by the GAgent after each state change so subscribers can
+// maintain an up-to-date readmodel without reading write-model state.
+message UserConfigStateSnapshotEvent {
+  UserConfigGAgentState snapshot = 1;
+}

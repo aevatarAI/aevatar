@@ -1,0 +1,39 @@
+syntax = "proto3";
+package aevatar.gagents.user_memory;
+option csharp_namespace = "Aevatar.GAgents.UserMemory";
+
+// ─── State ───
+
+message UserMemoryEntryProto {
+  string id = 1;
+  string category = 2;
+  string content = 3;
+  string source = 4;
+  int64 created_at = 5;
+  int64 updated_at = 6;
+}
+
+message UserMemoryState {
+  repeated UserMemoryEntryProto entries = 1;
+}
+
+// ─── Events ───
+
+message MemoryEntryAddedEvent {
+  UserMemoryEntryProto entry = 1;
+}
+
+message MemoryEntryRemovedEvent {
+  string entry_id = 1;
+}
+
+message MemoryEntriesClearedEvent {
+}
+
+// ─── Readmodel ───
+
+// Published by the GAgent after each state change so subscribers can
+// maintain an up-to-date readmodel without reading write-model state.
+message UserMemoryStateSnapshotEvent {
+  UserMemoryState snapshot = 1;
+}

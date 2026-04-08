@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.Middleware;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Domain.Studio.Compatibility;
 using Aevatar.Studio.Domain.Studio.Services;
+using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.Middleware;
 using Aevatar.Studio.Infrastructure.Serialization;
 using Aevatar.Studio.Infrastructure.Storage;
@@ -27,19 +28,21 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IStudioWorkspaceStore>(sp => sp.GetRequiredService<FileStudioWorkspaceStore>());
         services.AddSingleton<IConnectorCatalogImportParser, ConnectorCatalogImportParser>();
         services.AddSingleton<IRoleCatalogImportParser, RoleCatalogImportParser>();
+        // chrono-storage blob client retained for media file uploads (ExplorerEndpoints)
         services.AddSingleton<ChronoStorageCatalogBlobClient>();
-        services.AddSingleton<IConnectorCatalogStore, ChronoStorageConnectorCatalogStore>();
-        services.AddSingleton<IRoleCatalogStore, ChronoStorageRoleCatalogStore>();
-        services.AddSingleton<IUserConfigStore, ChronoStorageUserConfigStore>();
-        services.AddSingleton<INyxIdUserLlmPreferencesStore, ChronoStorageNyxIdUserLlmPreferencesStore>();
-        services.AddSingleton<IUserMemoryStore, ChronoStorageUserMemoryStore>();
+        // ── Actor-backed stores (replacing ChronoStorage* implementations) ──
+        services.AddSingleton<IGAgentActorStore, ActorBackedGAgentActorStore>();
+        services.AddSingleton<IStreamingProxyParticipantStore, ActorBackedStreamingProxyParticipantStore>();
+        services.AddSingleton<IUserConfigStore, ActorBackedUserConfigStore>();
+        services.AddSingleton<INyxIdUserLlmPreferencesStore, ActorBackedNyxIdUserLlmPreferencesStore>();
+        services.AddSingleton<IUserMemoryStore, ActorBackedUserMemoryStore>();
+        services.AddSingleton<IConnectorCatalogStore, ActorBackedConnectorCatalogStore>();
+        services.AddSingleton<IRoleCatalogStore, ActorBackedRoleCatalogStore>();
+        services.AddSingleton<IChatHistoryStore, ActorBackedChatHistoryStore>();
+        services.AddSingleton<IWorkflowStoragePort, ActorBackedWorkflowStoragePort>();
+        services.AddSingleton<IScriptStoragePort, ActorBackedScriptStoragePort>();
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
-        services.AddSingleton<IGAgentActorStore, ChronoStorageGAgentActorStore>();
-        services.AddSingleton<IStreamingProxyParticipantStore, ChronoStorageStreamingProxyParticipantStore>();
-        services.AddSingleton<IChatHistoryStore, ChronoStorageChatHistoryStore>();
-        services.AddSingleton<IWorkflowStoragePort, ChronoStorageWorkflowStoragePort>();
-        services.AddSingleton<IScriptStoragePort, ChronoStorageScriptStoragePort>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }

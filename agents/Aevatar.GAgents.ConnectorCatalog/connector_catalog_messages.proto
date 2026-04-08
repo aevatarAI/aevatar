@@ -1,0 +1,38 @@
+syntax = "proto3";
+package aevatar.gagents.connector_catalog;
+option csharp_namespace = "Aevatar.GAgents.ConnectorCatalog";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+// Actor state persists catalog and draft as JSON strings.
+// The complex nested connector types (StoredConnectorDefinition, etc.)
+// are serialized/deserialized at the ActorBackedStore boundary.
+message ConnectorCatalogState {
+  string catalog_json = 1;
+  string draft_json = 2;
+  google.protobuf.Timestamp draft_updated_at_utc = 3;
+}
+
+// ─── Events ───
+
+message ConnectorCatalogSavedEvent {
+  string catalog_json = 1;
+}
+
+message ConnectorDraftSavedEvent {
+  string draft_json = 1;
+  google.protobuf.Timestamp updated_at_utc = 2;
+}
+
+message ConnectorDraftDeletedEvent {
+}
+
+// ─── Readmodel ───
+
+// Published by the GAgent after each state change so subscribers can
+// maintain an up-to-date readmodel without reading write-model state.
+message ConnectorCatalogStateSnapshotEvent {
+  ConnectorCatalogState snapshot = 1;
+}

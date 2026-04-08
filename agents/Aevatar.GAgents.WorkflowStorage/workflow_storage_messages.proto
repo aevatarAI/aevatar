@@ -1,0 +1,31 @@
+syntax = "proto3";
+package aevatar.gagents.workflow_storage;
+option csharp_namespace = "Aevatar.GAgents.WorkflowStorage";
+
+// ─── State ───
+
+message WorkflowEntry {
+  string workflow_name = 1;
+  string yaml = 2;
+}
+
+message WorkflowStorageState {
+  // workflowId → (name, yaml)
+  map<string, WorkflowEntry> workflows = 1;
+}
+
+// ─── Events ───
+
+message WorkflowYamlUploadedEvent {
+  string workflow_id = 1;
+  string workflow_name = 2;
+  string yaml = 3;
+}
+
+// ─── Readmodel ───
+
+// Published by the GAgent after each state change so subscribers can
+// maintain an up-to-date readmodel without reading write-model state.
+message WorkflowStorageStateSnapshotEvent {
+  WorkflowStorageState snapshot = 1;
+}

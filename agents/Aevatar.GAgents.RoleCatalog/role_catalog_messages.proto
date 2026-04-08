@@ -1,0 +1,47 @@
+syntax = "proto3";
+package aevatar.gagents.role_catalog;
+option csharp_namespace = "Aevatar.GAgents.RoleCatalog";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── State ───
+
+message RoleDefinitionEntry {
+  string id = 1;
+  string name = 2;
+  string system_prompt = 3;
+  string provider = 4;
+  string model = 5;
+  repeated string connectors = 6;
+}
+
+message RoleDraftEntry {
+  RoleDefinitionEntry draft = 1;
+  google.protobuf.Timestamp updated_at_utc = 2;
+}
+
+message RoleCatalogState {
+  repeated RoleDefinitionEntry roles = 1;
+  RoleDraftEntry draft = 2;  // null when no draft exists
+}
+
+// ─── Events ───
+
+message RoleCatalogSavedEvent {
+  repeated RoleDefinitionEntry roles = 1;
+}
+
+message RoleDraftSavedEvent {
+  RoleDefinitionEntry draft = 1;
+  google.protobuf.Timestamp updated_at_utc = 2;
+}
+
+message RoleDraftDeletedEvent {}
+
+// ─── Readmodel ───
+
+// Published by the GAgent after each state change so subscribers can
+// maintain an up-to-date readmodel without reading write-model state.
+message RoleCatalogStateSnapshotEvent {
+  RoleCatalogState snapshot = 1;
+}

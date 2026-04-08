@@ -1,0 +1,34 @@
+syntax = "proto3";
+package aevatar.gagents.registry;
+option csharp_namespace = "Aevatar.GAgents.Registry";
+
+// ─── State ───
+
+message GAgentRegistryEntry {
+  string gagent_type = 1;
+  repeated string actor_ids = 2;
+}
+
+message GAgentRegistryState {
+  repeated GAgentRegistryEntry groups = 1;
+}
+
+// ─── Events ───
+
+message ActorRegisteredEvent {
+  string gagent_type = 1;
+  string actor_id = 2;
+}
+
+message ActorUnregisteredEvent {
+  string gagent_type = 1;
+  string actor_id = 2;
+}
+
+// ─── Readmodel ───
+
+// Published by the GAgent after each state change so subscribers can
+// maintain an up-to-date readmodel without reading write-model state.
+message GAgentRegistryStateSnapshotEvent {
+  GAgentRegistryState snapshot = 1;
+}

@@ -2,7 +2,16 @@
   <Folder Name="/agents/">
     <Project Path="agents\Aevatar.GAgents.NyxidChat\Aevatar.GAgents.NyxidChat.csproj" />
     <Project Path="agents\Aevatar.GAgents.StreamingProxy\Aevatar.GAgents.StreamingProxy.csproj" />
+    <Project Path="agents/Aevatar.GAgents.Registry/Aevatar.GAgents.Registry.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ConnectorCatalog/Aevatar.GAgents.ConnectorCatalog.csproj" />
+    <Project Path="agents/Aevatar.GAgents.RoleCatalog/Aevatar.GAgents.RoleCatalog.csproj" />
+    <Project Path="agents/Aevatar.GAgents.ScriptStorage/Aevatar.GAgents.ScriptStorage.csproj" />
+    <Project Path="agents/Aevatar.GAgents.WorkflowStorage/Aevatar.GAgents.WorkflowStorage.csproj" />
+    <Project Path="agents/Aevatar.GAgents.StreamingProxyParticipant/Aevatar.GAgents.StreamingProxyParticipant.csproj" />
+    <Project Path="agents/Aevatar.GAgents.UserConfig/Aevatar.GAgents.UserConfig.csproj" />
+    <Project Path="agents/Aevatar.GAgents.UserMemory/Aevatar.GAgents.UserMemory.csproj" />
     <Project Path="agents\Aevatar.GAgents.ChatbotClassifier\Aevatar.GAgents.ChatbotClassifier.csproj" />
+    <Project Path="agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
   </Folder>
   <Folder Name="/demos/">
     <Project Path="demos\Aevatar.Demos.Cli\Aevatar.Demos.Cli.csproj" />
