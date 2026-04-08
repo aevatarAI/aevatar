@@ -927,6 +927,45 @@ describe("ChatPage", () => {
     expect(screen.queryByText("sk-test-secret-key")).toBeNull();
   });
 
+  it("keeps the onboarding composer available for typed replies", async () => {
+    (studioApi.getSettings as jest.Mock).mockResolvedValueOnce({
+      defaultProviderName: "",
+      providerTypes: [
+        {
+          category: "llm",
+          defaultEndpoint: "https://api.openai.com/v1",
+          defaultModel: "gpt-5.4-mini",
+          description: "OpenAI platform",
+          displayName: "OpenAI",
+          id: "openai",
+          recommended: true,
+        },
+      ],
+      providers: [],
+      runtimeBaseUrl: "https://runtime.example.test",
+    });
+
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    fireEvent.click(await screen.findByLabelText("Chat service"));
+    fireEvent.click(await screen.findByRole("option", { name: /Onboarding/i }));
+
+    const onboardingInput = await screen.findByPlaceholderText(
+      "Reply with a provider number, like 1."
+    );
+    fireEvent.change(onboardingInput, {
+      target: { value: "1" },
+    });
+    fireEvent.click(await screen.findByLabelText("Send"));
+
+    expect(
+      await screen.findByText(/Choose how to connect the provider/i)
+    ).toBeTruthy();
+    expect(
+      await screen.findByPlaceholderText("Reply with 1 for default or 2 for custom.")
+    ).toBeTruthy();
+  });
+
   it("shows a start onboarding action in the NyxID Chat empty state", async () => {
     window.history.pushState({}, "", "/chat?serviceId=nyxid-chat");
     (studioApi.getSettings as jest.Mock).mockResolvedValueOnce({

@@ -579,9 +579,7 @@ describe('ScopeInvokePage', () => {
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello service' },
     });
@@ -669,9 +667,7 @@ describe('ScopeInvokePage', () => {
       screen.queryByText('No published project service is selected yet.'),
     ).toBeNull();
 
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello nyxid' },
     });
@@ -810,9 +806,7 @@ describe('ScopeInvokePage', () => {
         namespace: 'default',
       });
     });
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello service' },
     });

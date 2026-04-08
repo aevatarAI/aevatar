@@ -71,6 +71,7 @@ import {
   buildOnboardingSuccessPrompt,
   createOnboardingProviderSettings,
   createOnboardingServiceOption,
+  getOnboardingComposerPlaceholder,
   hasConfiguredProviders,
   isValidOnboardingEndpoint,
   onboardingServiceId,
@@ -1975,6 +1976,14 @@ const ChatPage: React.FC = () => {
 
   const isLoadingScope =
     authSessionQuery.isLoading || (scopeId.length > 0 && servicesQuery.isLoading);
+  const isOnboardingSelected = selectedService?.kind === "onboarding";
+  const composerDisabled =
+    !scopeId ||
+    !selectedService ||
+    (isOnboardingSelected && onboardingState?.step === "creating");
+  const composerPlaceholder = isOnboardingSelected
+    ? getOnboardingComposerPlaceholder(onboardingState)
+    : undefined;
 
   return (
     <AevatarPageShell pageHeaderRender={false} title="Chat">
@@ -2250,19 +2259,19 @@ const ChatPage: React.FC = () => {
               </div>
             ) : null}
 
-            {selectedService?.kind === "onboarding" ? null : (
-              <div
-                style={{
-                  background: "#ffffff",
-                  borderTop: "1px solid #e7e5e4",
-                  flexShrink: 0,
-                  padding: "14px 20px",
-                }}
-              >
-                <div style={{ margin: "0 auto", maxWidth: 840 }}>
-                  <ChatInput
-                    disabled={!scopeId || !selectedService}
-                    footer={
+            <div
+              style={{
+                background: "#ffffff",
+                borderTop: "1px solid #e7e5e4",
+                flexShrink: 0,
+                padding: "14px 20px",
+              }}
+            >
+              <div style={{ margin: "0 auto", maxWidth: 840 }}>
+                <ChatInput
+                  disabled={composerDisabled}
+                  footer={
+                    isOnboardingSelected ? undefined : (
                       <ConversationLlmConfigBar
                         disabled={isStreaming || !scopeId || !selectedService}
                         effectiveModel={effectiveModel}
@@ -2280,13 +2289,16 @@ const ChatPage: React.FC = () => {
                         routeOptions={routeOptions}
                         routeValue={conversationRoute}
                       />
-                    }
-                    isStreaming={isStreaming}
-                    onChange={setPrompt}
-                    onSend={() => void handleSend()}
-                    onStop={handleStop}
-                    value={prompt}
-                  />
+                    )
+                  }
+                  isStreaming={isOnboardingSelected ? false : isStreaming}
+                  onChange={setPrompt}
+                  onSend={() => void handleSend()}
+                  onStop={handleStop}
+                  placeholder={composerPlaceholder}
+                  value={prompt}
+                />
+                {isOnboardingSelected ? null : (
                   <ChatMetaStrip
                     actorId={session.actorId}
                     commandId={session.commandId}
@@ -2296,9 +2308,9 @@ const ChatPage: React.FC = () => {
                     scopeId={scopeId}
                     serviceId={selectedService?.id}
                   />
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
