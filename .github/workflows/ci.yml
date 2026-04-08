@@ -34,6 +34,7 @@ jobs:
       projection_provider: ${{ steps.filter.outputs.projection_provider }}
       kafka_runtime: ${{ steps.filter.outputs.kafka_runtime }}
       event_sourcing: ${{ steps.filter.outputs.event_sourcing }}
+      console_web: ${{ steps.filter.outputs.console_web }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,6 +84,9 @@ jobs:
               - 'tools/ci/orleans_garnet_persistence_smoke.sh'
               - 'tools/ci/architecture_guards.sh'
               - '.github/workflows/ci.yml'
+            console_web:
+              - 'apps/aevatar-console-web/**'
+              - '.github/workflows/ci.yml'
 
   fast-gates:
     if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.core_code == 'true')
@@ -109,6 +113,44 @@ jobs:
 
       - name: Test Stability Guards
         run: bash tools/ci/test_stability_guards.sh
+
+  console-web:
+    if: |
+      github.event_name != 'schedule' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) ||
+        needs.changes.outputs.console_web == 'true'
+      )
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.2.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/aevatar-console-web/pnpm-lock.yaml
+
+      - name: Install console-web dependencies
+        run: pnpm --dir apps/aevatar-console-web install --frozen-lockfile
+
+      - name: Type-check console-web
+        run: pnpm --dir apps/aevatar-console-web tsc
+
+      - name: Test console-web
+        run: pnpm --dir apps/aevatar-console-web test --runInBand
+
+      - name: Build console-web
+        run: pnpm --dir apps/aevatar-console-web build
 
   split-test-guards:
     if: |

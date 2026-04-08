@@ -385,18 +385,54 @@ public sealed class ToolCallLoop
 
             var root = doc.RootElement;
             var imageBase64 =
-                TryGetStringByKeys(root, "image_base64", "imageBase64", "base64", "data") ??
-                TryGetNestedImageBase64(root);
-            if (string.IsNullOrWhiteSpace(imageBase64))
+                TryGetStringByKeys(root, "image_base64", "imageBase64") ??
+                TryGetNestedMediaBase64(root, "image", "image_base64", "imageBase64");
+            var audioBase64 =
+                TryGetStringByKeys(root, "audio_base64", "audioBase64") ??
+                TryGetNestedMediaBase64(root, "audio", "audio_base64", "audioBase64");
+            var videoBase64 =
+                TryGetStringByKeys(root, "video_base64", "videoBase64") ??
+                TryGetNestedMediaBase64(root, "video", "video_base64", "videoBase64");
+
+            if (string.IsNullOrWhiteSpace(imageBase64) &&
+                string.IsNullOrWhiteSpace(audioBase64) &&
+                string.IsNullOrWhiteSpace(videoBase64))
+            {
+                imageBase64 = TryGetStringByKeys(root, "base64", "data");
+            }
+
+            var kind = ResolveMediaKind(imageBase64, audioBase64, videoBase64);
+            var dataBase64 = kind switch
+            {
+                ContentPartKind.Image => imageBase64,
+                ContentPartKind.Audio => audioBase64,
+                ContentPartKind.Video => videoBase64,
+                _ => null,
+            };
+
+            if (string.IsNullOrWhiteSpace(dataBase64))
                 return false;
 
             var mediaType =
-                TryGetStringByKeys(root, "image_media_type", "imageMediaType", "mime_type", "mimeType", "media_type", "mediaType", "content_type") ??
-                TryGetNestedImageMediaType(root) ??
-                "image/png";
+                TryGetStringByKeys(
+                    root,
+                    kind switch
+                    {
+                        ContentPartKind.Image => "image_media_type",
+                        ContentPartKind.Audio => "audio_media_type",
+                        ContentPartKind.Video => "video_media_type",
+                        _ => "media_type",
+                    },
+                    "mime_type",
+                    "mimeType",
+                    "media_type",
+                    "mediaType",
+                    "content_type") ??
+                TryGetNestedMediaType(root, kind) ??
+                DefaultMediaType(kind);
 
             // Accept data-uri output and normalize into raw base64 + media type.
-            var normalizedBase64 = imageBase64!.Trim();
+            var normalizedBase64 = dataBase64!.Trim();
             if (normalizedBase64.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
                 var commaIndex = normalizedBase64.IndexOf(',');
@@ -413,11 +449,16 @@ public sealed class ToolCallLoop
 
             text =
                 TryGetStringByKeys(root, "text", "description", "summary", "observation", "message") ??
-                "[tool image output]";
+                kind switch
+                {
+                    ContentPartKind.Audio => "[tool audio output]",
+                    ContentPartKind.Video => "[tool video output]",
+                    _ => "[tool image output]",
+                };
             contentParts =
             [
                 ContentPart.TextPart(text),
-                ContentPart.ImagePart(normalizedBase64, mediaType),
+                CreateMediaPart(kind, normalizedBase64, mediaType),
             ];
             return true;
         }
@@ -427,18 +468,30 @@ public sealed class ToolCallLoop
         }
     }
 
-    private static string? TryGetNestedImageBase64(JsonElement root)
+    private static string? TryGetNestedMediaBase64(JsonElement root, string propertyName, params string[] legacyAliasKeys)
     {
-        if (!root.TryGetProperty("image", out var image) || image.ValueKind != JsonValueKind.Object)
+        if (!root.TryGetProperty(propertyName, out var media) || media.ValueKind != JsonValueKind.Object)
             return null;
-        return TryGetStringByKeys(image, "base64", "image_base64", "data");
+
+        var keys = new List<string>(legacyAliasKeys.Length + 2);
+        keys.AddRange(legacyAliasKeys);
+        keys.Add("base64");
+        keys.Add("data");
+        return TryGetStringByKeys(media, [.. keys]);
     }
 
-    private static string? TryGetNestedImageMediaType(JsonElement root)
+    private static string? TryGetNestedMediaType(JsonElement root, ContentPartKind kind)
     {
-        if (!root.TryGetProperty("image", out var image) || image.ValueKind != JsonValueKind.Object)
+        var propertyName = kind switch
+        {
+            ContentPartKind.Audio => "audio",
+            ContentPartKind.Video => "video",
+            _ => "image",
+        };
+
+        if (!root.TryGetProperty(propertyName, out var media) || media.ValueKind != JsonValueKind.Object)
             return null;
-        return TryGetStringByKeys(image, "media_type", "mime_type", "mediaType", "mimeType", "content_type");
+        return TryGetStringByKeys(media, "media_type", "mime_type", "mediaType", "mimeType", "content_type");
     }
 
     private static string? TryGetStringByKeys(JsonElement element, params string[] keys)
@@ -459,6 +512,43 @@ public sealed class ToolCallLoop
         }
 
         return null;
+    }
+
+    private static ContentPartKind ResolveMediaKind(string? imageBase64, string? audioBase64, string? videoBase64)
+    {
+        if (!string.IsNullOrWhiteSpace(imageBase64))
+            return ContentPartKind.Image;
+        if (!string.IsNullOrWhiteSpace(audioBase64))
+            return ContentPartKind.Audio;
+        if (!string.IsNullOrWhiteSpace(videoBase64))
+            return ContentPartKind.Video;
+        return ContentPartKind.Unspecified;
+    }
+
+    private static string DefaultMediaType(ContentPartKind kind) =>
+        kind switch
+        {
+            ContentPartKind.Audio => "audio/wav",
+            ContentPartKind.Video => "video/mp4",
+            _ => "image/png",
+        };
+
+    private static ContentPart CreateMediaPart(ContentPartKind kind, string dataBase64, string mediaType) =>
+        kind switch
+        {
+            ContentPartKind.Audio => ContentPart.AudioPart(dataBase64, mediaType),
+            ContentPartKind.Video => ContentPart.VideoPart(dataBase64, mediaType),
+            _ => ContentPart.ImagePart(dataBase64, mediaType),
+        };
+
+    private sealed class NullAgentTool(string name) : IAgentTool
+    {
+        public string Name => name;
+        public string Description => "";
+        public string ParametersSchema => "{}";
+        public ToolApprovalMode ApprovalMode => ToolApprovalMode.NeverRequire;
+        public Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default) =>
+            Task.FromResult("{}");
     }
 
     private async Task ExecuteToolCallsCoreAsync(

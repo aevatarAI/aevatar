@@ -828,4 +828,91 @@ public class AIComponentCoverageTests
         field.Should().NotBeNull($"Field {fieldName} should exist on {target.GetType().Name}");
         return (T)field!.GetValue(target)!;
     }
+
+    /// <summary>
+    /// End-to-end test: verifies that tool names survive the full serialization
+    /// pipeline from IAgentTool → AgentToolAIFunction → MEAI OpenAIChatClient → HTTP JSON body.
+    /// Captures the actual HTTP request body that would be sent to the OpenAI API.
+    /// This catches the exact bug: "Missing required parameter: tools[0].name".
+    /// </summary>
+    [Fact]
+    public async Task AgentToolAIFunction_ShouldSerializeToolNameInOpenAIWireFormat()
+    {
+        string? capturedRequestBody = null;
+
+        // Create a mock HTTP transport that captures the request body
+        var handler = new CapturingHttpHandler(request =>
+        {
+            capturedRequestBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            // Return a minimal valid streaming response so the SDK doesn't throw
+            var responseContent = "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"test\"," +
+                                  "\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseContent, System.Text.Encoding.UTF8, "text/event-stream"),
+            };
+            return Task.FromResult(response);
+        });
+
+        // Build the same pipeline as NyxIdLLMProvider: OpenAIClient → IChatClient → MEAILLMProvider
+        var clientOptions = new OpenAI.OpenAIClientOptions
+        {
+            Endpoint = new Uri("https://test.example.com/v1/"),
+            Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(new HttpClient(handler)),
+        };
+        var openAiClient = new OpenAI.OpenAIClient(
+            new System.ClientModel.ApiKeyCredential("test-key"), clientOptions);
+        var chatClient = openAiClient.GetChatClient("gpt-5.4").AsIChatClient();
+        var provider = new MEAILLMProvider("test", chatClient);
+
+        var tools = new IAgentTool[]
+        {
+            new StubTool("nyxid_services"),
+            new StubTool("web_search"),
+        };
+
+        // Stream through the full pipeline
+        await foreach (var _ in provider.ChatStreamAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+            Tools = tools,
+        }))
+        { }
+
+        // Verify the captured HTTP body contains tool names
+        capturedRequestBody.Should().NotBeNullOrWhiteSpace("request body must be captured");
+
+        using var doc = System.Text.Json.JsonDocument.Parse(capturedRequestBody!);
+        var root = doc.RootElement;
+
+        root.TryGetProperty("tools", out var toolsArray).Should().BeTrue("request must contain 'tools' array");
+        toolsArray.GetArrayLength().Should().Be(2);
+
+        for (var i = 0; i < toolsArray.GetArrayLength(); i++)
+        {
+            var toolElement = toolsArray[i];
+            toolElement.TryGetProperty("function", out var function).Should().BeTrue(
+                $"tools[{i}] must have 'function' property");
+            function.TryGetProperty("name", out var nameElement).Should().BeTrue(
+                $"tools[{i}].function must have 'name' property — " +
+                $"this is the exact field the OpenAI API rejects as missing");
+            nameElement.GetString().Should().NotBeNullOrWhiteSpace(
+                $"tools[{i}].function.name must be non-empty");
+        }
+
+        // Verify specific names
+        var toolNames = Enumerable.Range(0, toolsArray.GetArrayLength())
+            .Select(i => toolsArray[i].GetProperty("function").GetProperty("name").GetString())
+            .ToList();
+        toolNames.Should().ContainInOrder("nyxid_services", "web_search");
+    }
+
+    private sealed class CapturingHttpHandler(
+        Func<HttpRequestMessage, Task<HttpResponseMessage>> onSend) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            onSend(request);
+    }
 }

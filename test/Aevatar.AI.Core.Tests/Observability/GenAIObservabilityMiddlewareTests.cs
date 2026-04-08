@@ -167,7 +167,7 @@ public class GenAIObservabilityMiddlewareTests : IDisposable
 
         var ctx = new LLMCallContext
         {
-            Request = new LLMRequest { Messages = null!, Model = "gpt-4o-mini" },
+            Request = new LLMRequest { Messages = null!, Model = "gpt-5.4" },
             Provider = new FakeLLMProvider("   "),
         };
 

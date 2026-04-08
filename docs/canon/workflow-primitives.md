@@ -45,7 +45,7 @@ roles:
     name: Assistant
     system_prompt: "You are helpful."
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-5.4
     temperature: 0.2
     max_tokens: 512
     max_tool_rounds: 4

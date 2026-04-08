@@ -8,7 +8,10 @@ internal static class ChatCapabilityMessageTypes
 public sealed record ChatInput
 {
     /// <summary>User prompt for this chat run.</summary>
-    public required string Prompt { get; init; }
+    public string? Prompt { get; init; }
+
+    /// <summary>Structured multimodal input parts for this chat run.</summary>
+    public IReadOnlyList<ChatInputContentPart>? InputParts { get; init; }
 
     /// <summary>
     /// Workflow identifier lookup (built-ins and file-loaded workflows).
@@ -50,6 +53,16 @@ public sealed record ChatInput
     /// Optional run metadata passthrough for internal bridge integrations.
     /// </summary>
     public IDictionary<string, string>? Metadata { get; init; }
+}
+
+public sealed record ChatInputContentPart
+{
+    public required string Type { get; init; }
+    public string? Text { get; init; }
+    public string? DataBase64 { get; init; }
+    public string? MediaType { get; init; }
+    public string? Uri { get; init; }
+    public string? Name { get; init; }
 }
 
 public sealed record WorkflowResumeInput

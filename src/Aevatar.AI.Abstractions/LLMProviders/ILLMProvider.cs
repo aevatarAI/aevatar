@@ -11,6 +11,9 @@ public interface ILLMProvider
     /// <summary>提供者名称，用于从 Factory 中按名获取。</summary>
     string Name { get; }
 
+    /// <summary>提供者能力描述。用于多模态请求分发与 failover 兼容性校验。</summary>
+    LLMProviderCapabilities Capabilities => LLMProviderCapabilities.TextOnly;
+
     /// <summary>同步 Chat 调用。返回完整响应内容与 tool_calls。</summary>
     /// <param name="request">LLM 请求，包含消息、工具、模型参数等。</param>
     /// <param name="ct">取消令牌。</param>

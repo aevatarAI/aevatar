@@ -230,7 +230,7 @@ public sealed class WorkflowRunGAgent
             return;
         }
 
-        if (request.Metadata.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
+        if (request.Headers.TryGetValue(WorkflowCommandIdMetadataKey, out var commandId) &&
             !string.IsNullOrWhiteSpace(commandId))
         {
             await PersistDomainEventAsync(
@@ -256,7 +256,7 @@ public sealed class WorkflowRunGAgent
             WorkflowName = _compiledWorkflow.Name,
             Input = request.Prompt ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, request.Metadata, State.ScopeId),
+            ScopeId = ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
         });
 
         if (request.Metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization))

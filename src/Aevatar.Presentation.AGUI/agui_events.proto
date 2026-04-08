@@ -88,6 +88,7 @@ message HumanInputRequestEvent {
   string prompt = 4;
   int32 timeout_seconds = 5;
   string variable_name = 6;
+  repeated string options = 7;
 }
 
 message HumanInputResponseEvent {

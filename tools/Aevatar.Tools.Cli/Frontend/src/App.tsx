@@ -1048,6 +1048,37 @@ function App() {
 
   useEffect(() => {
     void bootstrap();
+
+    // In Electron, listen for OAuth callback from the loopback server
+    const cleanup = nyxid.setupElectronAuthListener(
+      ({ session: oauthSession, returnTo }) => {
+        setAuthSession({
+          loading: false,
+          enabled: true,
+          authenticated: true,
+          providerDisplayName: 'NyxID',
+          loginUrl: '',
+          logoutUrl: '',
+          name: oauthSession.user.name || '',
+          email: oauthSession.user.email || '',
+          picture: oauthSession.user.picture || '',
+          errorMessage: '',
+        });
+        if (oauthSession.user.sub) setRunScopeId(oauthSession.user.sub);
+        // Re-bootstrap to load workspace data now that we're authenticated
+        void bootstrap();
+      },
+      (err) => {
+        setAuthSession(prev => ({
+          ...prev,
+          loading: false,
+          enabled: true,
+          authenticated: false,
+          errorMessage: err?.message || 'OAuth callback failed.',
+        }));
+      },
+    );
+    return cleanup || undefined;
   }, []);
 
   useEffect(() => api.onAuthRequired(detail => {
@@ -2725,10 +2756,12 @@ function App() {
       const activeRuntimeUrl = getActiveRuntimeUrl(settingsState);
 
       // Save runtime selection and defaultModel to chrono-storage (userConfig)
+      // Only send defaultModel/preferredLlmRoute when non-empty to avoid clearing stored values
+      // (backend treats null as "keep current" but "" as "overwrite to empty").
       const nyxIdModel = nyxIdProvider?.model.trim() || '';
       const userConfigSaveAll = api.userConfig.save({
-        defaultModel: nyxIdModel,
-        preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute),
+        ...(nyxIdModel ? { defaultModel: nyxIdModel } : {}),
+        ...(userConfigState.preferredLlmRoute ? { preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute) } : {}),
         ...runtimeConfig,
       }).catch(() => {});
 
@@ -5152,9 +5185,11 @@ function CloudConfigSection(props: {
           onClick={async () => {
             try {
               setUserConfigState(prev => ({ ...prev, loading: true }));
+              const trimmedModel = userConfigState.defaultModel.trim();
+              const trimmedRoute = normalizeUserLlmRoute(userConfigState.preferredLlmRoute);
               await api.userConfig.save({
-                defaultModel: userConfigState.defaultModel.trim(),
-                preferredLlmRoute: normalizeUserLlmRoute(userConfigState.preferredLlmRoute),
+                ...(trimmedModel ? { defaultModel: trimmedModel } : {}),
+                ...(trimmedRoute ? { preferredLlmRoute: trimmedRoute } : {}),
                 runtimeMode: runtimeConfig.runtimeMode,
                 localRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL),
                 remoteRuntimeBaseUrl: normalizeRuntimeUrl(runtimeConfig.remoteRuntimeUrl, DEFAULT_REMOTE_RUNTIME_URL),
