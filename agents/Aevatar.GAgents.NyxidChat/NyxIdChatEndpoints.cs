@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.NyxidChat;
@@ -76,21 +77,39 @@ public static class NyxIdChatEndpoints
     private static async Task<IResult> HandleCreateConversationAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
-        var entry = await actorStore.CreateActorAsync(scopeId, ct);
-        return Results.Ok(new { actorId = entry.ActorId, createdAt = entry.CreatedAt });
+        var actorId = NyxIdChatServiceDefaults.GenerateActorId();
+        try
+        {
+            await actorStore.AddActorAsync(NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // chrono-storage unavailable — actor still usable via runtime
+        }
+        return Results.Ok(new { actorId });
     }
 
     private static async Task<IResult> HandleListConversationsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
-        var actors = await actorStore.ListActorsAsync(scopeId, ct);
-        return Results.Ok(actors);
+        try
+        {
+            var groups = await actorStore.GetAsync(ct);
+            var group = groups.FirstOrDefault(g =>
+                string.Equals(g.GAgentType, NyxIdChatServiceDefaults.GAgentTypeName, StringComparison.Ordinal));
+            var actorIds = group?.ActorIds ?? [];
+            return Results.Ok(actorIds.Select(id => new { actorId = id }));
+        }
+        catch (InvalidOperationException)
+        {
+            return Results.Ok(Array.Empty<object>());
+        }
     }
 
     private static async Task HandleStreamMessageAsync(
@@ -300,11 +319,18 @@ public static class NyxIdChatEndpoints
         HttpContext http,
         string scopeId,
         string actorId,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
-        var removed = await actorStore.DeleteActorAsync(scopeId, actorId, ct);
-        return removed ? Results.Ok() : Results.NotFound();
+        try
+        {
+            await actorStore.RemoveActorAsync(NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // chrono-storage unavailable
+        }
+        return Results.Ok();
     }
 
     /// <summary>
@@ -693,7 +719,7 @@ public static class NyxIdChatEndpoints
         HttpContext http,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
-        [FromServices] NyxIdChatActorStore actorStore,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] NyxIdRelayOptions relayOptions,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
@@ -758,7 +784,14 @@ public static class NyxIdChatEndpoints
             // ─── Get or create actor ───
             var actor = await actorRuntime.GetAsync(actorId)
                         ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(actorId, ct);
-            await actorStore.EnsureActorAsync(scopeId, actorId, ct);
+            try
+            {
+                await actorStore.AddActorAsync(NyxIdChatServiceDefaults.GAgentTypeName, actorId, ct);
+            }
+            catch (InvalidOperationException)
+            {
+                // chrono-storage unavailable — actor still usable via runtime
+            }
 
             // ─── Subscribe and collect response ───
             var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);

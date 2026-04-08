@@ -7,7 +7,6 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddStreamingProxy(this IServiceCollection services)
     {
-        services.TryAddSingleton<StreamingProxyActorStore>();
         return services;
     }
 }

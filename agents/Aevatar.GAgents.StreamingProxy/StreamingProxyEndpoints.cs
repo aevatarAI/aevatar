@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxy;
@@ -44,7 +45,7 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         [FromBody] CreateRoomRequest? request,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IGAgentActorStore actorStore,
         [FromServices] IActorRuntime actorRuntime,
         CancellationToken ct)
     {
@@ -52,10 +53,10 @@ public static class StreamingProxyEndpoints
         if (string.IsNullOrWhiteSpace(roomName))
             roomName = "Group Chat";
 
-        var entry = await store.CreateRoomAsync(scopeId, roomName, ct);
+        var roomId = StreamingProxyDefaults.GenerateRoomId();
 
         // Create the actor and initialize it
-        var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(entry.RoomId, ct);
+        var actor = await actorRuntime.CreateAsync<StreamingProxyGAgent>(roomId, ct);
 
         var initEvent = new GroupChatRoomInitializedEvent { RoomName = roomName };
         var envelope = new EventEnvelope
@@ -67,28 +68,54 @@ public static class StreamingProxyEndpoints
         };
         await actor.HandleEventAsync(envelope, ct);
 
-        return Results.Ok(new { roomId = entry.RoomId, roomName = entry.RoomName, createdAt = entry.CreatedAt });
+        try
+        {
+            await actorStore.AddActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // chrono-storage unavailable — actor still usable via runtime
+        }
+
+        return Results.Ok(new { roomId, roomName });
     }
 
     private static async Task<IResult> HandleListRoomsAsync(
         HttpContext http,
         string scopeId,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
-        var rooms = await store.ListRoomsAsync(scopeId, ct);
-        return Results.Ok(rooms);
+        try
+        {
+            var groups = await actorStore.GetAsync(ct);
+            var group = groups.FirstOrDefault(g =>
+                string.Equals(g.GAgentType, StreamingProxyDefaults.GAgentTypeName, StringComparison.Ordinal));
+            var roomIds = group?.ActorIds ?? [];
+            return Results.Ok(roomIds.Select(id => new { roomId = id }));
+        }
+        catch (InvalidOperationException)
+        {
+            return Results.Ok(Array.Empty<object>());
+        }
     }
 
     private static async Task<IResult> HandleDeleteRoomAsync(
         HttpContext http,
         string scopeId,
         string roomId,
-        [FromServices] StreamingProxyActorStore store,
+        [FromServices] IGAgentActorStore actorStore,
         CancellationToken ct)
     {
-        var removed = await store.DeleteRoomAsync(scopeId, roomId, ct);
-        return removed ? Results.Ok() : Results.NotFound();
+        try
+        {
+            await actorStore.RemoveActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // chrono-storage unavailable
+        }
+        return Results.Ok();
     }
 
     // ─── User Chat (trigger topic + SSE stream) ───
@@ -271,15 +298,16 @@ public static class StreamingProxyEndpoints
 
     // ─── Participant management ───
 
+    // TODO: participant query requires a readmodel (actor state holds participants via
+    // StreamingProxyGAgentState, but direct actor state reads violate read/write separation).
+    // For now return empty list; real-time participant changes are visible via the SSE stream.
     private static Task<IResult> HandleListParticipantsAsync(
         HttpContext http,
         string scopeId,
         string roomId,
-        [FromServices] StreamingProxyActorStore store,
         CancellationToken ct)
     {
-        var participants = store.ListParticipants(scopeId, roomId);
-        return Task.FromResult<IResult>(Results.Ok(participants));
+        return Task.FromResult<IResult>(Results.Ok(Array.Empty<object>()));
     }
 
     private static async Task<IResult> HandleJoinAsync(
@@ -288,7 +316,6 @@ public static class StreamingProxyEndpoints
         string roomId,
         JoinRoomRequest request,
         [FromServices] IActorRuntime actorRuntime,
-        [FromServices] StreamingProxyActorStore store,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.AgentId))
@@ -315,9 +342,6 @@ public static class StreamingProxyEndpoints
             Route = new EnvelopeRoute { Direct = new DirectRoute { TargetActorId = actor.Id } },
         };
         await actor.HandleEventAsync(envelope, ct);
-
-        // Track participant in the store for query endpoints
-        store.AddParticipant(scopeId, roomId, agentId, displayName);
 
         return Results.Ok(new { status = "joined", agentId });
     }
