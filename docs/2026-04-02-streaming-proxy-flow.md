@@ -2,6 +2,8 @@
 
 本文只整理当前仓库里 `Streaming Proxy` 这条真实实现链路，对应宿主是 `Aevatar.Mainnet.Host.Api`，入口是 `/api/scopes/{scopeId}/streaming-proxy/...`。
 
+2026-04-08 更新：room 索引已经切换到 `IGAgentActorStore`，participant 索引已经切换到 `IStreamingProxyParticipantStore`。下文若出现 `StreamingProxyActorStore`，应视为旧实现残留描述，不再对应当前代码里的真实类型或文件路径。
+
 目标是回答三个问题：
 
 1. 用户发起一次 `streaming proxy` 聊天后，后端到底怎么流转。
@@ -15,7 +17,8 @@
 | `Aevatar.Mainnet.Host.Api` | `src/Aevatar.Mainnet.Host.Api/Program.cs` | 注册 `AddStreamingProxy()`，挂载 `MapStreamingProxyEndpoints()` |
 | `StreamingProxyEndpoints` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyEndpoints.cs` | 提供 room CRUD、`:chat`、`messages`、`messages:stream`、participant 管理 HTTP/SSE 入口 |
 | `StreamingProxyGAgent` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyGAgent.cs` | 房间 actor，本质上是 group chat broker；持久化事件、更新房间内消息/参与者状态、向订阅者发布事件 |
-| `StreamingProxyActorStore` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyActorStore.cs` | 当前实现里的 room/participant 查询索引，内存态 |
+| `IGAgentActorStore` | `src/Aevatar.Studio.Application/Studio/Abstractions/IGAgentActorStore.cs` | room 列表的持久化索引，供 `GET /rooms` 与删除 room 时使用 |
+| `IStreamingProxyParticipantStore` | `src/Aevatar.Studio.Application/Studio/Abstractions/IStreamingProxyParticipantStore.cs` | room participant 的持久化索引，供 participant 查询、自动加入与失败移除时使用 |
 | `StreamingProxyNyxParticipantCoordinator` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxyNyxParticipantCoordinator.cs` | 在带 Bearer Token 时发现 Nyx 可用 provider，把它们自动加入房间并生成多轮回复 |
 | `StreamingProxySseWriter` | `agents/Aevatar.GAgents.StreamingProxy/StreamingProxySseWriter.cs` | 把 actor 事件映射成 SSE frame 输出给客户端 |
 
@@ -25,7 +28,8 @@
 %%{init: {"maxTextSize": 100000, "flowchart": {"useMaxWidth": false, "nodeSpacing": 10, "rankSpacing": 50}, "themeVariables": {"fontSize": "10px"}}}%%
 flowchart TB
     CL["Client / OpenClaw"] --> API["StreamingProxyEndpoints\n/api/scopes/{scopeId}/streaming-proxy/..."]
-    API --> STORE["StreamingProxyActorStore\nroom / participant query index"]
+    API --> ROOMS["IGAgentActorStore\nroom index"]
+    API --> PSTORE["IStreamingProxyParticipantStore\nparticipant index"]
     API --> RT["IActorRuntime"]
     RT --> ACT["StreamingProxyGAgent\nroom actor"]
     API --> SUB["IActorEventSubscriptionProvider"]
@@ -57,11 +61,11 @@ flowchart TB
 
 ## 4. 房间创建链路
 
-创建 room 时，入口先写 `StreamingProxyActorStore`，生成 `roomId`，再创建 `StreamingProxyGAgent`，最后向 actor 投递一个 `GroupChatRoomInitializedEvent`。
+创建 room 时，入口先生成 `roomId`，创建 `StreamingProxyGAgent`，向 actor 投递一个 `GroupChatRoomInitializedEvent`，再把 room 写入 `IGAgentActorStore`。
 
 这里有两个状态落点：
 
-1. `StreamingProxyActorStore` 记录 room 列表，用于 `ListRoomsAsync(...)`。
+1. `IGAgentActorStore` 记录 room 列表，用于 `ListRoomsAsync(...)`。
 2. `StreamingProxyGAgent` 持久化 `GroupChatRoomInitializedEvent`，并在自己的 `_proxyState.RoomName` 中保留房间名。
 
 ```mermaid
@@ -69,18 +73,17 @@ flowchart TB
 sequenceDiagram
     participant CL as "Client"
     participant API as "StreamingProxyEndpoints"
-    participant STORE as "StreamingProxyActorStore"
+    participant STORE as "IGAgentActorStore"
     participant RT as "IActorRuntime"
     participant ACT as "StreamingProxyGAgent"
 
     CL->>API: "POST /rooms"
-    API->>STORE: "CreateRoomAsync(scopeId, roomName)"
-    STORE-->>API: "roomId"
     API->>RT: "CreateAsync<StreamingProxyGAgent>(roomId)"
     RT-->>API: "actor"
     API->>ACT: "HandleEventAsync(GroupChatRoomInitializedEvent)"
     ACT->>ACT: "PersistDomainEventAsync"
     ACT->>ACT: "TransitionState -> RoomName"
+    API->>STORE: "AddActorAsync(StreamingProxyGAgent, roomId)"
     API-->>CL: "{ roomId, roomName, createdAt }"
 ```
 
