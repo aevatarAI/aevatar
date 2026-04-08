@@ -45,6 +45,7 @@ public sealed class WorkflowRunGAgent
     private readonly IReadOnlyList<IWorkflowModuleConfigurator> _moduleConfigurators;
     private readonly ISet<string> _knownModuleStepTypes;
     private readonly SubWorkflowOrchestrator _subWorkflowOrchestrator;
+    private readonly WorkflowYamlBundleNormalizer _bundleNormalizer = new();
 
     public WorkflowRunGAgent(
         IActorRuntime runtime,
@@ -709,8 +710,9 @@ public sealed class WorkflowRunGAgent
     private WorkflowRunState ApplyBindWorkflowRunDefinition(WorkflowRunState current, BindWorkflowRunDefinitionEvent evt)
     {
         var next = current.Clone();
+        var rawWorkflowYaml = evt.WorkflowYaml ?? string.Empty;
+        var rawInlineWorkflowYamls = NormalizeInlineWorkflowYamls(evt.InlineWorkflowYamls);
         next.DefinitionActorId = evt.DefinitionActorId?.Trim() ?? string.Empty;
-        next.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
         next.WorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName)
             ? current.WorkflowName
             : evt.WorkflowName.Trim();
@@ -732,8 +734,32 @@ public sealed class WorkflowRunGAgent
         next.PendingSubWorkflowInvocationIndexByChildRunId.Clear();
         next.PendingChildRunIdsByParentRunId.Clear();
         next.LastCommandId = string.Empty;
-        next.InlineWorkflowYamls.Clear();
-        foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
+
+        try
+        {
+            var normalizedBundle = _bundleNormalizer.Normalize(rawWorkflowYaml, rawInlineWorkflowYamls);
+            next.WorkflowYaml = normalizedBundle.WorkflowYaml;
+            ReplaceInlineWorkflowYamls(next.InlineWorkflowYamls, normalizedBundle.InlineWorkflowYamls);
+            var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
+            next.Compiled = compileResult.Compiled;
+            next.CompilationError = compileResult.CompilationError;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "ApplyBindWorkflowRunDefinition: normalization failed.");
+            next.WorkflowYaml = rawWorkflowYaml;
+            ReplaceInlineWorkflowYamls(next.InlineWorkflowYamls, rawInlineWorkflowYamls);
+            next.Compiled = false;
+            next.CompilationError = ex.Message;
+        }
+        return next;
+    }
+
+    private static Dictionary<string, string> NormalizeInlineWorkflowYamls(
+        IEnumerable<KeyValuePair<string, string>> inlineWorkflowYamls)
+    {
+        var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (workflowNameKey, workflowYamlValue) in inlineWorkflowYamls)
         {
             var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowNameKey);
             if (string.IsNullOrWhiteSpace(normalizedWorkflowName) ||
@@ -742,13 +768,19 @@ public sealed class WorkflowRunGAgent
                 continue;
             }
 
-            next.InlineWorkflowYamls[normalizedWorkflowName] = workflowYamlValue;
+            normalized[normalizedWorkflowName] = workflowYamlValue;
         }
 
-        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
-        next.Compiled = compileResult.Compiled;
-        next.CompilationError = compileResult.CompilationError;
-        return next;
+        return normalized;
+    }
+
+    private static void ReplaceInlineWorkflowYamls(
+        IDictionary<string, string> target,
+        IEnumerable<KeyValuePair<string, string>> source)
+    {
+        target.Clear();
+        foreach (var (key, value) in source)
+            target[key] = value;
     }
 
     private static WorkflowRunState ApplyWorkflowRunExecutionStarted(WorkflowRunState current, WorkflowRunExecutionStartedEvent evt)
@@ -971,10 +1003,21 @@ public sealed class WorkflowRunGAgent
     {
         var childActorIdsToReset = CaptureDerivedChildActorIdsForReset();
         var stateBeforeBind = State.Clone();
+        WorkflowYamlBundleNormalizationResult normalizedBundle;
+        try
+        {
+            normalizedBundle = _bundleNormalizer.Normalize(workflowYaml, State.InlineWorkflowYamls);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "ReplaceWorkflowDefinitionBypassingBinding: normalization failed.");
+            return WorkflowCompilationResult.Invalid(ex.Message);
+        }
+
         WorkflowDefinition parsed;
         try
         {
-            parsed = _parser.Parse(workflowYaml);
+            parsed = _parser.Parse(normalizedBundle.WorkflowYaml);
         }
         catch (Exception ex)
         {
@@ -987,15 +1030,18 @@ public sealed class WorkflowRunGAgent
             return WorkflowCompilationResult.Invalid(string.Join("; ", validationErrors));
 
         var workflowName = parsed.Name ?? string.Empty;
-        await PersistDomainEventAsync(new BindWorkflowRunDefinitionEvent
+        var bindDefinitionEvent = new BindWorkflowRunDefinitionEvent
         {
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
             WorkflowName = workflowName,
-            WorkflowYaml = workflowYaml,
+            WorkflowYaml = normalizedBundle.WorkflowYaml,
             RunId = string.IsNullOrWhiteSpace(State.RunId) ? Id : State.RunId,
             ScopeId = State.ScopeId ?? string.Empty,
-            InlineWorkflowYamls = { State.InlineWorkflowYamls },
-        }, ct);
+        };
+        foreach (var (key, value) in normalizedBundle.InlineWorkflowYamls)
+            bindDefinitionEvent.InlineWorkflowYamls[key] = value;
+
+        await PersistDomainEventAsync(bindDefinitionEvent, ct);
         await _subWorkflowOrchestrator.CancelPendingDefinitionResolutionTimeoutsAsync(stateBeforeBind, CancellationToken.None);
         RebuildCompiledWorkflowCache();
         await ResetDerivedRuntimeStateAsync(childActorIdsToReset, ct);

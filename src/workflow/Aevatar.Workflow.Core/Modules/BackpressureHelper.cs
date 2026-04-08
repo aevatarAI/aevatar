@@ -85,4 +85,15 @@ internal static class BackpressureHelper
     /// <summary>Initializes backpressure state with the resolved max concurrency.</summary>
     public static BackpressureQueueState Initialize(int maxConcurrent) =>
         new() { MaxConcurrentWorkers = maxConcurrent };
+
+    /// <summary>
+    /// Ensures a module state has a usable backpressure sub-state even when the persisted proto omits it.
+    /// </summary>
+    public static BackpressureQueueState EnsureInitialized(
+        BackpressureQueueState? state,
+        IDictionary<string, string>? parameters,
+        int fallback = DefaultMaxConcurrentWorkers) =>
+        state is { MaxConcurrentWorkers: > 0 }
+            ? state
+            : Initialize(ResolveMaxConcurrent(parameters, fallback));
 }

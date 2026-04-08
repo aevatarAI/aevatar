@@ -9,8 +9,28 @@ internal sealed class AppApiClient : IDisposable
     private readonly HttpClient _http;
 
     public AppApiClient(string baseUrl)
+        : this(baseUrl, handler: null, bearerToken: null)
     {
-        _http = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
+    }
+
+    internal AppApiClient(
+        string baseUrl,
+        HttpMessageHandler? handler,
+        string? bearerToken)
+    {
+        _http = handler == null
+            ? new HttpClient()
+            : new HttpClient(handler, disposeHandler: false);
+        _http.BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/");
+
+        var resolvedBearerToken = string.IsNullOrWhiteSpace(bearerToken)
+            ? NyxIdTokenStore.LoadToken()
+            : bearerToken;
+        if (!string.IsNullOrWhiteSpace(resolvedBearerToken))
+        {
+            _http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", resolvedBearerToken);
+        }
     }
 
     public async Task<HttpResponseMessage> StreamDraftRunAsync(

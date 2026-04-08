@@ -15,6 +15,7 @@ namespace Aevatar.Workflow.Core;
 public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
 {
     private readonly WorkflowParser _parser = new();
+    private readonly WorkflowYamlBundleNormalizer _bundleNormalizer = new();
 
     public async Task BindWorkflowDefinitionAsync(
         string workflowYaml,
@@ -62,18 +63,25 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
     private WorkflowState ApplyBindWorkflowDefinition(WorkflowState current, BindWorkflowDefinitionEvent evt)
     {
         var next = current.Clone();
-        next.WorkflowYaml = evt.WorkflowYaml ?? string.Empty;
-        next.InlineWorkflowYamls.Clear();
-        foreach (var (workflowNameKey, workflowYamlValue) in evt.InlineWorkflowYamls)
-        {
-            var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowNameKey);
-            if (string.IsNullOrWhiteSpace(normalizedWorkflowName) ||
-                string.IsNullOrWhiteSpace(workflowYamlValue))
-            {
-                continue;
-            }
+        var rawWorkflowYaml = evt.WorkflowYaml ?? string.Empty;
+        var rawInlineWorkflowYamls = NormalizeInlineWorkflowYamls(evt.InlineWorkflowYamls);
 
-            next.InlineWorkflowYamls[normalizedWorkflowName] = workflowYamlValue;
+        try
+        {
+            var normalizedBundle = _bundleNormalizer.Normalize(rawWorkflowYaml, rawInlineWorkflowYamls);
+            next.WorkflowYaml = normalizedBundle.WorkflowYaml;
+            ReplaceInlineWorkflowYamls(next.InlineWorkflowYamls, normalizedBundle.InlineWorkflowYamls);
+            var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
+            next.Compiled = compileResult.Compiled;
+            next.CompilationError = compileResult.CompilationError;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "ApplyBindWorkflowDefinition: normalization failed.");
+            next.WorkflowYaml = rawWorkflowYaml;
+            ReplaceInlineWorkflowYamls(next.InlineWorkflowYamls, rawInlineWorkflowYamls);
+            next.Compiled = false;
+            next.CompilationError = ex.Message;
         }
 
         var incomingWorkflowName = string.IsNullOrWhiteSpace(evt.WorkflowName)
@@ -83,12 +91,36 @@ public sealed class WorkflowGAgent : GAgentBase<WorkflowState>
             next.WorkflowName = incomingWorkflowName;
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
             next.ScopeId = evt.ScopeId.Trim();
-
-        var compileResult = EvaluateWorkflowCompilation(next.WorkflowYaml);
-        next.Compiled = compileResult.Compiled;
-        next.CompilationError = compileResult.CompilationError;
         next.Version = current.Version + 1;
         return next;
+    }
+
+    private static Dictionary<string, string> NormalizeInlineWorkflowYamls(
+        IEnumerable<KeyValuePair<string, string>> inlineWorkflowYamls)
+    {
+        var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (workflowNameKey, workflowYamlValue) in inlineWorkflowYamls)
+        {
+            var normalizedWorkflowName = WorkflowRunIdNormalizer.NormalizeWorkflowName(workflowNameKey);
+            if (string.IsNullOrWhiteSpace(normalizedWorkflowName) ||
+                string.IsNullOrWhiteSpace(workflowYamlValue))
+            {
+                continue;
+            }
+
+            normalized[normalizedWorkflowName] = workflowYamlValue;
+        }
+
+        return normalized;
+    }
+
+    private static void ReplaceInlineWorkflowYamls(
+        IDictionary<string, string> target,
+        IEnumerable<KeyValuePair<string, string>> source)
+    {
+        target.Clear();
+        foreach (var (key, value) in source)
+            target[key] = value;
     }
 
     private WorkflowCompilationResult EvaluateWorkflowCompilation(string yaml)

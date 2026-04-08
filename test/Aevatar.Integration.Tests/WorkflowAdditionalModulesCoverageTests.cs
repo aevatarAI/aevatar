@@ -1380,6 +1380,45 @@ public sealed class WorkflowAdditionalModulesCoverageTests
     }
 
     [Fact]
+    public async Task ParallelFanOutModule_ShouldRecoverWhenPersistedBackpressureStateIsMissing()
+    {
+        var module = new ParallelFanOutModule();
+        var ctx = CreateContext();
+
+        await ctx.SaveStateAsync(
+            "parallel_fanout",
+            new ParallelFanOutModuleState
+            {
+                Backpressure = null,
+            },
+            CancellationToken.None);
+
+        await module.HandleAsync(
+            Envelope(new StepRequestEvent
+            {
+                StepId = "parallel-missing-backpressure",
+                StepType = "parallel",
+                RunId = "run-parallel-missing-backpressure",
+                Input = "translate me",
+                Parameters =
+                {
+                    ["workers"] = "[\"worker_a\",\"worker_b\"]",
+                },
+            }),
+            ctx,
+            CancellationToken.None);
+
+        var dispatched = ctx.Published.Select(x => x.evt).OfType<StepRequestEvent>().ToList();
+        dispatched.Should().HaveCount(2);
+        dispatched[0].TargetRole.Should().Be("worker_a");
+        dispatched[1].TargetRole.Should().Be("worker_b");
+
+        var persistedState = ctx.LoadState<ParallelFanOutModuleState>("parallel_fanout");
+        persistedState.Backpressure.Should().NotBeNull();
+        persistedState.Backpressure.MaxConcurrentWorkers.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
     public async Task ParallelFanOutModule_WhenMissingWorkersAndRole_ShouldFailFast()
     {
         var module = new ParallelFanOutModule();

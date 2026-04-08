@@ -146,6 +146,120 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_BindWorkflowRunDefinition_ShouldNormalizeWhileChildrenIntoInlineWorkflow()
+    {
+        var agent = CreateRunAgent(runtime: new RecordingActorRuntime());
+        var parser = new WorkflowParser();
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-while-children",
+            """
+            name: wf_while_children
+            steps:
+              - id: research_loop
+                type: while
+                parameters:
+                  max_iterations: "2"
+                children:
+                  - id: normalize
+                    type: transform
+                    parameters:
+                      op: trim
+            """,
+            "wf_while_children",
+            runId: "run-while-children");
+
+        agent.State.Compiled.Should().BeTrue();
+        agent.State.InlineWorkflowYamls.Should().HaveCount(1);
+
+        var rootWorkflow = parser.Parse(agent.State.WorkflowYaml);
+        var whileStep = rootWorkflow.Steps.Should().ContainSingle().Subject;
+        whileStep.Children.Should().BeNull();
+        whileStep.Parameters["step"].Should().Be("workflow_call");
+        whileStep.Parameters["sub_param_lifecycle"].Should().Be("transient");
+        agent.State.InlineWorkflowYamls.Should().ContainKey(whileStep.Parameters["sub_param_workflow"]);
+    }
+
+    [Fact]
+    public async Task WorkflowGAgent_BindWorkflowDefinition_WhenWhileChildrenSyntaxIsInvalid_ShouldMarkInvalid()
+    {
+        var agent = CreateDefinitionAgent();
+
+        await agent.BindWorkflowDefinitionAsync(
+            """
+            name: wf_invalid_while_children
+            steps:
+              - id: bad_loop
+                type: while
+                parameters:
+                  step: llm_call
+                children:
+                  - id: normalize
+                    type: transform
+                    parameters:
+                      op: trim
+            """,
+            "wf_invalid_while_children");
+
+        agent.State.Compiled.Should().BeFalse();
+        agent.State.CompilationError.Should().Contain("while.children");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_BindWorkflowRunDefinition_WhenWhileChildrenSyntaxIsInvalid_ShouldMarkInvalid()
+    {
+        var agent = CreateRunAgent(runtime: new RecordingActorRuntime());
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-invalid-while-children",
+            """
+            name: wf_invalid_while_children
+            steps:
+              - id: bad_loop
+                type: while
+                parameters:
+                  sub_param_workflow: child_flow
+                children:
+                  - id: normalize
+                    type: transform
+                    parameters:
+                      op: trim
+            """,
+            "wf_invalid_while_children",
+            runId: "run-invalid-while-children");
+
+        agent.State.Compiled.Should().BeFalse();
+        agent.State.CompilationError.Should().Contain("while.children");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_BindWorkflowRunDefinition_ShouldCompileSingleFileSisyphusWorkflow()
+    {
+        var agent = CreateRunAgent(runtime: new RecordingActorRuntime());
+        var parser = new WorkflowParser();
+        var workflowPath = Path.GetFullPath(
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "workflows", "sisyphus-research.yaml"));
+        var workflowYaml = await File.ReadAllTextAsync(workflowPath);
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-sisyphus",
+            workflowYaml,
+            "sisyphus-research",
+            runId: "run-sisyphus");
+
+        agent.State.Compiled.Should().BeTrue();
+        agent.State.CompilationError.Should().BeEmpty();
+        agent.State.InlineWorkflowYamls.Should().HaveCount(1);
+
+        var rootWorkflow = parser.Parse(agent.State.WorkflowYaml);
+        rootWorkflow.Name.Should().Be("sisyphus-research");
+        var whileStep = rootWorkflow.Steps.Should().ContainSingle().Subject;
+        whileStep.Id.Should().Be("research_loop");
+        whileStep.Parameters["step"].Should().Be("workflow_call");
+        agent.State.InlineWorkflowYamls.Should().ContainKey(whileStep.Parameters["sub_param_workflow"]);
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_ShouldPassFullRoleConfigurationToInitializeEvent()
     {
         var runtime = new RecordingActorRuntime();
@@ -464,6 +578,62 @@ public class WorkflowGAgentCoverageTests
         agent.State.Input.Should().Be("second");
         runtime.Linked.Should().Contain(x => x.child.EndsWith(":role_b", StringComparison.Ordinal));
         runtime.CreatedActors.Select(x => x.Id).Should().Contain($"{agent.Id}:role_b");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_WhenDynamicYamlUsesWhileChildren_ShouldNormalizeAndExecuteReplacement()
+    {
+        var eventStore = new InMemoryEventStore();
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRunAgent(eventStore: eventStore);
+        agent.EventPublisher = publisher;
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-dynamic-while-children");
+
+        await agent.HandleReplaceWorkflowDefinitionAndExecute(new ReplaceWorkflowDefinitionAndExecuteEvent
+        {
+            WorkflowYaml = """
+                           name: wf_dynamic_while_children
+                           steps:
+                             - id: research_loop
+                               type: while
+                               parameters:
+                                 max_iterations: "2"
+                               children:
+                                 - id: normalize
+                                   type: transform
+                                   parameters:
+                                     op: trim
+                           """,
+            Input = "  hello  ",
+        });
+
+        agent.State.Compiled.Should().BeTrue();
+        agent.State.CompilationError.Should().BeEmpty();
+        agent.State.WorkflowName.Should().Be("wf_dynamic_while_children");
+        agent.State.Status.Should().Be("running");
+        agent.State.Input.Should().Be("  hello  ");
+        agent.State.InlineWorkflowYamls.Should().HaveCount(1);
+
+        var parser = new WorkflowParser();
+        var rootWorkflow = parser.Parse(agent.State.WorkflowYaml);
+        var whileStep = rootWorkflow.Steps.Should().ContainSingle().Subject;
+        whileStep.Type.Should().Be("while");
+        whileStep.Children.Should().BeNull();
+        whileStep.Parameters["step"].Should().Be("workflow_call");
+        whileStep.Parameters["sub_param_lifecycle"].Should().Be("transient");
+        agent.State.InlineWorkflowYamls.Should().ContainKey(whileStep.Parameters["sub_param_workflow"]);
+
+        publisher.Published.Select(x => x.evt).OfType<ChatResponseEvent>()
+            .Should().BeEmpty();
+
+        var persisted = await eventStore.GetEventsAsync(agent.Id);
+        persisted.Count(x => x.EventType.Contains(nameof(BindWorkflowRunDefinitionEvent), StringComparison.Ordinal))
+            .Should()
+            .Be(2);
     }
 
     [Fact]

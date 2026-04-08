@@ -81,10 +81,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
                 ReducePromptPrefix = reducePrefix,
             };
             state.Parents[parentKey.StepId] = parentState;
-
-            if (state.Backpressure.MaxConcurrentWorkers == 0)
-                state.Backpressure = BackpressureHelper.Initialize(
-                    BackpressureHelper.ResolveMaxConcurrent(request.Parameters));
+            state.Backpressure = BackpressureHelper.EnsureInitialized(state.Backpressure, request.Parameters);
 
             ctx.Logger.LogInformation("MapReduce {StepId}: map {Count} items via {Type}", request.StepId, items.Length, mapType);
 
@@ -143,6 +140,7 @@ public sealed class MapReduceModule : IEventModule<IWorkflowExecutionContext>
             parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Results.Add(evt.ToMapReduceItemResult());
             state.Parents[parent] = parentState;
+            state.Backpressure = BackpressureHelper.EnsureInitialized(state.Backpressure, null);
             var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
 
             if (parentState.Results.Count < parentState.MapCount)

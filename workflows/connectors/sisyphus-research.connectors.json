@@ -1,0 +1,32 @@
+{
+  "chrono_graph": {
+    "type": "http",
+    "enabled": true,
+    "timeoutMs": 60000,
+    "http": {
+      "baseUrl": "${NYXID_PROXY_BASE_URL}/api/v1/proxy/s/chrono-graph-service",
+      "allowedMethods": ["GET", "POST"],
+      "allowedPaths": [
+        "/api/v1/proxy/s/chrono-graph-service/*"
+      ],
+      "defaultHeaders": {
+        "Content-Type": "application/json"
+      }
+    }
+  },
+  "format_validator": {
+    "type": "http",
+    "enabled": true,
+    "timeoutMs": 10000,
+    "http": {
+      "baseUrl": "${FORMAT_VALIDATOR_BASE_URL}",
+      "allowedMethods": ["POST"],
+      "allowedPaths": [
+        "/validate*"
+      ],
+      "defaultHeaders": {
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
