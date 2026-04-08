@@ -19,7 +19,7 @@
 
 ```csharp
 services.AddMEAIProviders(factory => factory
-    .RegisterOpenAI("openai", "gpt-4o-mini", openaiKey)
+    .RegisterOpenAI("openai", "gpt-5.4", openaiKey)
     .SetDefault("openai"));
 ```
 

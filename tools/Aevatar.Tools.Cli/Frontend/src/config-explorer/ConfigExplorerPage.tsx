@@ -102,6 +102,7 @@ export default function ConfigExplorerPage({ scopeId, flash, initialFolder, onIn
             <EditorPanel
               selectedKey={store.selectedKey}
               content={store.selectedContent}
+              mediaInfo={store.mediaInfo}
               loading={store.contentLoading}
               manifest={store.manifest}
               onOpenInStudio={handleOpenInStudio}

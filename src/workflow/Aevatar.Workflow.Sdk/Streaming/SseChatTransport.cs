@@ -46,6 +46,7 @@ public sealed class SseChatTransport : IWorkflowChatTransport
                     prompt = request.Prompt,
                     sessionId = request.SessionId,
                     headers = request.Metadata,
+                    inputParts = request.InputParts,
                 },
                 options: jsonOptions),
         };
