@@ -4,6 +4,7 @@ using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Scripting.Core.Ports;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Google.Protobuf.Collections;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aevatar.GAgentService.Infrastructure.Dispatch;
@@ -161,16 +162,31 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         if (!string.IsNullOrWhiteSpace(chatRequest.ScopeId))
             return chatRequest.ScopeId.Trim();
 
-        var metadata = chatRequest.Headers;
+        return TryResolveScopeId(chatRequest.Headers, out var scopeId) ||
+               TryResolveScopeId(chatRequest.Metadata, out scopeId)
+            ? scopeId
+            : string.Empty;
+    }
 
-        if (metadata.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
+    private static bool TryResolveScopeId(MapField<string, string> values, out string scopeId)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        if (values.TryGetValue(WorkflowRunCommandMetadataKeys.ScopeId, out var workflowScopeId) &&
             !string.IsNullOrWhiteSpace(workflowScopeId))
         {
-            return workflowScopeId.Trim();
+            scopeId = workflowScopeId.Trim();
+            return true;
         }
 
-        return metadata.TryGetValue("scope_id", out var scopeId) && !string.IsNullOrWhiteSpace(scopeId)
-            ? scopeId.Trim()
-            : string.Empty;
+        if (values.TryGetValue("scope_id", out var legacyScopeId) &&
+            !string.IsNullOrWhiteSpace(legacyScopeId))
+        {
+            scopeId = legacyScopeId.Trim();
+            return true;
+        }
+
+        scopeId = string.Empty;
+        return false;
     }
 }

@@ -4,12 +4,14 @@ using System.Security.Claims;
 using Aevatar.AI.Abstractions;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
@@ -938,7 +940,7 @@ public sealed class ScopeServiceEndpointsTests
         });
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
@@ -947,7 +949,7 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
-    public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenTargetIsNotWorkflow()
+    public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenStaticActorTypeCannotBeResolved()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         var service = BuildService("scope-a", "default", "definition-actor-1");
@@ -994,6 +996,13 @@ public sealed class ScopeServiceEndpointsTests
                         ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
                     },
                 },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    StaticPlan = new StaticServiceDeploymentPlan
+                    {
+                        ActorTypeName = "Missing.StaticAgent, Missing.Assembly",
+                    },
+                },
             },
             CancellationToken.None);
 
@@ -1001,12 +1010,18 @@ public sealed class ScopeServiceEndpointsTests
         {
             prompt = "hello",
         });
-        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        var bodyText = await response.Content.ReadAsStringAsync();
+        Dictionary<string, string>? body = null;
+        if (!string.IsNullOrWhiteSpace(bodyText) &&
+            bodyText.TrimStart().StartsWith('{'))
+        {
+            body = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(bodyText);
+        }
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "stream body: {0}", bodyText);
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
-        body["message"].Should().Contain("Only workflow services support SSE stream execution");
+        body["message"].Should().Contain("could not be resolved");
     }
 
     [Fact]
@@ -1084,7 +1099,7 @@ public sealed class ScopeServiceEndpointsTests
         });
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
@@ -2109,6 +2124,8 @@ public sealed class ScopeServiceEndpointsTests
             var resumeDispatchService = new RecordingResumeDispatchService();
             var signalDispatchService = new RecordingSignalDispatchService();
             var stopDispatchService = new RecordingStopDispatchService();
+            var actorRuntime = new NoOpActorRuntime();
+            var eventSubscriptionProvider = new NoOpActorEventSubscriptionProvider();
             builder.Services.AddSingleton<IServiceGovernanceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceGovernanceQueryPort>(queryPort);
             builder.Services.AddSingleton<IScopeBindingCommandPort>(scopeBindingPort);
@@ -2127,6 +2144,8 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(stopDispatchService);
+            builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
+            builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IOptions<ScopeWorkflowCapabilityOptions>>(
                 Options.Create(new ScopeWorkflowCapabilityOptions
                 {
@@ -2602,6 +2621,123 @@ public sealed class ScopeServiceEndpointsTests
             ServiceInvocationRequest request,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class NoOpActorEventSubscriptionProvider : IActorEventSubscriptionProvider
+    {
+        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+            string actorId,
+            Func<TMessage, Task> handler,
+            CancellationToken ct = default)
+            where TMessage : class, Google.Protobuf.IMessage, new()
+        {
+            _ = actorId;
+            _ = handler;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IAsyncDisposable>(new NoOpAsyncDisposable());
+        }
+    }
+
+    private sealed class NoOpActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            _ = agentType;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IActor>(new NoOpActor(id ?? "noop-actor"));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _ = id;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new NoOpActor(id));
+
+        public Task<bool> ExistsAsync(string id)
+        {
+            _ = id;
+            return Task.FromResult(true);
+        }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
+        {
+            _ = parentId;
+            _ = childId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default)
+        {
+            _ = childId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpActor : IActor
+    {
+        public NoOpActor(string id)
+        {
+            Id = id;
+            Agent = new NoOpAgent(id);
+        }
+
+        public string Id { get; }
+
+        public IAgent Agent { get; }
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class NoOpAgent : IAgent
+    {
+        public NoOpAgent(string id)
+        {
+            Id = id;
+        }
+
+        public string Id { get; }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("noop");
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoOpAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingResumeDispatchService

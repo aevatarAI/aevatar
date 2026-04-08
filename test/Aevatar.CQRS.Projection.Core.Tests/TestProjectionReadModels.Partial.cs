@@ -29,3 +29,12 @@ public sealed partial class TestProviderStoreSmokeReadModel : IProjectionReadMod
         set => UpdatedAtEpochMs = value.ToUnixTimeMilliseconds();
     }
 }
+
+public sealed partial class TestRecursiveWellKnownReadModel : IProjectionReadModel<TestRecursiveWellKnownReadModel>
+{
+    public DateTimeOffset UpdatedAt
+    {
+        get => UpdatedAtUtcValue == null ? default : UpdatedAtUtcValue.ToDateTimeOffset();
+        set => UpdatedAtUtcValue = Timestamp.FromDateTimeOffset(value.ToUniversalTime());
+    }
+}

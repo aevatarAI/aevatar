@@ -9,10 +9,13 @@ using Aevatar.Workflow.Application.Abstractions.Runs;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using FluentAssertions;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -33,7 +36,7 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             "subworkflow_level3.yaml",
         ]);
 
-        using var response = await host.Client.PostAsJsonAsync($"/api/scopes/{host.ScopeId}/draft-run", new
+        using var response = await host.Client.PostAsJsonAsync($"/api/scopes/{host.ScopeId}/workflow/draft-run", new
         {
             prompt = "  z\nz\ny  ",
             workflowYamls,
@@ -120,6 +123,7 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             builder.WebHost.UseUrls("http://127.0.0.1:0");
             builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
+                ["GAgentService:Demo:Enabled"] = "false",
                 ["Projection:Document:Providers:InMemory:Enabled"] = "true",
                 ["Projection:Document:Providers:Elasticsearch:Enabled"] = "false",
                 ["Projection:Graph:Providers:InMemory:Enabled"] = "true",
@@ -139,6 +143,9 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
                 options.EnableScriptingCapability = false;
             });
             builder.AddGAgentServiceCapabilityBundle();
+            builder.Services.AddAuthentication("Test")
+                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
+            builder.Services.AddAuthorization();
 
             var app = builder.Build();
             app.UseAevatarDefaultHost();
@@ -192,6 +199,25 @@ public sealed class ScopeDraftRunActorQueryIntegrationTests
             }
 
             throw new InvalidOperationException("Unable to locate repository root from test base directory.");
+        }
+    }
+
+    private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
+    {
+        public TestAuthHandler(
+            IOptionsMonitor<AuthenticationSchemeOptions> options,
+            ILoggerFactory logger,
+            System.Text.Encodings.Web.UrlEncoder encoder)
+            : base(options, logger, encoder)
+        {
+        }
+
+        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+        {
+            var identity = new ClaimsIdentity("Test");
+            var principal = new ClaimsPrincipal(identity);
+            var ticket = new AuthenticationTicket(principal, Scheme.Name);
+            return Task.FromResult(AuthenticateResult.Success(ticket));
         }
     }
 }
