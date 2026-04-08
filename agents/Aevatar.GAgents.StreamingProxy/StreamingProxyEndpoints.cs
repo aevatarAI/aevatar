@@ -47,8 +47,10 @@ public static class StreamingProxyEndpoints
         [FromBody] CreateRoomRequest? request,
         [FromServices] IGAgentActorStore actorStore,
         [FromServices] IActorRuntime actorRuntime,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         var roomName = request?.RoomName?.Trim();
         if (string.IsNullOrWhiteSpace(roomName))
             roomName = "Group Chat";
@@ -72,9 +74,11 @@ public static class StreamingProxyEndpoints
         {
             await actorStore.AddActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
         }
-        catch (InvalidOperationException)
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
         {
-            // chrono-storage unavailable — actor still usable via runtime
+            // chrono-storage unavailable (timeout/403/network) — actor still usable via runtime
+            logger.LogWarning(ex, "Failed to persist room {RoomId} to actor store; room is usable via runtime", roomId);
         }
 
         return Results.Ok(new { roomId, roomName });
@@ -84,8 +88,10 @@ public static class StreamingProxyEndpoints
         HttpContext http,
         string scopeId,
         [FromServices] IGAgentActorStore actorStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
             var groups = await actorStore.GetAsync(ct);
@@ -94,8 +100,10 @@ public static class StreamingProxyEndpoints
             var roomIds = group?.ActorIds ?? [];
             return Results.Ok(roomIds.Select(id => new { roomId = id }));
         }
-        catch (InvalidOperationException)
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
         {
+            logger.LogWarning(ex, "Failed to list rooms from actor store");
             return Results.Ok(Array.Empty<object>());
         }
     }
@@ -105,15 +113,18 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IGAgentActorStore actorStore,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
+        var logger = loggerFactory.CreateLogger("Aevatar.GAgents.StreamingProxy.Endpoints");
         try
         {
             await actorStore.RemoveActorAsync(StreamingProxyDefaults.GAgentTypeName, roomId, ct);
         }
-        catch (InvalidOperationException)
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
         {
-            // chrono-storage unavailable
+            logger.LogWarning(ex, "Failed to remove room {RoomId} from actor store", roomId);
         }
         return Results.Ok();
     }
@@ -298,9 +309,10 @@ public static class StreamingProxyEndpoints
 
     // ─── Participant management ───
 
-    // TODO: participant query requires a readmodel (actor state holds participants via
-    // StreamingProxyGAgentState, but direct actor state reads violate read/write separation).
-    // For now return empty list; real-time participant changes are visible via the SSE stream.
+    // TODO: participant snapshot query requires an actor-scoped current-state readmodel
+    // projected from committed GroupChatParticipantJoined/Left events. The authoritative
+    // state lives in StreamingProxyGAgentState; direct actor state reads violate read/write
+    // separation. Real-time participant changes are visible via the SSE stream.
     private static Task<IResult> HandleListParticipantsAsync(
         HttpContext http,
         string scopeId,
