@@ -87,7 +87,7 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
                 plan.WorkflowName,
                 plan.WorkflowYaml,
                 plan.InlineWorkflowYamls,
-                ResolveScopeId(chatRequest)),
+                ResolveAuthoritativeScopeId(request, chatRequest)),
             ct);
         var commandId = ResolveCommandId(request);
         var correlationId = ResolveCorrelationId(request, commandId);
@@ -154,6 +154,14 @@ public sealed class DefaultServiceInvocationDispatcher : IServiceInvocationDispa
         string.IsNullOrWhiteSpace(request.CorrelationId)
             ? commandId
             : request.CorrelationId;
+
+    private static string ResolveAuthoritativeScopeId(ServiceInvocationRequest request, ChatRequestEvent chatRequest)
+    {
+        // Path-level scope (Identity.TenantId) is authoritative; payload cannot override it.
+        if (!string.IsNullOrWhiteSpace(request.Identity?.TenantId))
+            return request.Identity.TenantId.Trim();
+        return ResolveScopeId(chatRequest);
+    }
 
     private static string ResolveScopeId(ChatRequestEvent chatRequest)
     {

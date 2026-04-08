@@ -166,10 +166,13 @@ describe("RunsPage", () => {
       `/runtime/runs?scopeId=scope-1&endpointId=aevatar.tools.cli.hosting.AppScriptCommand&draftKey=${draftKey}`
     );
 
-    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+    renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("script payload");
-    const form = container.querySelector("form");
+    const promptInput = await screen.findByDisplayValue("script payload");
+    // ProForm's custom submitter buttons don't render in jsdom; submit via the
+    // form element which exercises the same onFinish path as the button's
+    // onClick={() => props.form?.submit?.()) wiring.
+    const form = promptInput.closest("form");
     expect(form).toBeTruthy();
     fireEvent.submit(form!);
 
@@ -384,10 +387,13 @@ describe("RunsPage", () => {
       "/runtime/runs?scopeId=scope-1&route=direct&endpointId=support-chat&endpointKind=chat&prompt=Run%20it"
     );
 
-    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+    renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("Run it");
-    const form = container.querySelector("form");
+    const promptInput = await screen.findByDisplayValue("Run it");
+    // ProForm's custom submitter buttons don't render in jsdom; submit via the
+    // form element which exercises the same onFinish path as the button's
+    // onClick={() => props.form?.submit?.()) wiring.
+    const form = promptInput.closest("form");
     expect(form).toBeTruthy();
     fireEvent.submit(form!);
 
