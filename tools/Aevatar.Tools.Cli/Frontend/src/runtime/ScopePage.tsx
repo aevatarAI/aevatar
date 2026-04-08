@@ -1327,6 +1327,7 @@ function ServiceSelector({
 }
 
 function ConversationLlmConfigBar({
+  mode = 'conversation',
   routeValue,
   routeOptions,
   modelValue,
@@ -1340,6 +1341,7 @@ function ConversationLlmConfigBar({
   onModelChange,
   onReset,
 }: {
+  mode?: 'conversation' | 'streaming-proxy';
   routeValue: string | undefined;
   routeOptions: Array<{ value: string; label: string }>;
   modelValue: string | undefined;
@@ -1362,6 +1364,18 @@ function ConversationLlmConfigBar({
   const selectedModel = trimOptional(modelValue) || effectiveModel;
   const routeSelectValue = encodeRouteSelectValue(routeValue);
   const normalizedQuery = query.trim().toLowerCase();
+  const isStreamingProxyMode = mode === 'streaming-proxy';
+  const panelTitle = isStreamingProxyMode ? 'Room model preferences' : 'Conversation model';
+  const routeLabel = isStreamingProxyMode ? 'Preferred route' : 'Route';
+  const defaultRouteLabel = isStreamingProxyMode ? 'Room default' : 'Config default';
+  const emptyStateLabel = isStreamingProxyMode
+    ? `No room models for ${effectiveRouteLabel}`
+    : `No models for ${effectiveRouteLabel}`;
+  const inlineRouteLabel = isStreamingProxyMode
+    ? `room prefers ${effectiveRouteLabel}`
+    : effectiveRoute === USER_LLM_ROUTE_GATEWAY
+      ? effectiveRouteLabel
+      : `via ${effectiveRouteLabel}`;
   const filteredGroups = modelGroups
     .map(group => ({
       ...group,
@@ -1458,7 +1472,7 @@ function ConversationLlmConfigBar({
         } : { visibility: 'hidden', top: 0, left: 0 }}
       >
         <div className="scope-chat-llm-panel-header">
-          <div className="scope-chat-llm-panel-title">Conversation model</div>
+          <div className="scope-chat-llm-panel-title">{panelTitle}</div>
           {hasOverride ? (
             <button
               type="button"
@@ -1472,6 +1486,11 @@ function ConversationLlmConfigBar({
             </button>
           ) : null}
         </div>
+        {isStreamingProxyMode ? (
+          <div className="px-4 pb-2 text-[12px] text-[#8A877F]">
+            Used to rank room participants, not to direct-chat a single node.
+          </div>
+        ) : null}
 
         <div className="scope-chat-llm-search">
           <Search size={15} className="scope-chat-llm-search-icon" />
@@ -1490,13 +1509,13 @@ function ConversationLlmConfigBar({
         </div>
 
         <div className="scope-chat-llm-route-row">
-          <span className="scope-chat-llm-route-label">Route</span>
+          <span className="scope-chat-llm-route-label">{routeLabel}</span>
           <select
             value={routeSelectValue}
             onChange={event => onRouteChange(decodeRouteSelectValue(event.target.value))}
             className="scope-chat-llm-route-select"
           >
-            <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>Config default</option>
+            <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>{defaultRouteLabel}</option>
             {routeOptions.map(option => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -1521,7 +1540,7 @@ function ConversationLlmConfigBar({
           ) : null}
 
           {!modelsLoading && filteredGroups.length === 0 ? (
-            <div className="scope-chat-llm-empty">No models for {effectiveRouteLabel}</div>
+            <div className="scope-chat-llm-empty">{emptyStateLabel}</div>
           ) : null}
 
           {filteredGroups.map(group => (
@@ -1566,7 +1585,7 @@ function ConversationLlmConfigBar({
           className={`scope-chat-llm-chevron shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
         />
       </button>
-      <span className="scope-chat-llm-inline-route">{effectiveRoute === USER_LLM_ROUTE_GATEWAY ? effectiveRouteLabel : `via ${effectiveRouteLabel}`}</span>
+      <span className="scope-chat-llm-inline-route">{inlineRouteLabel}</span>
       {renderPanel()}
     </div>
   );
@@ -3942,6 +3961,7 @@ export default function ScopePage() {
             onRemoveAttachment={handleRemoveAttachment}
             footer={(
               <ConversationLlmConfigBar
+                mode={activeService.kind === 'streaming-proxy' ? 'streaming-proxy' : 'conversation'}
                 routeValue={conversationRoute}
                 routeOptions={routeOptions}
                 modelValue={conversationModel}
@@ -3959,8 +3979,8 @@ export default function ScopePage() {
           />
           <div className="mt-1.5 text-center text-[11px] text-gray-300">
             Service: {activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id}
-            {' · Route: '}{effectiveRouteLabel}
-            {' · Model: '}{effectiveModel || 'provider default'}
+            {activeService.kind === 'streaming-proxy' ? ' · Room route: ' : ' · Route: '}{effectiveRouteLabel}
+            {activeService.kind === 'streaming-proxy' ? ' · Room model: ' : ' · Model: '}{effectiveModel || 'provider default'}
             {' · Scope: '}{scopeId.slice(0, 16)}...
           </div>
         </div>

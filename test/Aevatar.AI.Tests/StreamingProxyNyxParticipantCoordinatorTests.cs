@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
@@ -70,8 +71,8 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             "room-1");
 
         llmProvider.Requests.Should().HaveCount(2);
-        llmProvider.Requests[0].RequestId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
-        llmProvider.Requests[1].RequestId.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+        llmProvider.Requests[0].RequestId.Should().Contain("node-a");
+        llmProvider.Requests[1].RequestId.Should().Contain("node-b");
 
         var messageEvents = actor.Events
             .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
@@ -85,11 +86,11 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
         messageEvents.Should().HaveCount(1);
         messageEvents.Should().NotContain(evt => evt.Content.StartsWith("当前暂时不可用", StringComparison.Ordinal));
-        messageEvents.Single().Content.Should().Contain("reply from", StringComparison.OrdinalIgnoreCase);
-        messageEvents.Single().Content.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+        messageEvents.Single().Content.Should().Contain("reply from");
+        messageEvents.Single().Content.Should().Contain("node-b");
         messageEvents.Select(evt => evt.AgentId).Should().OnlyHaveUniqueItems();
         leftEvents.Should().HaveCount(1);
-        leftEvents.Single().AgentId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
+        leftEvents.Single().AgentId.Should().Contain("node-a");
         store.ListParticipants("scope-1", "room-1").Should().HaveCount(2);
     }
 
@@ -135,8 +136,8 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             "room-1");
 
         llmProvider.Requests.Should().HaveCount(2);
-        llmProvider.Requests[0].RequestId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
-        llmProvider.Requests[1].RequestId.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+        llmProvider.Requests[0].RequestId.Should().Contain("node-a");
+        llmProvider.Requests[1].RequestId.Should().Contain("node-b");
 
         var messageEvents = actor.Events
             .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
@@ -149,12 +150,62 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             .ToList();
 
         messageEvents.Should().HaveCount(1);
-        messageEvents.Single().Content.Should().Contain("reply from", StringComparison.OrdinalIgnoreCase);
-        messageEvents.Single().Content.Should().Contain("node-b", StringComparison.OrdinalIgnoreCase);
+        messageEvents.Single().Content.Should().Contain("reply from");
+        messageEvents.Single().Content.Should().Contain("node-b");
         messageEvents.Should().NotContain(evt => evt.Content.Contains("503", StringComparison.OrdinalIgnoreCase));
         leftEvents.Should().HaveCount(1);
-        leftEvents.Single().AgentId.Should().Contain("node-a", StringComparison.OrdinalIgnoreCase);
+        leftEvents.Single().AgentId.Should().Contain("node-a");
         store.ListParticipants("scope-1", "room-1").Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GenerateRepliesAsync_ShouldUseStreamContentWhenSynchronousContentIsMissing()
+    {
+        var (coordinator, actor, store, llmProvider) = CreateCoordinator(
+            responseFactory: _ => new LLMResponse(),
+            streamFactory: request =>
+            [
+                new LLMStreamChunk { DeltaContent = $"streamed reply from {request.RequestId}" },
+                new LLMStreamChunk { FinishReason = "stop", IsLast = true },
+            ]);
+
+        var participants = await coordinator.EnsureParticipantsJoinedAsync(
+            "scope-1",
+            "room-1",
+            actor,
+            store,
+            "test-token",
+            CancellationToken.None,
+            preferredRoute: "/api/v1/proxy/s/openclaw/node-b");
+
+        var roomParticipants = participants.Take(1).ToList();
+
+        await coordinator.GenerateRepliesAsync(
+            roomParticipants,
+            actor,
+            "Discuss the roadmap for the next release.",
+            "session-1",
+            "test-token",
+            CancellationToken.None,
+            store,
+            "scope-1",
+            "room-1");
+
+        llmProvider.Requests.Should().HaveCount(1);
+
+        var messageEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatMessageEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatMessageEvent>())
+            .ToList();
+
+        var leftEvents = actor.Events
+            .Where(envelope => envelope.Payload!.Is(GroupChatParticipantLeftEvent.Descriptor))
+            .Select(envelope => envelope.Payload!.Unpack<GroupChatParticipantLeftEvent>())
+            .ToList();
+
+        messageEvents.Should().HaveCount(1);
+        messageEvents.Single().Content.Should().Contain("streamed reply from");
+        leftEvents.Should().BeEmpty();
     }
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, StreamingProxyActorStore Store, RecordingLlmProvider Provider) CreateCoordinator()
@@ -162,11 +213,16 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
 
     private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, StreamingProxyActorStore Store, RecordingLlmProvider Provider) CreateCoordinator(
         Func<LLMRequest, LLMResponse>? responseFactory)
+        => CreateCoordinator(responseFactory, null);
+
+    private static (StreamingProxyNyxParticipantCoordinator Coordinator, RecordingActor Actor, StreamingProxyActorStore Store, RecordingLlmProvider Provider) CreateCoordinator(
+        Func<LLMRequest, LLMResponse>? responseFactory,
+        Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory)
     {
         var handler = new StreamingProxyHttpHandler();
         var httpClient = new HttpClient(handler);
         var httpClientFactory = new StubHttpClientFactory(httpClient);
-        var provider = new RecordingLlmProvider(responseFactory);
+        var provider = new RecordingLlmProvider(responseFactory, streamFactory);
         var llmFactory = new StubLlmProviderFactory(provider);
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -267,9 +323,12 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
         public IReadOnlyList<string> GetAvailableProviders() => ["nyxid"];
     }
 
-    private sealed class RecordingLlmProvider(Func<LLMRequest, LLMResponse>? responseFactory = null) : ILLMProvider
+    private sealed class RecordingLlmProvider(
+        Func<LLMRequest, LLMResponse>? responseFactory = null,
+        Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? streamFactory = null) : ILLMProvider
     {
         private readonly Func<LLMRequest, LLMResponse>? _responseFactory = responseFactory;
+        private readonly Func<LLMRequest, IReadOnlyList<LLMStreamChunk>>? _streamFactory = streamFactory;
 
         public string Name => "nyxid";
 
@@ -291,8 +350,51 @@ public sealed class StreamingProxyNyxParticipantCoordinatorTests
             });
         }
 
-        public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+            LLMRequest request,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            Requests.Add(request);
+
+            if (_streamFactory != null)
+            {
+                foreach (var chunk in _streamFactory(request))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    yield return chunk;
+                }
+
+                yield break;
+            }
+
+            if (_responseFactory != null)
+            {
+                var response = _responseFactory(request);
+                if (!string.IsNullOrWhiteSpace(response.Content))
+                    yield return new LLMStreamChunk { DeltaContent = response.Content };
+
+                yield return new LLMStreamChunk
+                {
+                    FinishReason = response.FinishReason ?? "stop",
+                    IsLast = true,
+                    Usage = response.Usage,
+                };
+                yield break;
+            }
+
+            if (request.RequestId?.Contains("node-a", StringComparison.OrdinalIgnoreCase) == true)
+                throw new InvalidOperationException("node-a is unavailable");
+
+            yield return new LLMStreamChunk
+            {
+                DeltaContent = $"reply from {request.RequestId}",
+            };
+            yield return new LLMStreamChunk
+            {
+                FinishReason = "stop",
+                IsLast = true,
+            };
+        }
     }
 
     private sealed class RecordingActor(string id) : IActor

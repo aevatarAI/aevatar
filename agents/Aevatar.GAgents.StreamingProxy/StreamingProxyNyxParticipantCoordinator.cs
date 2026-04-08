@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -166,7 +167,7 @@ internal sealed class StreamingProxyNyxParticipantCoordinator
                         transcript,
                         round,
                         rounds);
-                    var response = await provider.ChatAsync(request, ct);
+                    var response = await ReadParticipantResponseAsync(provider, request, ct);
                     if (IsUnavailableResponse(response))
                     {
                         failedParticipants.Add(participant.ParticipantId);
@@ -815,6 +816,50 @@ Return only {participant.DisplayName}'s reply text, with no prefixed name and no
             Model = participant.Model,
             Temperature = 0.7,
             MaxTokens = 220,
+        };
+    }
+
+    private static async Task<LLMResponse> ReadParticipantResponseAsync(
+        ILLMProvider provider,
+        LLMRequest request,
+        CancellationToken ct)
+    {
+        var content = new StringBuilder();
+        List<ContentPart>? contentParts = null;
+        TokenUsage? usage = null;
+        string? finishReason = null;
+
+        await foreach (var chunk in provider.ChatStreamAsync(request, ct).WithCancellation(ct))
+        {
+            if (!string.IsNullOrWhiteSpace(chunk.DeltaContent))
+                content.Append(chunk.DeltaContent);
+
+            if (chunk.DeltaContentPart != null)
+            {
+                if (chunk.DeltaContentPart.Kind == ContentPartKind.Text &&
+                    !string.IsNullOrWhiteSpace(chunk.DeltaContentPart.Text))
+                {
+                    content.Append(chunk.DeltaContentPart.Text);
+                }
+                else
+                {
+                    contentParts ??= [];
+                    contentParts.Add(chunk.DeltaContentPart);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(chunk.FinishReason))
+                finishReason = chunk.FinishReason;
+
+            usage = chunk.Usage ?? usage;
+        }
+
+        return new LLMResponse
+        {
+            Content = content.Length > 0 ? content.ToString() : null,
+            ContentParts = contentParts,
+            FinishReason = finishReason,
+            Usage = usage,
         };
     }
 
