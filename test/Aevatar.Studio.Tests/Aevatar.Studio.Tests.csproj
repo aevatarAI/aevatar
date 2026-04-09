@@ -18,6 +18,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Aevatar.Studio.Domain/Aevatar.Studio.Domain.csproj" />
     <ProjectReference Include="../../src/Aevatar.Studio.Application/Aevatar.Studio.Application.csproj" />
+    <ProjectReference Include="../../src/platform/Aevatar.GAgentService.Hosting/Aevatar.GAgentService.Hosting.csproj" />
+    <ProjectReference Include="../../src/Aevatar.Authentication.Providers.NyxId/Aevatar.Authentication.Providers.NyxId.csproj" />
   </ItemGroup>
 
   <ItemGroup>
