@@ -10,8 +10,8 @@ namespace Aevatar.GAgents.ChatHistory;
 /// Per-user index actor that holds conversation list and metadata.
 /// Actor ID: <c>chat-index-{scopeId}</c>.
 ///
-/// After each state change, publishes <see cref="ChatHistoryIndexStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date snapshot.
+/// After each state change, pushes the current state to the paired
+/// <see cref="ChatHistoryIndexReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
 {
@@ -22,7 +22,7 @@ public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "removeConversation")]
@@ -38,13 +38,13 @@ public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override ChatHistoryIndexState TransitionState(
@@ -84,9 +84,10 @@ public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
         return next;
     }
 
-    private async Task PublishStateSnapshotAsync()
+    private async Task PushToReadModelAsync()
     {
-        var snapshot = new ChatHistoryIndexStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
+        var readModelActorId = Id + "-readmodel";
+        var update = new ChatHistoryIndexReadModelUpdateEvent { Snapshot = State.Clone() };
+        await SendToAsync(readModelActorId, update);
     }
 }

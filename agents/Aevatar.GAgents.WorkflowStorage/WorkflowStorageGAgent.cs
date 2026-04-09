@@ -12,9 +12,8 @@ namespace Aevatar.GAgents.WorkflowStorage;
 ///
 /// Actor ID: <c>workflow-storage</c> (cluster-scoped singleton).
 ///
-/// After each state change, publishes <see cref="WorkflowStorageStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date projection without
-/// reading write-model internal state.
+/// Write-only: no readmodel needed since the only port method is
+/// <c>UploadWorkflowYamlAsync</c>.
 /// </summary>
 public sealed class WorkflowStorageGAgent : GAgentBase<WorkflowStorageState>
 {
@@ -25,17 +24,6 @@ public sealed class WorkflowStorageGAgent : GAgentBase<WorkflowStorageState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
-    }
-
-    /// <summary>
-    /// On activation (after event replay), publish the current state so
-    /// any subscriber that activates the actor can receive the initial snapshot.
-    /// </summary>
-    protected override async Task OnActivateAsync(CancellationToken ct)
-    {
-        await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
     }
 
     protected override WorkflowStorageState TransitionState(
@@ -57,11 +45,5 @@ public sealed class WorkflowStorageGAgent : GAgentBase<WorkflowStorageState>
             Yaml = evt.Yaml,
         };
         return next;
-    }
-
-    private async Task PublishStateSnapshotAsync()
-    {
-        var snapshot = new WorkflowStorageStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
     }
 }

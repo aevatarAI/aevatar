@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -14,18 +13,18 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IUserMemoryStore"/>.
-/// Per-scope isolation: each scope gets its own <c>user-memory-{scopeId}</c> actor.
+/// Completely stateless: no fields hold snapshot or subscription state.
+/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Writes send commands to the Write GAgent.
 /// </summary>
-internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDisposable
+internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 {
-    private const string ActorIdPrefix = "user-memory-";
+    private const string WriteActorIdPrefix = "user-memory-";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly ILogger<ActorBackedUserMemoryStore> _logger;
-
-    private readonly ConcurrentDictionary<string, ScopeState> _scopes = new(StringComparer.Ordinal);
 
     public ActorBackedUserMemoryStore(
         IActorRuntime runtime,
@@ -41,9 +40,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDispo
 
     public async Task<UserMemoryDocument> GetAsync(CancellationToken ct = default)
     {
-        var scopeState = await EnsureScopeAsync(ct);
-
-        var state = scopeState.Snapshot;
+        var state = await ReadFromReadModelAsync(ct);
         if (state is null)
             return UserMemoryDocument.Empty;
 
@@ -81,7 +78,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDispo
         // Add entries not in the current state
         foreach (var entry in document.Entries.Where(e => !currentIds.Contains(e.Id)))
         {
-            var actor = await EnsureActorAsync(ct);
+            var actor = await EnsureWriteActorAsync(ct);
             var evt = new MemoryEntryAddedEvent
             {
                 Entry = new UserMemoryEntryProto
@@ -101,7 +98,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDispo
     public async Task<UserMemoryEntry> AddEntryAsync(
         string category, string content, string source, CancellationToken ct = default)
     {
-        var actor = await EnsureActorAsync(ct);
+        var actor = await EnsureWriteActorAsync(ct);
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var entry = new UserMemoryEntryProto
         {
@@ -127,13 +124,11 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDispo
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
-        var scopeState = await EnsureScopeAsync(ct);
-
-        var state = scopeState.Snapshot;
+        var state = await ReadFromReadModelAsync(ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
-        var actor = await EnsureActorAsync(ct);
+        var actor = await EnsureWriteActorAsync(ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
         await SendCommandAsync(actor, evt, ct);
         return true;
@@ -198,86 +193,70 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDispo
             : truncated;
     }
 
-    public async ValueTask DisposeAsync()
+    // ── Per-request readmodel read (no service-level state) ──
+
+    private async Task<UserMemoryState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        foreach (var scope in _scopes.Values)
+        var readModelActorId = ResolveReadModelActorId();
+        var tcs = new TaskCompletionSource<UserMemoryState?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
+            readModelActorId,
+            envelope =>
+            {
+                if (envelope.Payload?.Is(UserMemoryStateSnapshotEvent.Descriptor) == true)
+                {
+                    var snapshot = envelope.Payload.Unpack<UserMemoryStateSnapshotEvent>();
+                    tcs.TrySetResult(snapshot.Snapshot);
+                }
+                return Task.CompletedTask;
+            },
+            ct);
+
+        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
+        await EnsureReadModelActorAsync(readModelActorId, ct);
+
+        // Wait for snapshot with timeout
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        try
         {
-            if (scope.Subscription is not null)
-                await scope.Subscription.DisposeAsync();
+            return await tcs.Task.WaitAsync(cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
+            return null;
         }
     }
 
-    private string ResolveActorId()
+    // ── Actor resolution ──
+
+    private string ResolveScopeId()
     {
         var scope = _scopeResolver.Resolve();
         if (scope is null)
             throw new InvalidOperationException(
                 "User memory store requires an authenticated user scope. No scope could be resolved.");
-        return ActorIdPrefix + scope.ScopeId;
+        return scope.ScopeId;
     }
 
-    private async Task<ScopeState> EnsureScopeAsync(CancellationToken ct)
+    private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
+    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
+
+    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        var actorId = ResolveActorId();
-        var scopeState = _scopes.GetOrAdd(actorId, _ => new ScopeState(actorId));
-
-        if (scopeState.Initialized)
-            return scopeState;
-
-        await scopeState.InitLock.WaitAsync(ct);
-        try
-        {
-            if (scopeState.Initialized)
-                return scopeState;
-
-            scopeState.Subscription = await _subscriptions.SubscribeAsync<EventEnvelope>(
-                actorId,
-                envelope => HandleSnapshotEventAsync(actorId, envelope),
-                ct);
-
-            await EnsureActorAsync(actorId, ct);
-            scopeState.Initialized = true;
-        }
-        finally
-        {
-            scopeState.InitLock.Release();
-        }
-
-        return scopeState;
-    }
-
-    private Task HandleSnapshotEventAsync(string actorId, EventEnvelope envelope)
-    {
-        if (envelope.Payload is null)
-            return Task.CompletedTask;
-
-        if (envelope.Payload.Is(UserMemoryStateSnapshotEvent.Descriptor))
-        {
-            var snapshot = envelope.Payload.Unpack<UserMemoryStateSnapshotEvent>();
-            if (_scopes.TryGetValue(actorId, out var scopeState))
-            {
-                scopeState.Snapshot = snapshot.Snapshot;
-                _logger.LogDebug("User memory readmodel updated for {ActorId}: {EntryCount} entries",
-                    actorId, snapshot.Snapshot?.Entries.Count ?? 0);
-            }
-        }
-
-        return Task.CompletedTask;
-    }
-
-    private async Task<IActor> EnsureActorAsync(string actorId, CancellationToken ct)
-    {
+        var actorId = ResolveWriteActorId();
         var actor = await _runtime.GetAsync(actorId);
-        if (actor is not null)
-            return actor;
-
-        return await _runtime.CreateAsync<UserMemoryGAgent>(actorId, ct);
+        return actor ?? await _runtime.CreateAsync<UserMemoryGAgent>(actorId, ct);
     }
 
-    private async Task<IActor> EnsureActorAsync(CancellationToken ct)
+    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
     {
-        var actorId = ResolveActorId();
-        return await EnsureActorAsync(actorId, ct);
+        var actor = await _runtime.GetAsync(readModelActorId);
+        if (actor is null)
+            await _runtime.CreateAsync<UserMemoryReadModelGAgent>(readModelActorId, ct);
     }
 
     private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
@@ -318,13 +297,4 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore, IAsyncDispo
 
     private static string Capitalize(string s) =>
         s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
-
-    private sealed class ScopeState(string actorId)
-    {
-        public string ActorId { get; } = actorId;
-        public SemaphoreSlim InitLock { get; } = new(1, 1);
-        public volatile bool Initialized;
-        public volatile UserMemoryState? Snapshot;
-        public IAsyncDisposable? Subscription;
-    }
 }

@@ -10,14 +10,16 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IRoleCatalogStore"/>.
-/// Writes go through <see cref="RoleCatalogGAgent"/> event handlers.
-/// Reads come from a readmodel snapshot maintained via event subscription.
+/// Completely stateless: no fields hold snapshot or subscription state.
+/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Writes send commands to the Write GAgent.
 /// Local workspace operations (ImportLocalCatalogAsync) delegate to
 /// <see cref="IStudioWorkspaceStore"/>.
 /// </summary>
-internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDisposable
+internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 {
-    private const string CatalogActorId = "role-catalog";
+    private const string WriteActorId = "role-catalog";
+    private const string ReadModelActorId = "role-catalog-readmodel";
     private const string ActorHomeDirectory = "actor://role-catalog";
     private const string ActorFilePath = "actor://role-catalog/roles";
 
@@ -25,11 +27,6 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
     private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IStudioWorkspaceStore _localWorkspaceStore;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
-
-    private readonly SemaphoreSlim _initLock = new(1, 1);
-    private volatile RoleCatalogState? _snapshot;
-    private IAsyncDisposable? _subscription;
-    private bool _initialized;
 
     public ActorBackedRoleCatalogStore(
         IActorRuntime runtime,
@@ -45,9 +42,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
 
     public async Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default)
     {
-        await EnsureInitializedAsync(cancellationToken);
-
-        var state = _snapshot;
+        var state = await ReadFromReadModelAsync(cancellationToken);
         var roles = state?.Roles
             .Select(ToStoredRoleDefinition)
             .ToList()
@@ -65,7 +60,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
         StoredRoleCatalog catalog,
         CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
         await SendCommandAsync(actor, evt, cancellationToken);
@@ -85,7 +80,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
             throw new InvalidOperationException($"Local role catalog not found at '{localCatalog.FilePath}'.");
         }
 
-        var actor = await EnsureActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
         await SendCommandAsync(actor, evt, cancellationToken);
@@ -101,9 +96,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
 
     public async Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default)
     {
-        await EnsureInitializedAsync(cancellationToken);
-
-        var state = _snapshot;
+        var state = await ReadFromReadModelAsync(cancellationToken);
         var draftEntry = state?.Draft;
         if (draftEntry is null)
         {
@@ -127,7 +120,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
         StoredRoleDraft draft,
         CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         var updatedAtUtc = draft.UpdatedAtUtc ?? DateTimeOffset.UtcNow;
         var evt = new RoleDraftSavedEvent
         {
@@ -146,69 +139,60 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore, IAsyncDis
 
     public async Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         await SendCommandAsync(actor, new RoleDraftDeletedEvent(), cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_subscription is not null)
-            await _subscription.DisposeAsync();
-    }
+    // ── Per-request readmodel read (no service-level state) ──
 
-    private async Task EnsureInitializedAsync(CancellationToken ct)
+    private async Task<RoleCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        if (_initialized)
-            return;
+        var tcs = new TaskCompletionSource<RoleCatalogState?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await _initLock.WaitAsync(ct);
+        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
+            ReadModelActorId,
+            envelope =>
+            {
+                if (envelope.Payload?.Is(RoleCatalogStateSnapshotEvent.Descriptor) == true)
+                {
+                    var snapshot = envelope.Payload.Unpack<RoleCatalogStateSnapshotEvent>();
+                    tcs.TrySetResult(snapshot.Snapshot);
+                }
+                return Task.CompletedTask;
+            },
+            ct);
+
+        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
+        await EnsureReadModelActorAsync(ct);
+
+        // Wait for snapshot with timeout
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            if (_initialized)
-                return;
-
-            // Subscribe to the catalog actor's events to receive state snapshots
-            _subscription = await _subscriptions.SubscribeAsync<EventEnvelope>(
-                CatalogActorId,
-                HandleCatalogEventAsync,
-                ct);
-
-            // Activate the actor — this triggers event replay + OnActivateAsync
-            // which publishes the initial state snapshot
-            await EnsureActorAsync(ct);
-
-            _initialized = true;
+            return await tcs.Task.WaitAsync(cts.Token);
         }
-        finally
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _initLock.Release();
+            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", ReadModelActorId);
+            return null;
         }
     }
 
-    private Task HandleCatalogEventAsync(EventEnvelope envelope)
+    // ── Actor resolution ──
+
+    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        if (envelope.Payload is null)
-            return Task.CompletedTask;
-
-        if (envelope.Payload.Is(RoleCatalogStateSnapshotEvent.Descriptor))
-        {
-            var snapshot = envelope.Payload.Unpack<RoleCatalogStateSnapshotEvent>();
-            _snapshot = snapshot.Snapshot;
-            _logger.LogDebug("Role catalog readmodel updated: {RoleCount} roles, draft={HasDraft}",
-                snapshot.Snapshot?.Roles.Count ?? 0,
-                snapshot.Snapshot?.Draft is not null);
-        }
-
-        return Task.CompletedTask;
+        var actor = await _runtime.GetAsync(WriteActorId);
+        return actor ?? await _runtime.CreateAsync<RoleCatalogGAgent>(WriteActorId, ct);
     }
 
-    private async Task<IActor> EnsureActorAsync(CancellationToken ct)
+    private async Task EnsureReadModelActorAsync(CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(CatalogActorId);
-        if (actor is not null)
-            return actor;
-
-        return await _runtime.CreateAsync<RoleCatalogGAgent>(CatalogActorId, ct);
+        var actor = await _runtime.GetAsync(ReadModelActorId);
+        if (actor is null)
+            await _runtime.CreateAsync<RoleCatalogReadModelGAgent>(ReadModelActorId, ct);
     }
 
     private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)

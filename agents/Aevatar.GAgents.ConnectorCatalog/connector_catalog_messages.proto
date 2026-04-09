@@ -4,25 +4,78 @@ option csharp_namespace = "Aevatar.GAgents.ConnectorCatalog";
 
 import "google/protobuf/timestamp.proto";
 
+// ─── Sub-messages ───
+
+message ConnectorAuthEntry {
+  string type = 1;
+  string token_url = 2;
+  string client_id = 3;
+  string client_secret = 4;
+  string scope = 5;
+}
+
+message HttpConnectorConfigEntry {
+  string base_url = 1;
+  repeated string allowed_methods = 2;
+  repeated string allowed_paths = 3;
+  repeated string allowed_input_keys = 4;
+  map<string, string> default_headers = 5;
+  ConnectorAuthEntry auth = 6;
+}
+
+message CliConnectorConfigEntry {
+  string command = 1;
+  repeated string fixed_arguments = 2;
+  repeated string allowed_operations = 3;
+  repeated string allowed_input_keys = 4;
+  string working_directory = 5;
+  map<string, string> environment = 6;
+}
+
+message McpConnectorConfigEntry {
+  string server_name = 1;
+  string command = 2;
+  string url = 3;
+  repeated string arguments = 4;
+  map<string, string> environment = 5;
+  map<string, string> additional_headers = 6;
+  ConnectorAuthEntry auth = 7;
+  string default_tool = 8;
+  repeated string allowed_tools = 9;
+  repeated string allowed_input_keys = 10;
+}
+
 // ─── State ───
 
-// Actor state persists catalog and draft as JSON strings.
-// The complex nested connector types (StoredConnectorDefinition, etc.)
-// are serialized/deserialized at the ActorBackedStore boundary.
+message ConnectorDefinitionEntry {
+  string name = 1;
+  string type = 2;
+  bool enabled = 3;
+  int32 timeout_ms = 4;
+  int32 retry = 5;
+  HttpConnectorConfigEntry http = 6;
+  CliConnectorConfigEntry cli = 7;
+  McpConnectorConfigEntry mcp = 8;
+}
+
+message ConnectorDraftEntry {
+  ConnectorDefinitionEntry draft = 1;
+  google.protobuf.Timestamp updated_at_utc = 2;
+}
+
 message ConnectorCatalogState {
-  string catalog_json = 1;
-  string draft_json = 2;
-  google.protobuf.Timestamp draft_updated_at_utc = 3;
+  repeated ConnectorDefinitionEntry connectors = 1;
+  ConnectorDraftEntry draft = 2;  // null when no draft exists
 }
 
 // ─── Events ───
 
 message ConnectorCatalogSavedEvent {
-  string catalog_json = 1;
+  repeated ConnectorDefinitionEntry connectors = 1;
 }
 
 message ConnectorDraftSavedEvent {
-  string draft_json = 1;
+  ConnectorDefinitionEntry draft = 1;
   google.protobuf.Timestamp updated_at_utc = 2;
 }
 
@@ -31,8 +84,12 @@ message ConnectorDraftDeletedEvent {
 
 // ─── Readmodel ───
 
-// Published by the GAgent after each state change so subscribers can
-// maintain an up-to-date readmodel without reading write-model state.
+// Published by ReadModel GAgent so subscribers can observe the current projected state.
 message ConnectorCatalogStateSnapshotEvent {
+  ConnectorCatalogState snapshot = 1;
+}
+
+// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
+message ConnectorCatalogReadModelUpdateEvent {
   ConnectorCatalogState snapshot = 1;
 }

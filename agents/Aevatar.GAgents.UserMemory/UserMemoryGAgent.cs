@@ -16,9 +16,8 @@ namespace Aevatar.GAgents.UserMemory;
 ///      evict the oldest entry in the same category first.
 ///   2. If no same-category entry remains, evict the globally oldest entry.
 ///
-/// After each state change, publishes <see cref="UserMemoryStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date projection without
-/// reading write-model internal state.
+/// After each state change, pushes the current state to the paired
+/// <see cref="UserMemoryReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
 {
@@ -37,7 +36,7 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "removeMemoryEntry")]
@@ -51,7 +50,7 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "clearMemoryEntries")]
@@ -61,17 +60,13 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
-    /// <summary>
-    /// On activation (after event replay), publish the current state so
-    /// any subscriber that activates the actor can receive the initial snapshot.
-    /// </summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override UserMemoryState TransitionState(
@@ -144,9 +139,10 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
         return next;
     }
 
-    private async Task PublishStateSnapshotAsync()
+    private async Task PushToReadModelAsync()
     {
-        var snapshot = new UserMemoryStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
+        var readModelActorId = Id + "-readmodel";
+        var update = new UserMemoryReadModelUpdateEvent { Snapshot = State.Clone() };
+        await SendToAsync(readModelActorId, update);
     }
 }

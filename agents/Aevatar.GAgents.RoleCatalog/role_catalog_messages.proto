@@ -45,3 +45,8 @@ message RoleDraftDeletedEvent {}
 message RoleCatalogStateSnapshotEvent {
   RoleCatalogState snapshot = 1;
 }
+
+// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
+message RoleCatalogReadModelUpdateEvent {
+  RoleCatalogState snapshot = 1;
+}

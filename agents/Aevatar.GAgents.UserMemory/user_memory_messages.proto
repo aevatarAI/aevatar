@@ -37,3 +37,8 @@ message MemoryEntriesClearedEvent {
 message UserMemoryStateSnapshotEvent {
   UserMemoryState snapshot = 1;
 }
+
+// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
+message UserMemoryReadModelUpdateEvent {
+  UserMemoryState snapshot = 1;
+}

@@ -10,11 +10,10 @@ namespace Aevatar.GAgents.UserConfig;
 /// User-scoped actor that owns the user configuration state.
 /// Replaces the chrono-storage backed <c>ChronoStorageUserConfigStore</c>.
 ///
-/// Actor ID: <c>user-config</c> (user-scoped singleton).
+/// Actor ID: <c>user-config-{scopeId}</c> (per-scope).
 ///
-/// After each state change, publishes <see cref="UserConfigStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date projection without
-/// reading write-model internal state.
+/// After each state change, pushes the current state to the paired
+/// <see cref="UserConfigReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
 {
@@ -22,17 +21,13 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
     public async Task HandleConfigUpdated(UserConfigUpdatedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
-    /// <summary>
-    /// On activation (after event replay), publish the current state so
-    /// any subscriber that activates the actor can receive the initial snapshot.
-    /// </summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override UserConfigGAgentState TransitionState(
@@ -58,9 +53,10 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
         };
     }
 
-    private async Task PublishStateSnapshotAsync()
+    private async Task PushToReadModelAsync()
     {
-        var snapshot = new UserConfigStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
+        var readModelActorId = Id + "-readmodel";
+        var update = new UserConfigReadModelUpdateEvent { Snapshot = State.Clone() };
+        await SendToAsync(readModelActorId, update);
     }
 }

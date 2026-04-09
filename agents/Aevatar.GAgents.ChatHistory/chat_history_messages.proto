@@ -38,10 +38,12 @@ message ChatConversationState {
 message MessagesReplacedEvent {
   repeated StoredChatMessageProto messages = 1;
   ConversationMetaProto meta = 2;
+  string scope_id = 3;
 }
 
 message ConversationDeletedEvent {
   string conversation_id = 1;
+  string scope_id = 2;
 }
 
 // ─── ChatConversationGAgent Snapshot ───
@@ -69,5 +71,17 @@ message ConversationRemovedEvent {
 // ─── ChatHistoryIndexGAgent Snapshot ───
 
 message ChatHistoryIndexStateSnapshotEvent {
+  ChatHistoryIndexState snapshot = 1;
+}
+
+// ─── ReadModel Update Events (sent via SendToAsync from write actors) ───
+
+// Sent from ChatConversationGAgent to ChatConversationReadModelGAgent.
+message ChatConversationReadModelUpdateEvent {
+  ChatConversationState snapshot = 1;
+}
+
+// Sent from ChatHistoryIndexGAgent to ChatHistoryIndexReadModelGAgent.
+message ChatHistoryIndexReadModelUpdateEvent {
   ChatHistoryIndexState snapshot = 1;
 }

@@ -1,9 +1,7 @@
-using System.Text;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.Storage;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -12,22 +10,21 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IConnectorCatalogStore"/>.
-/// Remote catalog persistence goes through <see cref="ConnectorCatalogGAgent"/>.
-/// Local workspace operations (import, draft) delegate to <see cref="IStudioWorkspaceStore"/>.
+/// Completely stateless: no fields hold snapshot or subscription state.
+/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Writes send commands to the Write GAgent.
+/// Local workspace operations (import, draft backup) delegate to <see cref="IStudioWorkspaceStore"/>.
 /// </summary>
-internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore, IAsyncDisposable
+internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 {
-    private const string CatalogActorId = "connector-catalog";
+    private const string WriteActorId = "connector-catalog";
+    private const string ActorHomeDirectory = "actor://connector-catalog";
+    private const string ActorFilePath = "actor://connector-catalog/connectors";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IStudioWorkspaceStore _workspaceStore;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
-
-    private readonly SemaphoreSlim _initLock = new(1, 1);
-    private volatile ConnectorCatalogState? _snapshot;
-    private IAsyncDisposable? _subscription;
-    private bool _initialized;
 
     public ActorBackedConnectorCatalogStore(
         IActorRuntime runtime,
@@ -44,23 +41,25 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore,
     public async Task<StoredConnectorCatalog> GetConnectorCatalogAsync(
         CancellationToken cancellationToken = default)
     {
-        await EnsureInitializedAsync(cancellationToken);
-
-        var state = _snapshot;
-        if (state is null || string.IsNullOrEmpty(state.CatalogJson))
+        var state = await ReadFromReadModelAsync(cancellationToken);
+        if (state is null)
         {
             return new StoredConnectorCatalog(
-                HomeDirectory: string.Empty,
-                FilePath: string.Empty,
+                HomeDirectory: ActorHomeDirectory,
+                FilePath: ActorFilePath,
                 FileExists: false,
                 Connectors: []);
         }
 
-        var connectors = await DeserializeCatalogJsonAsync(state.CatalogJson, cancellationToken);
+        var connectors = state.Connectors
+            .Select(ToStoredConnectorDefinition)
+            .ToList()
+            .AsReadOnly();
+
         return new StoredConnectorCatalog(
-            HomeDirectory: string.Empty,
-            FilePath: string.Empty,
-            FileExists: true,
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath,
+            FileExists: connectors.Count > 0,
             Connectors: connectors);
     }
 
@@ -68,14 +67,14 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore,
         StoredConnectorCatalog catalog,
         CancellationToken cancellationToken = default)
     {
-        var catalogJson = await SerializeCatalogJsonAsync(catalog.Connectors, cancellationToken);
-        var actor = await EnsureActorAsync(cancellationToken);
-        var evt = new ConnectorCatalogSavedEvent { CatalogJson = catalogJson };
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var evt = new ConnectorCatalogSavedEvent();
+        evt.Connectors.AddRange(catalog.Connectors.Select(ToProtoConnectorDefinition));
         await SendCommandAsync(actor, evt, cancellationToken);
 
         return new StoredConnectorCatalog(
-            HomeDirectory: string.Empty,
-            FilePath: string.Empty,
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath,
             FileExists: true,
             Connectors: catalog.Connectors);
     }
@@ -90,96 +89,126 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore,
                 $"Local connector catalog not found at '{localCatalog.FilePath}'.");
         }
 
-        // Persist the local catalog into the actor
-        var saved = await SaveConnectorCatalogAsync(
-            new StoredConnectorCatalog(
-                HomeDirectory: string.Empty,
-                FilePath: string.Empty,
-                FileExists: true,
-                Connectors: localCatalog.Connectors),
-            cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var evt = new ConnectorCatalogSavedEvent();
+        evt.Connectors.AddRange(localCatalog.Connectors.Select(ToProtoConnectorDefinition));
+        await SendCommandAsync(actor, evt, cancellationToken);
 
-        return new ImportedConnectorCatalog(localCatalog.FilePath, true, saved);
+        var importedCatalog = new StoredConnectorCatalog(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath,
+            FileExists: true,
+            Connectors: localCatalog.Connectors);
+
+        return new ImportedConnectorCatalog(localCatalog.FilePath, true, importedCatalog);
     }
 
-    public Task<StoredConnectorDraft> GetConnectorDraftAsync(
+    public async Task<StoredConnectorDraft> GetConnectorDraftAsync(
         CancellationToken cancellationToken = default)
     {
-        return _workspaceStore.GetConnectorDraftAsync(cancellationToken);
+        var state = await ReadFromReadModelAsync(cancellationToken);
+        var draftEntry = state?.Draft;
+        if (draftEntry is null)
+        {
+            return new StoredConnectorDraft(
+                HomeDirectory: ActorHomeDirectory,
+                FilePath: ActorFilePath + "/draft",
+                FileExists: false,
+                UpdatedAtUtc: null,
+                Draft: null);
+        }
+
+        return new StoredConnectorDraft(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath + "/draft",
+            FileExists: true,
+            UpdatedAtUtc: draftEntry.UpdatedAtUtc?.ToDateTimeOffset(),
+            Draft: draftEntry.Draft is not null ? ToStoredConnectorDefinition(draftEntry.Draft) : null);
     }
 
-    public Task<StoredConnectorDraft> SaveConnectorDraftAsync(
+    public async Task<StoredConnectorDraft> SaveConnectorDraftAsync(
         StoredConnectorDraft draft,
         CancellationToken cancellationToken = default)
     {
-        return _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var updatedAtUtc = draft.UpdatedAtUtc ?? DateTimeOffset.UtcNow;
+        var evt = new ConnectorDraftSavedEvent
+        {
+            Draft = draft.Draft is not null ? ToProtoConnectorDefinition(draft.Draft) : null,
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
+        };
+        await SendCommandAsync(actor, evt, cancellationToken);
+
+        // Also persist to local workspace for offline access
+        await _workspaceStore.SaveConnectorDraftAsync(draft, cancellationToken);
+
+        return new StoredConnectorDraft(
+            HomeDirectory: ActorHomeDirectory,
+            FilePath: ActorFilePath + "/draft",
+            FileExists: true,
+            UpdatedAtUtc: updatedAtUtc,
+            Draft: draft.Draft);
     }
 
-    public Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default)
+    public async Task DeleteConnectorDraftAsync(CancellationToken cancellationToken = default)
     {
-        return _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        await SendCommandAsync(actor, new ConnectorDraftDeletedEvent(), cancellationToken);
+
+        await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_subscription is not null)
-            await _subscription.DisposeAsync();
-    }
+    // ── Per-request readmodel read (no service-level state) ──
 
-    private async Task EnsureInitializedAsync(CancellationToken ct)
+    private async Task<ConnectorCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        if (_initialized)
-            return;
+        var readModelActorId = WriteActorId + "-readmodel";
+        var tcs = new TaskCompletionSource<ConnectorCatalogState?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await _initLock.WaitAsync(ct);
+        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
+            readModelActorId,
+            envelope =>
+            {
+                if (envelope.Payload?.Is(ConnectorCatalogStateSnapshotEvent.Descriptor) == true)
+                {
+                    var snapshot = envelope.Payload.Unpack<ConnectorCatalogStateSnapshotEvent>();
+                    tcs.TrySetResult(snapshot.Snapshot);
+                }
+                return Task.CompletedTask;
+            },
+            ct);
+
+        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
+        await EnsureReadModelActorAsync(readModelActorId, ct);
+
+        // Wait for snapshot with timeout
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            if (_initialized)
-                return;
-
-            // Subscribe to the catalog actor's events to receive state snapshots
-            _subscription = await _subscriptions.SubscribeAsync<EventEnvelope>(
-                CatalogActorId,
-                HandleCatalogEventAsync,
-                ct);
-
-            // Activate the actor — triggers event replay + OnActivateAsync
-            // which publishes the initial state snapshot
-            await EnsureActorAsync(ct);
-
-            _initialized = true;
+            return await tcs.Task.WaitAsync(cts.Token);
         }
-        finally
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _initLock.Release();
+            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
+            return null;
         }
     }
 
-    private Task HandleCatalogEventAsync(EventEnvelope envelope)
+    // ── Actor resolution ──
+
+    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        if (envelope.Payload is null)
-            return Task.CompletedTask;
-
-        if (envelope.Payload.Is(ConnectorCatalogStateSnapshotEvent.Descriptor))
-        {
-            var snapshot = envelope.Payload.Unpack<ConnectorCatalogStateSnapshotEvent>();
-            _snapshot = snapshot.Snapshot;
-            _logger.LogDebug(
-                "Connector catalog readmodel updated: catalog has {HasCatalog}, draft has {HasDraft}",
-                !string.IsNullOrEmpty(snapshot.Snapshot?.CatalogJson),
-                !string.IsNullOrEmpty(snapshot.Snapshot?.DraftJson));
-        }
-
-        return Task.CompletedTask;
+        var actor = await _runtime.GetAsync(WriteActorId);
+        return actor ?? await _runtime.CreateAsync<ConnectorCatalogGAgent>(WriteActorId, ct);
     }
 
-    private async Task<IActor> EnsureActorAsync(CancellationToken ct)
+    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(CatalogActorId);
-        if (actor is not null)
-            return actor;
-
-        return await _runtime.CreateAsync<ConnectorCatalogGAgent>(CatalogActorId, ct);
+        var actor = await _runtime.GetAsync(readModelActorId);
+        if (actor is null)
+            await _runtime.CreateAsync<ConnectorCatalogReadModelGAgent>(readModelActorId, ct);
     }
 
     private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
@@ -197,21 +226,146 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore,
         await actor.HandleEventAsync(envelope, ct);
     }
 
-    private static async Task<string> SerializeCatalogJsonAsync(
-        IReadOnlyList<StoredConnectorDefinition> connectors,
-        CancellationToken ct)
+    // ── Proto <-> Domain mapping ──
+
+    private static StoredConnectorDefinition ToStoredConnectorDefinition(ConnectorDefinitionEntry entry) =>
+        new(
+            Name: entry.Name,
+            Type: entry.Type,
+            Enabled: entry.Enabled,
+            TimeoutMs: entry.TimeoutMs,
+            Retry: entry.Retry,
+            Http: entry.Http is not null ? ToStoredHttpConfig(entry.Http) : EmptyHttpConfig(),
+            Cli: entry.Cli is not null ? ToStoredCliConfig(entry.Cli) : EmptyCliConfig(),
+            Mcp: entry.Mcp is not null ? ToStoredMcpConfig(entry.Mcp) : EmptyMcpConfig());
+
+    private static StoredHttpConnectorConfig ToStoredHttpConfig(HttpConnectorConfigEntry entry) =>
+        new(
+            BaseUrl: entry.BaseUrl,
+            AllowedMethods: entry.AllowedMethods.ToList().AsReadOnly(),
+            AllowedPaths: entry.AllowedPaths.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly(),
+            DefaultHeaders: new Dictionary<string, string>(entry.DefaultHeaders, StringComparer.OrdinalIgnoreCase),
+            Auth: entry.Auth is not null ? ToStoredAuthConfig(entry.Auth) : EmptyAuthConfig());
+
+    private static StoredCliConnectorConfig ToStoredCliConfig(CliConnectorConfigEntry entry) =>
+        new(
+            Command: entry.Command,
+            FixedArguments: entry.FixedArguments.ToList().AsReadOnly(),
+            AllowedOperations: entry.AllowedOperations.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly(),
+            WorkingDirectory: entry.WorkingDirectory,
+            Environment: new Dictionary<string, string>(entry.Environment, StringComparer.OrdinalIgnoreCase));
+
+    private static StoredMcpConnectorConfig ToStoredMcpConfig(McpConnectorConfigEntry entry) =>
+        new(
+            ServerName: entry.ServerName,
+            Command: entry.Command,
+            Url: entry.Url,
+            Arguments: entry.Arguments.ToList().AsReadOnly(),
+            Environment: new Dictionary<string, string>(entry.Environment, StringComparer.OrdinalIgnoreCase),
+            AdditionalHeaders: new Dictionary<string, string>(entry.AdditionalHeaders, StringComparer.OrdinalIgnoreCase),
+            Auth: entry.Auth is not null ? ToStoredAuthConfig(entry.Auth) : EmptyAuthConfig(),
+            DefaultTool: entry.DefaultTool,
+            AllowedTools: entry.AllowedTools.ToList().AsReadOnly(),
+            AllowedInputKeys: entry.AllowedInputKeys.ToList().AsReadOnly());
+
+    private static StoredConnectorAuthConfig ToStoredAuthConfig(ConnectorAuthEntry entry) =>
+        new(
+            Type: entry.Type,
+            TokenUrl: entry.TokenUrl,
+            ClientId: entry.ClientId,
+            ClientSecret: entry.ClientSecret,
+            Scope: entry.Scope);
+
+    private static ConnectorDefinitionEntry ToProtoConnectorDefinition(StoredConnectorDefinition def)
     {
-        await using var stream = new MemoryStream();
-        await ConnectorCatalogJsonSerializer.WriteCatalogAsync(stream, connectors, ct);
-        return Encoding.UTF8.GetString(stream.ToArray());
+        var entry = new ConnectorDefinitionEntry
+        {
+            Name = def.Name,
+            Type = def.Type,
+            Enabled = def.Enabled,
+            TimeoutMs = def.TimeoutMs,
+            Retry = def.Retry,
+            Http = ToProtoHttpConfig(def.Http),
+            Cli = ToProtoCliConfig(def.Cli),
+            Mcp = ToProtoMcpConfig(def.Mcp),
+        };
+        return entry;
     }
 
-    private static async Task<IReadOnlyList<StoredConnectorDefinition>> DeserializeCatalogJsonAsync(
-        string json,
-        CancellationToken ct)
+    private static HttpConnectorConfigEntry ToProtoHttpConfig(StoredHttpConnectorConfig config)
     {
-        var bytes = Encoding.UTF8.GetBytes(json);
-        await using var stream = new MemoryStream(bytes, writable: false);
-        return await ConnectorCatalogJsonSerializer.ReadCatalogAsync(stream, ct);
+        var entry = new HttpConnectorConfigEntry
+        {
+            BaseUrl = config.BaseUrl,
+            Auth = ToProtoAuthConfig(config.Auth),
+        };
+        entry.AllowedMethods.AddRange(config.AllowedMethods);
+        entry.AllowedPaths.AddRange(config.AllowedPaths);
+        entry.AllowedInputKeys.AddRange(config.AllowedInputKeys);
+        foreach (var kvp in config.DefaultHeaders)
+            entry.DefaultHeaders[kvp.Key] = kvp.Value;
+        return entry;
     }
+
+    private static CliConnectorConfigEntry ToProtoCliConfig(StoredCliConnectorConfig config)
+    {
+        var entry = new CliConnectorConfigEntry
+        {
+            Command = config.Command,
+            WorkingDirectory = config.WorkingDirectory,
+        };
+        entry.FixedArguments.AddRange(config.FixedArguments);
+        entry.AllowedOperations.AddRange(config.AllowedOperations);
+        entry.AllowedInputKeys.AddRange(config.AllowedInputKeys);
+        foreach (var kvp in config.Environment)
+            entry.Environment[kvp.Key] = kvp.Value;
+        return entry;
+    }
+
+    private static McpConnectorConfigEntry ToProtoMcpConfig(StoredMcpConnectorConfig config)
+    {
+        var entry = new McpConnectorConfigEntry
+        {
+            ServerName = config.ServerName,
+            Command = config.Command,
+            Url = config.Url,
+            Auth = ToProtoAuthConfig(config.Auth),
+            DefaultTool = config.DefaultTool,
+        };
+        entry.Arguments.AddRange(config.Arguments);
+        entry.AllowedTools.AddRange(config.AllowedTools);
+        entry.AllowedInputKeys.AddRange(config.AllowedInputKeys);
+        foreach (var kvp in config.Environment)
+            entry.Environment[kvp.Key] = kvp.Value;
+        foreach (var kvp in config.AdditionalHeaders)
+            entry.AdditionalHeaders[kvp.Key] = kvp.Value;
+        return entry;
+    }
+
+    private static ConnectorAuthEntry ToProtoAuthConfig(StoredConnectorAuthConfig config) =>
+        new()
+        {
+            Type = config.Type,
+            TokenUrl = config.TokenUrl,
+            ClientId = config.ClientId,
+            ClientSecret = config.ClientSecret,
+            Scope = config.Scope,
+        };
+
+    private static StoredHttpConnectorConfig EmptyHttpConfig() =>
+        new(string.Empty, [], [], [], new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase), EmptyAuthConfig());
+
+    private static StoredCliConnectorConfig EmptyCliConfig() =>
+        new(string.Empty, [], [], [], string.Empty, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+    private static StoredMcpConnectorConfig EmptyMcpConfig() =>
+        new(string.Empty, string.Empty, string.Empty, [],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            EmptyAuthConfig(), string.Empty, [], []);
+
+    private static StoredConnectorAuthConfig EmptyAuthConfig() =>
+        new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
 }

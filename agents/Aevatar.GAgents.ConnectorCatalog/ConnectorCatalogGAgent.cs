@@ -7,54 +7,46 @@ using Google.Protobuf;
 namespace Aevatar.GAgents.ConnectorCatalog;
 
 /// <summary>
-/// Singleton actor that persists the connector catalog and draft.
+/// Singleton actor that owns the connector catalog and draft.
 /// Replaces the chrono-storage backed <c>ChronoStorageConnectorCatalogStore</c>
-/// for remote persistence operations.
+/// for remote persistence concerns.
 ///
 /// Actor ID: <c>connector-catalog</c> (cluster-scoped singleton).
 ///
-/// After each state change, publishes <see cref="ConnectorCatalogStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date projection without
-/// reading write-model internal state.
+/// After each state change, pushes the current state to the paired
+/// <see cref="ConnectorCatalogReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
 {
     [EventHandler(EndpointName = "saveCatalog")]
     public async Task HandleCatalogSaved(ConnectorCatalogSavedEvent evt)
     {
-        if (string.IsNullOrWhiteSpace(evt.CatalogJson))
-            return;
-
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "saveDraft")]
     public async Task HandleDraftSaved(ConnectorDraftSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "deleteDraft")]
     public async Task HandleDraftDeleted(ConnectorDraftDeletedEvent evt)
     {
         // Idempotent: skip if no draft exists
-        if (string.IsNullOrEmpty(State.DraftJson))
+        if (State.Draft is null)
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
-    /// <summary>
-    /// On activation (after event replay), publish the current state so
-    /// any subscriber that activates the actor can receive the initial snapshot.
-    /// </summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override ConnectorCatalogState TransitionState(
@@ -72,7 +64,8 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
         ConnectorCatalogState state, ConnectorCatalogSavedEvent evt)
     {
         var next = state.Clone();
-        next.CatalogJson = evt.CatalogJson;
+        next.Connectors.Clear();
+        next.Connectors.AddRange(evt.Connectors);
         return next;
     }
 
@@ -80,8 +73,11 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
         ConnectorCatalogState state, ConnectorDraftSavedEvent evt)
     {
         var next = state.Clone();
-        next.DraftJson = evt.DraftJson;
-        next.DraftUpdatedAtUtc = evt.UpdatedAtUtc;
+        next.Draft = new ConnectorDraftEntry
+        {
+            Draft = evt.Draft?.Clone(),
+            UpdatedAtUtc = evt.UpdatedAtUtc,
+        };
         return next;
     }
 
@@ -89,14 +85,14 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
         ConnectorCatalogState state, ConnectorDraftDeletedEvent _)
     {
         var next = state.Clone();
-        next.DraftJson = string.Empty;
-        next.DraftUpdatedAtUtc = null;
+        next.Draft = null;
         return next;
     }
 
-    private async Task PublishStateSnapshotAsync()
+    private async Task PushToReadModelAsync()
     {
-        var snapshot = new ConnectorCatalogStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
+        var readModelActorId = Id + "-readmodel";
+        var update = new ConnectorCatalogReadModelUpdateEvent { Snapshot = State.Clone() };
+        await SendToAsync(readModelActorId, update);
     }
 }

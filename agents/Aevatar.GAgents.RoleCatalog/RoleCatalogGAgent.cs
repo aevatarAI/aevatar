@@ -14,9 +14,8 @@ namespace Aevatar.GAgents.RoleCatalog;
 ///
 /// Actor ID: <c>role-catalog</c> (cluster-scoped singleton).
 ///
-/// After each state change, publishes <see cref="RoleCatalogStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date projection without
-/// reading write-model internal state.
+/// After each state change, pushes the current state to the paired
+/// <see cref="RoleCatalogReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
 {
@@ -24,14 +23,14 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
     public async Task HandleCatalogSaved(RoleCatalogSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "saveDraft")]
     public async Task HandleDraftSaved(RoleDraftSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "deleteDraft")]
@@ -41,17 +40,13 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
-    /// <summary>
-    /// On activation (after event replay), publish the current state so
-    /// any subscriber that activates the actor can receive the initial snapshot.
-    /// </summary>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override RoleCatalogState TransitionState(
@@ -94,9 +89,10 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
         return next;
     }
 
-    private async Task PublishStateSnapshotAsync()
+    private async Task PushToReadModelAsync()
     {
-        var snapshot = new RoleCatalogStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
+        var readModelActorId = Id + "-readmodel";
+        var update = new RoleCatalogReadModelUpdateEvent { Snapshot = State.Clone() };
+        await SendToAsync(readModelActorId, update);
     }
 }

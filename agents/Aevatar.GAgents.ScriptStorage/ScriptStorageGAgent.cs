@@ -12,9 +12,8 @@ namespace Aevatar.GAgents.ScriptStorage;
 ///
 /// Actor ID: <c>script-storage</c> (cluster-scoped singleton).
 ///
-/// After each state change, publishes <see cref="ScriptStorageStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date projection without
-/// reading write-model internal state.
+/// Write-only: no readmodel needed since the only port method is
+/// <c>UploadScriptAsync</c>.
 /// </summary>
 public sealed class ScriptStorageGAgent : GAgentBase<ScriptStorageState>
 {
@@ -25,17 +24,6 @@ public sealed class ScriptStorageGAgent : GAgentBase<ScriptStorageState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
-    }
-
-    /// <summary>
-    /// On activation (after event replay), publish the current state so
-    /// any subscriber that activates the actor can receive the initial snapshot.
-    /// </summary>
-    protected override async Task OnActivateAsync(CancellationToken ct)
-    {
-        await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
     }
 
     protected override ScriptStorageState TransitionState(
@@ -53,11 +41,5 @@ public sealed class ScriptStorageGAgent : GAgentBase<ScriptStorageState>
         var next = state.Clone();
         next.Scripts[evt.ScriptId] = evt.SourceText;
         return next;
-    }
-
-    private async Task PublishStateSnapshotAsync()
-    {
-        var snapshot = new ScriptStorageStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
     }
 }

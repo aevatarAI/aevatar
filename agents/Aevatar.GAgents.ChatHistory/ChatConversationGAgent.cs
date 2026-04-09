@@ -8,10 +8,14 @@ namespace Aevatar.GAgents.ChatHistory;
 
 /// <summary>
 /// Per-conversation actor that holds all messages for a single conversation.
-/// Actor ID: <c>chat-{conversationId}</c>.
+/// Actor ID: <c>chat-{scopeId}-{conversationId}</c>.
 ///
-/// After each state change, publishes <see cref="ChatConversationStateSnapshotEvent"/>
-/// so readmodel subscribers can maintain an up-to-date snapshot.
+/// After each state change, pushes the current state to the paired
+/// <see cref="ChatConversationReadModelGAgent"/> via <c>SendToAsync</c>.
+///
+/// When messages are replaced or the conversation is deleted, also forwards
+/// the change to the <see cref="ChatHistoryIndexGAgent"/> via <c>SendToAsync</c>,
+/// ensuring transactional consistency between conversation and index actors.
 /// </summary>
 public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
 {
@@ -28,7 +32,19 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
         var trimmed = TrimMessages(evt);
 
         await PersistDomainEventAsync(trimmed);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
+
+        // Forward index upsert to the index actor
+        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+        {
+            var indexActorId = IndexActorId(evt.ScopeId);
+            var indexMeta = State.Meta?.Clone();
+            if (indexMeta is not null)
+            {
+                indexMeta.MessageCount = State.Messages.Count;
+                await SendToAsync(indexActorId, new ConversationUpsertedEvent { Meta = indexMeta });
+            }
+        }
     }
 
     [EventHandler(EndpointName = "deleteConversation")]
@@ -42,13 +58,20 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
+
+        // Forward index removal to the index actor
+        if (!string.IsNullOrWhiteSpace(evt.ScopeId))
+        {
+            var indexActorId = IndexActorId(evt.ScopeId);
+            await SendToAsync(indexActorId, new ConversationRemovedEvent { ConversationId = evt.ConversationId });
+        }
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PublishStateSnapshotAsync();
+        await PushToReadModelAsync();
     }
 
     protected override ChatConversationState TransitionState(
@@ -91,9 +114,12 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
         return new ChatConversationState();
     }
 
-    private async Task PublishStateSnapshotAsync()
+    private async Task PushToReadModelAsync()
     {
-        var snapshot = new ChatConversationStateSnapshotEvent { Snapshot = State.Clone() };
-        await PublishAsync(snapshot, TopologyAudience.Parent);
+        var readModelActorId = Id + "-readmodel";
+        var update = new ChatConversationReadModelUpdateEvent { Snapshot = State.Clone() };
+        await SendToAsync(readModelActorId, update);
     }
+
+    private static string IndexActorId(string scopeId) => $"chat-index-{scopeId}";
 }

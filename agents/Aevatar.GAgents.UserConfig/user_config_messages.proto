@@ -26,8 +26,12 @@ message UserConfigUpdatedEvent {
 
 // ─── Readmodel ───
 
-// Published by the GAgent after each state change so subscribers can
-// maintain an up-to-date readmodel without reading write-model state.
+// Published by ReadModel GAgent so subscribers can observe the current projected state.
 message UserConfigStateSnapshotEvent {
+  UserConfigGAgentState snapshot = 1;
+}
+
+// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
+message UserConfigReadModelUpdateEvent {
   UserConfigGAgentState snapshot = 1;
 }

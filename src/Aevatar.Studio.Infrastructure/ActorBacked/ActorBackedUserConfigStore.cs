@@ -1,47 +1,50 @@
-using System.Collections.Concurrent;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Infrastructure.Storage;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IUserConfigStore"/>.
+/// Completely stateless: no fields hold snapshot or subscription state.
+/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Writes send commands to the Write GAgent.
 /// Per-scope isolation: each scope gets its own <c>user-config-{scopeId}</c> actor.
 /// </summary>
-internal sealed class ActorBackedUserConfigStore : IUserConfigStore, IAsyncDisposable
+internal sealed class ActorBackedUserConfigStore : IUserConfigStore
 {
-    private const string ActorIdPrefix = "user-config-";
+    private const string WriteActorIdPrefix = "user-config-";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IAppScopeResolver _scopeResolver;
+    private readonly StudioStorageOptions _storageOptions;
     private readonly ILogger<ActorBackedUserConfigStore> _logger;
-
-    private readonly ConcurrentDictionary<string, ScopeState> _scopes = new(StringComparer.Ordinal);
 
     public ActorBackedUserConfigStore(
         IActorRuntime runtime,
         IActorEventSubscriptionProvider subscriptions,
         IAppScopeResolver scopeResolver,
+        IOptions<StudioStorageOptions> storageOptions,
         ILogger<ActorBackedUserConfigStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        _storageOptions = storageOptions?.Value ?? new StudioStorageOptions();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<UserConfig> GetAsync(CancellationToken cancellationToken = default)
     {
-        var scopeState = await EnsureScopeAsync(cancellationToken);
-
-        var state = scopeState.Snapshot;
+        var state = await ReadFromReadModelAsync(cancellationToken);
         if (state is null)
             return CreateDefaultConfig();
 
@@ -54,18 +57,17 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore, IAsyncDispo
                 ? UserConfigRuntimeDefaults.LocalMode
                 : state.RuntimeMode,
             LocalRuntimeBaseUrl: string.IsNullOrEmpty(state.LocalRuntimeBaseUrl)
-                ? UserConfigRuntimeDefaults.LocalRuntimeBaseUrl
+                ? _storageOptions.ResolveDefaultLocalRuntimeBaseUrl()
                 : state.LocalRuntimeBaseUrl,
             RemoteRuntimeBaseUrl: string.IsNullOrEmpty(state.RemoteRuntimeBaseUrl)
-                ? UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl
+                ? _storageOptions.ResolveDefaultRemoteRuntimeBaseUrl()
                 : state.RemoteRuntimeBaseUrl,
             MaxToolRounds: state.MaxToolRounds);
     }
 
     public async Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default)
     {
-        var scopeState = await EnsureScopeAsync(cancellationToken);
-        var actor = await EnsureActorAsync(scopeState.ActorId, cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new UserConfigUpdatedEvent
         {
             DefaultModel = config.DefaultModel,
@@ -82,14 +84,45 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore, IAsyncDispo
         await SendCommandAsync(actor, evt, cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
+    // ── Per-request readmodel read (no service-level state) ──
+
+    private async Task<UserConfigGAgentState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        foreach (var scope in _scopes.Values)
+        var readModelActorId = ResolveReadModelActorId();
+        var tcs = new TaskCompletionSource<UserConfigGAgentState?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
+            readModelActorId,
+            envelope =>
+            {
+                if (envelope.Payload?.Is(UserConfigStateSnapshotEvent.Descriptor) == true)
+                {
+                    var snapshot = envelope.Payload.Unpack<UserConfigStateSnapshotEvent>();
+                    tcs.TrySetResult(snapshot.Snapshot);
+                }
+                return Task.CompletedTask;
+            },
+            ct);
+
+        // Activate readmodel actor (triggers OnActivateAsync → PublishAsync snapshot)
+        await EnsureReadModelActorAsync(readModelActorId, ct);
+
+        // Wait for snapshot with timeout
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        try
         {
-            if (scope.Subscription is not null)
-                await scope.Subscription.DisposeAsync();
+            return await tcs.Task.WaitAsync(cts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
+            return null;
         }
     }
+
+    // ── Actor resolution ──
 
     private string ResolveScopeId()
     {
@@ -97,63 +130,21 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore, IAsyncDispo
         return scope?.ScopeId ?? "default";
     }
 
-    private async Task<ScopeState> EnsureScopeAsync(CancellationToken ct)
+    private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
+    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
+
+    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        var scopeId = ResolveScopeId();
-        var actorId = ActorIdPrefix + scopeId;
-
-        var scopeState = _scopes.GetOrAdd(actorId, _ => new ScopeState(actorId));
-
-        if (scopeState.Initialized)
-            return scopeState;
-
-        await scopeState.InitLock.WaitAsync(ct);
-        try
-        {
-            if (scopeState.Initialized)
-                return scopeState;
-
-            scopeState.Subscription = await _subscriptions.SubscribeAsync<EventEnvelope>(
-                actorId,
-                envelope => HandleConfigEventAsync(actorId, envelope),
-                ct);
-
-            await EnsureActorAsync(actorId, ct);
-            scopeState.Initialized = true;
-        }
-        finally
-        {
-            scopeState.InitLock.Release();
-        }
-
-        return scopeState;
-    }
-
-    private Task HandleConfigEventAsync(string actorId, EventEnvelope envelope)
-    {
-        if (envelope.Payload is null)
-            return Task.CompletedTask;
-
-        if (envelope.Payload.Is(UserConfigStateSnapshotEvent.Descriptor))
-        {
-            var snapshot = envelope.Payload.Unpack<UserConfigStateSnapshotEvent>();
-            if (_scopes.TryGetValue(actorId, out var scopeState))
-            {
-                scopeState.Snapshot = snapshot.Snapshot;
-                _logger.LogDebug("User config readmodel updated for {ActorId}", actorId);
-            }
-        }
-
-        return Task.CompletedTask;
-    }
-
-    private async Task<IActor> EnsureActorAsync(string actorId, CancellationToken ct)
-    {
+        var actorId = ResolveWriteActorId();
         var actor = await _runtime.GetAsync(actorId);
-        if (actor is not null)
-            return actor;
+        return actor ?? await _runtime.CreateAsync<UserConfigGAgent>(actorId, ct);
+    }
 
-        return await _runtime.CreateAsync<UserConfigGAgent>(actorId, ct);
+    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
+    {
+        var actor = await _runtime.GetAsync(readModelActorId);
+        if (actor is null)
+            await _runtime.CreateAsync<UserConfigReadModelGAgent>(readModelActorId, ct);
     }
 
     private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
@@ -171,20 +162,11 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore, IAsyncDispo
         await actor.HandleEventAsync(envelope, ct);
     }
 
-    private static UserConfig CreateDefaultConfig() =>
+    private UserConfig CreateDefaultConfig() =>
         new(
             DefaultModel: string.Empty,
             PreferredLlmRoute: UserConfigLlmRouteDefaults.Gateway,
             RuntimeMode: UserConfigRuntimeDefaults.LocalMode,
-            LocalRuntimeBaseUrl: UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
-            RemoteRuntimeBaseUrl: UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
-
-    private sealed class ScopeState(string actorId)
-    {
-        public string ActorId { get; } = actorId;
-        public SemaphoreSlim InitLock { get; } = new(1, 1);
-        public volatile bool Initialized;
-        public volatile UserConfigGAgentState? Snapshot;
-        public IAsyncDisposable? Subscription;
-    }
+            LocalRuntimeBaseUrl: _storageOptions.ResolveDefaultLocalRuntimeBaseUrl(),
+            RemoteRuntimeBaseUrl: _storageOptions.ResolveDefaultRemoteRuntimeBaseUrl());
 }

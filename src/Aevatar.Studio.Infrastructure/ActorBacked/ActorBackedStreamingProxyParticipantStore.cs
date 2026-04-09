@@ -10,22 +10,18 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IStreamingProxyParticipantStore"/>.
-/// Writes go through <see cref="StreamingProxyParticipantGAgent"/> event handlers.
-/// Reads come from a readmodel snapshot maintained via event subscription.
+/// Completely stateless: no fields hold snapshot or subscription state.
+/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Writes send commands to the Write GAgent.
 /// </summary>
 internal sealed class ActorBackedStreamingProxyParticipantStore
-    : IStreamingProxyParticipantStore, IAsyncDisposable
+    : IStreamingProxyParticipantStore
 {
-    private const string ParticipantActorId = "streaming-proxy-participants";
+    private const string WriteActorId = "streaming-proxy-participants";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly ILogger<ActorBackedStreamingProxyParticipantStore> _logger;
-
-    private readonly SemaphoreSlim _initLock = new(1, 1);
-    private volatile StreamingProxyParticipantGAgentState? _snapshot;
-    private IAsyncDisposable? _subscription;
-    private bool _initialized;
 
     public ActorBackedStreamingProxyParticipantStore(
         IActorRuntime runtime,
@@ -40,9 +36,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     public async Task<IReadOnlyList<StreamingProxyParticipant>> ListAsync(
         string roomId, CancellationToken cancellationToken = default)
     {
-        await EnsureInitializedAsync(cancellationToken);
-
-        var state = _snapshot;
+        var state = await ReadFromReadModelAsync(cancellationToken);
         if (state is null)
             return [];
 
@@ -62,7 +56,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         string roomId, string agentId, string displayName,
         CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new ParticipantAddedEvent
         {
             RoomId = roomId,
@@ -76,7 +70,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     public async Task RemoveRoomAsync(
         string roomId, CancellationToken cancellationToken = default)
     {
-        var actor = await EnsureActorAsync(cancellationToken);
+        var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoomParticipantsRemovedEvent
         {
             RoomId = roomId,
@@ -84,65 +78,57 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         await SendCommandAsync(actor, evt, cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_subscription is not null)
-            await _subscription.DisposeAsync();
-    }
+    // ── Per-request readmodel read (no service-level state) ──
 
-    private async Task EnsureInitializedAsync(CancellationToken ct)
+    private async Task<StreamingProxyParticipantGAgentState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        if (_initialized)
-            return;
+        var readModelActorId = WriteActorId + "-readmodel";
+        var tcs = new TaskCompletionSource<StreamingProxyParticipantGAgentState?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
 
-        await _initLock.WaitAsync(ct);
+        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
+            readModelActorId,
+            envelope =>
+            {
+                if (envelope.Payload?.Is(StreamingProxyParticipantStateSnapshotEvent.Descriptor) == true)
+                {
+                    var snapshot = envelope.Payload.Unpack<StreamingProxyParticipantStateSnapshotEvent>();
+                    tcs.TrySetResult(snapshot.Snapshot);
+                }
+                return Task.CompletedTask;
+            },
+            ct);
+
+        // Activate readmodel actor (triggers OnActivateAsync → PublishAsync snapshot)
+        await EnsureReadModelActorAsync(readModelActorId, ct);
+
+        // Wait for snapshot with timeout
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         try
         {
-            if (_initialized)
-                return;
-
-            // Subscribe to the participant actor's events to receive state snapshots
-            _subscription = await _subscriptions.SubscribeAsync<EventEnvelope>(
-                ParticipantActorId,
-                HandleParticipantEventAsync,
-                ct);
-
-            // Activate the actor — this triggers event replay + OnActivateAsync
-            // which publishes the initial state snapshot
-            await EnsureActorAsync(ct);
-
-            _initialized = true;
+            return await tcs.Task.WaitAsync(cts.Token);
         }
-        finally
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _initLock.Release();
+            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
+            return null;
         }
     }
 
-    private Task HandleParticipantEventAsync(EventEnvelope envelope)
+    // ── Actor resolution ──
+
+    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        if (envelope.Payload is null)
-            return Task.CompletedTask;
-
-        if (envelope.Payload.Is(StreamingProxyParticipantStateSnapshotEvent.Descriptor))
-        {
-            var snapshot = envelope.Payload.Unpack<StreamingProxyParticipantStateSnapshotEvent>();
-            _snapshot = snapshot.Snapshot;
-            _logger.LogDebug(
-                "Participant readmodel updated: {RoomCount} rooms",
-                snapshot.Snapshot?.Rooms.Count ?? 0);
-        }
-
-        return Task.CompletedTask;
+        var actor = await _runtime.GetAsync(WriteActorId);
+        return actor ?? await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
     }
 
-    private async Task<IActor> EnsureActorAsync(CancellationToken ct)
+    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(ParticipantActorId);
-        if (actor is not null)
-            return actor;
-
-        return await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(ParticipantActorId, ct);
+        var actor = await _runtime.GetAsync(readModelActorId);
+        if (actor is null)
+            await _runtime.CreateAsync<StreamingProxyParticipantReadModelGAgent>(readModelActorId, ct);
     }
 
     private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
