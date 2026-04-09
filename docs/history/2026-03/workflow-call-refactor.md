@@ -7,8 +7,8 @@
 - 日期：2026-03-19
 - 关联文档：
   - `src/workflow/README.md`
-  - `docs/architecture/archive/2026-03/workflow-actor-binding-read-boundary-refactor-plan-2026-03-09.md`
-  - `docs/architecture/archive/2026-03/2026-03-16-workflow-fact-sources-event-and-projection-refactor.md`
+  - (historical) workflow-actor-binding-read-boundary-refactor-plan-2026-03-09 — established definition/run split boundary; archived, see git history
+  - (historical) 2026-03-16-workflow-fact-sources-event-and-projection-refactor — projection fact source cleanup; archived, see git history
 - 适用范围：
   - `src/workflow/Aevatar.Workflow.Abstractions`
   - `src/workflow/Aevatar.Workflow.Core`

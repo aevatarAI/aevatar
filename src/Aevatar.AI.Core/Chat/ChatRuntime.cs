@@ -72,19 +72,29 @@ public sealed class ChatRuntime
 
     /// <summary>单轮 Chat（含 Tool Calling 循环），包裹 Agent Run Middleware。</summary>
     public Task<string?> ChatAsync(string userMessage, int maxToolRounds = DefaultMaxToolRounds, CancellationToken ct = default) =>
-        ChatAsync(userMessage, maxToolRounds, requestId: null, metadata: null, ct);
+        ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId: null, metadata: null, ct);
 
-    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata。</summary>
-    public async Task<string?> ChatAsync(
+    /// <summary>单轮 Chat（含 Tool Calling 循环），显式传入稳定 request id 和 metadata（文本快捷方式）。</summary>
+    public Task<string?> ChatAsync(
         string userMessage,
+        int maxToolRounds,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata,
+        CancellationToken ct = default) =>
+        ChatAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId, metadata, ct);
+
+    /// <summary>单轮 Chat（多模态内容），显式传入稳定 request id 和 metadata。</summary>
+    public async Task<string?> ChatAsync(
+        IReadOnlyList<ContentPart> userContent,
         int maxToolRounds,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata,
         CancellationToken ct = default)
     {
+        var normalizedUserContent = NormalizeUserContent(userContent);
         var runContext = new AgentRunContext
         {
-            UserMessage = userMessage,
+            UserMessage = DescribeUserContent(normalizedUserContent),
             AgentId = _agentId,
             AgentName = _agentName,
             CancellationToken = ct,
@@ -96,7 +106,7 @@ public sealed class ChatRuntime
             {
                 if (runContext.Terminate) return;
 
-                _history.Add(ChatMessage.User(runContext.UserMessage));
+                _history.Add(ChatMessage.User(normalizedUserContent, runContext.UserMessage));
                 await RunCompressionIfNeededAsync(ct);
                 var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
                 var provider = _providerFactory();
@@ -145,25 +155,47 @@ public sealed class ChatRuntime
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         CancellationToken ct = default) =>
-        ChatStreamAsync(userMessage, DefaultMaxToolRounds, requestId: null, metadata: null, ct);
+        ChatStreamAsync([ContentPart.TextPart(userMessage)], DefaultMaxToolRounds, requestId: null, metadata: null, ct);
+
+    /// <summary>流式 Chat（多模态内容）。</summary>
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userContent, DefaultMaxToolRounds, requestId: null, metadata: null, ct);
 
     /// <summary>流式 Chat，允许显式控制 tool calling 轮数。</summary>
     public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
         int maxToolRounds,
         CancellationToken ct = default) =>
-        ChatStreamAsync(userMessage, maxToolRounds, requestId: null, metadata: null, ct);
+        ChatStreamAsync([ContentPart.TextPart(userMessage)], maxToolRounds, requestId: null, metadata: null, ct);
 
-    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata。</summary>
+    /// <summary>流式 Chat（多模态内容），允许显式控制 tool calling 轮数。</summary>
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        IReadOnlyList<ContentPart> userContent,
+        int maxToolRounds,
+        CancellationToken ct = default) =>
+        ChatStreamAsync(userContent, maxToolRounds, requestId: null, metadata: null, ct);
+
+    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata（默认 tool 轮数）。</summary>
+    public IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
+        string userMessage,
+        string? requestId,
+        IReadOnlyDictionary<string, string>? metadata = null,
+        CancellationToken ct = default) =>
+        ChatStreamAsync([ContentPart.TextPart(userMessage)], DefaultMaxToolRounds, requestId, metadata, ct);
+
+    /// <summary>流式 Chat，显式传入稳定 request id 和 metadata + tool 轮数。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
         string userMessage,
+        int maxToolRounds,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         await foreach (var chunk in ChatStreamAsync(
-                           userMessage,
-                           DefaultMaxToolRounds,
+                           [ContentPart.TextPart(userMessage)],
+                           maxToolRounds,
                            requestId,
                            metadata,
                            ct))
@@ -172,14 +204,15 @@ public sealed class ChatRuntime
         }
     }
 
-    /// <summary>流式 Chat，显式传入稳定 request id / metadata / tool 调用轮数。</summary>
+    /// <summary>流式 Chat（多模态内容），显式传入稳定 request id / metadata / tool 调用轮数。</summary>
     public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(
-        string userMessage,
+        IReadOnlyList<ContentPart> userContent,
         int maxToolRounds,
         string? requestId,
         IReadOnlyDictionary<string, string>? metadata = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        var normalizedUserContent = NormalizeUserContent(userContent);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var runToken = linkedCts.Token;
         var effectiveMaxToolRounds = maxToolRounds > 0 ? maxToolRounds : DefaultMaxToolRounds;
@@ -193,7 +226,7 @@ public sealed class ChatRuntime
 
         var runContext = new AgentRunContext
         {
-            UserMessage = userMessage,
+            UserMessage = DescribeUserContent(normalizedUserContent),
             AgentId = _agentId,
             AgentName = _agentName,
             CancellationToken = runToken,
@@ -213,7 +246,7 @@ public sealed class ChatRuntime
                     if (runContext.Terminate) return;
 
                     await RunCompressionIfNeededAsync(runToken);
-                    var userMsg = ChatMessage.User(runContext.UserMessage);
+                    var userMsg = ChatMessage.User(normalizedUserContent, runContext.UserMessage);
                     pendingHistoryMessages.Add(userMsg);
                     var baseRequest = ApplyRequestIdentity(_requestBuilder(), requestId, metadata);
                     var provider = _providerFactory();
@@ -779,6 +812,7 @@ public sealed class ChatRuntime
 
         if (string.IsNullOrEmpty(chunk.DeltaContent) &&
             string.IsNullOrEmpty(chunk.DeltaReasoningContent) &&
+            chunk.DeltaContentPart == null &&
             normalizedToolCall == null &&
             !chunk.IsLast &&
             chunk.Usage == null)
@@ -789,6 +823,7 @@ public sealed class ChatRuntime
         return new LLMStreamChunk
         {
             DeltaContent = chunk.DeltaContent,
+            DeltaContentPart = chunk.DeltaContentPart,
             DeltaReasoningContent = chunk.DeltaReasoningContent,
             DeltaToolCall = normalizedToolCall,
             Usage = chunk.Usage,
@@ -877,4 +912,35 @@ public sealed class ChatRuntime
         IReadOnlyList<ToolCall>? ToolCalls,
         bool Terminated,
         string? FinishReason);
+
+    // ─── Multimodal helpers ───
+
+    private static IReadOnlyList<ContentPart> NormalizeUserContent(IReadOnlyList<ContentPart> userContent)
+    {
+        if (userContent == null || userContent.Count == 0)
+            return [ContentPart.TextPart(string.Empty)];
+
+        return userContent;
+    }
+
+    private static string DescribeUserContent(IReadOnlyList<ContentPart> userContent)
+    {
+        var textParts = userContent
+            .Where(part => part.Kind == ContentPartKind.Text && !string.IsNullOrWhiteSpace(part.Text))
+            .Select(part => part.Text!.Trim())
+            .ToArray();
+
+        if (textParts.Length > 0)
+            return string.Join("\n", textParts);
+
+        return string.Join(
+            ", ",
+            userContent.Select(part => part.Kind switch
+            {
+                ContentPartKind.Image => "[image]",
+                ContentPartKind.Audio => "[audio]",
+                ContentPartKind.Video => "[video]",
+                _ => "[content]",
+            }));
+    }
 }

@@ -30,6 +30,29 @@ public sealed class LLMRequest
 
     /// <summary>可选最大生成 Token 数。</summary>
     public int? MaxTokens { get; init; }
+
+    public IReadOnlySet<ContentPartKind> GetRequestedInputModalities()
+    {
+        var modalities = new HashSet<ContentPartKind>();
+        foreach (var message in Messages)
+        {
+            if (!string.IsNullOrWhiteSpace(message.Content))
+                modalities.Add(ContentPartKind.Text);
+
+            if (message.ContentParts is not { Count: > 0 })
+                continue;
+
+            foreach (var part in message.ContentParts)
+            {
+                if (part == null || part.Kind == ContentPartKind.Unspecified)
+                    continue;
+
+                modalities.Add(part.Kind);
+            }
+        }
+
+        return modalities;
+    }
 }
 
 /// <summary>单条 Chat 消息。支持 system / user / assistant / tool 四种角色。</summary>
@@ -63,30 +86,67 @@ public sealed class ChatMessage
     /// <param name="callId">对应 tool_call 的 Id。</param>
     /// <param name="result">工具执行结果 JSON 字符串。</param>
     public static ChatMessage Tool(string callId, string result) => new() { Role = "tool", ToolCallId = callId, Content = result };
+
+    public static ChatMessage User(IReadOnlyList<ContentPart> parts, string? text = null) => new()
+    {
+        Role = "user",
+        Content = text,
+        ContentParts = parts,
+    };
+}
+
+public enum ContentPartKind
+{
+    Unspecified = 0,
+    Text = 1,
+    Image = 2,
+    Audio = 3,
+    Video = 4,
 }
 
 /// <summary>多模态内容分片。</summary>
 public sealed class ContentPart
 {
-    /// <summary>分片类型：text / image。</summary>
-    public required string Type { get; init; }
+    /// <summary>分片类型：text / image / audio / video。</summary>
+    public required ContentPartKind Kind { get; init; }
 
     /// <summary>文本分片内容。</summary>
     public string? Text { get; init; }
 
-    /// <summary>图片分片（base64，不带 data-uri 头）。</summary>
-    public string? ImageBase64 { get; init; }
+    /// <summary>媒体分片的内联 base64 数据（不带 data-uri 头）。</summary>
+    public string? DataBase64 { get; init; }
 
-    /// <summary>图片 MIME 类型（例如 image/png）。</summary>
-    public string? ImageMediaType { get; init; }
+    /// <summary>媒体 MIME 类型（例如 image/png、audio/wav、video/mp4）。</summary>
+    public string? MediaType { get; init; }
+
+    /// <summary>媒体远程地址或 data-uri。</summary>
+    public string? Uri { get; init; }
+
+    /// <summary>可选显示名或文件名。</summary>
+    public string? Name { get; init; }
 
     /// <summary>创建文本分片。</summary>
     public static ContentPart TextPart(string text) =>
-        new() { Type = "text", Text = text };
+        new() { Kind = ContentPartKind.Text, Text = text };
 
     /// <summary>创建图片分片。</summary>
-    public static ContentPart ImagePart(string imageBase64, string imageMediaType = "image/png") =>
-        new() { Type = "image", ImageBase64 = imageBase64, ImageMediaType = imageMediaType };
+    public static ContentPart ImagePart(string dataBase64, string mediaType = "image/png", string? name = null) =>
+        new() { Kind = ContentPartKind.Image, DataBase64 = dataBase64, MediaType = mediaType, Name = name };
+
+    public static ContentPart ImageUriPart(string uri, string mediaType = "image/png", string? name = null) =>
+        new() { Kind = ContentPartKind.Image, Uri = uri, MediaType = mediaType, Name = name };
+
+    public static ContentPart AudioPart(string dataBase64, string mediaType = "audio/wav", string? name = null) =>
+        new() { Kind = ContentPartKind.Audio, DataBase64 = dataBase64, MediaType = mediaType, Name = name };
+
+    public static ContentPart AudioUriPart(string uri, string mediaType = "audio/wav", string? name = null) =>
+        new() { Kind = ContentPartKind.Audio, Uri = uri, MediaType = mediaType, Name = name };
+
+    public static ContentPart VideoPart(string dataBase64, string mediaType = "video/mp4", string? name = null) =>
+        new() { Kind = ContentPartKind.Video, DataBase64 = dataBase64, MediaType = mediaType, Name = name };
+
+    public static ContentPart VideoUriPart(string uri, string mediaType = "video/mp4", string? name = null) =>
+        new() { Kind = ContentPartKind.Video, Uri = uri, MediaType = mediaType, Name = name };
 }
 
 /// <summary>单次工具调用。包含 Id、名称、参数 JSON。</summary>

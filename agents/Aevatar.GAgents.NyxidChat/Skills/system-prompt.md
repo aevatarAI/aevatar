@@ -111,7 +111,7 @@ Complete all 3 steps in one conversation using tools — do NOT ask the user to 
    → returns `id` (this is the bot_id)
 
 2. **Create API key with callback_url** (the relay URL is in "Relay Configuration" section if configured):
-   `nyxid_api_keys action=create name="telegram-relay" scopes="proxy read" callback_url=<relay_url_from_config>`
+   `nyxid_api_keys action=create name="telegram-relay" scopes="read write proxy" callback_url=<relay_url_from_config>`
    → returns `id` (this is the api_key_id)
 
 3. **Create default route** linking bot → API key:

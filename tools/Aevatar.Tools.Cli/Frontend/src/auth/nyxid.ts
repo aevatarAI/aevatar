@@ -99,6 +99,10 @@ export function getAccessToken(): string | undefined {
 
 // ─── OAuth flows ───
 
+function isElectron(): boolean {
+  return Boolean((window as any).electronAPI);
+}
+
 function getRedirectUri(): string {
   return `${window.location.origin}/auth/callback`;
 }
@@ -107,7 +111,12 @@ export async function loginWithRedirect(returnTo = '/'): Promise<void> {
   const codeVerifier = randomUrlSafe(48);
   const codeChallenge = await sha256Base64Url(codeVerifier);
   const state = randomUrlSafe(24);
-  const redirectUri = getRedirectUri();
+
+  // In Electron, ask main process to start a loopback HTTP server for the callback
+  const api = (window as any).electronAPI;
+  const redirectUri = api?.getAuthRedirectUri
+    ? await api.getAuthRedirectUri()
+    : getRedirectUri();
 
   const pending: PendingAuth = { state, codeVerifier, redirectUri, returnTo };
   localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
@@ -121,7 +130,12 @@ export async function loginWithRedirect(returnTo = '/'): Promise<void> {
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('state', state);
 
-  window.location.assign(url.toString());
+  if (isElectron()) {
+    // Open system browser for login
+    window.open(url.toString());
+  } else {
+    window.location.assign(url.toString());
+  }
 }
 
 export async function handleCallback(): Promise<{ session: NyxIDSession; returnTo: string }> {
@@ -229,4 +243,90 @@ export async function refreshSession(session: NyxIDSession): Promise<NyxIDSessio
 export function isAuthCallback(): boolean {
   return window.location.pathname === '/auth/callback' &&
     Boolean(new URLSearchParams(window.location.search).get('code'));
+}
+
+/**
+ * In Electron, listen for OAuth callback via custom protocol (IPC).
+ * Returns a cleanup function, or null if not in Electron.
+ */
+export function setupElectronAuthListener(
+  onSession: (result: { session: NyxIDSession; returnTo: string }) => void,
+  onError: (error: Error) => void,
+): (() => void) | null {
+  const api = (window as any).electronAPI;
+  if (!api?.onAuthCallback) return null;
+
+  return api.onAuthCallback(async (data: {
+    code: string | null;
+    state: string | null;
+    error: string | null;
+    errorDescription: string | null;
+  }) => {
+    if (data.error) {
+      onError(new Error(data.errorDescription ?? `OAuth error: ${data.error}`));
+      return;
+    }
+    if (!data.code || !data.state) {
+      onError(new Error('Missing authorization code or state'));
+      return;
+    }
+
+    const raw = localStorage.getItem(PENDING_KEY);
+    const pending = raw ? JSON.parse(raw) as PendingAuth : null;
+    if (!pending) {
+      onError(new Error('Missing PKCE state'));
+      return;
+    }
+    if (pending.state !== data.state) {
+      localStorage.removeItem(PENDING_KEY);
+      onError(new Error('State mismatch'));
+      return;
+    }
+
+    try {
+      const form = new URLSearchParams();
+      form.set('grant_type', 'authorization_code');
+      form.set('code', data.code);
+      form.set('redirect_uri', pending.redirectUri);
+      form.set('client_id', NYXID_CLIENT_ID);
+      form.set('code_verifier', pending.codeVerifier);
+
+      const tokenRes = await fetch(`${NYXID_BASE_URL}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+      });
+
+      if (!tokenRes.ok) {
+        const payload = await tokenRes.json().catch(() => null);
+        localStorage.removeItem(PENDING_KEY);
+        onError(new Error(`Token exchange failed: ${(payload as any)?.error_description || tokenRes.statusText}`));
+        return;
+      }
+
+      const body = await tokenRes.json() as any;
+      const tokens: NyxIDTokenSet = {
+        accessToken: body.access_token,
+        tokenType: body.token_type,
+        expiresIn: body.expires_in,
+        expiresAt: Date.now() + body.expires_in * 1000,
+        refreshToken: body.refresh_token,
+        idToken: body.id_token,
+        scope: body.scope,
+      };
+
+      const userRes = await fetch(`${NYXID_BASE_URL}/oauth/userinfo`, {
+        headers: { Authorization: `Bearer ${tokens.accessToken}` },
+      });
+      const user: NyxIDUserInfo = userRes.ok ? await userRes.json() : { sub: '' };
+
+      const session: NyxIDSession = { tokens, user };
+      persistSession(session);
+      localStorage.removeItem(PENDING_KEY);
+
+      onSession({ session, returnTo: pending.returnTo || '/' });
+    } catch (err) {
+      onError(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
 }

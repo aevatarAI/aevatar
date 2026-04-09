@@ -20,10 +20,16 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             SessionId = sessionId,
             ScopeId = command.ScopeId ?? string.Empty,
         };
-        AppendMetadata(chatRequest.Metadata, context.Headers);
+        if (command.InputParts is { Count: > 0 })
+            chatRequest.InputParts.Add(command.InputParts.Select(ToProto));
+        AppendMetadata(chatRequest.Headers, context.Headers);
+        AppendMetadata(chatRequest.Headers, command.Metadata);
+        chatRequest.Headers[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
+        chatRequest.Headers[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
+        // Preserve caller metadata in the Metadata map so that downstream consumers
+        // (WorkflowRunGAgent.PropagateRequestMetadataToExecutionItems, connector auth)
+        // can read it from the canonical field.
         AppendMetadata(chatRequest.Metadata, command.Metadata);
-        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.CommandId] = context.CommandId;
-        chatRequest.Metadata[WorkflowRunCommandMetadataKeys.SessionId] = sessionId;
 
         var envelope = new EventEnvelope
         {
@@ -37,6 +43,28 @@ internal sealed class WorkflowChatRequestEnvelopeFactory : ICommandEnvelopeFacto
             },
         };
         return envelope;
+    }
+
+    private static ChatContentPart ToProto(WorkflowChatInputPart source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        return new ChatContentPart
+        {
+            Kind = source.Kind switch
+            {
+                WorkflowChatInputPartKind.Text => ChatContentPartKind.Text,
+                WorkflowChatInputPartKind.Image => ChatContentPartKind.Image,
+                WorkflowChatInputPartKind.Audio => ChatContentPartKind.Audio,
+                WorkflowChatInputPartKind.Video => ChatContentPartKind.Video,
+                _ => ChatContentPartKind.Unspecified,
+            },
+            Text = source.Text ?? string.Empty,
+            DataBase64 = source.DataBase64 ?? string.Empty,
+            MediaType = source.MediaType ?? string.Empty,
+            Uri = source.Uri ?? string.Empty,
+            Name = source.Name ?? string.Empty,
+        };
     }
 
     private static void AppendMetadata(

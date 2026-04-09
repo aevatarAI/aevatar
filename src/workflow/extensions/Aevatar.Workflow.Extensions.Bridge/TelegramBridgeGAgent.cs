@@ -39,7 +39,7 @@ public class TelegramBridgeGAgent : GAgentBase
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var connectorName = ReadMetadata(request.Metadata, "telegram.connector", "connector", "connector_name");
+        var connectorName = ReadMetadata(request.Headers, "telegram.connector", "connector", "connector_name");
         if (string.IsNullOrWhiteSpace(connectorName))
             connectorName = DefaultConnectorName;
 
@@ -49,14 +49,14 @@ public class TelegramBridgeGAgent : GAgentBase
             return;
         }
 
-        var chatId = ReadMetadata(request.Metadata, "telegram.chat_id", "chat_id");
+        var chatId = ReadMetadata(request.Headers, "telegram.chat_id", "chat_id");
         if (string.IsNullOrWhiteSpace(chatId))
         {
             await PublishFailureAsync(request, "telegram metadata 'chat_id' is required");
             return;
         }
 
-        var operation = ReadMetadata(request.Metadata, "telegram.operation", "operation", "path");
+        var operation = ReadMetadata(request.Headers, "telegram.operation", "operation", "path");
         if (string.IsNullOrWhiteSpace(operation))
             operation = "/sendMessage";
 
@@ -68,11 +68,11 @@ public class TelegramBridgeGAgent : GAgentBase
         }
 
         var requestPayload = BuildTelegramPayload(request, chatId.Trim());
-        var connectorParameters = BuildConnectorParameters(request.Metadata);
+        var connectorParameters = BuildConnectorParameters(request.Headers);
         var connectorRequest = new ConnectorRequest
         {
-            RunId = ReadMetadata(request.Metadata, "run_id", "workflow.run_id", "workflow_run_id", "session_id"),
-            StepId = ReadMetadata(request.Metadata, "step_id", "workflow.step_id", "workflow_step_id"),
+            RunId = ReadMetadata(request.Headers, "run_id", "workflow.run_id", "workflow_run_id", "session_id"),
+            StepId = ReadMetadata(request.Headers, "step_id", "workflow.step_id", "workflow_step_id"),
             Connector = connectorName,
             Operation = operation,
             Payload = requestPayload,
@@ -102,7 +102,7 @@ public class TelegramBridgeGAgent : GAgentBase
         string connectorName,
         IConnector connector)
     {
-        var expectedChatId = ReadMetadata(request.Metadata, "telegram.chat_id", "chat_id").Trim();
+        var expectedChatId = ReadMetadata(request.Headers, "telegram.chat_id", "chat_id").Trim();
         if (string.IsNullOrWhiteSpace(expectedChatId))
         {
             await PublishFailureAsync(request, "telegram metadata 'chat_id' is required for /waitReply");
@@ -110,33 +110,33 @@ public class TelegramBridgeGAgent : GAgentBase
         }
 
         var expectedFromUserId = ReadMetadata(
-            request.Metadata,
+            request.Headers,
             "telegram.expected_from_user_id",
             "expected_from_user_id",
             "from_user_id").Trim();
         var expectedFromUsername = NormalizeUsername(ReadMetadata(
-            request.Metadata,
+            request.Headers,
             "telegram.expected_from_username",
             "expected_from_username",
             "from_username",
             "from_user"));
         var correlationContains = ReadMetadata(
-            request.Metadata,
+            request.Headers,
             "telegram.correlation_contains",
             "correlation_contains",
             "contains").Trim();
 
-        var waitTimeoutMs = ResolveWaitReplyTimeoutMs(request.Metadata);
-        var pollTimeoutSeconds = ResolvePollTimeoutSeconds(request.Metadata);
-        var settlePollsAfterMatch = ResolveSettlePollsAfterMatch(request.Metadata);
-        var collectAllReplies = ResolveCollectAllReplies(request.Metadata);
-        var startFromLatest = ResolveStartFromLatest(request.Metadata);
+        var waitTimeoutMs = ResolveWaitReplyTimeoutMs(request.Headers);
+        var pollTimeoutSeconds = ResolvePollTimeoutSeconds(request.Headers);
+        var settlePollsAfterMatch = ResolveSettlePollsAfterMatch(request.Headers);
+        var collectAllReplies = ResolveCollectAllReplies(request.Headers);
+        var startFromLatest = ResolveStartFromLatest(request.Headers);
         var bootstrapRecentCutoffUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             - Math.Max(30, Math.Min(600, waitTimeoutMs / 1000 + 10));
 
-        var connectorParameters = BuildConnectorParameters(request.Metadata);
+        var connectorParameters = BuildConnectorParameters(request.Headers);
         long? offset = TryReadInt64(
-            ReadMetadata(request.Metadata, "telegram.offset", "offset"),
+            ReadMetadata(request.Headers, "telegram.offset", "offset"),
             minimum: 0);
         var collectedByIdentity = collectAllReplies
             ? new Dictionary<string, TelegramInboundUpdate>(StringComparer.Ordinal)
@@ -439,8 +439,8 @@ public class TelegramBridgeGAgent : GAgentBase
 
         var connectorRequest = new ConnectorRequest
         {
-            RunId = ReadMetadata(request.Metadata, "run_id", "workflow.run_id", "workflow_run_id", "session_id"),
-            StepId = ReadMetadata(request.Metadata, "step_id", "workflow.step_id", "workflow_step_id"),
+            RunId = ReadMetadata(request.Headers, "run_id", "workflow.run_id", "workflow_run_id", "session_id"),
+            StepId = ReadMetadata(request.Headers, "step_id", "workflow.step_id", "workflow_step_id"),
             Connector = connectorName,
             Operation = "/getUpdates",
             Payload = BuildGetUpdatesPayload(offset, pollTimeoutSeconds),
@@ -891,22 +891,22 @@ public class TelegramBridgeGAgent : GAgentBase
             ["text"] = request.Prompt ?? string.Empty,
         };
 
-        var threadId = ReadMetadata(request.Metadata, "telegram.message_thread_id", "message_thread_id");
+        var threadId = ReadMetadata(request.Headers, "telegram.message_thread_id", "message_thread_id");
         if (!string.IsNullOrWhiteSpace(threadId) && long.TryParse(threadId, out var parsedThreadId))
             payload["message_thread_id"] = parsedThreadId;
 
-        var parseMode = ReadMetadata(request.Metadata, "telegram.parse_mode", "parse_mode");
+        var parseMode = ReadMetadata(request.Headers, "telegram.parse_mode", "parse_mode");
         if (!string.IsNullOrWhiteSpace(parseMode))
             payload["parse_mode"] = parseMode.Trim();
 
         var disablePreview = ReadMetadata(
-            request.Metadata,
+            request.Headers,
             "telegram.disable_web_page_preview",
             "disable_web_page_preview");
         if (TryParseBool(disablePreview, out var parsedDisablePreview))
             payload["disable_web_page_preview"] = parsedDisablePreview;
 
-        var replyToMessageId = ReadMetadata(request.Metadata, "telegram.reply_to_message_id", "reply_to_message_id");
+        var replyToMessageId = ReadMetadata(request.Headers, "telegram.reply_to_message_id", "reply_to_message_id");
         if (!string.IsNullOrWhiteSpace(replyToMessageId) && long.TryParse(replyToMessageId, out var parsedReplyToMessageId))
             payload["reply_to_message_id"] = parsedReplyToMessageId;
 
@@ -941,7 +941,7 @@ public class TelegramBridgeGAgent : GAgentBase
 
     private async Task PublishSuccessAsync(ChatRequestEvent request, string content)
     {
-        if (ShouldEmitChatResponse(request.Metadata))
+        if (ShouldEmitChatResponse(request.Headers))
         {
             await PublishAsync(
                 new ChatResponseEvent

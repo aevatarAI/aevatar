@@ -14,6 +14,7 @@ NEO4J_URI="bolt://${NEO4J_HOST}:${NEO4J_PORT}"
 NEO4J_USERNAME="neo4j"
 NEO4J_PASSWORD="password"
 RESULTS_DIR=""
+export NEO4J_PASSWORD
 
 cleanup() {
   docker compose -f "${COMPOSE_FILE}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -23,7 +24,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-run_provider_integration_tests() {
+run_provider_integration_tests_on_host() {
   local project="$1"
   local log_file="$2"
 
@@ -34,9 +35,15 @@ run_provider_integration_tests() {
     --results-directory "${RESULTS_DIR}"
 }
 
+probe_elasticsearch_from_container() {
+  docker compose -f "${COMPOSE_FILE}" exec -T elasticsearch bash -lc \
+    'exec 3<>/dev/tcp/127.0.0.1/9200; printf "GET /_cluster/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3; head -n 20 <&3' \
+    2>/dev/null || true
+}
+
 wait_elasticsearch() {
   for _ in {1..90}; do
-    status="$(curl --max-time 2 -s "${ELASTICSEARCH_ENDPOINT}/_cluster/health" | rg -o "\"status\":\"[^\"]+\"" || true)"
+    status="$(probe_elasticsearch_from_container | rg -o "\"status\":\"[^\"]+\"" || true)"
     if [[ "${status}" == "\"status\":\"green\"" || "${status}" == "\"status\":\"yellow\"" ]]; then
       echo "Elasticsearch is ready: ${status}"
       return 0
@@ -52,7 +59,7 @@ wait_elasticsearch() {
 
 wait_neo4j() {
   for _ in {1..90}; do
-    if (echo >"/dev/tcp/${NEO4J_HOST}/${NEO4J_PORT}") >/dev/null 2>&1; then
+    if docker compose -f "${COMPOSE_FILE}" exec -T neo4j bash -lc 'exec 3<>/dev/tcp/127.0.0.1/7687' >/dev/null 2>&1; then
       echo "Neo4j bolt endpoint is reachable on ${NEO4J_HOST}:${NEO4J_PORT}."
       return 0
     fi
@@ -65,6 +72,11 @@ wait_neo4j() {
   return 1
 }
 
+host_can_reach_providers() {
+  curl --max-time 2 -s "${ELASTICSEARCH_ENDPOINT}/_cluster/health" >/dev/null 2>&1 &&
+    bash -lc "exec 3<>/dev/tcp/${NEO4J_HOST}/${NEO4J_PORT}" >/dev/null 2>&1
+}
+
 echo "Starting Elasticsearch + Neo4j..."
 docker compose -f "${COMPOSE_FILE}" up -d elasticsearch neo4j
 
@@ -72,18 +84,26 @@ wait_elasticsearch
 wait_neo4j
 
 echo "Running projection provider integration tests..."
-RESULTS_DIR="$(mktemp -d)"
+mkdir -p "${REPO_ROOT}/artifacts/ci"
+RESULTS_DIR="$(mktemp -d "${REPO_ROOT}/artifacts/ci/projection-provider-e2e.XXXXXX")"
 RESULTS_FILE_CORE="${RESULTS_DIR}/projection-provider-core-e2e.trx"
 RESULTS_FILE_SCRIPTING="${RESULTS_DIR}/projection-provider-scripting-e2e.trx"
+
+if ! host_can_reach_providers; then
+  echo "Projection providers are ready in Docker, but host cannot reach ${ELASTICSEARCH_ENDPOINT} / ${NEO4J_URI}."
+  exit 1
+fi
+
+echo "Host can reach projection providers; running integration tests from host."
 export AEVATAR_TEST_ELASTICSEARCH_ENDPOINT="${ELASTICSEARCH_ENDPOINT}"
 export AEVATAR_TEST_NEO4J_URI="${NEO4J_URI}"
 export AEVATAR_TEST_NEO4J_USERNAME="${NEO4J_USERNAME}"
 export AEVATAR_TEST_NEO4J_PASSWORD="${NEO4J_PASSWORD}"
 
-run_provider_integration_tests \
+run_provider_integration_tests_on_host \
   "test/Aevatar.CQRS.Projection.Core.Tests/Aevatar.CQRS.Projection.Core.Tests.csproj" \
   "projection-provider-core-e2e.trx"
-run_provider_integration_tests \
+run_provider_integration_tests_on_host \
   "test/Aevatar.Integration.Tests/Aevatar.Integration.Tests.csproj" \
   "projection-provider-scripting-e2e.trx"
 

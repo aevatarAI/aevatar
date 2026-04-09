@@ -61,6 +61,29 @@ await foreach (var evt in client.StartRunStreamAsync(request, cancellationToken)
 }
 ```
 
+也可以直接提交多模态输入：
+
+```csharp
+var request = new ChatRunRequest
+{
+    Workflow = "auto",
+    InputParts =
+    [
+        new ChatRunContentPart
+        {
+            Type = "text",
+            Text = "请描述这张图里的主要风险",
+        },
+        new ChatRunContentPart
+        {
+            Type = "image",
+            Uri = "https://example.com/incident-board.png",
+            MediaType = "image/png",
+        },
+    ],
+};
+```
+
 ### 常用事件类型
 
 - `RUN_STARTED` / `RUN_FINISHED` / `RUN_ERROR`
@@ -70,6 +93,11 @@ await foreach (var evt in client.StartRunStreamAsync(request, cancellationToken)
 - `CUSTOM`
 
 事件常量见 `WorkflowEventTypes`。
+
+常见 `CUSTOM` 事件名还包括：
+
+- `aevatar.llm.reasoning`
+- `aevatar.media.chunk`
 
 ## 3.2 运行到结束（便捷模式）
 

@@ -109,9 +109,9 @@ public sealed class NyxIdLLMProvider : ILLMProvider
                         "NyxID LLM error: status={Status}, route={Route}, endpoint={Endpoint}, body={Body}",
                         status, route.RouteName, route.Endpoint, body);
 
-                    var detail = !string.IsNullOrWhiteSpace(body)
-                        ? $"{ex.Message} | NyxID response: {body}"
-                        : ex.Message;
+                    var detail = $"{ex.Message} | endpoint={route.Endpoint}, model={route.Request.Model}, route={route.RouteName}";
+                    if (!string.IsNullOrWhiteSpace(body))
+                        detail += $" | NyxID response: {body}";
                     throw new InvalidOperationException(detail, ex);
                 }
 
@@ -165,8 +165,10 @@ public sealed class NyxIdLLMProvider : ILLMProvider
             Endpoint = endpoint,
         };
 
-        if (ShouldSuppressDefaultUserAgent(endpoint))
-            options.Transport = new NyxIdProxyTransport();
+        // Always suppress the OpenAI SDK default User-Agent (e.g. "openai-dotnet/2.0.0")
+        // for all NyxID routes. The gateway and proxy both reject requests that look like
+        // direct OpenAI SDK connections.
+        options.Transport = new NyxIdProxyTransport();
 
         var client = new OpenAI.OpenAIClient(new System.ClientModel.ApiKeyCredential(accessToken), options);
         var chatClient = client.GetChatClient(request.Model!).AsIChatClient();

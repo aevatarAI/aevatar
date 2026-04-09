@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -36,6 +37,36 @@ public static class NyxIdChatEndpoints
             endpoint = "/api/webhooks/nyxid-relay",
             last_check = DateTimeOffset.UtcNow,
         })).WithTags("NyxIdRelay");
+
+        // Temporary diagnostic: test NyxID gateway connectivity from this server
+        app.MapPost("/api/webhooks/nyxid-relay/diag", async (HttpContext http, CancellationToken ct) =>
+        {
+            var token = http.Request.Headers["X-Test-Token"].FirstOrDefault()
+                ?? http.Request.Headers.Authorization.FirstOrDefault()?.Replace("Bearer ", "");
+            if (string.IsNullOrWhiteSpace(token))
+                return Results.Json(new { error = "Provide token via X-Test-Token header" });
+
+            var gateway = "https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1/chat/completions";
+            var body = """{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}""";
+
+            using var client = new System.Net.Http.HttpClient();
+            var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, gateway);
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            req.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            // Clear default User-Agent to mimic clean request
+            client.DefaultRequestHeaders.UserAgent.Clear();
+
+            var resp = await client.SendAsync(req, ct);
+            var respBody = await resp.Content.ReadAsStringAsync(ct);
+
+            return Results.Json(new
+            {
+                status = (int)resp.StatusCode,
+                statusText = resp.StatusCode.ToString(),
+                responseBody = respBody.Length > 500 ? respBody[..500] : respBody,
+                serverOutboundIp = "check response headers",
+            });
+        }).WithTags("NyxIdRelay");
 
         // Access control for relay is handled by NyxID's route configuration.
 
@@ -85,7 +116,7 @@ public static class NyxIdChatEndpoints
             }
 
             var prompt = request.Prompt?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(prompt))
+            if (string.IsNullOrWhiteSpace(prompt) && request.InputParts is not { Count: > 0 })
             {
                 http.Response.StatusCode = StatusCodes.Status400BadRequest;
                 return;
@@ -129,6 +160,11 @@ public static class NyxIdChatEndpoints
                 SessionId = request.SessionId ?? messageId,
                 ScopeId = scopeId,
             };
+            if (request.InputParts is { Count: > 0 })
+            {
+                foreach (var part in request.InputParts)
+                    chatRequest.InputParts.Add(part.ToProto());
+            }
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = accessToken;
             chatRequest.Metadata["scope_id"] = scopeId;
             await InjectUserConfigMetadataAsync(http, chatRequest.Metadata, ct);
@@ -224,6 +260,11 @@ public static class NyxIdChatEndpoints
                 evt.RequestId, evt.ToolName, evt.ToolCallId,
                 evt.ArgumentsJson, evt.IsDestructive, evt.TimeoutSeconds,
                 CancellationToken.None);
+        }
+        else if (payload.Is(MediaContentEvent.Descriptor))
+        {
+            var evt = payload.Unpack<MediaContentEvent>();
+            await writer.WriteMediaContentAsync(evt, CancellationToken.None);
         }
         else if (payload.Is(TextMessageEndEvent.Descriptor))
         {
@@ -399,13 +440,25 @@ public static class NyxIdChatEndpoints
         IDictionary<string, string> metadata,
         CancellationToken ct)
     {
+        var logger = http.RequestServices.GetService<ILoggerFactory>()
+            ?.CreateLogger("Aevatar.NyxId.Chat.UserConfig");
+
         var preferencesStore = http.RequestServices.GetService<INyxIdUserLlmPreferencesStore>();
         if (preferencesStore == null)
+        {
+            logger?.LogWarning("INyxIdUserLlmPreferencesStore not registered — skipping user config injection");
             return;
+        }
 
         try
         {
             var preferences = await preferencesStore.GetAsync(ct);
+            logger?.LogInformation(
+                "User config loaded: model={Model}, route={Route}, maxToolRounds={MaxToolRounds}",
+                preferences.DefaultModel ?? "<empty>",
+                preferences.PreferredRoute ?? "<empty>",
+                preferences.MaxToolRounds);
+
             if (!string.IsNullOrWhiteSpace(preferences.DefaultModel))
                 metadata[LLMRequestMetadataKeys.ModelOverride] = preferences.DefaultModel.Trim();
             if (!string.IsNullOrWhiteSpace(preferences.PreferredRoute))
@@ -413,9 +466,9 @@ public static class NyxIdChatEndpoints
             if (preferences.MaxToolRounds > 0)
                 metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride] = preferences.MaxToolRounds.ToString();
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort
+            logger?.LogWarning(ex, "Failed to load user config from chrono-storage — falling back to server defaults");
         }
     }
 
@@ -599,7 +652,36 @@ public static class NyxIdChatEndpoints
         }
     }
 
-    public sealed record NyxIdChatStreamRequest(string? Prompt, string? SessionId = null);
+    public sealed record NyxIdChatStreamRequest(
+        string? Prompt,
+        string? SessionId = null,
+        IReadOnlyList<ContentPartDto>? InputParts = null);
+
+    public sealed record ContentPartDto(
+        string Type,
+        string? Text = null,
+        string? DataBase64 = null,
+        string? MediaType = null,
+        string? Uri = null,
+        string? Name = null)
+    {
+        public ChatContentPart ToProto() => new()
+        {
+            Kind = Type?.ToLowerInvariant() switch
+            {
+                "image" => ChatContentPartKind.Image,
+                "audio" => ChatContentPartKind.Audio,
+                "video" => ChatContentPartKind.Video,
+                "text" => ChatContentPartKind.Text,
+                _ => ChatContentPartKind.Unspecified,
+            },
+            Text = Text ?? string.Empty,
+            DataBase64 = DataBase64 ?? string.Empty,
+            MediaType = MediaType ?? string.Empty,
+            Uri = Uri ?? string.Empty,
+            Name = Name ?? string.Empty,
+        };
+    }
 
     // ─── NyxID Channel Bot Relay ───
 
@@ -654,6 +736,11 @@ public static class NyxIdChatEndpoints
                 var identity = new System.Security.Claims.ClaimsIdentity(claims, "NyxIdRelay");
                 http.User = new System.Security.Claims.ClaimsPrincipal(identity);
             }
+
+            // Note: config.json in chrono-storage cannot be read in relay flow because
+            // ChronoStorageCatalogBlobClient reads the Bearer token from Authorization header,
+            // which is not present on relay callbacks (token is in X-NyxID-User-Token instead).
+            // InjectUserConfigMetadataAsync will silently fall back to server defaults.
 
             // ─── Resolve conversation ───
             var platform = message.Platform ?? "unknown";
@@ -712,10 +799,17 @@ public static class NyxIdChatEndpoints
                 ct);
 
             // ─── Dispatch to actor ───
+            // SessionId = per-message unique ID (for idempotent retry),
+            // NOT conversationId (which is per-chat and would collide across messages).
+            var relayMessageId = message.MessageId;
+            var sessionId = !string.IsNullOrWhiteSpace(relayMessageId)
+                ? $"{conversationId}-{relayMessageId}"
+                : $"{conversationId}-{Guid.NewGuid():N}";
+
             var chatRequest = new ChatRequestEvent
             {
                 Prompt = message.Content.Text,
-                SessionId = conversationId,
+                SessionId = sessionId,
                 ScopeId = scopeId,
             };
             chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = userToken;
@@ -769,6 +863,13 @@ public static class NyxIdChatEndpoints
                     conversationId, errorMessage);
 
                 replyText = ClassifyError(errorMessage);
+
+                if (relayOptions.EnableDebugDiagnostics)
+                {
+                    var config = http.RequestServices.GetService<IConfiguration>();
+                    var diagnostic = BuildRelayDiagnostic(chatRequest.Metadata, config, errorMessage);
+                    replyText += $"\n\n[Debug]\n{diagnostic}";
+                }
             }
             else if (string.IsNullOrWhiteSpace(replyText))
             {
@@ -794,29 +895,51 @@ public static class NyxIdChatEndpoints
     {
         if (error.Contains("403", StringComparison.Ordinal) ||
             error.Contains("Forbidden", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, I can't reach the AI service right now. " +
-                   "The bot owner may need to check their NyxID LLM provider settings.";
+            return "Sorry, I can't reach the AI service right now (403 Forbidden).";
 
         if (error.Contains("401", StringComparison.Ordinal) ||
             error.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
             error.Contains("authentication", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, authentication with the AI service failed. " +
-                   "The bot owner may need to reconnect their LLM provider in NyxID.";
+            return "Sorry, authentication with the AI service failed (401).";
 
         if (error.Contains("429", StringComparison.Ordinal) ||
             error.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
             error.Contains("too many", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the AI service is busy right now. Please wait a moment and try again.";
+            return "Sorry, the AI service is busy right now (429). Please wait a moment and try again.";
 
         if (error.Contains("timeout", StringComparison.OrdinalIgnoreCase))
             return "Sorry, the AI service took too long to respond. Please try again.";
 
         if (error.Contains("model", StringComparison.OrdinalIgnoreCase) &&
             error.Contains("not found", StringComparison.OrdinalIgnoreCase))
-            return "Sorry, the configured AI model is not available. " +
-                   "The bot owner may need to update their model settings.";
+            return "Sorry, the configured AI model is not available.";
 
-        return "Sorry, something went wrong while generating a response. Please try again later.";
+        return "Sorry, something went wrong while generating a response.";
+    }
+
+    /// <summary>
+    /// Build diagnostic block for relay error replies. Only included when
+    /// <see cref="NyxIdRelayOptions.EnableDebugDiagnostics"/> is true.
+    /// </summary>
+    private static string BuildRelayDiagnostic(
+        Google.Protobuf.Collections.MapField<string, string> metadata,
+        IConfiguration? configuration,
+        string errorMessage)
+    {
+        var modelOverride = metadata.TryGetValue(LLMRequestMetadataKeys.ModelOverride, out var m) ? m : null;
+        var serverDefault = configuration?["Aevatar:NyxId:DefaultModel"] ?? "(OpenAIModel option)";
+        var route = metadata.TryGetValue(LLMRequestMetadataKeys.NyxIdRoutePreference, out var r)
+            && !string.IsNullOrWhiteSpace(r) ? r : "gateway";
+        var hasToken = metadata.ContainsKey(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var scope = metadata.TryGetValue("scope_id", out var s) ? s : "<unknown>";
+
+        var model = !string.IsNullOrWhiteSpace(modelOverride)
+            ? $"{modelOverride} (from config.json)"
+            : $"server-default={serverDefault}";
+
+        var error = errorMessage.Length > 300 ? errorMessage[..300] + "..." : errorMessage;
+
+        return $"Model: {model}\nRoute: {route}\nScope: {scope}\nToken: {(hasToken ? "present" : "MISSING")}\nError: {error}";
     }
 
     private static IResult FriendlyReply(string text) =>

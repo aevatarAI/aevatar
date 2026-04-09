@@ -11,6 +11,9 @@ public sealed class LLMResponse
     /// <summary>LLM 生成的文本内容。</summary>
     public string? Content { get; init; }
 
+    /// <summary>LLM 生成的多模态内容分片。</summary>
+    public IReadOnlyList<ContentPart>? ContentParts { get; init; }
+
     /// <summary>LLM 请求调用的工具列表。</summary>
     public IReadOnlyList<ToolCall>? ToolCalls { get; init; }
 
@@ -29,6 +32,9 @@ public sealed class LLMStreamChunk
 {
     /// <summary>本块增量文本内容。</summary>
     public string? DeltaContent { get; init; }
+
+    /// <summary>本块增量多模态分片。</summary>
+    public ContentPart? DeltaContentPart { get; init; }
 
     /// <summary>本块增量思考内容（若模型提供）。</summary>
     public string? DeltaReasoningContent { get; init; }
