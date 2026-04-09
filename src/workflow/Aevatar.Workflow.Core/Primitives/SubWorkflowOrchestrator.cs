@@ -1,6 +1,5 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
-using Aevatar.AI.Abstractions;
 using Aevatar.Workflow.Abstractions;
 using Aevatar.Workflow.Core.Execution;
 using Aevatar.Workflow.Core.Validation;
@@ -25,8 +24,6 @@ internal sealed class SubWorkflowOrchestrator
     private const string WorkflowCallLifecycleMetadataKey = WorkflowCallMetadataPrefix + "lifecycle";
     private const string WorkflowCallChildActorIdMetadataKey = WorkflowCallMetadataPrefix + "child_actor_id";
     private const string WorkflowCallChildRunIdMetadataKey = WorkflowCallMetadataPrefix + "child_run_id";
-    private const string WorkflowCallParentRunIdMetadataKey = WorkflowCallMetadataPrefix + "parent_run_id";
-    private const string WorkflowCallParentStepIdMetadataKey = WorkflowCallMetadataPrefix + "parent_step_id";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorDispatchPort _dispatchPort;
@@ -385,10 +382,10 @@ internal sealed class SubWorkflowOrchestrator
         }, ct);
 
         var requestMetadata = _requestMetadataAccessor();
-        var chatRequest = new ChatRequestEvent
+        var start = new StartSubWorkflowRunEvent
         {
-            Prompt = input ?? string.Empty,
-            SessionId = childRunId,
+            Input = input ?? string.Empty,
+            RunId = childRunId,
             ScopeId = string.IsNullOrWhiteSpace(definition.ScopeId)
                 ? state.ScopeId ?? string.Empty
                 : definition.ScopeId,
@@ -398,17 +395,12 @@ internal sealed class SubWorkflowOrchestrator
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
                 continue;
 
-            chatRequest.Metadata[key] = value;
+            start.RequestItems[key] = value;
         }
-        chatRequest.Metadata[WorkflowCallInvocationIdMetadataKey] = invocationId;
-        chatRequest.Metadata[WorkflowCallParentRunIdMetadataKey] = parentRunId;
-        chatRequest.Metadata[WorkflowCallParentStepIdMetadataKey] = parentStepId;
-        chatRequest.Metadata[WorkflowCallWorkflowNameMetadataKey] = definition.WorkflowName ?? string.Empty;
-        chatRequest.Metadata[WorkflowCallLifecycleMetadataKey] = lifecycle;
 
         try
         {
-            await _sendToAsync(childActor.Id, chatRequest, ct);
+            await _sendToAsync(childActor.Id, start, ct);
         }
         catch (Exception ex)
         {
@@ -418,7 +410,7 @@ internal sealed class SubWorkflowOrchestrator
                     InvocationId = invocationId,
                     ChildRunId = childRunId,
                     Success = false,
-                    Error = $"workflow_call failed to dispatch ChatRequestEvent: {ex.Message}",
+                    Error = $"workflow_call failed to dispatch StartSubWorkflowRunEvent: {ex.Message}",
                 },
                 ct);
             await TryFinalizeNonSingletonChildAsync(

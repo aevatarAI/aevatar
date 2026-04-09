@@ -5,6 +5,13 @@ option csharp_namespace = "Aevatar.Workflow.Abstractions";
 import "google/protobuf/any.proto";
 
 message StartWorkflowEvent    { string workflow_name = 1; string input = 2; map<string, string> parameters = 3; string run_id = 4; }
+message StartSubWorkflowRunEvent
+{
+  string input = 1;
+  string run_id = 2;
+  string scope_id = 3;
+  map<string, string> request_items = 4;
+}
 message BindWorkflowRunDefinitionEvent
 {
   string definition_actor_id = 1;

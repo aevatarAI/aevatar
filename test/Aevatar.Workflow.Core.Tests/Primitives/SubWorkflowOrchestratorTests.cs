@@ -223,13 +223,11 @@ public sealed class SubWorkflowOrchestratorTests
         harness.Persisted.Should().NotContain(x => x is SubWorkflowBindingUpsertedEvent);
         harness.CancelledLeases.Should().ContainSingle(x => x.CallbackId == resolutionState.PendingSubWorkflowDefinitionResolutions[0].TimeoutCallbackId);
         harness.Sent.Should().ContainSingle(x => x.TargetActorId == childActorId);
-        var start = harness.Sent.Single().Message.Should().BeOfType<ChatRequestEvent>().Subject;
-        start.Prompt.Should().Be("payload-a");
-        start.SessionId.Should().Be("invoke-1");
-        start.Metadata["workflow_call.parent_run_id"].Should().Be("parent-run");
-        start.Metadata["workflow_call.parent_step_id"].Should().Be("step-a");
-        start.Metadata["Authorization"].Should().Be("Bearer token-123");
-        start.Metadata["nyxid.access_token"].Should().Be("nyx-token");
+        var start = harness.Sent.Single().Message.Should().BeOfType<StartSubWorkflowRunEvent>().Subject;
+        start.Input.Should().Be("payload-a");
+        start.RunId.Should().Be("invoke-1");
+        start.RequestItems["Authorization"].Should().Be("Bearer token-123");
+        start.RequestItems["nyxid.access_token"].Should().Be("nyx-token");
     }
 
     [Fact]

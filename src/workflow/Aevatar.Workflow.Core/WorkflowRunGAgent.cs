@@ -243,44 +243,72 @@ public sealed class WorkflowRunGAgent
                 CancellationToken.None);
         }
 
-        // Propagate per-request metadata (e.g. NyxID token, model override)
-        // to execution items so that inner LLM steps can forward them.
-        PropagateRequestMetadataToExecutionItems(request.Metadata);
+        await StartWorkflowExecutionCoreAsync(
+            request.Prompt,
+            requestedRunId: null,
+            scopeId: ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
+            requestItems: request.Metadata,
+            ct: CancellationToken.None);
+    }
+
+    [EventHandler]
+    public Task HandleStartSubWorkflowRun(StartSubWorkflowRunEvent request) =>
+        StartWorkflowExecutionCoreAsync(
+            request.Input,
+            requestedRunId: request.RunId,
+            scopeId: string.IsNullOrWhiteSpace(request.ScopeId) ? State.ScopeId ?? string.Empty : request.ScopeId,
+            requestItems: request.RequestItems,
+            ct: CancellationToken.None);
+
+    private async Task StartWorkflowExecutionCoreAsync(
+        string? input,
+        string? requestedRunId,
+        string? scopeId,
+        IReadOnlyDictionary<string, string>? requestItems,
+        CancellationToken ct)
+    {
+        if (_compiledWorkflow == null)
+            throw new InvalidOperationException("Workflow run is not definition-bound or compiled.");
+
+        PropagateRequestMetadataToExecutionItems(requestItems);
 
         await EnsureAgentTreeAsync();
 
-        var runId = string.IsNullOrWhiteSpace(State.RunId)
-            ? WorkflowRunIdNormalizer.Normalize(Id)
-            : WorkflowRunIdNormalizer.Normalize(State.RunId);
+        var runId = string.IsNullOrWhiteSpace(requestedRunId)
+            ? string.IsNullOrWhiteSpace(State.RunId)
+                ? WorkflowRunIdNormalizer.Normalize(Id)
+                : WorkflowRunIdNormalizer.Normalize(State.RunId)
+            : WorkflowRunIdNormalizer.Normalize(requestedRunId);
         await PersistDomainEventAsync(new WorkflowRunExecutionStartedEvent
         {
             RunId = runId,
             WorkflowName = _compiledWorkflow.Name,
-            Input = request.Prompt ?? string.Empty,
+            Input = input ?? string.Empty,
             DefinitionActorId = State.DefinitionActorId ?? string.Empty,
-            ScopeId = ResolveScopeId(request.ScopeId, request.Headers, State.ScopeId),
-        });
+            ScopeId = scopeId ?? string.Empty,
+        }, ct);
 
-        if (request.Metadata.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization))
+        if (requestItems != null &&
+            requestItems.TryGetValue(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorization))
+        {
             ConnectorAuthorizationRuntimeItemsAccess.SetAuthorization(this, authorization);
+        }
         else
+        {
             ConnectorAuthorizationRuntimeItemsAccess.RemoveAuthorization(this);
+        }
 
-        if (request.Metadata.Count > 0)
-        {
-            WorkflowRequestMetadataItemsAccess.SetRequestMetadata(this, request.Metadata);
-        }
+        if (requestItems != null && requestItems.Count > 0)
+            WorkflowRequestMetadataItemsAccess.SetRequestMetadata(this, requestItems);
         else
-        {
             WorkflowRequestMetadataItemsAccess.RemoveRequestMetadata(this);
-        }
 
         await PublishAsync(new StartWorkflowEvent
         {
             WorkflowName = _compiledWorkflow.Name,
-            Input = request.Prompt,
+            Input = input ?? string.Empty,
             RunId = runId,
-        }, TopologyAudience.Self);
+        }, TopologyAudience.Self, ct);
     }
 
     [EventHandler]
@@ -1056,8 +1084,11 @@ public sealed class WorkflowRunGAgent
     ];
 
     private void PropagateRequestMetadataToExecutionItems(
-        Google.Protobuf.Collections.MapField<string, string> metadata)
+        IReadOnlyDictionary<string, string>? metadata)
     {
+        if (metadata == null || metadata.Count == 0)
+            return;
+
         foreach (var key in PropagatedMetadataKeys)
         {
             if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))

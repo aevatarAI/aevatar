@@ -1,6 +1,7 @@
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.Abstractions.Persistence;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
@@ -675,7 +676,7 @@ public class WorkflowGAgentCoverageTests
             x.InvocationId == "invoke-1" &&
             x.DefinitionActorId == "workflow-definition:sub_flow" &&
             x.DefinitionVersion == definitionAgent.State.Version);
-        runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
+        runPublisher.Sent.Select(x => x.evt).OfType<StartSubWorkflowRunEvent>().Should().ContainSingle();
 
         runPublisher.Sent.Clear();
         definitionPublisher.Sent.Clear();
@@ -699,11 +700,11 @@ public class WorkflowGAgentCoverageTests
         agent.State.PendingSubWorkflowInvocations.Should().HaveCount(2);
         agent.State.PendingSubWorkflowInvocations.Select(x => x.ChildActorId).Distinct().Should().ContainSingle();
         agent.State.PendingChildRunIdsByParentRunId.Should().ContainKey("parent-run");
-        runPublisher.Sent.Select(x => x.evt).OfType<StartWorkflowEvent>().Should().ContainSingle();
+        runPublisher.Sent.Select(x => x.evt).OfType<StartSubWorkflowRunEvent>().Should().ContainSingle();
 
         var childAgent = runtime.CreatedChildWorkflowAgents.Single();
         childAgent.BindEvents.Should().ContainSingle();
-        childAgent.StartEvents.Should().BeEmpty();
+        childAgent.SubWorkflowStartEvents.Should().BeEmpty();
     }
 
     [Fact]
@@ -1036,6 +1037,46 @@ public class WorkflowGAgentCoverageTests
             .Select(x => x.EventData.Unpack<WorkflowCommandObservedEvent>().CommandId)
             .Should()
             .ContainSingle("cmd-123");
+    }
+
+    [Fact]
+    public async Task WorkflowRunGAgent_HandleStartSubWorkflowRun_ShouldReuseSharedExecutionStartLogic()
+    {
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateRunAgent();
+        SetAgentId(agent, "workflow-run-sub-start");
+        agent.EventPublisher = publisher;
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-parent");
+
+        await agent.HandleStartSubWorkflowRun(new StartSubWorkflowRunEvent
+        {
+            Input = "child-input",
+            RunId = "child-run-1",
+            ScopeId = "scope-child",
+            RequestItems =
+            {
+                ["nyxid.access_token"] = "nyx-token",
+                [ConnectorRequest.HttpAuthorizationMetadataKey] = "Bearer token-123",
+            },
+        });
+
+        publisher.Published.Select(x => x.evt).OfType<StartWorkflowEvent>()
+            .Should()
+            .ContainSingle(x => x.RunId == "child-run-1" && x.Input == "child-input");
+
+        agent.TryGetExecutionItem("workflow.request.metadata", out var requestMetadataObject).Should().BeTrue();
+        var requestMetadata = requestMetadataObject.Should().BeOfType<Dictionary<string, string>>().Subject;
+        requestMetadata["nyxid.access_token"].Should().Be("nyx-token");
+        requestMetadata[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+
+        agent.TryGetExecutionItem(ConnectorRequest.HttpAuthorizationMetadataKey, out var authorizationObject).Should().BeTrue();
+        authorizationObject.Should().Be("Bearer token-123");
+        agent.State.Input.Should().Be("child-input");
     }
 
     [Fact]
@@ -1772,15 +1813,15 @@ public class WorkflowGAgentCoverageTests
     {
         public string Id { get; } = id;
         public List<BindWorkflowRunDefinitionEvent> BindEvents { get; } = [];
-        public List<StartWorkflowEvent> StartEvents { get; } = [];
+        public List<StartSubWorkflowRunEvent> SubWorkflowStartEvents { get; } = [];
 
         public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
         {
             if (envelope.Payload?.Is(BindWorkflowRunDefinitionEvent.Descriptor) == true)
                 BindEvents.Add(envelope.Payload.Unpack<BindWorkflowRunDefinitionEvent>());
 
-            if (envelope.Payload?.Is(StartWorkflowEvent.Descriptor) == true)
-                StartEvents.Add(envelope.Payload.Unpack<StartWorkflowEvent>());
+            if (envelope.Payload?.Is(StartSubWorkflowRunEvent.Descriptor) == true)
+                SubWorkflowStartEvents.Add(envelope.Payload.Unpack<StartSubWorkflowRunEvent>());
 
             return Task.CompletedTask;
         }
