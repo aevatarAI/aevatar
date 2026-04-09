@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -64,7 +63,7 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
             DisplayName = displayName,
             JoinedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
-        await SendCommandAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
     }
 
     public async Task RemoveRoomAsync(
@@ -75,45 +74,22 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         {
             RoomId = roomId,
         };
-        await SendCommandAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
     }
 
     // ── Per-request readmodel read (no service-level state) ──
 
-    private async Task<StreamingProxyParticipantGAgentState?> ReadFromReadModelAsync(CancellationToken ct)
+    private Task<StreamingProxyParticipantGAgentState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        var readModelActorId = WriteActorId + "-readmodel";
-        var tcs = new TaskCompletionSource<StreamingProxyParticipantGAgentState?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
-            readModelActorId,
-            envelope =>
-            {
-                if (envelope.Payload?.Is(StreamingProxyParticipantStateSnapshotEvent.Descriptor) == true)
-                {
-                    var snapshot = envelope.Payload.Unpack<StreamingProxyParticipantStateSnapshotEvent>();
-                    tcs.TrySetResult(snapshot.Snapshot);
-                }
-                return Task.CompletedTask;
-            },
+        return ReadModelSnapshotReader.ReadAsync<StreamingProxyParticipantGAgentState, StreamingProxyParticipantStateSnapshotEvent>(
+            _subscriptions,
+            _runtime,
+            WriteActorId + "-readmodel",
+            typeof(StreamingProxyParticipantReadModelGAgent),
+            StreamingProxyParticipantStateSnapshotEvent.Descriptor,
+            evt => evt.Snapshot,
+            _logger,
             ct);
-
-        // Activate readmodel actor (triggers OnActivateAsync → PublishAsync snapshot)
-        await EnsureReadModelActorAsync(readModelActorId, ct);
-
-        // Wait for snapshot with timeout
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            return await tcs.Task.WaitAsync(cts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
-            return null;
-        }
     }
 
     // ── Actor resolution ──
@@ -122,27 +98,5 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     {
         var actor = await _runtime.GetAsync(WriteActorId);
         return actor ?? await _runtime.CreateAsync<StreamingProxyParticipantGAgent>(WriteActorId, ct);
-    }
-
-    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(readModelActorId);
-        if (actor is null)
-            await _runtime.CreateAsync<StreamingProxyParticipantReadModelGAgent>(readModelActorId, ct);
-    }
-
-    private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
     }
 }

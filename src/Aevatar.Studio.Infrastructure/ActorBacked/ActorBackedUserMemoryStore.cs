@@ -5,8 +5,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
@@ -91,7 +89,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
                     UpdatedAt = entry.UpdatedAt,
                 },
             };
-            await SendCommandAsync(actor, evt, ct);
+            await ActorCommandDispatcher.SendAsync(actor, evt, ct);
         }
     }
 
@@ -111,7 +109,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
         };
 
         var evt = new MemoryEntryAddedEvent { Entry = entry };
-        await SendCommandAsync(actor, evt, ct);
+        await ActorCommandDispatcher.SendAsync(actor, evt, ct);
 
         return new UserMemoryEntry(
             Id: entry.Id,
@@ -130,7 +128,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
         var actor = await EnsureWriteActorAsync(ct);
         var evt = new MemoryEntryRemovedEvent { EntryId = id };
-        await SendCommandAsync(actor, evt, ct);
+        await ActorCommandDispatcher.SendAsync(actor, evt, ct);
         return true;
     }
 
@@ -195,52 +193,25 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     // ── Per-request readmodel read (no service-level state) ──
 
-    private async Task<UserMemoryState?> ReadFromReadModelAsync(CancellationToken ct)
+    private Task<UserMemoryState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        var readModelActorId = ResolveReadModelActorId();
-        var tcs = new TaskCompletionSource<UserMemoryState?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
-            readModelActorId,
-            envelope =>
-            {
-                if (envelope.Payload?.Is(UserMemoryStateSnapshotEvent.Descriptor) == true)
-                {
-                    var snapshot = envelope.Payload.Unpack<UserMemoryStateSnapshotEvent>();
-                    tcs.TrySetResult(snapshot.Snapshot);
-                }
-                return Task.CompletedTask;
-            },
+        return ReadModelSnapshotReader.ReadAsync<UserMemoryState, UserMemoryStateSnapshotEvent>(
+            _subscriptions,
+            _runtime,
+            ResolveReadModelActorId(),
+            typeof(UserMemoryReadModelGAgent),
+            UserMemoryStateSnapshotEvent.Descriptor,
+            evt => evt.Snapshot,
+            _logger,
             ct);
-
-        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
-        await EnsureReadModelActorAsync(readModelActorId, ct);
-
-        // Wait for snapshot with timeout
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            return await tcs.Task.WaitAsync(cts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
-            return null;
-        }
     }
 
     // ── Actor resolution ──
 
     private string ResolveScopeId()
-    {
-        var scope = _scopeResolver.Resolve();
-        if (scope is null)
-            throw new InvalidOperationException(
-                "User memory store requires an authenticated user scope. No scope could be resolved.");
-        return scope.ScopeId;
-    }
+        => _scopeResolver.Resolve()?.ScopeId
+           ?? throw new InvalidOperationException(
+               "User memory store requires an authenticated user scope. No scope could be resolved.");
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
     private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
@@ -250,28 +221,6 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
         var actorId = ResolveWriteActorId();
         var actor = await _runtime.GetAsync(actorId);
         return actor ?? await _runtime.CreateAsync<UserMemoryGAgent>(actorId, ct);
-    }
-
-    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(readModelActorId);
-        if (actor is null)
-            await _runtime.CreateAsync<UserMemoryReadModelGAgent>(readModelActorId, ct);
-    }
-
-    private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
     }
 
     private static string GenerateId()

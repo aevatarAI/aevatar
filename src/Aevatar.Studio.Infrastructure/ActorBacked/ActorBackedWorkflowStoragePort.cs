@@ -2,8 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.WorkflowStorage;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
@@ -41,17 +39,11 @@ internal sealed class ActorBackedWorkflowStoragePort : IWorkflowStoragePort
             WorkflowName = workflowName,
             Yaml = yaml,
         };
-        await SendCommandAsync(actor, evt, ct);
+        await ActorCommandDispatcher.SendAsync(actor, evt, ct);
         _logger.LogDebug("Workflow YAML uploaded via actor: {WorkflowId}", workflowId);
     }
 
-    private string ResolveScopeId()
-    {
-        var scope = _scopeResolver.Resolve();
-        return scope?.ScopeId ?? "default";
-    }
-
-    private string ResolveStorageActorId() => StorageActorIdPrefix + ResolveScopeId();
+    private string ResolveStorageActorId() => StorageActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
 
     private async Task<IActor> EnsureActorAsync(CancellationToken ct)
     {
@@ -61,20 +53,5 @@ internal sealed class ActorBackedWorkflowStoragePort : IWorkflowStoragePort
             return actor;
 
         return await _runtime.CreateAsync<WorkflowStorageGAgent>(actorId, ct);
-    }
-
-    private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
     }
 }

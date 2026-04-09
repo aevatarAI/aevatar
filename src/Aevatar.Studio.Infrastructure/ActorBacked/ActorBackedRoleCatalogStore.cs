@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
-using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -67,7 +66,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(catalog.Roles.Select(ToProtoRoleDefinition));
-        await SendCommandAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
 
         return new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -87,7 +86,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actor = await EnsureWriteActorAsync(cancellationToken);
         var evt = new RoleCatalogSavedEvent();
         evt.Roles.AddRange(localCatalog.Roles.Select(ToProtoRoleDefinition));
-        await SendCommandAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
 
         var importedCatalog = new StoredRoleCatalog(
             HomeDirectory: ActorHomeDirectory,
@@ -131,7 +130,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             Draft = draft.Draft is not null ? ToProtoRoleDefinition(draft.Draft) : null,
             UpdatedAtUtc = Timestamp.FromDateTimeOffset(updatedAtUtc),
         };
-        await SendCommandAsync(actor, evt, cancellationToken);
+        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
 
         return new StoredRoleDraft(
             HomeDirectory: ActorHomeDirectory,
@@ -144,56 +143,27 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     public async Task DeleteRoleDraftAsync(CancellationToken cancellationToken = default)
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
-        await SendCommandAsync(actor, new RoleDraftDeletedEvent(), cancellationToken);
+        await ActorCommandDispatcher.SendAsync(actor, new RoleDraftDeletedEvent(), cancellationToken);
     }
 
     // ── Per-request readmodel read (no service-level state) ──
 
-    private async Task<RoleCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
+    private Task<RoleCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        var readModelActorId = ResolveReadModelActorId();
-        var tcs = new TaskCompletionSource<RoleCatalogState?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
-            readModelActorId,
-            envelope =>
-            {
-                if (envelope.Payload?.Is(RoleCatalogStateSnapshotEvent.Descriptor) == true)
-                {
-                    var snapshot = envelope.Payload.Unpack<RoleCatalogStateSnapshotEvent>();
-                    tcs.TrySetResult(snapshot.Snapshot);
-                }
-                return Task.CompletedTask;
-            },
+        return ReadModelSnapshotReader.ReadAsync<RoleCatalogState, RoleCatalogStateSnapshotEvent>(
+            _subscriptions,
+            _runtime,
+            ResolveReadModelActorId(),
+            typeof(RoleCatalogReadModelGAgent),
+            RoleCatalogStateSnapshotEvent.Descriptor,
+            evt => evt.Snapshot,
+            _logger,
             ct);
-
-        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
-        await EnsureReadModelActorAsync(readModelActorId, ct);
-
-        // Wait for snapshot with timeout
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            return await tcs.Task.WaitAsync(cts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
-            return null;
-        }
     }
 
     // ── Actor resolution ──
 
-    private string ResolveScopeId()
-    {
-        var scope = _scopeResolver.Resolve();
-        return scope?.ScopeId ?? "default";
-    }
-
-    private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
+    private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
     private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
 
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
@@ -201,28 +171,6 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         var actorId = ResolveWriteActorId();
         var actor = await _runtime.GetAsync(actorId);
         return actor ?? await _runtime.CreateAsync<RoleCatalogGAgent>(actorId, ct);
-    }
-
-    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(readModelActorId);
-        if (actor is null)
-            await _runtime.CreateAsync<RoleCatalogReadModelGAgent>(readModelActorId, ct);
-    }
-
-    private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
     }
 
     private static StoredRoleDefinition ToStoredRoleDefinition(RoleDefinitionEntry entry) =>

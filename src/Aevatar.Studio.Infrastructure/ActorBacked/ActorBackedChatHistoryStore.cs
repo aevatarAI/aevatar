@@ -2,8 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
@@ -69,7 +67,7 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         foreach (var msg in messages)
             replaceEvt.Messages.Add(ToStoredChatMessageProto(msg));
 
-        await SendCommandAsync(conversationActor, replaceEvt, ct);
+        await ActorCommandDispatcher.SendAsync(conversationActor, replaceEvt, ct);
     }
 
     public async Task DeleteConversationAsync(
@@ -82,83 +80,37 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
             ConversationId = conversationId,
             ScopeId = scopeId,
         };
-        await SendCommandAsync(conversationActor, deleteEvt, ct);
+        await ActorCommandDispatcher.SendAsync(conversationActor, deleteEvt, ct);
     }
 
     // ── Per-request readmodel reads (no service-level state) ───
 
-    private async Task<ChatHistoryIndexState?> ReadIndexFromReadModelAsync(
+    private Task<ChatHistoryIndexState?> ReadIndexFromReadModelAsync(
         string scopeId, CancellationToken ct)
     {
-        var readModelActorId = IndexActorId(scopeId) + "-readmodel";
-        var tcs = new TaskCompletionSource<ChatHistoryIndexState?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
-            readModelActorId,
-            envelope =>
-            {
-                if (envelope.Payload?.Is(ChatHistoryIndexStateSnapshotEvent.Descriptor) == true)
-                {
-                    var snapshot = envelope.Payload.Unpack<ChatHistoryIndexStateSnapshotEvent>();
-                    tcs.TrySetResult(snapshot.Snapshot);
-                }
-                return Task.CompletedTask;
-            },
+        return ReadModelSnapshotReader.ReadAsync<ChatHistoryIndexState, ChatHistoryIndexStateSnapshotEvent>(
+            _subscriptions,
+            _runtime,
+            IndexActorId(scopeId) + "-readmodel",
+            typeof(ChatHistoryIndexReadModelGAgent),
+            ChatHistoryIndexStateSnapshotEvent.Descriptor,
+            evt => evt.Snapshot,
+            _logger,
             ct);
-
-        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
-        await EnsureIndexReadModelActorAsync(readModelActorId, ct);
-
-        // Wait for snapshot with timeout
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            return await tcs.Task.WaitAsync(cts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("Timeout waiting for index readmodel snapshot from {ActorId}", readModelActorId);
-            return null;
-        }
     }
 
-    private async Task<ChatConversationState?> ReadConversationFromReadModelAsync(
+    private Task<ChatConversationState?> ReadConversationFromReadModelAsync(
         string scopeId, string conversationId, CancellationToken ct)
     {
-        var readModelActorId = ConversationActorId(scopeId, conversationId) + "-readmodel";
-        var tcs = new TaskCompletionSource<ChatConversationState?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
-            readModelActorId,
-            envelope =>
-            {
-                if (envelope.Payload?.Is(ChatConversationStateSnapshotEvent.Descriptor) == true)
-                {
-                    var snapshot = envelope.Payload.Unpack<ChatConversationStateSnapshotEvent>();
-                    tcs.TrySetResult(snapshot.Snapshot);
-                }
-                return Task.CompletedTask;
-            },
+        return ReadModelSnapshotReader.ReadAsync<ChatConversationState, ChatConversationStateSnapshotEvent>(
+            _subscriptions,
+            _runtime,
+            ConversationActorId(scopeId, conversationId) + "-readmodel",
+            typeof(ChatConversationReadModelGAgent),
+            ChatConversationStateSnapshotEvent.Descriptor,
+            evt => evt.Snapshot,
+            _logger,
             ct);
-
-        // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
-        await EnsureConversationReadModelActorAsync(readModelActorId, ct);
-
-        // Wait for snapshot with timeout
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(5));
-        try
-        {
-            return await tcs.Task.WaitAsync(cts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("Timeout waiting for conversation readmodel snapshot from {ActorId}", readModelActorId);
-            return null;
-        }
     }
 
     // ── Actor resolution ───────────────────────────────────────
@@ -171,41 +123,10 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
         return actor ?? await _runtime.CreateAsync<ChatConversationGAgent>(actorId, ct);
     }
 
-    private async Task EnsureIndexReadModelActorAsync(string readModelActorId, CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(readModelActorId);
-        if (actor is null)
-            await _runtime.CreateAsync<ChatHistoryIndexReadModelGAgent>(readModelActorId, ct);
-    }
-
-    private async Task EnsureConversationReadModelActorAsync(string readModelActorId, CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(readModelActorId);
-        if (actor is null)
-            await _runtime.CreateAsync<ChatConversationReadModelGAgent>(readModelActorId, ct);
-    }
-
     // ── Actor ID conventions ───────────────────────────────────
 
     private static string IndexActorId(string scopeId) => $"chat-index-{scopeId}";
     private static string ConversationActorId(string scopeId, string conversationId) => $"chat-{scopeId}-{conversationId}";
-
-    // ── Command dispatch ───────────────────────────────────────
-
-    private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)
-    {
-        var envelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
-        };
-        await actor.HandleEventAsync(envelope, ct);
-    }
 
     // ── Mapping helpers ────────────────────────────────────────
 
