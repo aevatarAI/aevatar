@@ -18,16 +18,19 @@ export function useTeamRuntimeLens(scopeId: string) {
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "binding", normalizedScopeId],
     queryFn: () => studioApi.getScopeBinding(normalizedScopeId),
+    retry: false,
   });
   const workflowsQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "workflows", normalizedScopeId],
     queryFn: () => scopesApi.listWorkflows(normalizedScopeId),
+    retry: false,
   });
   const scriptsQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "scripts", normalizedScopeId],
     queryFn: () => scopesApi.listScripts(normalizedScopeId),
+    retry: false,
   });
   const servicesQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
@@ -38,11 +41,13 @@ export function useTeamRuntimeLens(scopeId: string) {
         appId: scopeServiceAppId,
         namespace: scopeServiceNamespace,
       }),
+    retry: false,
   });
   const actorsQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "actors", normalizedScopeId],
     queryFn: () => runtimeGAgentApi.listActors(normalizedScopeId),
+    retry: false,
   });
 
   const serviceId =
@@ -56,6 +61,7 @@ export function useTeamRuntimeLens(scopeId: string) {
       scopeRuntimeApi.listServiceRuns(normalizedScopeId, serviceId, {
         take: 12,
       }),
+    retry: false,
   });
 
   const compareRuns = useMemo(
@@ -93,6 +99,7 @@ export function useTeamRuntimeLens(scopeId: string) {
           actorId: compareRuns.currentRun?.actorId || undefined,
         },
       ),
+    retry: false,
   });
   const baselineRunAuditQuery = useQuery({
     enabled:
@@ -116,6 +123,7 @@ export function useTeamRuntimeLens(scopeId: string) {
           actorId: compareRuns.baselineRun?.actorId || undefined,
         },
       ),
+    retry: false,
   });
   const actorGraphQuery = useQuery({
     enabled: focusActorId.length > 0,
@@ -126,6 +134,7 @@ export function useTeamRuntimeLens(scopeId: string) {
         direction: "Both",
         take: 24,
       }),
+    retry: false,
   });
 
   const lens = useMemo(

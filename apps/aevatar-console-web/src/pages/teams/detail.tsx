@@ -27,6 +27,7 @@ import {
 } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
+import { scopesApi } from "@/shared/api/scopesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
 import {
@@ -36,6 +37,7 @@ import {
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { readScopeQueryDraft } from "@/shared/navigation/scopeRoutes";
 import { studioApi } from "@/shared/studio/api";
+import type { StudioWorkflowDocument } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -52,7 +54,10 @@ import {
 import {
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
-import { deriveTeamIntegrationsSummary } from "./runtime/teamIntegrations";
+import {
+  deriveTeamIntegrationsSummary,
+  deriveTeamWorkflowRoleBindings,
+} from "./runtime/teamIntegrations";
 import type { TeamPlaybackSummary } from "./runtime/teamRuntimeLens";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 
@@ -146,6 +151,10 @@ function compactId(value: string): string {
 
   const segment = normalized.split("/").pop() || normalized;
   return segment.split(":").pop() || segment;
+}
+
+function trimText(value: string | null | undefined): string {
+  return value?.trim() ?? "";
 }
 
 function createObservedPlaybackEvents(
@@ -281,22 +290,118 @@ const TeamDetailPage: React.FC = () => {
     queryFn: () => studioApi.getConnectorCatalog(),
     retry: false,
   });
-  const roleCatalogQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["teams", "role-catalog"],
-    queryFn: () => studioApi.getRoleCatalog(),
+  const activeWorkflowSummary = React.useMemo(() => {
+    if (lens.activeRevision?.implementationKind !== "workflow") {
+      return null;
+    }
+
+    const workflows = workflowsQuery.data ?? [];
+    const activeWorkflowName = trimText(lens.activeRevision.workflowName);
+    if (activeWorkflowName) {
+      const matchedWorkflow =
+        workflows.find(
+          (workflow) =>
+            trimText(workflow.workflowName) === activeWorkflowName ||
+            trimText(workflow.displayName) === activeWorkflowName,
+        ) ?? null;
+      if (matchedWorkflow) {
+        return matchedWorkflow;
+      }
+    }
+
+    return workflows.length === 1 ? workflows[0] : null;
+  }, [lens.activeRevision, workflowsQuery.data]);
+  const teamWorkflowDetailQuery = useQuery({
+    enabled:
+      scopeId.length > 0 &&
+      lens.activeRevision?.implementationKind === "workflow" &&
+      trimText(activeWorkflowSummary?.workflowId).length > 0,
+    queryKey: [
+      "teams",
+      "workflow-detail",
+      scopeId,
+      activeWorkflowSummary?.workflowId ?? "",
+      lens.activeRevision?.revisionId ?? "",
+    ],
+    queryFn: () =>
+      scopesApi.getWorkflowDetail(scopeId, activeWorkflowSummary?.workflowId ?? ""),
     retry: false,
   });
+  const teamWorkflowDocumentsQuery = useQuery({
+    enabled:
+      lens.activeRevision?.implementationKind === "workflow" &&
+      Boolean(teamWorkflowDetailQuery.data?.available) &&
+      trimText(teamWorkflowDetailQuery.data?.source?.workflowYaml).length > 0,
+    queryKey: [
+      "teams",
+      "workflow-documents",
+      scopeId,
+      activeWorkflowSummary?.workflowId ?? "",
+      lens.activeRevision?.revisionId ?? "",
+    ],
+    queryFn: async (): Promise<StudioWorkflowDocument[]> => {
+      const source = teamWorkflowDetailQuery.data?.source;
+      if (!source) {
+        return [];
+      }
+
+      const workflowYamls = [
+        trimText(source.workflowYaml),
+        ...Object.values(source.inlineWorkflowYamls ?? {}).map((yaml) =>
+          trimText(yaml),
+        ),
+      ].filter(Boolean);
+      const uniqueWorkflowYamls = [...new Set(workflowYamls)];
+      const parsedDocuments = await Promise.all(
+        uniqueWorkflowYamls.map(async (yaml) => {
+          const parsed = await studioApi.parseYaml({ yaml });
+          return parsed.document ?? null;
+        }),
+      );
+
+      return parsedDocuments.filter(
+        (document): document is StudioWorkflowDocument => Boolean(document),
+      );
+    },
+    retry: false,
+  });
+  const teamScopedRoleLoading =
+    lens.activeRevision?.implementationKind === "workflow" &&
+    (workflowsQuery.isLoading ||
+      teamWorkflowDetailQuery.isLoading ||
+      teamWorkflowDocumentsQuery.isLoading);
+  const teamScopedRoleUnavailable =
+    lens.activeRevision?.implementationKind === "workflow" &&
+    !teamScopedRoleLoading &&
+    (!activeWorkflowSummary ||
+      teamWorkflowDetailQuery.isError ||
+      teamWorkflowDocumentsQuery.isError ||
+      !teamWorkflowDetailQuery.data?.available ||
+      !teamWorkflowDetailQuery.data?.source);
   const integrations = React.useMemo(
     () =>
       deriveTeamIntegrationsSummary({
+        bindingKind: lens.activeRevision?.implementationKind ?? "unknown",
         workspaceSettings: workspaceSettingsQuery.data ?? null,
         connectorCatalog: connectorCatalogQuery.data ?? null,
-        roleCatalog: roleCatalogQuery.data ?? null,
+        teamWorkflowRoles:
+          lens.activeRevision?.implementationKind !== "workflow"
+            ? []
+            : teamScopedRoleLoading
+              ? undefined
+              : teamScopedRoleUnavailable
+                ? null
+                : deriveTeamWorkflowRoleBindings(
+                    teamWorkflowDocumentsQuery.data ?? [],
+                  ),
+        workflowDocumentCount: teamWorkflowDocumentsQuery.data?.length ?? 0,
       }),
     [
       connectorCatalogQuery.data,
-      roleCatalogQuery.data,
+      lens.activeRevision?.implementationKind,
+      teamScopedRoleLoading,
+      teamScopedRoleUnavailable,
+      teamWorkflowDocumentsQuery.data,
       workspaceSettingsQuery.data,
     ],
   );
@@ -318,7 +423,9 @@ const TeamDetailPage: React.FC = () => {
     actorGraphQuery.isError ? "Collaboration graph could not be loaded." : null,
     workspaceSettingsQuery.isError ? "Workspace settings could not be loaded." : null,
     connectorCatalogQuery.isError ? "Connector catalog could not be loaded." : null,
-    roleCatalogQuery.isError ? "Role catalog could not be loaded." : null,
+    teamScopedRoleUnavailable
+      ? "Current workflow connector usage could not be loaded."
+      : null,
   ].filter((issue): issue is string => Boolean(issue));
   const activityProvenance: ObservationBadge =
     runsQuery.isError || currentRunAuditQuery.isError
@@ -359,14 +466,17 @@ const TeamDetailPage: React.FC = () => {
     connectorCatalogQuery.isError
       ? "Connector catalog is unavailable."
       : null,
-    roleCatalogQuery.isError ? "Role catalog is unavailable." : null,
+    teamScopedRoleUnavailable
+      ? "Current workflow connector usage is unavailable."
+      : null,
   ].filter((issue): issue is string => Boolean(issue));
   const integrationsProvenance: ObservationBadge =
     workspaceSettingsQuery.isError &&
     connectorCatalogQuery.isError &&
-    roleCatalogQuery.isError
+    teamScopedRoleUnavailable
       ? { label: "Unavailable", status: "unavailable" }
-      : integrationsSignalIssues.length > 0
+      : integrationsSignalIssues.length > 0 ||
+          teamScopedRoleLoading
         ? { label: "Partial", status: "partial" }
         : integrations.available
           ? { label: "Delayed", status: "delayed" }
@@ -1240,11 +1350,12 @@ const TeamDetailPage: React.FC = () => {
       >
         {workspaceSettingsQuery.isLoading &&
         connectorCatalogQuery.isLoading &&
-        roleCatalogQuery.isLoading ? (
+        (lens.activeRevision?.implementationKind !== "workflow" ||
+          teamScopedRoleLoading) ? (
           <AevatarInspectorEmpty description="Loading team integrations." />
         ) : !integrations.available && integrationsSignalIssues.length > 0 ? (
           <AevatarInspectorEmpty
-            description="Workspace settings, connector definitions, or saved role references could not be loaded for this team."
+            description="Workspace settings, connector definitions, or current team connector usage could not be loaded for this team."
             title="Integrations unavailable"
           />
         ) : (
@@ -1254,6 +1365,13 @@ const TeamDetailPage: React.FC = () => {
                 description="Some integration facts are missing, so this inspector is showing the best visible workspace truth."
                 showIcon
                 type="warning"
+              />
+            ) : null}
+            {teamScopedRoleLoading ? (
+              <Alert
+                description="Loading team-scoped connector usage from the current workflow."
+                showIcon
+                type="info"
               />
             ) : null}
             <SignalCard
@@ -1278,9 +1396,9 @@ const TeamDetailPage: React.FC = () => {
               />
               <SignalCard
                 icon={<ApartmentOutlined />}
-                label="Role-linked connectors"
+                label="Team-linked connectors"
                 value={integrations.linkedConnectorCount}
-                caption={`${integrations.roleReferenceCount} saved connector references across team roles`}
+                caption={integrations.teamRoleUsageSummary}
               />
             </div>
             <Typography.Text type="secondary">
@@ -1318,11 +1436,19 @@ const TeamDetailPage: React.FC = () => {
                     </Typography.Text>
                     {connector.usedByRoles.length > 0 ? (
                       <Typography.Text type="secondary">
-                        Used by {connector.usedByRoles.join(", ")}
+                        Used by current team roles {connector.usedByRoles.join(", ")}
+                      </Typography.Text>
+                    ) : integrations.teamRoleUsageStatus === "resolved" ? (
+                      <Typography.Text type="secondary">
+                        Current team does not reference this connector.
+                      </Typography.Text>
+                    ) : integrations.teamRoleUsageStatus === "not_applicable" ? (
+                      <Typography.Text type="secondary">
+                        This team is {integrations.bindingKind}-bound, so workflow role usage is not available.
                       </Typography.Text>
                     ) : (
                       <Typography.Text type="secondary">
-                        No saved role explicitly references this connector yet.
+                        Team-scoped role usage is not currently available.
                       </Typography.Text>
                     )}
                   </div>

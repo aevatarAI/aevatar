@@ -188,12 +188,51 @@ jest.mock("@/shared/api/scopesApi", () => ({
   scopesApi: {
     listWorkflows: jest.fn(async () => [
       {
+        scopeId: "scope-1",
         workflowId: "workflow-1",
+        displayName: "Support Escalation Triage",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage",
+        actorId: "actor-intake",
+        activeRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        deploymentStatus: "Active",
+        updatedAt: "2026-04-09T09:00:00Z",
       },
       {
+        scopeId: "scope-1",
         workflowId: "workflow-2",
+        displayName: "Support Escalation Triage v1",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage-v1",
+        actorId: "actor-intake-v1",
+        activeRevisionId: "rev-1",
+        deploymentId: "dep-1",
+        deploymentStatus: "Retired",
+        updatedAt: "2026-04-08T09:00:00Z",
       },
     ]),
+    getWorkflowDetail: jest.fn(async () => ({
+      available: true,
+      scopeId: "scope-1",
+      workflow: {
+        scopeId: "scope-1",
+        workflowId: "workflow-1",
+        displayName: "Support Escalation Triage",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage",
+        actorId: "actor-intake",
+        activeRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        deploymentStatus: "Active",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+      source: {
+        workflowYaml: "name: support-triage",
+        definitionActorId: "definition://support-triage",
+        inlineWorkflowYamls: null,
+      },
+    })),
     listScripts: jest.fn(async () => [
       {
         scriptId: "script-1",
@@ -419,20 +458,19 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
-    getRoleCatalog: jest.fn(async () => ({
-      homeDirectory: "/tmp/.aevatar",
-      filePath: "/tmp/.aevatar/roles.json",
-      fileExists: true,
-      roles: [
-        {
-          id: "triage_operator",
-          name: "triage_operator",
-          systemPrompt: "",
-          provider: "openai",
-          model: "gpt-4.1",
-          connectors: ["web-search", "crm-sync"],
-        },
-      ],
+    parseYaml: jest.fn(async () => ({
+      document: {
+        name: "support-triage",
+        roles: [
+          {
+            id: "triage_operator",
+            name: "triage_operator",
+            connectors: ["web-search", "crm-sync"],
+          },
+        ],
+      },
+      graph: null,
+      findings: [],
     })),
   },
 }));
@@ -482,6 +520,12 @@ describe("TeamDetailPage", () => {
       expect(screen.getByText("Recent runtime events")).toBeTruthy();
       expect(screen.getByText("From focus")).toBeTruthy();
       expect(screen.getByText("web-search")).toBeTruthy();
+      expect(
+        screen.getByText("2 team-scoped connector references across 1 workflow roles"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("Used by current team roles triage_operator"),
+      ).toBeTruthy();
       expect(screen.getByText("Referenced but undefined")).toBeTruthy();
       expect(screen.getByText("crm-sync")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Open current run replay" })).toBeTruthy();
