@@ -174,7 +174,7 @@ public sealed class GAgentServiceHostingServiceCollectionExtensionsTests
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions");
         endpoints.Should().Contain("/api/scopes/{scopeId}/revisions/{revisionId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/binding/revisions/{revisionId}:retire");
-        endpoints.Should().Contain("/api/scopes/{scopeId}/draft-run");
+        endpoints.Should().Contain("/api/scopes/{scopeId}/workflow/draft-run");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/chat:stream");
         endpoints.Should().Contain("/api/scopes/{scopeId}/invoke/{endpointId}");
         endpoints.Should().Contain("/api/scopes/{scopeId}/runs");

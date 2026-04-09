@@ -367,24 +367,35 @@ public sealed class ElasticsearchProjectionDocumentStore<TReadModel, TKey>
     private static Dictionary<string, FieldDescriptor> BuildDescriptorFieldMap(MessageDescriptor descriptor)
     {
         var fields = new Dictionary<string, FieldDescriptor>(StringComparer.Ordinal);
-        VisitDescriptorFields(descriptor, prefix: null, fields);
+        VisitDescriptorFields(descriptor, prefix: null, fields, new HashSet<MessageDescriptor>());
         return fields;
     }
 
     private static void VisitDescriptorFields(
         MessageDescriptor descriptor,
         string? prefix,
-        Dictionary<string, FieldDescriptor> fields)
+        Dictionary<string, FieldDescriptor> fields,
+        HashSet<MessageDescriptor> ancestry)
     {
-        foreach (var field in descriptor.Fields.InDeclarationOrder())
-        {
-            var path = string.IsNullOrWhiteSpace(prefix)
-                ? field.Name
-                : $"{prefix}.{field.Name}";
-            fields[path] = field;
+        if (!ancestry.Add(descriptor))
+            return;
 
-            if (field.FieldType == FieldType.Message && field.MessageType != null)
-                VisitDescriptorFields(field.MessageType, path, fields);
+        try
+        {
+            foreach (var field in descriptor.Fields.InDeclarationOrder())
+            {
+                var path = string.IsNullOrWhiteSpace(prefix)
+                    ? field.Name
+                    : $"{prefix}.{field.Name}";
+                fields[path] = field;
+
+                if (field.FieldType == FieldType.Message && field.MessageType != null)
+                    VisitDescriptorFields(field.MessageType, path, fields, ancestry);
+            }
+        }
+        finally
+        {
+            ancestry.Remove(descriptor);
         }
     }
 
