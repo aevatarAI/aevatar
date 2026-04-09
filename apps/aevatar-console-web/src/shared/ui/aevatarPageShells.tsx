@@ -406,7 +406,7 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
         {title || description || extra ? (
           <div style={sectionHeaderStyle}>
             <Space
-              direction="vertical"
+              orientation="vertical"
               size={4}
               style={{ flex: 1, minWidth: 0 }}
             >
@@ -465,7 +465,7 @@ export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
       }
       styles={{ body: aevatarDrawerBodyStyle }}
       title={
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Typography.Text strong>{title}</Typography.Text>
           {subtitle ? (
             <Typography.Text style={{ color: token.colorTextSecondary }}>
@@ -511,7 +511,7 @@ export const AevatarInspectorEmpty: React.FC<{
   return (
     <Empty
       description={
-        <Space direction="vertical" size={4}>
+        <Space orientation="vertical" size={4}>
           <Typography.Text strong>{title}</Typography.Text>
           <Typography.Text style={{ color: token.colorTextSecondary }}>
             {description}

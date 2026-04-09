@@ -13,13 +13,14 @@ describe('buildStudioRoute', () => {
   it('includes workflow, template, tab, and prompt query params when provided', () => {
     expect(
       buildStudioRoute({
+        scopeId: 'scope-1',
         workflowId: 'workspace-demo',
         template: 'published_demo',
         tab: 'executions',
         prompt: 'Run the current draft',
       }),
     ).toBe(
-      '/studio?workflow=workspace-demo&template=published_demo&tab=executions&prompt=Run+the+current+draft',
+      '/studio?scopeId=scope-1&workflow=workspace-demo&template=published_demo&tab=executions&prompt=Run+the+current+draft',
     );
   });
 
@@ -72,17 +73,21 @@ describe('buildStudioRoute', () => {
   });
 
   it('builds dedicated workflow and script workspace routes', () => {
-    expect(buildStudioWorkflowWorkspaceRoute()).toBe('/studio?tab=workflows');
+    expect(buildStudioWorkflowWorkspaceRoute({ scopeId: 'scope-1' })).toBe(
+      '/studio?scopeId=scope-1&tab=workflows',
+    );
     expect(
       buildStudioWorkflowEditorRoute({
+        scopeId: 'scope-1',
         workflowId: 'workflow-1',
       }),
-    ).toBe('/studio?workflow=workflow-1&tab=studio');
+    ).toBe('/studio?scopeId=scope-1&workflow=workflow-1&tab=studio');
     expect(
       buildStudioScriptsWorkspaceRoute({
+        scopeId: 'scope-1',
         scriptId: 'script-1',
       }),
-    ).toBe('/studio?script=script-1&tab=scripts');
+    ).toBe('/studio?scopeId=scope-1&script=script-1&tab=scripts');
   });
 
   it('infers the workflow editor when only a workflow id is provided', () => {

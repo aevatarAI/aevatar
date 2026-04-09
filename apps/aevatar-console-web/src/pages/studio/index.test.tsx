@@ -1,7 +1,8 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
+import { history } from "@/shared/navigation/history";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
@@ -2002,6 +2003,41 @@ describe("StudioPage", () => {
     });
     await waitFor(() => {
       expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
+    });
+  });
+
+  it("prefers the route scopeId over the app context scope when opening Studio", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-app",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?scopeId=scope-route&workflow=workflow-1&tab=studio");
+
+    await waitFor(() => {
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-route");
+    });
+  });
+
+  it("updates the scope context when the Studio route scopeId changes after mount", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
+      ...defaultStudioAppContext,
+      scopeId: "scope-app",
+      scopeResolved: true,
+    });
+
+    renderStudioPage("/studio?scopeId=scope-route-a&workflow=workflow-1&tab=studio");
+
+    await waitFor(() => {
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-route-a");
+    });
+
+    await act(async () => {
+      history.push("/studio?scopeId=scope-route-b&workflow=workflow-1&tab=studio");
+    });
+
+    await waitFor(() => {
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-route-b");
     });
   });
 

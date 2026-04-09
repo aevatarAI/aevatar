@@ -45,6 +45,7 @@ import { resolveStudioScopeContext } from "./components/resolvedScope";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
   buildScopeHref,
+  buildScopeOverviewHref,
   normalizeScopeDraft,
   readScopeQueryDraft,
   type ScopeQueryDraft,
@@ -188,7 +189,7 @@ const ScopeOverviewPage: React.FC = () => {
 
   useEffect(() => {
     history.replace(
-      buildScopeHref("/scopes/overview", activeDraft, {
+      buildScopeOverviewHref(activeDraft, {
         revisionId: focus?.kind === "revision" ? focus.id : "",
         workflowId: focus?.kind === "workflow" ? focus.id : "",
         scriptId: focus?.kind === "script" ? focus.id : "",

@@ -10,6 +10,11 @@
  * @param icon 配置路由的图标，取值参考 https://ant.design/components/icon-cn， 注意去除风格后缀和大小写，如想要配置图标为 <StepBackwardOutlined /> 则取值应为 stepBackward 或 StepBackward，如想要配置图标为 <UserOutlined /> 则取值应为 user 或者 User
  * @doc https://umijs.org/docs/guides/routes
  */
+const TEAM_FIRST_ENABLED = ['1', 'true', 'yes', 'on'].includes(
+  (process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED || '').trim().toLowerCase(),
+);
+const HOME_REDIRECT = TEAM_FIRST_ENABLED ? '/teams' : '/scopes/overview';
+
 export default [
   {
     path: "/login",
@@ -23,8 +28,20 @@ export default [
   },
   {
     path: "/overview",
-    redirect: "/scopes/overview",
+    redirect: HOME_REDIRECT,
     hideInMenu: true,
+  },
+  {
+    path: "/teams",
+    name: "Teams",
+    component: "./teams",
+    menuGroupKey: "home",
+  },
+  {
+    path: "/teams/:scopeId",
+    component: "./teams/detail",
+    hideInMenu: true,
+    parentKeys: ["/teams"],
   },
   {
     path: "/scopes/assets",
@@ -208,7 +225,7 @@ export default [
   },
   {
     path: "/",
-    redirect: "/scopes/overview",
+    redirect: HOME_REDIRECT,
   },
   {
     component: "404",

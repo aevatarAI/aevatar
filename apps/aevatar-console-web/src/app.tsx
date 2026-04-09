@@ -11,6 +11,7 @@ import {
   MessageOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
+  TeamOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -124,6 +125,12 @@ const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
 const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
+  {
+    flattenSingleItem: true,
+    icon: <TeamOutlined />,
+    key: "home",
+    label: "Teams",
+  },
   {
     icon: <AppstoreOutlined />,
     key: "build",
