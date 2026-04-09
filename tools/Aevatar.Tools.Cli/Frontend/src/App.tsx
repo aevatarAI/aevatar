@@ -1051,7 +1051,7 @@ function App() {
 
     // In Electron, listen for OAuth callback from the loopback server
     const cleanup = nyxid.setupElectronAuthListener(
-      ({ session: oauthSession, returnTo }) => {
+      ({ session: oauthSession }) => {
         setAuthSession({
           loading: false,
           enabled: true,
