@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChatHistory;
 
@@ -38,6 +39,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
         {
             var indexActorId = IndexActorId(evt.ScopeId);
+            await EnsureIndexActorAsync(indexActorId);
             var indexMeta = State.Meta?.Clone();
             if (indexMeta is not null)
             {
@@ -64,6 +66,7 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
         {
             var indexActorId = IndexActorId(evt.ScopeId);
+            await EnsureIndexActorAsync(indexActorId);
             await SendToAsync(indexActorId, new ConversationRemovedEvent { ConversationId = evt.ConversationId });
         }
     }
@@ -117,8 +120,18 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
     private async Task PushToReadModelAsync()
     {
         var readModelActorId = Id + "-readmodel";
+        var runtime = Services.GetRequiredService<IActorRuntime>();
+        if (await runtime.GetAsync(readModelActorId) is null)
+            await runtime.CreateAsync<ChatConversationReadModelGAgent>(readModelActorId);
         var update = new ChatConversationReadModelUpdateEvent { Snapshot = State.Clone() };
         await SendToAsync(readModelActorId, update);
+    }
+
+    private async Task EnsureIndexActorAsync(string indexActorId)
+    {
+        var runtime = Services.GetRequiredService<IActorRuntime>();
+        if (await runtime.GetAsync(indexActorId) is null)
+            await runtime.CreateAsync<ChatHistoryIndexGAgent>(indexActorId);
     }
 
     private static string IndexActorId(string scopeId) => $"chat-index-{scopeId}";

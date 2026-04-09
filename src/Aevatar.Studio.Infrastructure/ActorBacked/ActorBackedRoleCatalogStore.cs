@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -15,27 +16,30 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// Writes send commands to the Write GAgent.
 /// Local workspace operations (ImportLocalCatalogAsync) delegate to
 /// <see cref="IStudioWorkspaceStore"/>.
+/// Per-scope isolation: each scope gets its own <c>role-catalog-{scopeId}</c> actor.
 /// </summary>
 internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 {
-    private const string WriteActorId = "role-catalog";
-    private const string ReadModelActorId = "role-catalog-readmodel";
+    private const string WriteActorIdPrefix = "role-catalog-";
     private const string ActorHomeDirectory = "actor://role-catalog";
     private const string ActorFilePath = "actor://role-catalog/roles";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorEventSubscriptionProvider _subscriptions;
+    private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _localWorkspaceStore;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
 
     public ActorBackedRoleCatalogStore(
         IActorRuntime runtime,
         IActorEventSubscriptionProvider subscriptions,
+        IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore localWorkspaceStore,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
+        _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localWorkspaceStore = localWorkspaceStore ?? throw new ArgumentNullException(nameof(localWorkspaceStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -147,11 +151,12 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 
     private async Task<RoleCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
     {
+        var readModelActorId = ResolveReadModelActorId();
         var tcs = new TaskCompletionSource<RoleCatalogState?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         await using var sub = await _subscriptions.SubscribeAsync<EventEnvelope>(
-            ReadModelActorId,
+            readModelActorId,
             envelope =>
             {
                 if (envelope.Payload?.Is(RoleCatalogStateSnapshotEvent.Descriptor) == true)
@@ -164,7 +169,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
             ct);
 
         // Activate readmodel actor (triggers OnActivateAsync -> PublishAsync snapshot)
-        await EnsureReadModelActorAsync(ct);
+        await EnsureReadModelActorAsync(readModelActorId, ct);
 
         // Wait for snapshot with timeout
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -175,24 +180,34 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", ReadModelActorId);
+            _logger.LogWarning("Timeout waiting for readmodel snapshot from {ActorId}", readModelActorId);
             return null;
         }
     }
 
     // ── Actor resolution ──
 
-    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
+    private string ResolveScopeId()
     {
-        var actor = await _runtime.GetAsync(WriteActorId);
-        return actor ?? await _runtime.CreateAsync<RoleCatalogGAgent>(WriteActorId, ct);
+        var scope = _scopeResolver.Resolve();
+        return scope?.ScopeId ?? "default";
     }
 
-    private async Task EnsureReadModelActorAsync(CancellationToken ct)
+    private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
+    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
+
+    private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(ReadModelActorId);
+        var actorId = ResolveWriteActorId();
+        var actor = await _runtime.GetAsync(actorId);
+        return actor ?? await _runtime.CreateAsync<RoleCatalogGAgent>(actorId, ct);
+    }
+
+    private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)
+    {
+        var actor = await _runtime.GetAsync(readModelActorId);
         if (actor is null)
-            await _runtime.CreateAsync<RoleCatalogReadModelGAgent>(ReadModelActorId, ct);
+            await _runtime.CreateAsync<RoleCatalogReadModelGAgent>(readModelActorId, ct);
     }
 
     private static async Task SendCommandAsync(IActor actor, IMessage command, CancellationToken ct)

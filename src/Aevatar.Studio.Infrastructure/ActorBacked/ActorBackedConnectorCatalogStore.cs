@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
@@ -14,26 +15,30 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// Reads use per-request temporary subscription to the ReadModel GAgent.
 /// Writes send commands to the Write GAgent.
 /// Local workspace operations (import, draft backup) delegate to <see cref="IStudioWorkspaceStore"/>.
+/// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
 /// </summary>
 internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 {
-    private const string WriteActorId = "connector-catalog";
+    private const string WriteActorIdPrefix = "connector-catalog-";
     private const string ActorHomeDirectory = "actor://connector-catalog";
     private const string ActorFilePath = "actor://connector-catalog/connectors";
 
     private readonly IActorRuntime _runtime;
     private readonly IActorEventSubscriptionProvider _subscriptions;
+    private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _workspaceStore;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
     public ActorBackedConnectorCatalogStore(
         IActorRuntime runtime,
         IActorEventSubscriptionProvider subscriptions,
+        IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore workspaceStore,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
+        _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -162,7 +167,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 
     private async Task<ConnectorCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
     {
-        var readModelActorId = WriteActorId + "-readmodel";
+        var readModelActorId = ResolveReadModelActorId();
         var tcs = new TaskCompletionSource<ConnectorCatalogState?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -198,10 +203,20 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
 
     // ── Actor resolution ──
 
+    private string ResolveScopeId()
+    {
+        var scope = _scopeResolver.Resolve();
+        return scope?.ScopeId ?? "default";
+    }
+
+    private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
+    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
+
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {
-        var actor = await _runtime.GetAsync(WriteActorId);
-        return actor ?? await _runtime.CreateAsync<ConnectorCatalogGAgent>(WriteActorId, ct);
+        var actorId = ResolveWriteActorId();
+        var actor = await _runtime.GetAsync(actorId);
+        return actor ?? await _runtime.CreateAsync<ConnectorCatalogGAgent>(actorId, ct);
     }
 
     private async Task EnsureReadModelActorAsync(string readModelActorId, CancellationToken ct)

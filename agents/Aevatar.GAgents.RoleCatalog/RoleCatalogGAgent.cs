@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.RoleCatalog;
@@ -92,6 +93,9 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
     private async Task PushToReadModelAsync()
     {
         var readModelActorId = Id + "-readmodel";
+        var runtime = Services.GetRequiredService<IActorRuntime>();
+        if (await runtime.GetAsync(readModelActorId) is null)
+            await runtime.CreateAsync<RoleCatalogReadModelGAgent>(readModelActorId);
         var update = new RoleCatalogReadModelUpdateEvent { Snapshot = State.Clone() };
         await SendToAsync(readModelActorId, update);
     }

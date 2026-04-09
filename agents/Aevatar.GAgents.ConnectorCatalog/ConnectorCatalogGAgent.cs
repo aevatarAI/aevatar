@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ConnectorCatalog;
 
@@ -92,6 +93,9 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
     private async Task PushToReadModelAsync()
     {
         var readModelActorId = Id + "-readmodel";
+        var runtime = Services.GetRequiredService<IActorRuntime>();
+        if (await runtime.GetAsync(readModelActorId) is null)
+            await runtime.CreateAsync<ConnectorCatalogReadModelGAgent>(readModelActorId);
         var update = new ConnectorCatalogReadModelUpdateEvent { Snapshot = State.Clone() };
         await SendToAsync(readModelActorId, update);
     }

@@ -75,10 +75,10 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore
             RuntimeMode = UserConfigRuntime.NormalizeMode(config.RuntimeMode),
             LocalRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
                 config.LocalRuntimeBaseUrl,
-                UserConfigRuntimeDefaults.LocalRuntimeBaseUrl),
+                _storageOptions.ResolveDefaultLocalRuntimeBaseUrl()),
             RemoteRuntimeBaseUrl = UserConfigRuntime.NormalizeBaseUrl(
                 config.RemoteRuntimeBaseUrl,
-                UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl),
+                _storageOptions.ResolveDefaultRemoteRuntimeBaseUrl()),
             MaxToolRounds = config.MaxToolRounds,
         };
         await SendCommandAsync(actor, evt, cancellationToken);

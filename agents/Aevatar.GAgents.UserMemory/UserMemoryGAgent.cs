@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.UserMemory;
 
@@ -142,6 +143,9 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
     private async Task PushToReadModelAsync()
     {
         var readModelActorId = Id + "-readmodel";
+        var runtime = Services.GetRequiredService<IActorRuntime>();
+        if (await runtime.GetAsync(readModelActorId) is null)
+            await runtime.CreateAsync<UserMemoryReadModelGAgent>(readModelActorId);
         var update = new UserMemoryReadModelUpdateEvent { Snapshot = State.Clone() };
         await SendToAsync(readModelActorId, update);
     }

@@ -488,11 +488,11 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedWorkflowStoragePort>.Instance;
 
-        var port = new ActorBackedWorkflowStoragePort(runtime, logger);
+        var port = new ActorBackedWorkflowStoragePort(runtime, new FakeScopeResolver(), logger);
 
         await port.UploadWorkflowYamlAsync("wf-001", "My Workflow", "name: test\nsteps: []", CancellationToken.None);
 
-        const string expectedActorId = "workflow-storage";
+        const string expectedActorId = "workflow-storage-default";
         runtime.Actors.Should().ContainKey(expectedActorId);
 
         var actor = runtime.Actors[expectedActorId];
@@ -516,14 +516,14 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedWorkflowStoragePort>.Instance;
 
-        var port = new ActorBackedWorkflowStoragePort(runtime, logger);
+        var port = new ActorBackedWorkflowStoragePort(runtime, new FakeScopeResolver(), logger);
 
         await port.UploadWorkflowYamlAsync("wf-1", "First", "yaml1", CancellationToken.None);
         await port.UploadWorkflowYamlAsync("wf-2", "Second", "yaml2", CancellationToken.None);
 
         runtime.Actors.Should().HaveCount(1, "actor should be reused across uploads");
 
-        var actor = runtime.Actors["workflow-storage"];
+        var actor = runtime.Actors["workflow-storage-default"];
         actor.ReceivedEnvelopes.Should().HaveCount(2);
     }
 
@@ -537,11 +537,11 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedScriptStoragePort>.Instance;
 
-        var port = new ActorBackedScriptStoragePort(runtime, logger);
+        var port = new ActorBackedScriptStoragePort(runtime, new FakeScopeResolver(), logger);
 
         await port.UploadScriptAsync("script-42", "console.log('hello');", CancellationToken.None);
 
-        const string expectedActorId = "script-storage";
+        const string expectedActorId = "script-storage-default";
         runtime.Actors.Should().ContainKey(expectedActorId);
 
         var actor = runtime.Actors[expectedActorId];
@@ -564,13 +564,13 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedScriptStoragePort>.Instance;
 
-        var port = new ActorBackedScriptStoragePort(runtime, logger);
+        var port = new ActorBackedScriptStoragePort(runtime, new FakeScopeResolver(), logger);
 
         await port.UploadScriptAsync("s1", "code1", CancellationToken.None);
         await port.UploadScriptAsync("s2", "code2", CancellationToken.None);
 
         runtime.Actors.Should().HaveCount(1, "actor should be reused");
-        runtime.Actors["script-storage"].ReceivedEnvelopes.Should().HaveCount(2);
+        runtime.Actors["script-storage-default"].ReceivedEnvelopes.Should().HaveCount(2);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -583,13 +583,13 @@ public sealed class ActorBackedStoreAdapterTests
         var runtime = new FakeActorRuntime();
         var logger = NullLogger<ActorBackedScriptStoragePort>.Instance;
 
-        var port = new ActorBackedScriptStoragePort(runtime, logger);
+        var port = new ActorBackedScriptStoragePort(runtime, new FakeScopeResolver(), logger);
         var beforeUtc = DateTimeOffset.UtcNow;
 
         await port.UploadScriptAsync("ts-check", "body", CancellationToken.None);
 
         var afterUtc = DateTimeOffset.UtcNow;
-        var envelope = runtime.Actors["script-storage"].ReceivedEnvelopes[0];
+        var envelope = runtime.Actors["script-storage-default"].ReceivedEnvelopes[0];
 
         envelope.Id.Should().NotBeNullOrWhiteSpace("envelope must have a unique ID");
         envelope.Id.Length.Should().Be(32, "ID should be a Guid without dashes");

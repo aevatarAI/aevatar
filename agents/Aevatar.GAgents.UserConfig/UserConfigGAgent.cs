@@ -3,6 +3,7 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.UserConfig;
 
@@ -56,6 +57,9 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
     private async Task PushToReadModelAsync()
     {
         var readModelActorId = Id + "-readmodel";
+        var runtime = Services.GetRequiredService<IActorRuntime>();
+        if (await runtime.GetAsync(readModelActorId) is null)
+            await runtime.CreateAsync<UserConfigReadModelGAgent>(readModelActorId);
         var update = new UserConfigReadModelUpdateEvent { Snapshot = State.Clone() };
         await SendToAsync(readModelActorId, update);
     }
