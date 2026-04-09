@@ -789,7 +789,7 @@ public sealed class ScopeGAgentEndpointsTests
                 {
                     foreach (var envelope in _envelopes)
                     {
-                        await Task.Delay(1, ct);
+                        ct.ThrowIfCancellationRequested();
                         await eventHandler(envelope);
                     }
                 }, ct);
