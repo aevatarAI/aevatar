@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
@@ -10,8 +9,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IConnectorCatalogStore"/>.
-/// Completely stateless: no fields hold snapshot or subscription state.
-/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Reads the write actor's state directly.
 /// Writes send commands to the Write GAgent.
 /// Local workspace operations (import, draft backup) delegate to <see cref="IStudioWorkspaceStore"/>.
 /// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
@@ -23,20 +21,17 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     private const string ActorFilePath = "actor://connector-catalog/connectors";
 
     private readonly IActorRuntime _runtime;
-    private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _workspaceStore;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
     public ActorBackedConnectorCatalogStore(
         IActorRuntime runtime,
-        IActorEventSubscriptionProvider subscriptions,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore workspaceStore,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -45,7 +40,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     public async Task<StoredConnectorCatalog> GetConnectorCatalogAsync(
         CancellationToken cancellationToken = default)
     {
-        var state = await ReadFromReadModelAsync(cancellationToken);
+        var state = await ReadWriteActorStateAsync(cancellationToken);
         if (state is null)
         {
             return new StoredConnectorCatalog(
@@ -110,7 +105,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     public async Task<StoredConnectorDraft> GetConnectorDraftAsync(
         CancellationToken cancellationToken = default)
     {
-        var state = await ReadFromReadModelAsync(cancellationToken);
+        var state = await ReadWriteActorStateAsync(cancellationToken);
         var draftEntry = state?.Draft;
         if (draftEntry is null)
         {
@@ -162,25 +157,18 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
 
-    // ── Per-request readmodel read (no service-level state) ──
+    // ── Read write actor state directly ──
 
-    private Task<ConnectorCatalogState?> ReadFromReadModelAsync(CancellationToken ct)
+    private async Task<ConnectorCatalogState?> ReadWriteActorStateAsync(CancellationToken ct)
     {
-        return ReadModelSnapshotReader.ReadAsync<ConnectorCatalogState, ConnectorCatalogStateSnapshotEvent>(
-            _subscriptions,
-            _runtime,
-            ResolveReadModelActorId(),
-            typeof(ConnectorCatalogReadModelGAgent),
-            ConnectorCatalogStateSnapshotEvent.Descriptor,
-            evt => evt.Snapshot,
-            _logger,
-            ct);
+        var actorId = ResolveWriteActorId();
+        var actor = await _runtime.GetAsync(actorId);
+        return (actor?.Agent as IAgent<ConnectorCatalogState>)?.State;
     }
 
     // ── Actor resolution ──
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
-    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
 
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {

@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ConnectorCatalog;
 
@@ -13,9 +12,6 @@ namespace Aevatar.GAgents.ConnectorCatalog;
 /// for remote persistence concerns.
 ///
 /// Actor ID: <c>connector-catalog</c> (cluster-scoped singleton).
-///
-/// After each state change, pushes the current state to the paired
-/// <see cref="ConnectorCatalogReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
 {
@@ -23,14 +19,12 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
     public async Task HandleCatalogSaved(ConnectorCatalogSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "saveDraft")]
     public async Task HandleDraftSaved(ConnectorDraftSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "deleteDraft")]
@@ -41,13 +35,11 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override ConnectorCatalogState TransitionState(
@@ -90,13 +82,4 @@ public sealed class ConnectorCatalogGAgent : GAgentBase<ConnectorCatalogState>
         return next;
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<ConnectorCatalogReadModelGAgent>(readModelActorId);
-        var update = new ConnectorCatalogReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }

@@ -3,8 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.RoleCatalog;
 
@@ -14,9 +12,6 @@ namespace Aevatar.GAgents.RoleCatalog;
 /// for remote persistence concerns.
 ///
 /// Actor ID: <c>role-catalog</c> (cluster-scoped singleton).
-///
-/// After each state change, pushes the current state to the paired
-/// <see cref="RoleCatalogReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
 {
@@ -24,14 +19,12 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
     public async Task HandleCatalogSaved(RoleCatalogSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "saveDraft")]
     public async Task HandleDraftSaved(RoleDraftSavedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "deleteDraft")]
@@ -41,13 +34,11 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override RoleCatalogState TransitionState(
@@ -90,13 +81,4 @@ public sealed class RoleCatalogGAgent : GAgentBase<RoleCatalogState>
         return next;
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<RoleCatalogReadModelGAgent>(readModelActorId);
-        var update = new RoleCatalogReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }

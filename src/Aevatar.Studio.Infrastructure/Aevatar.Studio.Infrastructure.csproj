@@ -13,8 +13,6 @@
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.Registry\Aevatar.GAgents.Registry.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ConnectorCatalog\Aevatar.GAgents.ConnectorCatalog.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ScriptStorage\Aevatar.GAgents.ScriptStorage.csproj" />
-    <ProjectReference Include="..\..\agents\Aevatar.GAgents.WorkflowStorage\Aevatar.GAgents.WorkflowStorage.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.RoleCatalog\Aevatar.GAgents.RoleCatalog.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />

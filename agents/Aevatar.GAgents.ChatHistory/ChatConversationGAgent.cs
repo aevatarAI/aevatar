@@ -11,10 +11,7 @@ namespace Aevatar.GAgents.ChatHistory;
 /// Per-conversation actor that holds all messages for a single conversation.
 /// Actor ID: <c>chat-{scopeId}-{conversationId}</c>.
 ///
-/// After each state change, pushes the current state to the paired
-/// <see cref="ChatConversationReadModelGAgent"/> via <c>SendToAsync</c>.
-///
-/// When messages are replaced or the conversation is deleted, also forwards
+/// When messages are replaced or the conversation is deleted, forwards
 /// the change to the <see cref="ChatHistoryIndexGAgent"/> via <c>SendToAsync</c>,
 /// ensuring transactional consistency between conversation and index actors.
 /// </summary>
@@ -33,7 +30,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
         var trimmed = TrimMessages(evt);
 
         await PersistDomainEventAsync(trimmed);
-        await PushToReadModelAsync();
 
         // Forward index upsert to the index actor
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
@@ -60,7 +56,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
 
         // Forward index removal to the index actor
         if (!string.IsNullOrWhiteSpace(evt.ScopeId))
@@ -74,7 +69,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override ChatConversationState TransitionState(
@@ -115,16 +109,6 @@ public sealed class ChatConversationGAgent : GAgentBase<ChatConversationState>
         ChatConversationState state, ConversationDeletedEvent evt)
     {
         return new ChatConversationState();
-    }
-
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<ChatConversationReadModelGAgent>(readModelActorId);
-        var update = new ChatConversationReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
     }
 
     private async Task EnsureIndexActorAsync(string indexActorId)

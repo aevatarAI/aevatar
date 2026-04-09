@@ -39,8 +39,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConnectorCatalogStore, ActorBackedConnectorCatalogStore>();
         services.AddSingleton<IRoleCatalogStore, ActorBackedRoleCatalogStore>();
         services.AddSingleton<IChatHistoryStore, ActorBackedChatHistoryStore>();
-        services.AddSingleton<IWorkflowStoragePort, ActorBackedWorkflowStoragePort>();
-        services.AddSingleton<IScriptStoragePort, ActorBackedScriptStoragePort>();
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();

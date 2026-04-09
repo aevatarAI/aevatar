@@ -3,16 +3,12 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChatHistory;
 
 /// <summary>
 /// Per-user index actor that holds conversation list and metadata.
 /// Actor ID: <c>chat-index-{scopeId}</c>.
-///
-/// After each state change, pushes the current state to the paired
-/// <see cref="ChatHistoryIndexReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
 {
@@ -23,7 +19,6 @@ public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "removeConversation")]
@@ -39,13 +34,11 @@ public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override ChatHistoryIndexState TransitionState(
@@ -85,13 +78,4 @@ public sealed class ChatHistoryIndexGAgent : GAgentBase<ChatHistoryIndexState>
         return next;
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<ChatHistoryIndexReadModelGAgent>(readModelActorId);
-        var update = new ChatHistoryIndexReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }

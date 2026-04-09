@@ -34,14 +34,3 @@ message RoomParticipantsRemovedEvent {
   string room_id = 1;
 }
 
-// ─── Readmodel ───
-
-// Published by ReadModel GAgent so subscribers can observe the current projected state.
-message StreamingProxyParticipantStateSnapshotEvent {
-  StreamingProxyParticipantGAgentState snapshot = 1;
-}
-
-// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
-message StreamingProxyParticipantReadModelUpdateEvent {
-  StreamingProxyParticipantGAgentState snapshot = 1;
-}

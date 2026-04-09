@@ -24,14 +24,3 @@ message UserConfigUpdatedEvent {
   int32 max_tool_rounds = 6;
 }
 
-// ─── Readmodel ───
-
-// Published by ReadModel GAgent so subscribers can observe the current projected state.
-message UserConfigStateSnapshotEvent {
-  UserConfigGAgentState snapshot = 1;
-}
-
-// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
-message UserConfigReadModelUpdateEvent {
-  UserConfigGAgentState snapshot = 1;
-}

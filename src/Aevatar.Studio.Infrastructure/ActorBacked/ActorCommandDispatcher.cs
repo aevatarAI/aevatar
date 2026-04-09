@@ -5,23 +5,24 @@ using Google.Protobuf.WellKnownTypes;
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
-/// Shared utility for dispatching command events to actors via <see cref="IActor.HandleEventAsync"/>.
-/// Eliminates duplicated <c>SendCommandAsync</c> across all ActorBacked stores.
+/// Sends a domain event (command) to a target actor by wrapping it in an
+/// <see cref="EventEnvelope"/> directed to the actor's own inbox.
 /// </summary>
 internal static class ActorCommandDispatcher
 {
-    public static async Task SendAsync(IActor actor, IMessage command, CancellationToken ct)
+    public static Task SendAsync<TEvent>(
+        IActor actor, TEvent evt, CancellationToken ct = default)
+        where TEvent : IMessage
     {
         var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(command),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = actor.Id },
-            },
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(evt),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication(
+                actor.Id, TopologyAudience.Self),
         };
-        await actor.HandleEventAsync(envelope, ct);
+
+        return actor.HandleEventAsync(envelope, ct);
     }
 }

@@ -3,8 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.Registry;
 
@@ -13,9 +11,6 @@ namespace Aevatar.GAgents.Registry;
 /// Replaces the chrono-storage backed <c>ChronoStorageGAgentActorStore</c>.
 ///
 /// Actor ID: <c>gagent-registry-{scopeId}</c> (per-scope).
-///
-/// After each state change, pushes the current state to the paired
-/// <see cref="GAgentRegistryReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>
 {
@@ -32,7 +27,6 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "unregisterActor")]
@@ -48,13 +42,11 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override GAgentRegistryState TransitionState(
@@ -104,13 +96,4 @@ public sealed class GAgentRegistryGAgent : GAgentBase<GAgentRegistryState>
         return next;
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<GAgentRegistryReadModelGAgent>(readModelActorId);
-        var update = new GAgentRegistryReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }

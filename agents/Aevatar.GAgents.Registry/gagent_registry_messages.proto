@@ -25,14 +25,3 @@ message ActorUnregisteredEvent {
   string actor_id = 2;
 }
 
-// ─── Readmodel ───
-
-// Published by ReadModel GAgent so subscribers can observe the current projected state.
-message GAgentRegistryStateSnapshotEvent {
-  GAgentRegistryState snapshot = 1;
-}
-
-// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
-message GAgentRegistryReadModelUpdateEvent {
-  GAgentRegistryState snapshot = 1;
-}

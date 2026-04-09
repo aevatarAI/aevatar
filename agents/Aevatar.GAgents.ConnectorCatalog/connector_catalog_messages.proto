@@ -82,14 +82,3 @@ message ConnectorDraftSavedEvent {
 message ConnectorDraftDeletedEvent {
 }
 
-// ─── Readmodel ───
-
-// Published by ReadModel GAgent so subscribers can observe the current projected state.
-message ConnectorCatalogStateSnapshotEvent {
-  ConnectorCatalogState snapshot = 1;
-}
-
-// Sent from WriteGAgent to ReadModelGAgent via SendToAsync to push state updates.
-message ConnectorCatalogReadModelUpdateEvent {
-  ConnectorCatalogState snapshot = 1;
-}

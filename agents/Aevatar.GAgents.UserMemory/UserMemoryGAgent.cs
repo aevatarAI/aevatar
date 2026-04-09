@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.UserMemory;
 
@@ -17,8 +16,6 @@ namespace Aevatar.GAgents.UserMemory;
 ///      evict the oldest entry in the same category first.
 ///   2. If no same-category entry remains, evict the globally oldest entry.
 ///
-/// After each state change, pushes the current state to the paired
-/// <see cref="UserMemoryReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
 {
@@ -37,7 +34,6 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "removeMemoryEntry")]
@@ -51,7 +47,6 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "clearMemoryEntries")]
@@ -61,13 +56,11 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override UserMemoryState TransitionState(
@@ -140,13 +133,4 @@ public sealed class UserMemoryGAgent : GAgentBase<UserMemoryState>
         return next;
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<UserMemoryReadModelGAgent>(readModelActorId);
-        var update = new UserMemoryReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }

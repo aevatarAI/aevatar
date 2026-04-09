@@ -3,7 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.UserConfig;
 
@@ -12,9 +11,6 @@ namespace Aevatar.GAgents.UserConfig;
 /// Replaces the chrono-storage backed <c>ChronoStorageUserConfigStore</c>.
 ///
 /// Actor ID: <c>user-config-{scopeId}</c> (per-scope).
-///
-/// After each state change, pushes the current state to the paired
-/// <see cref="UserConfigReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
 {
@@ -22,13 +18,11 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
     public async Task HandleConfigUpdated(UserConfigUpdatedEvent evt)
     {
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override UserConfigGAgentState TransitionState(
@@ -54,13 +48,4 @@ public sealed class UserConfigGAgent : GAgentBase<UserConfigGAgentState>
         };
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<UserConfigReadModelGAgent>(readModelActorId);
-        var update = new UserConfigReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }

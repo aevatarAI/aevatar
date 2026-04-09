@@ -1,5 +1,4 @@
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
@@ -11,8 +10,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IUserConfigStore"/>.
-/// Completely stateless: no fields hold snapshot or subscription state.
-/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Reads the write actor's state directly.
 /// Writes send commands to the Write GAgent.
 /// Per-scope isolation: each scope gets its own <c>user-config-{scopeId}</c> actor.
 /// </summary>
@@ -21,20 +19,17 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore
     private const string WriteActorIdPrefix = "user-config-";
 
     private readonly IActorRuntime _runtime;
-    private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly StudioStorageOptions _storageOptions;
     private readonly ILogger<ActorBackedUserConfigStore> _logger;
 
     public ActorBackedUserConfigStore(
         IActorRuntime runtime,
-        IActorEventSubscriptionProvider subscriptions,
         IAppScopeResolver scopeResolver,
         IOptions<StudioStorageOptions> storageOptions,
         ILogger<ActorBackedUserConfigStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _storageOptions = storageOptions?.Value ?? new StudioStorageOptions();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -42,7 +37,7 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore
 
     public async Task<UserConfig> GetAsync(CancellationToken cancellationToken = default)
     {
-        var state = await ReadFromReadModelAsync(cancellationToken);
+        var state = await ReadWriteActorStateAsync(cancellationToken);
         if (state is null)
             return CreateDefaultConfig();
 
@@ -82,25 +77,18 @@ internal sealed class ActorBackedUserConfigStore : IUserConfigStore
         await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
     }
 
-    // ── Per-request readmodel read (no service-level state) ──
+    // ── Read write actor state directly ──
 
-    private Task<UserConfigGAgentState?> ReadFromReadModelAsync(CancellationToken ct)
+    private async Task<UserConfigGAgentState?> ReadWriteActorStateAsync(CancellationToken ct)
     {
-        return ReadModelSnapshotReader.ReadAsync<UserConfigGAgentState, UserConfigStateSnapshotEvent>(
-            _subscriptions,
-            _runtime,
-            ResolveReadModelActorId(),
-            typeof(UserConfigReadModelGAgent),
-            UserConfigStateSnapshotEvent.Descriptor,
-            evt => evt.Snapshot,
-            _logger,
-            ct);
+        var actorId = ResolveWriteActorId();
+        var actor = await _runtime.GetAsync(actorId);
+        return (actor?.Agent as IAgent<UserConfigGAgentState>)?.State;
     }
 
     // ── Actor resolution ──
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + _scopeResolver.ResolveScopeIdOrDefault();
-    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
 
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {

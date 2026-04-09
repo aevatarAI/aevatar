@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgents.UserMemory;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Microsoft.Extensions.Logging;
@@ -11,8 +10,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IUserMemoryStore"/>.
-/// Completely stateless: no fields hold snapshot or subscription state.
-/// Reads use per-request temporary subscription to the ReadModel GAgent.
+/// Reads the write actor's state directly.
 /// Writes send commands to the Write GAgent.
 /// </summary>
 internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
@@ -20,25 +18,22 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
     private const string WriteActorIdPrefix = "user-memory-";
 
     private readonly IActorRuntime _runtime;
-    private readonly IActorEventSubscriptionProvider _subscriptions;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly ILogger<ActorBackedUserMemoryStore> _logger;
 
     public ActorBackedUserMemoryStore(
         IActorRuntime runtime,
-        IActorEventSubscriptionProvider subscriptions,
         IAppScopeResolver scopeResolver,
         ILogger<ActorBackedUserMemoryStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _subscriptions = subscriptions ?? throw new ArgumentNullException(nameof(subscriptions));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<UserMemoryDocument> GetAsync(CancellationToken ct = default)
     {
-        var state = await ReadFromReadModelAsync(ct);
+        var state = await ReadWriteActorStateAsync(ct);
         if (state is null)
             return UserMemoryDocument.Empty;
 
@@ -122,7 +117,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
-        var state = await ReadFromReadModelAsync(ct);
+        var state = await ReadWriteActorStateAsync(ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
@@ -191,19 +186,13 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
             : truncated;
     }
 
-    // ── Per-request readmodel read (no service-level state) ──
+    // ── Read write actor state directly ──
 
-    private Task<UserMemoryState?> ReadFromReadModelAsync(CancellationToken ct)
+    private async Task<UserMemoryState?> ReadWriteActorStateAsync(CancellationToken ct)
     {
-        return ReadModelSnapshotReader.ReadAsync<UserMemoryState, UserMemoryStateSnapshotEvent>(
-            _subscriptions,
-            _runtime,
-            ResolveReadModelActorId(),
-            typeof(UserMemoryReadModelGAgent),
-            UserMemoryStateSnapshotEvent.Descriptor,
-            evt => evt.Snapshot,
-            _logger,
-            ct);
+        var actorId = ResolveWriteActorId();
+        var actor = await _runtime.GetAsync(actorId);
+        return (actor?.Agent as IAgent<UserMemoryState>)?.State;
     }
 
     // ── Actor resolution ──
@@ -214,7 +203,6 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
                "User memory store requires an authenticated user scope. No scope could be resolved.");
 
     private string ResolveWriteActorId() => WriteActorIdPrefix + ResolveScopeId();
-    private string ResolveReadModelActorId() => ResolveWriteActorId() + "-readmodel";
 
     private async Task<IActor> EnsureWriteActorAsync(CancellationToken ct)
     {

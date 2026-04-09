@@ -1,9 +1,6 @@
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Abstractions;
-using Aevatar.Foundation.Abstractions.Streaming;
-using Aevatar.GAgents.ScriptStorage;
 using Aevatar.GAgents.UserConfig;
-using Aevatar.GAgents.WorkflowStorage;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Infrastructure.ActorBacked;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
@@ -24,14 +21,38 @@ public sealed class ActorBackedStoreAdapterTests
     // Fakes
     // ════════════════════════════════════════════════════════════
 
+    private sealed class FakeAgent : IAgent<UserConfigGAgentState>
+    {
+        public FakeAgent(string id, UserConfigGAgentState state)
+        {
+            Id = id;
+            State = state;
+        }
+
+        public string Id { get; }
+        public UserConfigGAgentState State { get; }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) =>
+            Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult(string.Empty);
+        public Task<IReadOnlyList<Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     private sealed class FakeActor : IActor
     {
         private readonly List<EventEnvelope> _received = [];
 
-        public FakeActor(string id) => Id = id;
+        public FakeActor(string id, IAgent? agent = null)
+        {
+            Id = id;
+            Agent = agent ?? new FakeAgent(id, new UserConfigGAgentState());
+        }
 
         public string Id { get; }
-        public IAgent Agent => throw new NotSupportedException();
+        public IAgent Agent { get; }
         public IReadOnlyList<EventEnvelope> ReceivedEnvelopes => _received;
 
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
@@ -49,39 +70,33 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     /// <summary>
-    /// Fake runtime that supports an optional callback when an actor is created.
-    /// This lets tests wire up auto-delivery of readmodel snapshots.
+    /// Fake runtime that supports typed agent state for read tests.
     /// </summary>
     private sealed class FakeActorRuntime : IActorRuntime
     {
         private readonly Dictionary<string, FakeActor> _actors = new(StringComparer.Ordinal);
         public IReadOnlyDictionary<string, FakeActor> Actors => _actors;
 
-        /// <summary>
-        /// Optional callback invoked after an actor is created.
-        /// Used to simulate the readmodel actor's OnActivateAsync publishing a snapshot.
-        /// </summary>
-        public Func<string, Task>? OnActorCreated { get; set; }
+        public void RegisterActor(string id, IAgent agent)
+        {
+            _actors[id] = new FakeActor(id, agent);
+        }
 
-        public async Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent
         {
             var actorId = id ?? Guid.NewGuid().ToString("N");
-            var actor = new FakeActor(actorId);
-            _actors[actorId] = actor;
-            if (OnActorCreated is not null)
-                await OnActorCreated(actorId);
-            return actor;
+            if (!_actors.ContainsKey(actorId))
+                _actors[actorId] = new FakeActor(actorId);
+            return Task.FromResult<IActor>(_actors[actorId]);
         }
 
-        public async Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
         {
             var actorId = id ?? Guid.NewGuid().ToString("N");
-            var actor = new FakeActor(actorId);
-            _actors[actorId] = actor;
-            if (OnActorCreated is not null)
-                await OnActorCreated(actorId);
-            return actor;
+            if (!_actors.ContainsKey(actorId))
+                _actors[actorId] = new FakeActor(actorId);
+            return Task.FromResult<IActor>(_actors[actorId]);
         }
 
         public Task DestroyAsync(string id, CancellationToken ct = default)
@@ -103,66 +118,6 @@ public sealed class ActorBackedStoreAdapterTests
             Task.CompletedTask;
     }
 
-    private sealed class FakeSubscriptionHandle : IAsyncDisposable
-    {
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    /// <summary>
-    /// Fake subscription provider that supports both manual delivery and
-    /// auto-delivery via queued messages per actor ID.
-    /// When a handler subscribes to an actorId that has queued messages,
-    /// those messages are delivered immediately (simulating OnActivateAsync publish).
-    /// </summary>
-    private sealed class FakeSubscriptionProvider : IActorEventSubscriptionProvider
-    {
-        private readonly Dictionary<string, Delegate> _handlers = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, List<object>> _queued = new(StringComparer.Ordinal);
-
-        /// <summary>
-        /// Queue a message to be auto-delivered when a handler subscribes to the given actor ID.
-        /// </summary>
-        public void EnqueueForDelivery<TMessage>(string actorId, TMessage message)
-            where TMessage : class, IMessage, new()
-        {
-            if (!_queued.TryGetValue(actorId, out var list))
-            {
-                list = [];
-                _queued[actorId] = list;
-            }
-            list.Add(message);
-        }
-
-        public async Task<IAsyncDisposable> SubscribeAsync<TMessage>(
-            string actorId,
-            Func<TMessage, Task> handler,
-            CancellationToken ct = default)
-            where TMessage : class, IMessage, new()
-        {
-            _handlers[actorId] = handler;
-
-            // Auto-deliver queued messages
-            if (_queued.TryGetValue(actorId, out var queued))
-            {
-                foreach (var msg in queued)
-                {
-                    if (msg is TMessage typed)
-                        await handler(typed);
-                }
-            }
-
-            return new FakeSubscriptionHandle();
-        }
-
-        /// <summary>Deliver a message to the handler registered for the given actor ID.</summary>
-        public async Task DeliverAsync<TMessage>(string actorId, TMessage message)
-            where TMessage : class, IMessage, new()
-        {
-            if (_handlers.TryGetValue(actorId, out var handler) && handler is Func<TMessage, Task> typedHandler)
-                await typedHandler(message);
-        }
-    }
-
     private sealed class FakeScopeResolver : IAppScopeResolver
     {
         public string? ScopeIdToReturn { get; set; }
@@ -173,46 +128,21 @@ public sealed class ActorBackedStoreAdapterTests
                 : null;
     }
 
-    // ── Helpers: wire up readmodel snapshot auto-delivery ──
-
-    /// <summary>
-    /// Configures fakes so that the readmodel actor auto-delivers the
-    /// given snapshot when the store subscribes.
-    /// </summary>
-    private static void WireUpUserConfigReadModel(
-        FakeSubscriptionProvider subscriptions,
-        string readModelActorId,
-        UserConfigGAgentState? snapshot)
-    {
-        if (snapshot is not null)
-        {
-            var snapshotEvent = new UserConfigStateSnapshotEvent { Snapshot = snapshot };
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Any.Pack(snapshotEvent),
-            };
-            subscriptions.EnqueueForDelivery(readModelActorId, envelope);
-        }
-    }
-
     // ════════════════════════════════════════════════════════════
-    // UserConfigStore: defaults when snapshot is null (timeout)
+    // UserConfigStore: defaults when actor does not exist
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task UserConfigStore_GetAsync_NullSnapshot_ReturnsDefaults()
+    public async Task UserConfigStore_GetAsync_NoActor_ReturnsDefaults()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "test-user" };
         var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
 
         var store = new ActorBackedUserConfigStore(
-            runtime, subscriptions, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
+            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
 
-        // No snapshot queued, readmodel timeout returns defaults
+        // No actor exists, returns defaults
         var config = await store.GetAsync();
 
         config.DefaultModel.Should().BeEmpty();
@@ -224,31 +154,30 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
-    // UserConfigStore: snapshot mapping
+    // UserConfigStore: state mapping
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task UserConfigStore_GetAsync_WithSnapshot_MapsFieldsCorrectly()
+    public async Task UserConfigStore_GetAsync_WithState_MapsFieldsCorrectly()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-42" };
         var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
 
-        // Queue snapshot for readmodel actor
-        WireUpUserConfigReadModel(subscriptions, "user-config-user-42-readmodel",
-            new UserConfigGAgentState
-            {
-                DefaultModel = "gpt-4",
-                PreferredLlmRoute = "/api/v1/proxy/s/custom",
-                RuntimeMode = "remote",
-                LocalRuntimeBaseUrl = "http://localhost:9090",
-                RemoteRuntimeBaseUrl = "https://remote.example.com",
-                MaxToolRounds = 5,
-            });
+        // Register write actor with state
+        var state = new UserConfigGAgentState
+        {
+            DefaultModel = "gpt-4",
+            PreferredLlmRoute = "/api/v1/proxy/s/custom",
+            RuntimeMode = "remote",
+            LocalRuntimeBaseUrl = "http://localhost:9090",
+            RemoteRuntimeBaseUrl = "https://remote.example.com",
+            MaxToolRounds = 5,
+        };
+        runtime.RegisterActor("user-config-user-42", new FakeAgent("user-config-user-42", state));
 
         var store = new ActorBackedUserConfigStore(
-            runtime, subscriptions, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
+            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
 
         var config = await store.GetAsync();
 
@@ -268,20 +197,15 @@ public sealed class ActorBackedStoreAdapterTests
     public async Task UserConfigStore_GetAsync_EmptyStringFields_ApplyDefaults()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-empty" };
         var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
 
-        // Queue snapshot with empty strings (proto default)
-        WireUpUserConfigReadModel(subscriptions, "user-config-user-empty-readmodel",
-            new UserConfigGAgentState
-            {
-                DefaultModel = "claude-3",
-                // Intentionally leave others as empty string (proto default)
-            });
+        // Register write actor with mostly-empty state
+        var state = new UserConfigGAgentState { DefaultModel = "claude-3" };
+        runtime.RegisterActor("user-config-user-empty", new FakeAgent("user-config-user-empty", state));
 
         var store = new ActorBackedUserConfigStore(
-            runtime, subscriptions, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
+            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
 
         var config = await store.GetAsync();
 
@@ -304,12 +228,11 @@ public sealed class ActorBackedStoreAdapterTests
     public async Task UserConfigStore_SaveAsync_SendsUserConfigUpdatedEvent()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "save-scope" };
         var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
 
         var store = new ActorBackedUserConfigStore(
-            runtime, subscriptions, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
+            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
 
         var config = new UserConfig(
             DefaultModel: "gpt-4-turbo",
@@ -334,11 +257,6 @@ public sealed class ActorBackedStoreAdapterTests
         var evt = envelope.Payload.Unpack<UserConfigUpdatedEvent>();
         evt.DefaultModel.Should().Be("gpt-4-turbo");
         evt.MaxToolRounds.Should().Be(10);
-
-        // Verify envelope routing targets the correct actor
-        envelope.Route.Should().NotBeNull();
-        envelope.Route.Direct.Should().NotBeNull();
-        envelope.Route.Direct.TargetActorId.Should().Be(actorId);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -393,209 +311,22 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
-    // Scope isolation: different scopes get different actor IDs
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task UserConfigStore_DifferentScopes_ProduceDifferentActorIds()
-    {
-        var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
-        var scopeResolver = new FakeScopeResolver();
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, subscriptions, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        // First scope
-        scopeResolver.ScopeIdToReturn = "scope-alpha";
-        _ = await store.GetAsync();
-
-        // Second scope
-        scopeResolver.ScopeIdToReturn = "scope-beta";
-        _ = await store.GetAsync();
-
-        // Both readmodel actors should be created
-        runtime.Actors.Should().ContainKey("user-config-scope-alpha-readmodel");
-        runtime.Actors.Should().ContainKey("user-config-scope-beta-readmodel");
-    }
-
-    [Fact]
-    public async Task UserConfigStore_NullScope_FallsBackToDefault()
-    {
-        var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = null };
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, subscriptions, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        _ = await store.GetAsync();
-
-        runtime.Actors.Should().ContainKey("user-config-default-readmodel",
-            "null scope should resolve to 'default' suffix");
-    }
-
-    // ════════════════════════════════════════════════════════════
     // GAgentActorStore: scope isolation
     // ════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task GAgentActorStore_ScopeIsolation_DifferentScopesGetDifferentActors()
+    public async Task GAgentActorStore_GetAsync_NoActor_ReturnsEmptyList()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
-        var scopeResolver = new FakeScopeResolver();
-        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
-
-        var store = new ActorBackedGAgentActorStore(
-            runtime, subscriptions, scopeResolver, logger);
-
-        scopeResolver.ScopeIdToReturn = "tenant-a";
-        _ = await store.GetAsync();
-
-        scopeResolver.ScopeIdToReturn = "tenant-b";
-        _ = await store.GetAsync();
-
-        runtime.Actors.Should().ContainKey("gagent-registry-tenant-a-readmodel");
-        runtime.Actors.Should().ContainKey("gagent-registry-tenant-b-readmodel");
-    }
-
-    [Fact]
-    public async Task GAgentActorStore_GetAsync_NullSnapshot_ReturnsEmptyList()
-    {
-        var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "empty-scope" };
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, subscriptions, scopeResolver, logger);
+            runtime, scopeResolver, logger);
 
         var groups = await store.GetAsync();
 
         groups.Should().BeEmpty();
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // WorkflowStoragePort: command construction
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task WorkflowStoragePort_UploadAsync_SendsWorkflowYamlUploadedEvent()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedWorkflowStoragePort>.Instance;
-
-        var port = new ActorBackedWorkflowStoragePort(runtime, new FakeScopeResolver(), logger);
-
-        await port.UploadWorkflowYamlAsync("wf-001", "My Workflow", "name: test\nsteps: []", CancellationToken.None);
-
-        const string expectedActorId = "workflow-storage-default";
-        runtime.Actors.Should().ContainKey(expectedActorId);
-
-        var actor = runtime.Actors[expectedActorId];
-        actor.ReceivedEnvelopes.Should().HaveCount(1);
-
-        var envelope = actor.ReceivedEnvelopes[0];
-        envelope.Payload.Is(WorkflowYamlUploadedEvent.Descriptor).Should().BeTrue();
-
-        var evt = envelope.Payload.Unpack<WorkflowYamlUploadedEvent>();
-        evt.WorkflowId.Should().Be("wf-001");
-        evt.WorkflowName.Should().Be("My Workflow");
-        evt.Yaml.Should().Be("name: test\nsteps: []");
-
-        // Verify direct routing
-        envelope.Route.Direct.TargetActorId.Should().Be(expectedActorId);
-    }
-
-    [Fact]
-    public async Task WorkflowStoragePort_MultipleUploads_ReusesSameActor()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedWorkflowStoragePort>.Instance;
-
-        var port = new ActorBackedWorkflowStoragePort(runtime, new FakeScopeResolver(), logger);
-
-        await port.UploadWorkflowYamlAsync("wf-1", "First", "yaml1", CancellationToken.None);
-        await port.UploadWorkflowYamlAsync("wf-2", "Second", "yaml2", CancellationToken.None);
-
-        runtime.Actors.Should().HaveCount(1, "actor should be reused across uploads");
-
-        var actor = runtime.Actors["workflow-storage-default"];
-        actor.ReceivedEnvelopes.Should().HaveCount(2);
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // ScriptStoragePort: command construction
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task ScriptStoragePort_UploadAsync_SendsScriptUploadedEvent()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedScriptStoragePort>.Instance;
-
-        var port = new ActorBackedScriptStoragePort(runtime, new FakeScopeResolver(), logger);
-
-        await port.UploadScriptAsync("script-42", "console.log('hello');", CancellationToken.None);
-
-        const string expectedActorId = "script-storage-default";
-        runtime.Actors.Should().ContainKey(expectedActorId);
-
-        var actor = runtime.Actors[expectedActorId];
-        actor.ReceivedEnvelopes.Should().HaveCount(1);
-
-        var envelope = actor.ReceivedEnvelopes[0];
-        envelope.Payload.Is(ScriptUploadedEvent.Descriptor).Should().BeTrue();
-
-        var evt = envelope.Payload.Unpack<ScriptUploadedEvent>();
-        evt.ScriptId.Should().Be("script-42");
-        evt.SourceText.Should().Be("console.log('hello');");
-
-        // Verify direct routing
-        envelope.Route.Direct.TargetActorId.Should().Be(expectedActorId);
-    }
-
-    [Fact]
-    public async Task ScriptStoragePort_MultipleUploads_ReusesSameActor()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedScriptStoragePort>.Instance;
-
-        var port = new ActorBackedScriptStoragePort(runtime, new FakeScopeResolver(), logger);
-
-        await port.UploadScriptAsync("s1", "code1", CancellationToken.None);
-        await port.UploadScriptAsync("s2", "code2", CancellationToken.None);
-
-        runtime.Actors.Should().HaveCount(1, "actor should be reused");
-        runtime.Actors["script-storage-default"].ReceivedEnvelopes.Should().HaveCount(2);
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // Envelope structure verification
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task AllStores_EnvelopeContainsIdAndTimestamp()
-    {
-        var runtime = new FakeActorRuntime();
-        var logger = NullLogger<ActorBackedScriptStoragePort>.Instance;
-
-        var port = new ActorBackedScriptStoragePort(runtime, new FakeScopeResolver(), logger);
-        var beforeUtc = DateTimeOffset.UtcNow;
-
-        await port.UploadScriptAsync("ts-check", "body", CancellationToken.None);
-
-        var afterUtc = DateTimeOffset.UtcNow;
-        var envelope = runtime.Actors["script-storage-default"].ReceivedEnvelopes[0];
-
-        envelope.Id.Should().NotBeNullOrWhiteSpace("envelope must have a unique ID");
-        envelope.Id.Length.Should().Be(32, "ID should be a Guid without dashes");
-
-        var ts = envelope.Timestamp.ToDateTimeOffset();
-        ts.Should().BeOnOrAfter(beforeUtc).And.BeOnOrBefore(afterUtc);
     }
 
     // ════════════════════════════════════════════════════════════
@@ -606,12 +337,11 @@ public sealed class ActorBackedStoreAdapterTests
     public async Task GAgentActorStore_AddActorAsync_SendsActorRegisteredEvent()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "cmd-scope" };
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, subscriptions, scopeResolver, logger);
+            runtime, scopeResolver, logger);
 
         await store.AddActorAsync("MyGAgent", "actor-123");
 
@@ -634,12 +364,11 @@ public sealed class ActorBackedStoreAdapterTests
     public async Task GAgentActorStore_RemoveActorAsync_SendsActorUnregisteredEvent()
     {
         var runtime = new FakeActorRuntime();
-        var subscriptions = new FakeSubscriptionProvider();
         var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "cmd-scope" };
         var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
 
         var store = new ActorBackedGAgentActorStore(
-            runtime, subscriptions, scopeResolver, logger);
+            runtime, scopeResolver, logger);
 
         await store.RemoveActorAsync("MyGAgent", "actor-456");
 
@@ -651,6 +380,34 @@ public sealed class ActorBackedStoreAdapterTests
         var evt = envelope.Payload.Unpack<Aevatar.GAgents.Registry.ActorUnregisteredEvent>();
         evt.GagentType.Should().Be("MyGAgent");
         evt.ActorId.Should().Be("actor-456");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // Envelope structure verification
+    // ════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task SaveAsync_EnvelopeContainsIdAndTimestamp()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ts-scope" };
+        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
+
+        var store = new ActorBackedUserConfigStore(
+            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
+
+        var beforeUtc = DateTimeOffset.UtcNow;
+
+        await store.SaveAsync(new UserConfig(DefaultModel: "model"));
+
+        var afterUtc = DateTimeOffset.UtcNow;
+        var envelope = runtime.Actors["user-config-ts-scope"].ReceivedEnvelopes[0];
+
+        envelope.Id.Should().NotBeNullOrWhiteSpace("envelope must have a unique ID");
+        envelope.Id.Length.Should().Be(32, "ID should be a Guid without dashes");
+
+        var ts = envelope.Timestamp.ToDateTimeOffset();
+        ts.Should().BeOnOrAfter(beforeUtc).And.BeOnOrBefore(afterUtc);
     }
 
     // ════════════════════════════════════════════════════════════

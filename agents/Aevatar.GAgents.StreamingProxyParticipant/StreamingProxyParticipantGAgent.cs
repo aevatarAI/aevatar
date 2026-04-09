@@ -3,9 +3,6 @@ using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.StreamingProxyParticipant;
 
@@ -14,9 +11,6 @@ namespace Aevatar.GAgents.StreamingProxyParticipant;
 /// Replaces the chrono-storage backed <c>ChronoStorageStreamingProxyParticipantStore</c>.
 ///
 /// Actor ID: <c>streaming-proxy-participants</c> (cluster-scoped singleton).
-///
-/// After each state change, pushes the current state to the paired
-/// <see cref="StreamingProxyParticipantReadModelGAgent"/> via <c>SendToAsync</c>.
 /// </summary>
 public sealed class StreamingProxyParticipantGAgent
     : GAgentBase<StreamingProxyParticipantGAgentState>
@@ -28,7 +22,6 @@ public sealed class StreamingProxyParticipantGAgent
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     [EventHandler(EndpointName = "removeRoomParticipants")]
@@ -42,13 +35,11 @@ public sealed class StreamingProxyParticipantGAgent
             return;
 
         await PersistDomainEventAsync(evt);
-        await PushToReadModelAsync();
     }
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
-        await PushToReadModelAsync();
     }
 
     protected override StreamingProxyParticipantGAgentState TransitionState(
@@ -96,13 +87,4 @@ public sealed class StreamingProxyParticipantGAgent
         return next;
     }
 
-    private async Task PushToReadModelAsync()
-    {
-        var readModelActorId = Id + "-readmodel";
-        var runtime = Services.GetRequiredService<IActorRuntime>();
-        if (await runtime.GetAsync(readModelActorId) is null)
-            await runtime.CreateAsync<StreamingProxyParticipantReadModelGAgent>(readModelActorId);
-        var update = new StreamingProxyParticipantReadModelUpdateEvent { Snapshot = State.Clone() };
-        await SendToAsync(readModelActorId, update);
-    }
 }
