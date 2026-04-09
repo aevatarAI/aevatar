@@ -1,23 +1,31 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Security.Claims;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.CQRS.Core.Abstractions.Commands;
 using Aevatar.CQRS.Core.Abstractions.Interactions;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Commands;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.GAgentService.Abstractions.Queries;
 using Aevatar.GAgentService.Application.Services;
 using Aevatar.GAgentService.Application.Workflows;
+using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.GAgentService.Governance.Abstractions;
 using Aevatar.GAgentService.Governance.Abstractions.Ports;
 using Aevatar.GAgentService.Governance.Abstractions.Queries;
 using Aevatar.GAgentService.Hosting.Endpoints;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Workflow.Application.Abstractions.Queries;
 using Aevatar.Workflow.Application.Abstractions.Runs;
+using Aevatar.Workflow.Infrastructure.CapabilityApi;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -938,7 +946,7 @@ public sealed class ScopeServiceEndpointsTests
         });
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-1");
@@ -947,7 +955,7 @@ public sealed class ScopeServiceEndpointsTests
     }
 
     [Fact]
-    public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenTargetIsNotWorkflow()
+    public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenStaticActorTypeCannotBeResolved()
     {
         await using var host = await ScopeServiceEndpointTestHost.StartAsync();
         var service = BuildService("scope-a", "default", "definition-actor-1");
@@ -994,6 +1002,90 @@ public sealed class ScopeServiceEndpointsTests
                         ResponseTypeUrl = Any.Pack(new ChatResponseEvent()).TypeUrl,
                     },
                 },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    StaticPlan = new StaticServiceDeploymentPlan
+                    {
+                        ActorTypeName = "Missing.StaticAgent, Missing.Assembly",
+                    },
+                },
+            },
+            CancellationToken.None);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/chat:stream", new
+        {
+            prompt = "hello",
+        });
+        var bodyText = await response.Content.ReadAsStringAsync();
+        Dictionary<string, string>? body = null;
+        if (!string.IsNullOrWhiteSpace(bodyText) &&
+            bodyText.TrimStart().StartsWith('{'))
+        {
+            body = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(bodyText);
+        }
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "stream body: {0}", bodyText);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
+        body["message"].Should().Contain("could not be resolved");
+    }
+
+    [Fact]
+    public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenWorkflowEndpointIsNotChat()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var service = BuildService("scope-a", "default", "definition-actor-1");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-1",
+                            "rev-1",
+                            "definition-actor-1",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "default",
+                },
+                RevisionId = "rev-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Command,
+                        RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "main",
+                        WorkflowYaml = "name: main\nsteps:\n  - run: echo hello",
+                        DefinitionActorId = "definition-actor-1",
+                    },
+                },
             },
             CancellationToken.None);
 
@@ -1006,7 +1098,237 @@ public sealed class ScopeServiceEndpointsTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         body.Should().NotBeNull();
         body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
-        body["message"].Should().Contain("Only workflow services support SSE stream execution");
+        body["message"].Should().Contain("Only chat endpoints support SSE stream execution.");
+    }
+
+    [Fact]
+    public async Task ScopeInvokeStreamEndpoint_ShouldReturnBadRequest_WhenWorkflowPayloadTypeDoesNotMatch()
+    {
+        await using var host = await ScopeServiceEndpointTestHost.StartAsync();
+        var service = BuildService("scope-a", "default", "definition-actor-1");
+        host.ServiceCatalogReader.Service = service;
+        host.TrafficViewReader.View = new ServiceTrafficViewSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceTrafficEndpointSnapshot(
+                    "chat",
+                    [
+                        new ServiceTrafficTargetSnapshot(
+                            "dep-1",
+                            "rev-1",
+                            "definition-actor-1",
+                            100,
+                            ServiceServingState.Active.ToString()),
+                    ]),
+            ],
+            DateTimeOffset.UtcNow);
+        await host.ArtifactStore.SaveAsync(
+            service.ServiceKey,
+            "rev-1",
+            new PreparedServiceRevisionArtifact
+            {
+                Identity = new ServiceIdentity
+                {
+                    TenantId = "scope-a",
+                    AppId = "default",
+                    Namespace = "default",
+                    ServiceId = "default",
+                },
+                RevisionId = "rev-1",
+                ImplementationKind = ServiceImplementationKind.Workflow,
+                Endpoints =
+                {
+                    new ServiceEndpointDescriptor
+                    {
+                        EndpointId = "chat",
+                        DisplayName = "chat",
+                        Kind = ServiceEndpointKind.Chat,
+                        RequestTypeUrl = Any.Pack(new Google.Protobuf.WellKnownTypes.Empty()).TypeUrl,
+                    },
+                },
+                DeploymentPlan = new ServiceDeploymentPlan
+                {
+                    WorkflowPlan = new WorkflowServiceDeploymentPlan
+                    {
+                        WorkflowName = "main",
+                        WorkflowYaml = "name: main\nsteps:\n  - run: echo hello",
+                        DefinitionActorId = "definition-actor-1",
+                    },
+                },
+            },
+            CancellationToken.None);
+
+        var response = await host.Client.PostAsJsonAsync("/api/scopes/scope-a/invoke/chat:stream", new
+        {
+            prompt = "hello",
+        });
+        var body = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        body.Should().NotBeNull();
+        body!["code"].Should().Be("INVALID_SERVICE_STREAM_REQUEST");
+        body["message"].Should().Contain("expects payload");
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldRejectWorkflowStream_WhenServiceHasNoActiveDefinitionActor()
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-a",
+                AppId = "default",
+                Namespace = "default",
+                ServiceId = "default",
+            },
+            RevisionId = "rev-1",
+            ImplementationKind = ServiceImplementationKind.Workflow,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                },
+            },
+        };
+        var target = new ServiceInvocationResolvedTarget(
+            new ServiceInvocationResolvedService(
+                "scope-a:default:default:default",
+                "rev-1",
+                "dep-1",
+                string.Empty,
+                "Active",
+                []),
+            artifact,
+            artifact.Endpoints[0]);
+        var request = InvokePrivateStatic<ServiceInvocationRequest>(
+            "BuildStreamInvocationRequest",
+            new ScopeWorkflowCapabilityOptions(),
+            "scope-a",
+            "default",
+            "chat",
+            "hello",
+            new Dictionary<string, string>(),
+            null,
+            null);
+
+        FluentActions.Invoking(() => InvokePrivateStaticVoid("EnsureWorkflowStreamTarget", target, request))
+            .Should()
+            .Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .WithMessage("*Workflow service has no active definition actor.*");
+    }
+
+    [Fact]
+    public async Task ScopeServiceEndpointHelpers_ShouldRejectScriptingStream_WhenRuntimeActorMissing()
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-a",
+                AppId = "default",
+                Namespace = "default",
+                ServiceId = "default",
+            },
+            RevisionId = "rev-1",
+            ImplementationKind = ServiceImplementationKind.Scripting,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                },
+            },
+        };
+        var target = new ServiceInvocationResolvedTarget(
+            new ServiceInvocationResolvedService(
+                "scope-a:default:default:default",
+                "rev-1",
+                "dep-1",
+                string.Empty,
+                "Active",
+                []),
+            artifact,
+            artifact.Endpoints[0]);
+        var context = new DefaultHttpContext();
+
+        var missingRuntimeAssertion = await FluentActions.Awaiting(() => InvokePrivateStaticTask(
+                "HandleScriptingServiceChatStreamAsync",
+                context,
+                target,
+                "hello",
+                "session-1",
+                "scope-a",
+                new Dictionary<string, string>(),
+                new NoOpActorRuntime(),
+                new NoOpActorEventSubscriptionProvider(),
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>();
+        missingRuntimeAssertion.Which.Message.Should().Contain("Script runtime actor is not available");
+    }
+
+    [Fact]
+    public async Task ScopeServiceEndpointHelpers_ShouldRejectScriptingStream_WhenRuntimeActorCannotBeResolved()
+    {
+        var artifact = new PreparedServiceRevisionArtifact
+        {
+            Identity = new ServiceIdentity
+            {
+                TenantId = "scope-a",
+                AppId = "default",
+                Namespace = "default",
+                ServiceId = "default",
+            },
+            RevisionId = "rev-1",
+            ImplementationKind = ServiceImplementationKind.Scripting,
+            Endpoints =
+            {
+                new ServiceEndpointDescriptor
+                {
+                    EndpointId = "chat",
+                    DisplayName = "chat",
+                    Kind = ServiceEndpointKind.Chat,
+                    RequestTypeUrl = Any.Pack(new ChatRequestEvent()).TypeUrl,
+                },
+            },
+        };
+        var target = new ServiceInvocationResolvedTarget(
+            new ServiceInvocationResolvedService(
+                "scope-a:default:default:default",
+                "rev-1",
+                "dep-1",
+                "script-runtime-1",
+                "Active",
+                []),
+            artifact,
+            artifact.Endpoints[0]);
+        var context = new DefaultHttpContext();
+
+        var unresolvedRuntimeAssertion = await FluentActions.Awaiting(() => InvokePrivateStaticTask(
+                "HandleScriptingServiceChatStreamAsync",
+                context,
+                target,
+                "hello",
+                "session-1",
+                "scope-a",
+                new Dictionary<string, string>(),
+                new MissingActorRuntime(),
+                new NoOpActorEventSubscriptionProvider(),
+                CancellationToken.None))
+            .Should()
+            .ThrowAsync<InvalidOperationException>();
+        unresolvedRuntimeAssertion.Which.Message.Should().Contain("could not be resolved");
     }
 
     [Fact]
@@ -1084,7 +1406,7 @@ public sealed class ScopeServiceEndpointsTests
         });
         var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "stream body: {0}", body);
         body.Should().Contain("aevatar.run.context");
         host.InteractionService.LastRequest.Should().NotBeNull();
         host.InteractionService.LastRequest!.ActorId.Should().Be("definition-actor-orders");
@@ -1940,6 +2262,608 @@ public sealed class ScopeServiceEndpointsTests
         host.WorkflowQueryService.ReportCalls.Should().ContainSingle("run-actor-orders-audit-1");
     }
 
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldParseKinds_AndRejectUnsupportedValues()
+    {
+        InvokePrivateStatic<ScopeBindingImplementationKind>("ParseScopeBindingImplementationKind", "workflow")
+            .Should().Be(ScopeBindingImplementationKind.Workflow);
+        InvokePrivateStatic<ScopeBindingImplementationKind>("ParseScopeBindingImplementationKind", "script")
+            .Should().Be(ScopeBindingImplementationKind.Scripting);
+        InvokePrivateStatic<ScopeBindingImplementationKind>("ParseScopeBindingImplementationKind", "scripting")
+            .Should().Be(ScopeBindingImplementationKind.Scripting);
+        InvokePrivateStatic<ScopeBindingImplementationKind>("ParseScopeBindingImplementationKind", "gagent")
+            .Should().Be(ScopeBindingImplementationKind.GAgent);
+
+        InvokePrivateStatic<ServiceEndpointKind>("ParseEndpointKind", "chat")
+            .Should().Be(ServiceEndpointKind.Chat);
+        InvokePrivateStatic<ServiceEndpointKind>("ParseEndpointKind", "command")
+            .Should().Be(ServiceEndpointKind.Command);
+        InvokePrivateStatic<ServiceEndpointKind>("ParseEndpointKind", (object?)null)
+            .Should().Be(ServiceEndpointKind.Command);
+        InvokePrivateStatic<ServiceEndpointKind>("ParseEndpointKind", string.Empty)
+            .Should().Be(ServiceEndpointKind.Command);
+
+        InvokePrivateStatic<ServiceBindingKind>("ParseBindingKind", "service")
+            .Should().Be(ServiceBindingKind.Service);
+        InvokePrivateStatic<ServiceBindingKind>("ParseBindingKind", "connector")
+            .Should().Be(ServiceBindingKind.Connector);
+        InvokePrivateStatic<ServiceBindingKind>("ParseBindingKind", "secret")
+            .Should().Be(ServiceBindingKind.Secret);
+
+        FluentActions.Invoking(() => InvokePrivateStatic<ScopeBindingImplementationKind>(
+                "ParseScopeBindingImplementationKind",
+                "unsupported"))
+            .Should().Throw<TargetInvocationException>().WithInnerException<InvalidOperationException>();
+        FluentActions.Invoking(() => InvokePrivateStatic<ServiceEndpointKind>(
+                "ParseEndpointKind",
+                "unsupported"))
+            .Should().Throw<TargetInvocationException>().WithInnerException<InvalidOperationException>();
+        FluentActions.Invoking(() => InvokePrivateStatic<ServiceBindingKind>(
+                "ParseBindingKind",
+                "unsupported"))
+            .Should().Throw<TargetInvocationException>().WithInnerException<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task ScopeServiceEndpointHelpers_ShouldBuildScopedHeaders_AndIgnoreConfigFailures()
+    {
+        var explicitHeaders = new Dictionary<string, string>
+        {
+            ["scope_id"] = "old",
+            [WorkflowRunCommandMetadataKeys.ScopeId] = "legacy",
+            [LLMRequestMetadataKeys.ModelOverride] = "existing-model",
+        };
+        var successContext = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddSingleton<IUserConfigStore>(new StubUserConfigStore(
+                    new UserConfig("user-model", "/preferred-route")))
+                .BuildServiceProvider(),
+        };
+        successContext.Request.Headers.Authorization = "Bearer token-123";
+
+        var scopedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
+            "BuildScopedHeadersAsync",
+            "scope-a",
+            explicitHeaders,
+            successContext,
+            CancellationToken.None);
+
+        scopedHeaders.Should().NotContainKey("scope_id");
+        scopedHeaders.Should().NotContainKey(WorkflowRunCommandMetadataKeys.ScopeId);
+        scopedHeaders[LLMRequestMetadataKeys.ModelOverride].Should().Be("existing-model");
+        scopedHeaders[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/preferred-route");
+        scopedHeaders["nyxid.access_token"].Should().Be("token-123");
+        scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey].Should().Be("Bearer token-123");
+
+        var failingContext = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddSingleton<IUserConfigStore>(new ThrowingUserConfigStore())
+                .BuildServiceProvider(),
+        };
+        var failedHeaders = await InvokePrivateStaticTask<Dictionary<string, string>>(
+            "BuildScopedHeadersAsync",
+            "scope-a",
+            null,
+            failingContext,
+            CancellationToken.None);
+        failedHeaders.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldBuildBindingSpec_ForEachBindingKind()
+    {
+        var options = new ScopeWorkflowCapabilityOptions
+        {
+            DefaultServiceId = "default",
+            ServiceAppId = "app-default",
+            ServiceNamespace = "ns-default",
+        };
+
+        var serviceSpec = InvokePrivateStatic<ServiceBindingSpec>(
+            "ToBindingSpec",
+            options,
+            "scope-a",
+            "service-a",
+            new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                "binding-1",
+                " Service Binding ",
+                "service",
+                new ScopeServiceEndpoints.BoundScopeServiceHttpRequest("orders", "chat"),
+                null,
+                null,
+                ["policy-a"]),
+            "binding-1");
+        serviceSpec.BindingKind.Should().Be(ServiceBindingKind.Service);
+        serviceSpec.ServiceRef!.Identity.ServiceId.Should().Be("orders");
+        serviceSpec.ServiceRef.EndpointId.Should().Be("chat");
+        serviceSpec.PolicyIds.Should().ContainSingle("policy-a");
+
+        var connectorSpec = InvokePrivateStatic<ServiceBindingSpec>(
+            "ToBindingSpec",
+            options,
+            "scope-a",
+            "service-a",
+            new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                "binding-2",
+                "Connector Binding",
+                "connector",
+                null,
+                new ScopeServiceEndpoints.BoundConnectorHttpRequest(" github ", " repo-1 "),
+                null),
+            "binding-2");
+        connectorSpec.BindingKind.Should().Be(ServiceBindingKind.Connector);
+        connectorSpec.ConnectorRef!.ConnectorType.Should().Be("github");
+        connectorSpec.ConnectorRef.ConnectorId.Should().Be("repo-1");
+
+        var secretSpec = InvokePrivateStatic<ServiceBindingSpec>(
+            "ToBindingSpec",
+            options,
+            "scope-a",
+            "service-a",
+            new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                "binding-3",
+                "Secret Binding",
+                "secret",
+                null,
+                null,
+                new ScopeServiceEndpoints.BoundSecretHttpRequest(" api-key ")),
+            "binding-3");
+        secretSpec.BindingKind.Should().Be(ServiceBindingKind.Secret);
+        secretSpec.SecretRef!.SecretName.Should().Be("api-key");
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldBuildBindingSpec_WithNullBindingTargets_AndRejectUnsupportedKind()
+    {
+        var options = new ScopeWorkflowCapabilityOptions
+        {
+            DefaultServiceId = "default",
+            ServiceAppId = "app-default",
+            ServiceNamespace = "ns-default",
+        };
+
+        FluentActions.Invoking(() => InvokePrivateStatic<ServiceBindingSpec>(
+                "ToBindingSpec",
+                options,
+                "scope-a",
+                "service-a",
+                new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                    null,
+                    null,
+                    "service",
+                    null,
+                    null,
+                    null,
+                    null),
+                (string?)null))
+            .Should()
+            .Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .Which.Message.Should().Contain("serviceId is required.");
+
+        var connectorSpec = InvokePrivateStatic<ServiceBindingSpec>(
+            "ToBindingSpec",
+            options,
+            "scope-a",
+            "service-a",
+            new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                "binding-connector-null",
+                null,
+                "connector",
+                null,
+                null,
+                null,
+                null),
+            "binding-connector-null");
+        connectorSpec.BindingId.Should().Be("binding-connector-null");
+        connectorSpec.DisplayName.Should().BeEmpty();
+        connectorSpec.PolicyIds.Should().BeEmpty();
+        connectorSpec.ConnectorRef.Should().NotBeNull();
+        connectorSpec.ConnectorRef!.ConnectorType.Should().BeEmpty();
+        connectorSpec.ConnectorRef.ConnectorId.Should().BeEmpty();
+
+        var secretSpec = InvokePrivateStatic<ServiceBindingSpec>(
+            "ToBindingSpec",
+            options,
+            "scope-a",
+            "service-a",
+            new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                "binding-secret-null",
+                null,
+                "secret",
+                null,
+                null,
+                null,
+                null),
+            "binding-secret-null");
+        secretSpec.SecretRef.Should().NotBeNull();
+        secretSpec.SecretRef!.SecretName.Should().BeEmpty();
+
+        FluentActions.Invoking(() => InvokePrivateStatic<ServiceBindingSpec>(
+                "ToBindingSpec",
+                options,
+                "scope-a",
+                "service-a",
+                new ScopeServiceEndpoints.ScopeServiceBindingHttpRequest(
+                    "binding-invalid",
+                    "Invalid",
+                    "unsupported",
+                    null,
+                    null,
+                    null,
+                    null),
+                "binding-invalid"))
+            .Should()
+            .Throw<TargetInvocationException>()
+            .WithInnerException<InvalidOperationException>()
+            .Which.Message.Should().Contain("Unsupported binding kind");
+    }
+
+    [Fact]
+    public async Task ScopeServiceEndpointHelpers_ShouldMapInvocationErrors_AndNormalizeUtilities()
+    {
+        var formatResult = InvokePrivateStatic<IResult>("CreateScopeInvokeFailureResult", new FormatException("bad"));
+        (await ExecutePrivateResultAsync(formatResult)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        var notFoundResult = InvokePrivateStatic<IResult>(
+            "CreateScopeInvokeFailureResult",
+            new InvalidOperationException("Endpoint 'chat' was not found."));
+        (await ExecutePrivateResultAsync(notFoundResult)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        var unavailableResult = InvokePrivateStatic<IResult>(
+            "CreateScopeInvokeFailureResult",
+            new InvalidOperationException("No active serving targets are available."));
+        (await ExecutePrivateResultAsync(unavailableResult)).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var genericResult = InvokePrivateStatic<IResult>(
+            "CreateScopeInvokeFailureResult",
+            new InvalidOperationException("generic failure"));
+        (await ExecutePrivateResultAsync(genericResult)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        InvokePrivateStatic<string?>("NormalizeOptional", "  hello  ").Should().Be("hello");
+        InvokePrivateStatic<string?>("NormalizeOptional", " ").Should().BeNull();
+        InvokePrivateStatic<string>("BuildScopeServiceNotFoundMessage", "scope-a", "orders")
+            .Should().Contain("orders");
+        InvokePrivateStatic<string>("BuildScopeServiceRunNotFoundMessage", "scope-a", "orders", "run-1")
+            .Should().Contain("run-1");
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldMapInputParts_AndBuildStreamInvocationRequest()
+    {
+        var mappedParts = InvokePrivateStatic<IReadOnlyList<ChatInputContentPart>?>(
+            "MapInputParts",
+            new List<ScopeServiceEndpoints.StreamContentPartHttpRequest?>
+            {
+                new("text", Text: "hello"),
+                null,
+                new("image", Uri: "https://example.com/image.png", Name: "img"),
+            });
+        mappedParts.Should().NotBeNull();
+        mappedParts!.Should().HaveCount(2);
+        mappedParts[0].Text.Should().Be("hello");
+        mappedParts[1].Uri.Should().Be("https://example.com/image.png");
+        InvokePrivateStatic<IReadOnlyList<ChatInputContentPart>?>("MapInputParts", (object?)null).Should().BeNull();
+
+        var options = new ScopeWorkflowCapabilityOptions
+        {
+            DefaultServiceId = "default",
+            ServiceAppId = "app-default",
+            ServiceNamespace = "ns-default",
+        };
+
+        var invocation = InvokePrivateStatic<ServiceInvocationRequest>(
+            "BuildStreamInvocationRequest",
+            options,
+            "scope-a",
+            "orders",
+            " chat ",
+            "prompt",
+            new Dictionary<string, string> { ["trace-id"] = "abc" },
+            " rev-1 ",
+            " app-x ");
+        invocation.Identity.AppId.Should().Be("app-x");
+        invocation.Identity.ServiceId.Should().Be("orders");
+        invocation.EndpointId.Should().Be("chat");
+        invocation.RevisionId.Should().Be("rev-1");
+        invocation.Payload!.Unpack<ChatRequestEvent>().Metadata["trace-id"].Should().Be("abc");
+
+        InvokePrivateStatic<string>("ResolveDefaultScopeServiceId", options).Should().Be("default");
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldBuildServingTargetIndex_PreferActiveTargets()
+    {
+        var servingSet = new ServiceServingSetSnapshot(
+            "scope-a:default:default:orders",
+            1,
+            string.Empty,
+            [
+                new ServiceServingTargetSnapshot("dep-paused", "rev-1", "actor-paused", 90, "Paused", []),
+                new ServiceServingTargetSnapshot("dep-active", "rev-1", "actor-active", 10, "Active", []),
+                new ServiceServingTargetSnapshot("dep-disabled", "rev-2", "actor-disabled", 100, "Disabled", []),
+            ],
+            DateTimeOffset.UtcNow);
+
+        var index = InvokePrivateStatic<IReadOnlyDictionary<string, ServiceServingTargetSnapshot>>(
+            "BuildServingTargetIndex",
+            servingSet);
+
+        index["rev-1"].DeploymentId.Should().Be("dep-active");
+        index["rev-2"].DeploymentId.Should().Be("dep-disabled");
+        InvokePrivateStatic<IReadOnlyDictionary<string, ServiceServingTargetSnapshot>>("BuildServingTargetIndex", (object?)null)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldResolveRunDeployment_AndRankServingStates()
+    {
+        var createdAt = DateTimeOffset.UtcNow;
+        var updatedAt = createdAt.AddMinutes(1);
+        var service = BuildService("scope-a", "orders", "def-primary");
+
+        var matchedBinding = new WorkflowActorBinding(
+            WorkflowActorKind.Run,
+            "run-actor-1",
+            "def-match",
+            "run-1",
+            "main",
+            "yaml",
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            "scope-a");
+        var deployments = new ServiceDeploymentCatalogSnapshot(
+            "scope-a:default:default:orders",
+            [
+                new ServiceDeploymentSnapshot("dep-match", "rev-2", "def-match", "Active", createdAt, updatedAt),
+                new ServiceDeploymentSnapshot("dep-other", "rev-1", "def-other", "Inactive", createdAt.AddMinutes(-1), updatedAt),
+            ],
+            updatedAt);
+
+        InvokePrivateStatic<ServiceDeploymentSnapshot?>("ResolveRunDeployment", matchedBinding, service, deployments)!
+            .DeploymentId.Should().Be("dep-match");
+
+        var fallbackBinding = new WorkflowActorBinding(
+            WorkflowActorKind.Run,
+            "run-actor-2",
+            "def-primary",
+            "run-2",
+            "main",
+            "yaml",
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            "scope-a");
+        var fallbackDeployment = InvokePrivateStatic<ServiceDeploymentSnapshot?>(
+            "ResolveRunDeployment",
+            fallbackBinding,
+            service,
+            (object?)null);
+        fallbackDeployment.Should().NotBeNull();
+        fallbackDeployment!.DeploymentId.Should().Be(service.DeploymentId);
+
+        var missingBinding = new WorkflowActorBinding(
+            WorkflowActorKind.Run,
+            "run-actor-3",
+            "def-missing",
+            "run-3",
+            "main",
+            "yaml",
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            "scope-a");
+        InvokePrivateStatic<ServiceDeploymentSnapshot?>("ResolveRunDeployment", missingBinding, service, deployments)
+            .Should().BeNull();
+
+        InvokePrivateStatic<int>(
+            "GetServingStateSummaryPriority",
+            new ServiceServingTargetSnapshot("dep-active", "rev-1", "actor-active", 100, "Active", []))
+            .Should().Be(5);
+        InvokePrivateStatic<int>(
+            "GetServingStateSummaryPriority",
+            new ServiceServingTargetSnapshot("dep-paused", "rev-1", "actor-paused", 80, "Paused", []))
+            .Should().Be(4);
+        InvokePrivateStatic<int>(
+            "GetServingStateSummaryPriority",
+            new ServiceServingTargetSnapshot("dep-draining", "rev-1", "actor-draining", 60, "Draining", []))
+            .Should().Be(3);
+        InvokePrivateStatic<int>(
+            "GetServingStateSummaryPriority",
+            new ServiceServingTargetSnapshot("dep-disabled", "rev-1", "actor-disabled", 40, "Disabled", []))
+            .Should().Be(2);
+        InvokePrivateStatic<int>(
+            "GetServingStateSummaryPriority",
+            new ServiceServingTargetSnapshot("dep-unspecified", "rev-1", "actor-unspecified", 20, "Unspecified", []))
+            .Should().Be(1);
+        InvokePrivateStatic<int>(
+            "GetServingStateSummaryPriority",
+            new ServiceServingTargetSnapshot("dep-unknown", "rev-1", "actor-unknown", 0, "mystery", []))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldBuildBindingAndRevisionCatalogResponses()
+    {
+        var createdAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        var updatedAt = createdAt.AddMinutes(5);
+        var service = BuildService("scope-a", "orders", "def-workflow");
+
+        var emptyStatus = InvokePrivateStatic<ScopeServiceEndpoints.ScopeBindingStatusHttpResponse>(
+            "BuildScopeBindingStatusResponse",
+            "scope-a",
+            service,
+            (object?)null,
+            (object?)null);
+        emptyStatus.CatalogStateVersion.Should().Be(0);
+        emptyStatus.CatalogLastEventId.Should().BeEmpty();
+        emptyStatus.Revisions.Should().BeEmpty();
+
+        var revisions = new ServiceRevisionCatalogSnapshot(
+            service.ServiceKey,
+            [
+                new ServiceRevisionSnapshot(
+                    "rev-1",
+                    "workflow",
+                    "Published",
+                    "hash-1",
+                    string.Empty,
+                    [],
+                    createdAt,
+                    createdAt,
+                    updatedAt,
+                    null,
+                    new ServiceRevisionImplementationSnapshot(
+                        Workflow: new ServiceRevisionWorkflowSnapshot("order-flow", "def-workflow", 2))),
+            ],
+            updatedAt,
+            7,
+            "evt-7");
+        var servingSet = new ServiceServingSetSnapshot(
+            service.ServiceKey,
+            1,
+            string.Empty,
+            [
+                new ServiceServingTargetSnapshot("dep-1", "rev-1", "def-workflow", 100, "Active", []),
+            ],
+            updatedAt);
+
+        var status = InvokePrivateStatic<ScopeServiceEndpoints.ScopeBindingStatusHttpResponse>(
+            "BuildScopeBindingStatusResponse",
+            "scope-a",
+            service,
+            revisions,
+            servingSet);
+        status.CatalogStateVersion.Should().Be(7);
+        status.CatalogLastEventId.Should().Be("evt-7");
+        status.Revisions.Should().ContainSingle();
+        status.Revisions[0].IsDefaultServing.Should().BeTrue();
+        status.Revisions[0].IsActiveServing.Should().BeTrue();
+        status.Revisions[0].IsServingTarget.Should().BeTrue();
+        status.Revisions[0].AllocationWeight.Should().Be(100);
+        status.Revisions[0].ServingState.Should().Be("Active");
+        status.Revisions[0].WorkflowName.Should().Be("order-flow");
+        status.Revisions[0].WorkflowDefinitionActorId.Should().Be("def-workflow");
+        status.Revisions[0].InlineWorkflowCount.Should().Be(2);
+
+        var catalog = InvokePrivateStatic<ScopeServiceEndpoints.ScopeServiceRevisionCatalogHttpResponse>(
+            "BuildScopeServiceRevisionCatalogResponse",
+            "scope-a",
+            service,
+            revisions,
+            servingSet);
+        catalog.CatalogStateVersion.Should().Be(7);
+        catalog.CatalogLastEventId.Should().Be("evt-7");
+        catalog.UpdatedAt.Should().Be(updatedAt);
+        catalog.Revisions.Should().ContainSingle();
+        catalog.Revisions[0].DeploymentId.Should().Be("dep-1");
+    }
+
+    [Fact]
+    public void ScopeServiceEndpointHelpers_ShouldMatchRunsBoundToScopeService()
+    {
+        var service = BuildService("scope-a", "orders", "def-service");
+        var deployments = new ServiceDeploymentCatalogSnapshot(
+            service.ServiceKey,
+            [
+                new ServiceDeploymentSnapshot(
+                    "dep-2",
+                    "rev-2",
+                    "def-deployment",
+                    "Active",
+                    DateTimeOffset.UtcNow.AddMinutes(-1),
+                    DateTimeOffset.UtcNow),
+            ],
+            DateTimeOffset.UtcNow);
+
+        InvokePrivateStatic<bool>(
+            "IsRunBoundToScopeService",
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-1",
+                "def-deployment",
+                "run-1",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+            "scope-a",
+            service,
+            deployments).Should().BeTrue();
+
+        InvokePrivateStatic<bool>(
+            "IsRunBoundToScopeService",
+            new WorkflowActorBinding(
+                WorkflowActorKind.Definition,
+                "run-actor-2",
+                "def-deployment",
+                "run-2",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+            "scope-a",
+            service,
+            deployments).Should().BeFalse();
+
+        InvokePrivateStatic<bool>(
+            "IsRunBoundToScopeService",
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                string.Empty,
+                "def-deployment",
+                "run-3",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+            "scope-a",
+            service,
+            deployments).Should().BeFalse();
+
+        InvokePrivateStatic<bool>(
+            "IsRunBoundToScopeService",
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-4",
+                string.Empty,
+                "run-4",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+            "scope-a",
+            service,
+            deployments).Should().BeFalse();
+
+        InvokePrivateStatic<bool>(
+            "IsRunBoundToScopeService",
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-5",
+                "def-deployment",
+                "run-5",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-b"),
+            "scope-a",
+            service,
+            deployments).Should().BeFalse();
+
+        InvokePrivateStatic<bool>(
+            "IsRunBoundToScopeService",
+            new WorkflowActorBinding(
+                WorkflowActorKind.Run,
+                "run-actor-6",
+                "def-missing",
+                "run-6",
+                "main",
+                "yaml",
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                "scope-a"),
+            "scope-a",
+            service,
+            deployments).Should().BeFalse();
+    }
+
     private static ServiceCatalogSnapshot BuildService(string scopeId, string serviceId, string primaryActorId) =>
         new(
             $"{scopeId}:default:default:{serviceId}",
@@ -2005,6 +2929,67 @@ public sealed class ScopeServiceEndpointsTests
         };
         request.Headers.Add("X-Test-Authenticated", "false");
         return request;
+    }
+
+    private static T InvokePrivateStatic<T>(string methodName, params object?[] args)
+    {
+        var method = typeof(ScopeServiceEndpoints).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method {methodName} not found.");
+        return (T)method.Invoke(null, args)!;
+    }
+
+    private static void InvokePrivateStaticVoid(string methodName, params object?[] args)
+    {
+        var method = typeof(ScopeServiceEndpoints).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method {methodName} not found.");
+        method.Invoke(null, args);
+    }
+
+    private static async Task InvokePrivateStaticTask(string methodName, params object?[] args)
+    {
+        var method = typeof(ScopeServiceEndpoints).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method {methodName} not found.");
+        var result = method.Invoke(null, args);
+        switch (result)
+        {
+            case Task task:
+                await task;
+                return;
+            case ValueTask valueTask:
+                await valueTask;
+                return;
+            default:
+                throw new InvalidOperationException($"Unexpected return type for {methodName}.");
+        }
+    }
+
+    private static async Task<T> InvokePrivateStaticTask<T>(string methodName, params object?[] args)
+    {
+        var method = typeof(ScopeServiceEndpoints).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException($"Method {methodName} not found.");
+        var result = method.Invoke(null, args);
+        return result switch
+        {
+            Task<T> task => await task,
+            ValueTask<T> valueTask => await valueTask,
+            _ => throw new InvalidOperationException($"Unexpected return type for {methodName}."),
+        };
+    }
+
+    private static async Task<(HttpStatusCode StatusCode, string Body)> ExecutePrivateResultAsync(IResult result)
+    {
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        await using var body = new MemoryStream();
+        context.Response.Body = body;
+        await result.ExecuteAsync(context);
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body, leaveOpen: true);
+        return ((HttpStatusCode)context.Response.StatusCode, await reader.ReadToEndAsync());
     }
 
     private sealed class ScopeServiceEndpointTestHost : IAsyncDisposable
@@ -2109,6 +3094,8 @@ public sealed class ScopeServiceEndpointsTests
             var resumeDispatchService = new RecordingResumeDispatchService();
             var signalDispatchService = new RecordingSignalDispatchService();
             var stopDispatchService = new RecordingStopDispatchService();
+            var actorRuntime = new NoOpActorRuntime();
+            var eventSubscriptionProvider = new NoOpActorEventSubscriptionProvider();
             builder.Services.AddSingleton<IServiceGovernanceCommandPort>(commandPort);
             builder.Services.AddSingleton<IServiceGovernanceQueryPort>(queryPort);
             builder.Services.AddSingleton<IScopeBindingCommandPort>(scopeBindingPort);
@@ -2127,6 +3114,8 @@ public sealed class ScopeServiceEndpointsTests
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowResumeCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(resumeDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowSignalCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(signalDispatchService);
             builder.Services.AddSingleton<ICommandDispatchService<WorkflowStopCommand, WorkflowRunControlAcceptedReceipt, WorkflowRunControlStartError>>(stopDispatchService);
+            builder.Services.AddSingleton<IActorRuntime>(actorRuntime);
+            builder.Services.AddSingleton<IActorEventSubscriptionProvider>(eventSubscriptionProvider);
             builder.Services.AddSingleton<IOptions<ScopeWorkflowCapabilityOptions>>(
                 Options.Create(new ScopeWorkflowCapabilityOptions
                 {
@@ -2602,6 +3591,193 @@ public sealed class ScopeServiceEndpointsTests
             ServiceInvocationRequest request,
             CancellationToken ct = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class NoOpActorEventSubscriptionProvider : IActorEventSubscriptionProvider
+    {
+        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+            string actorId,
+            Func<TMessage, Task> handler,
+            CancellationToken ct = default)
+            where TMessage : class, Google.Protobuf.IMessage, new()
+        {
+            _ = actorId;
+            _ = handler;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IAsyncDisposable>(new NoOpAsyncDisposable());
+        }
+    }
+
+    private sealed class NoOpActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            _ = agentType;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IActor>(new NoOpActor(id ?? "noop-actor"));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _ = id;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id) => Task.FromResult<IActor?>(new NoOpActor(id));
+
+        public Task<bool> ExistsAsync(string id)
+        {
+            _ = id;
+            return Task.FromResult(true);
+        }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
+        {
+            _ = parentId;
+            _ = childId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default)
+        {
+            _ = childId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class MissingActorRuntime : IActorRuntime
+    {
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            CreateAsync(typeof(TAgent), id, ct);
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            _ = agentType;
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IActor>(new NoOpActor(id ?? "missing-actor"));
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default)
+        {
+            _ = id;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<IActor?> GetAsync(string id)
+        {
+            _ = id;
+            return Task.FromResult<IActor?>(null);
+        }
+
+        public Task<bool> ExistsAsync(string id)
+        {
+            _ = id;
+            return Task.FromResult(false);
+        }
+
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default)
+        {
+            _ = parentId;
+            _ = childId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task UnlinkAsync(string childId, CancellationToken ct = default)
+        {
+            _ = childId;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class NoOpActor : IActor
+    {
+        public NoOpActor(string id)
+        {
+            Id = id;
+            Agent = new NoOpAgent(id);
+        }
+
+        public string Id { get; }
+
+        public IAgent Agent { get; }
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class NoOpAgent : IAgent
+    {
+        public NoOpAgent(string id)
+        {
+            Id = id;
+        }
+
+        public string Id { get; }
+
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            _ = envelope;
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetDescriptionAsync() => Task.FromResult("noop");
+
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() => Task.FromResult<IReadOnlyList<System.Type>>([]);
+
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoOpAsyncDisposable : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StubUserConfigStore : IUserConfigStore
+    {
+        private readonly UserConfig _config;
+
+        public StubUserConfigStore(UserConfig config)
+        {
+            _config = config;
+        }
+
+        public Task<UserConfig> GetAsync(CancellationToken cancellationToken = default) => Task.FromResult(_config);
+
+        public Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class ThrowingUserConfigStore : IUserConfigStore
+    {
+        public Task<UserConfig> GetAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("config unavailable");
+
+        public Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingResumeDispatchService
