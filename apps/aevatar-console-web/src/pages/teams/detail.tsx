@@ -14,7 +14,18 @@ import {
   SafetyCertificateOutlined,
   SwapOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Empty, Grid, Space, Tag, Typography, theme } from "antd";
+import {
+  Alert,
+  Button,
+  Empty,
+  Grid,
+  Segmented,
+  Space,
+  Tag,
+  Typography,
+  theme,
+} from "antd";
+import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
@@ -24,6 +35,7 @@ import {
 } from "@/shared/navigation/runtimeRoutes";
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
 import { readScopeQueryDraft } from "@/shared/navigation/scopeRoutes";
+import { studioApi } from "@/shared/studio/api";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
@@ -40,8 +52,16 @@ import {
 import {
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
+import { deriveTeamIntegrationsSummary } from "./runtime/teamIntegrations";
 import type { TeamPlaybackSummary } from "./runtime/teamRuntimeLens";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
+
+type ObservationStatus = "live" | "delayed" | "partial" | "unavailable" | "seeded";
+
+type ObservationBadge = {
+  label: string;
+  status: ObservationStatus;
+};
 
 type SignalCardProps = {
   caption?: React.ReactNode;
@@ -100,6 +120,21 @@ function renderDirectionLabel(direction: string): string {
       return "From focus";
     default:
       return "Peer";
+  }
+}
+
+function renderObservationLabel(status: ObservationStatus): string {
+  switch (status) {
+    case "live":
+      return "Live";
+    case "delayed":
+      return "Delayed";
+    case "partial":
+      return "Partial";
+    case "seeded":
+      return "Seeded";
+    default:
+      return "Unavailable";
   }
 }
 
@@ -218,6 +253,10 @@ const TeamDetailPage: React.FC = () => {
   const scopeId = requestedScope.scopeId.trim();
   const screens = Grid.useBreakpoint();
   const isCompactTeamLayout = !screens.lg;
+  const { token } = theme.useToken();
+  const [compactPanel, setCompactPanel] = React.useState<"activity" | "details">(
+    "activity",
+  );
   const {
     actorGraphQuery,
     actorsQuery,
@@ -230,6 +269,37 @@ const TeamDetailPage: React.FC = () => {
     servicesQuery,
     workflowsQuery,
   } = useTeamRuntimeLens(scopeId);
+  const workspaceSettingsQuery = useQuery({
+    enabled: scopeId.length > 0,
+    queryKey: ["teams", "workspace-settings"],
+    queryFn: () => studioApi.getWorkspaceSettings(),
+    retry: false,
+  });
+  const connectorCatalogQuery = useQuery({
+    enabled: scopeId.length > 0,
+    queryKey: ["teams", "connector-catalog"],
+    queryFn: () => studioApi.getConnectorCatalog(),
+    retry: false,
+  });
+  const roleCatalogQuery = useQuery({
+    enabled: scopeId.length > 0,
+    queryKey: ["teams", "role-catalog"],
+    queryFn: () => studioApi.getRoleCatalog(),
+    retry: false,
+  });
+  const integrations = React.useMemo(
+    () =>
+      deriveTeamIntegrationsSummary({
+        workspaceSettings: workspaceSettingsQuery.data ?? null,
+        connectorCatalog: connectorCatalogQuery.data ?? null,
+        roleCatalog: roleCatalogQuery.data ?? null,
+      }),
+    [
+      connectorCatalogQuery.data,
+      roleCatalogQuery.data,
+      workspaceSettingsQuery.data,
+    ],
+  );
   const initialLoading =
     bindingQuery.isLoading ||
     servicesQuery.isLoading ||
@@ -246,9 +316,136 @@ const TeamDetailPage: React.FC = () => {
     currentRunAuditQuery.isError ? "Current run audit could not be loaded." : null,
     baselineRunAuditQuery.isError ? "Baseline run audit could not be loaded." : null,
     actorGraphQuery.isError ? "Collaboration graph could not be loaded." : null,
+    workspaceSettingsQuery.isError ? "Workspace settings could not be loaded." : null,
+    connectorCatalogQuery.isError ? "Connector catalog could not be loaded." : null,
+    roleCatalogQuery.isError ? "Role catalog could not be loaded." : null,
   ].filter((issue): issue is string => Boolean(issue));
+  const activityProvenance: ObservationBadge =
+    runsQuery.isError || currentRunAuditQuery.isError
+      ? { label: "Unavailable", status: "unavailable" }
+      : lens.currentRun
+        ? { label: "Delayed", status: "delayed" }
+        : { label: "Partial", status: "partial" };
+  const compareProvenance: ObservationBadge =
+    currentRunAuditQuery.isError || baselineRunAuditQuery.isError
+      ? { label: "Unavailable", status: "unavailable" }
+      : lens.baselineRun
+        ? { label: "Delayed", status: "delayed" }
+        : { label: "Partial", status: "partial" };
+  const playbackProvenance: ObservationBadge = currentRunAuditQuery.isError
+    ? { label: "Unavailable", status: "unavailable" }
+    : lens.playback.available
+      ? { label: "Delayed", status: "delayed" }
+      : { label: "Partial", status: "partial" };
+  const graphProvenance: ObservationBadge = actorGraphQuery.isError
+    ? { label: "Unavailable", status: "unavailable" }
+    : lens.graph.available
+      ? { label: "Live", status: "live" }
+      : { label: "Partial", status: "partial" };
+  const contextProvenance: ObservationBadge =
+    teamSignalIssues.length > 0 || lens.partialSignals.length > 0
+      ? { label: "Partial", status: "partial" }
+      : { label: "Delayed", status: "delayed" };
+  const currentServingProvenance: ObservationBadge =
+    bindingQuery.isError || servicesQuery.isError
+      ? { label: "Unavailable", status: "unavailable" }
+      : lens.currentBindingContext
+        ? { label: "Live", status: "live" }
+        : { label: "Partial", status: "partial" };
+  const integrationsSignalIssues = [
+    workspaceSettingsQuery.isError
+      ? "Workspace settings are unavailable."
+      : null,
+    connectorCatalogQuery.isError
+      ? "Connector catalog is unavailable."
+      : null,
+    roleCatalogQuery.isError ? "Role catalog is unavailable." : null,
+  ].filter((issue): issue is string => Boolean(issue));
+  const integrationsProvenance: ObservationBadge =
+    workspaceSettingsQuery.isError &&
+    connectorCatalogQuery.isError &&
+    roleCatalogQuery.isError
+      ? { label: "Unavailable", status: "unavailable" }
+      : integrationsSignalIssues.length > 0
+        ? { label: "Partial", status: "partial" }
+        : integrations.available
+          ? { label: "Delayed", status: "delayed" }
+          : { label: "Partial", status: "partial" };
   const runtimeServiceId =
     lens.currentService?.serviceId || lens.currentRun?.serviceId || undefined;
+  const availableActorIds = React.useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...lens.members.map((member) => member.actorId),
+          ...lens.graph.nodes.map((node) => node.actorId),
+        ]),
+      ).filter(Boolean),
+    [lens.graph.nodes, lens.members],
+  );
+  const defaultSelectedActorId =
+    lens.graph.focusActorId || lens.members[0]?.actorId || "";
+  const [selectedActorId, setSelectedActorId] = React.useState("");
+
+  React.useEffect(() => {
+    if (availableActorIds.length === 0) {
+      if (selectedActorId) {
+        setSelectedActorId("");
+      }
+      return;
+    }
+
+    if (!selectedActorId || !availableActorIds.includes(selectedActorId)) {
+      setSelectedActorId(defaultSelectedActorId || availableActorIds[0]);
+    }
+  }, [availableActorIds, defaultSelectedActorId, selectedActorId]);
+
+  const effectiveActorId = selectedActorId || defaultSelectedActorId;
+  const selectedMember =
+    lens.members.find((member) => member.actorId === effectiveActorId) || null;
+  const selectedGraphNodes = lens.graph.nodes.map((node) => ({
+    ...node,
+    isFocused: effectiveActorId
+      ? node.actorId === effectiveActorId
+      : node.isFocused,
+  }));
+  const selectedGraphRelationships = effectiveActorId
+    ? lens.graph.relationships.filter(
+        (relationship) =>
+          relationship.fromActorId === effectiveActorId ||
+          relationship.toActorId === effectiveActorId,
+      )
+    : lens.graph.relationships;
+  const visibleGraphRelationships =
+    selectedGraphRelationships.length > 0
+      ? selectedGraphRelationships
+      : lens.graph.relationships;
+  const selectedFocusReason =
+    effectiveActorId && effectiveActorId !== lens.graph.focusActorId
+      ? `Inspector focus is pinned to ${compactId(effectiveActorId)}. ${lens.graph.focusReason}`
+      : lens.graph.focusReason;
+  const selectedPlaybackSteps = effectiveActorId
+    ? lens.playback.steps.filter((step) => step.actorId === effectiveActorId)
+    : lens.playback.steps;
+  const visiblePlaybackSteps =
+    selectedPlaybackSteps.length > 0 ? selectedPlaybackSteps : lens.playback.steps;
+  const selectedPlaybackEvents = effectiveActorId
+    ? lens.playback.events.filter((event) => event.actorId === effectiveActorId)
+    : lens.playback.events;
+  const visiblePlaybackEvents =
+    selectedPlaybackEvents.length > 0
+      ? selectedPlaybackEvents
+      : lens.playback.events;
+  const selectedPlaybackSummary =
+    effectiveActorId && selectedPlaybackSteps.length === 0 && selectedPlaybackEvents.length === 0
+      ? `No actor-specific playback facts are visible for ${compactId(
+          effectiveActorId,
+        )} yet, so the rail is showing the latest team-wide activity.`
+      : effectiveActorId
+        ? `The rail is focused on ${compactId(
+            effectiveActorId,
+          )} whenever actor-specific playback is available.`
+        : "";
   const handleOpenPlaybackRun = React.useCallback(
     (preferredActorId?: string | null) => {
       const runId = lens.playback.currentRunId?.trim() || "";
@@ -319,6 +516,13 @@ const TeamDetailPage: React.FC = () => {
   const activityRail = (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={activityProvenance.label}
+            status={activityProvenance.status}
+          />
+        }
         title="Team Activity"
         titleHelp="Recent service runs are the shortest path from the team shell to real operational truth."
       >
@@ -378,6 +582,13 @@ const TeamDetailPage: React.FC = () => {
       </AevatarPanel>
 
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={compareProvenance.label}
+            status={compareProvenance.status}
+          />
+        }
         title="Run Compare / Change Diff"
         titleHelp="Compare the latest visible team run with the closest prior good run so operators can explain what changed."
       >
@@ -427,6 +638,13 @@ const TeamDetailPage: React.FC = () => {
       </AevatarPanel>
 
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={playbackProvenance.label}
+            status={playbackProvenance.status}
+          />
+        }
         title="Human Escalation Playback"
         titleHelp="Playback keeps the current human gate, the recent step sequence, and the latest runtime events on one rail so operators can explain why the team is paused."
       >
@@ -437,6 +655,13 @@ const TeamDetailPage: React.FC = () => {
               showIcon
               type={lens.playback.interactionLabel ? "warning" : "info"}
             />
+            {selectedPlaybackSummary ? (
+              <Alert
+                description={selectedPlaybackSummary}
+                showIcon
+                type="info"
+              />
+            ) : null}
             {lens.playback.currentRunId || lens.playback.rootActorId ? (
               <Space wrap size={[8, 8]}>
                 {lens.playback.currentRunId ? (
@@ -488,7 +713,7 @@ const TeamDetailPage: React.FC = () => {
               </div>
             ) : null}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {lens.playback.steps.map((step) => (
+              {visiblePlaybackSteps.map((step) => (
                 <div
                   key={step.key}
                   style={{
@@ -545,7 +770,7 @@ const TeamDetailPage: React.FC = () => {
                 <ClockCircleOutlined />
                 <Typography.Text strong>Recent runtime events</Typography.Text>
               </Space>
-              {lens.playback.events.map((event) => (
+              {visiblePlaybackEvents.map((event) => (
                 <div
                   key={event.key}
                   style={{
@@ -632,6 +857,13 @@ const TeamDetailPage: React.FC = () => {
   const collaborationStage = (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={graphProvenance.label}
+            status={graphProvenance.status}
+          />
+        }
         title="Collaboration Canvas"
         titleHelp="The canvas stays focused on the actor implied by the latest run or current serving revision, then shows the nearby relationship surface around it."
       >
@@ -655,18 +887,18 @@ const TeamDetailPage: React.FC = () => {
                 icon={<EyeOutlined />}
                 label="Focused actor"
                 tone="info"
-                value={lens.graph.focusActorId || "n/a"}
-                caption={lens.graph.focusReason}
+                value={effectiveActorId || "n/a"}
+                caption={selectedFocusReason}
               />
               <SignalCard
                 icon={<BranchesOutlined />}
                 label="Visible relations"
-                value={lens.graph.edgeCount}
-                caption={`${lens.graph.nodeCount} nodes in the current focused subgraph`}
+                value={visibleGraphRelationships.length}
+                caption={`${selectedGraphNodes.length} nodes in the current focused subgraph`}
               />
             </div>
             <Alert
-              description={`${lens.graph.stageSummary} ${lens.graph.focusReason}`}
+              description={`${lens.graph.stageSummary} ${selectedFocusReason}`}
               showIcon
               type="info"
             />
@@ -690,12 +922,12 @@ const TeamDetailPage: React.FC = () => {
               >
                 <Typography.Text strong>Focused actor</Typography.Text>
                 <Typography.Title level={4} style={{ margin: 0 }}>
-                  {compactId(lens.graph.focusActorId)}
+                  {compactId(effectiveActorId)}
                 </Typography.Title>
                 <Typography.Text type="secondary">
-                  {lens.graph.focusReason}
+                  {selectedFocusReason}
                 </Typography.Text>
-                {lens.graph.nodes
+                {selectedGraphNodes
                   .filter((node) => node.isFocused)
                   .slice(0, 1)
                   .map((node) => (
@@ -713,7 +945,7 @@ const TeamDetailPage: React.FC = () => {
                   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                 }}
               >
-                {lens.graph.nodes
+                {selectedGraphNodes
                   .filter((node) => !node.isFocused)
                   .map((node) => (
                     <div
@@ -746,7 +978,7 @@ const TeamDetailPage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
               }}
             >
-              {lens.graph.relationships.map((relationship) => (
+              {visibleGraphRelationships.map((relationship) => (
                 <div
                   key={relationship.key}
                   style={{
@@ -781,6 +1013,13 @@ const TeamDetailPage: React.FC = () => {
       </AevatarPanel>
 
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={contextProvenance.label}
+            status={contextProvenance.status}
+          />
+        }
         title="Team Composition"
         titleHelp="The team shell keeps members, service surface, and current binding context visible on one stage."
       >
@@ -819,28 +1058,36 @@ const TeamDetailPage: React.FC = () => {
         >
           {lens.members.length > 0 ? (
             lens.members.map((member) => (
-              <div
+              <button
+                aria-label={`Focus member ${member.actorType} ${member.actorId}`}
                 key={member.actorId}
+                onClick={() => setSelectedActorId(member.actorId)}
                 style={{
-                  background: member.isFocused
+                  background: member.actorId === effectiveActorId
                     ? "var(--ant-color-primary-bg)"
                     : "var(--ant-color-bg-container)",
-                  border: member.isFocused
+                  border: member.actorId === effectiveActorId
                     ? "1px solid var(--ant-color-primary-border)"
                     : "1px solid var(--ant-color-border-secondary)",
                   borderRadius: 12,
+                  cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
                   gap: 8,
+                  minHeight: 0,
                   padding: 14,
+                  textAlign: "left",
                 }}
+                type="button"
               >
                 <Space align="center" wrap>
                   <Typography.Text strong>{member.actorType}</Typography.Text>
-                  {member.isFocused ? <Tag color="processing">focused</Tag> : null}
+                  {member.actorId === effectiveActorId ? (
+                    <Tag color="processing">focused</Tag>
+                  ) : null}
                 </Space>
                 <Typography.Text>{member.actorId}</Typography.Text>
-              </div>
+              </button>
             ))
           ) : (
             <Empty
@@ -856,6 +1103,69 @@ const TeamDetailPage: React.FC = () => {
   const contextAside = (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={effectiveActorId ? "Live" : "Partial"}
+            status={effectiveActorId ? "live" : "partial"}
+          />
+        }
+        title="Selected Member"
+        titleHelp="Member selection should drive the canvas, playback rail, and inspector together, so the user never has to rebuild context across separate pages."
+      >
+        {selectedMember || effectiveActorId ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <SignalCard
+              icon={<EyeOutlined />}
+              label="Inspector focus"
+              tone="info"
+              value={compactId(effectiveActorId)}
+              caption={selectedMember?.actorType || "Team member"}
+            />
+            <Typography.Text type="secondary">
+              {visibleGraphRelationships.length > 0
+                ? `${visibleGraphRelationships.length} visible collaboration paths currently touch this member.`
+                : "No visible collaboration path is attached to this member yet."}
+            </Typography.Text>
+            <Space wrap size={[8, 8]}>
+              <Button
+                onClick={() =>
+                  handleOpenPlaybackActor(
+                    effectiveActorId,
+                    lens.playback.currentRunId,
+                  )
+                }
+                size="small"
+                type="link"
+              >
+                Inspect actor
+              </Button>
+              {lens.playback.currentRunId ? (
+                <Button
+                  onClick={() => handleOpenPlaybackRun(effectiveActorId)}
+                  size="small"
+                >
+                  Open run replay
+                </Button>
+              ) : null}
+            </Space>
+          </div>
+        ) : (
+          <AevatarInspectorEmpty
+            description="Select a visible member to focus the canvas, playback, and inspector together."
+            title="No member selected"
+          />
+        )}
+      </AevatarPanel>
+
+      <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={contextProvenance.label}
+            status={contextProvenance.status}
+          />
+        }
         title="Health / Trust Rail"
         titleHelp="This rail answers whether the team is healthy, blocked, degraded, human-overridden, or still missing critical runtime signals."
       >
@@ -889,6 +1199,13 @@ const TeamDetailPage: React.FC = () => {
       </AevatarPanel>
 
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={currentServingProvenance.label}
+            status={currentServingProvenance.status}
+          />
+        }
         title="Current Serving"
         titleHelp="This keeps the active target, revision, and service identity in one place so operators do not need to jump into Studio immediately."
       >
@@ -911,6 +1228,141 @@ const TeamDetailPage: React.FC = () => {
       </AevatarPanel>
 
       <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={integrationsProvenance.label}
+            status={integrationsProvenance.status}
+          />
+        }
+        title="Integrations Inspector"
+        titleHelp="Integrations are external systems and connection capabilities around the team, not additional team members."
+      >
+        {workspaceSettingsQuery.isLoading &&
+        connectorCatalogQuery.isLoading &&
+        roleCatalogQuery.isLoading ? (
+          <AevatarInspectorEmpty description="Loading team integrations." />
+        ) : !integrations.available && integrationsSignalIssues.length > 0 ? (
+          <AevatarInspectorEmpty
+            description="Workspace settings, connector definitions, or saved role references could not be loaded for this team."
+            title="Integrations unavailable"
+          />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {integrationsSignalIssues.length > 0 ? (
+              <Alert
+                description="Some integration facts are missing, so this inspector is showing the best visible workspace truth."
+                showIcon
+                type="warning"
+              />
+            ) : null}
+            <SignalCard
+              icon={<DeploymentUnitOutlined />}
+              label="Runtime base"
+              tone="info"
+              value={integrations.runtimeHostLabel}
+              caption={integrations.workspaceSummary}
+            />
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              }}
+            >
+              <SignalCard
+                icon={<BranchesOutlined />}
+                label="Connector definitions"
+                value={integrations.connectorCount}
+                caption="Workspace-visible connection capabilities"
+              />
+              <SignalCard
+                icon={<ApartmentOutlined />}
+                label="Role-linked connectors"
+                value={integrations.linkedConnectorCount}
+                caption={`${integrations.roleReferenceCount} saved connector references across team roles`}
+              />
+            </div>
+            <Typography.Text type="secondary">
+              {integrations.summary}
+            </Typography.Text>
+            {integrations.items.length > 0 ? (
+              <div
+                style={{
+                  display: "grid",
+                  gap: 10,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                }}
+              >
+                {integrations.items.map((connector) => (
+                  <div
+                    key={connector.key}
+                    style={{
+                      border: "1px solid var(--ant-color-border-secondary)",
+                      borderRadius: 12,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                      padding: 12,
+                    }}
+                  >
+                    <Space align="center" wrap>
+                      <Typography.Text strong>{connector.name}</Typography.Text>
+                      <Tag>{connector.type.toUpperCase()}</Tag>
+                      <Tag color={connector.enabled ? "success" : "default"}>
+                        {connector.enabled ? "enabled" : "disabled"}
+                      </Tag>
+                    </Space>
+                    <Typography.Text type="secondary">
+                      {connector.summary}
+                    </Typography.Text>
+                    {connector.usedByRoles.length > 0 ? (
+                      <Typography.Text type="secondary">
+                        Used by {connector.usedByRoles.join(", ")}
+                      </Typography.Text>
+                    ) : (
+                      <Typography.Text type="secondary">
+                        No saved role explicitly references this connector yet.
+                      </Typography.Text>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <AevatarInspectorEmpty
+                description="No connector definitions are currently visible for this workspace."
+                title="No connectors visible"
+              />
+            )}
+            {integrations.unresolvedReferences.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <Typography.Text strong>Referenced but undefined</Typography.Text>
+                {integrations.unresolvedReferences.map((connectorName) => (
+                  <div
+                    key={connectorName}
+                    style={{
+                      border: "1px solid var(--ant-color-border-secondary)",
+                      borderRadius: 10,
+                      padding: "10px 12px",
+                    }}
+                  >
+                    <Typography.Text>{connectorName}</Typography.Text>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </AevatarPanel>
+
+      <AevatarPanel
+        extra={
+          <AevatarStatusTag
+            domain="observation"
+            label={contextProvenance.label}
+            status={contextProvenance.status}
+          />
+        }
         title="Governance Snapshot"
         titleHelp="This is the buyer-readable trust summary, not a replacement for the full Governance console."
       >
@@ -1014,7 +1466,7 @@ const TeamDetailPage: React.FC = () => {
             onClick={() =>
               history.push(
                 buildRuntimeExplorerHref({
-                  actorId: lens.graph.focusActorId || undefined,
+                  actorId: effectiveActorId || lens.graph.focusActorId || undefined,
                   scopeId,
                   serviceId: lens.currentService?.serviceId || undefined,
                 }),
@@ -1047,8 +1499,37 @@ const TeamDetailPage: React.FC = () => {
         {isCompactTeamLayout ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {collaborationStage}
-            {activityRail}
-            {contextAside}
+            <div
+              style={{
+                background: token.colorBgLayout,
+                bottom: 12,
+                position: "sticky",
+                zIndex: 2,
+              }}
+            >
+              <Segmented
+                block
+                onChange={(value) =>
+                  setCompactPanel(value as "activity" | "details")
+                }
+                options={[
+                  {
+                    label: `Activity · ${renderObservationLabel(
+                      activityProvenance.status,
+                    )}`,
+                    value: "activity",
+                  },
+                  {
+                    label: `Details · ${renderObservationLabel(
+                      contextProvenance.status,
+                    )}`,
+                    value: "details",
+                  },
+                ]}
+                value={compactPanel}
+              />
+            </div>
+            {compactPanel === "activity" ? activityRail : contextAside}
           </div>
         ) : (
           <AevatarWorkbenchLayout

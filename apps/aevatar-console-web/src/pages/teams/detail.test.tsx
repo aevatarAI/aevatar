@@ -372,6 +372,68 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
+    getWorkspaceSettings: jest.fn(async () => ({
+      runtimeBaseUrl: "https://runtime.aevatar.test",
+      directories: [
+        {
+          directoryId: "default",
+          label: "Default",
+          path: "/tmp/workflows",
+          isBuiltIn: false,
+        },
+      ],
+    })),
+    getConnectorCatalog: jest.fn(async () => ({
+      homeDirectory: "/tmp/.aevatar",
+      filePath: "/tmp/.aevatar/connectors.json",
+      fileExists: true,
+      connectors: [
+        {
+          name: "web-search",
+          type: "http",
+          enabled: true,
+          timeoutMs: 30000,
+          retry: 1,
+          http: {
+            baseUrl: "https://search.example.com",
+            allowedMethods: ["GET"],
+            allowedPaths: ["/search"],
+            allowedInputKeys: ["query"],
+            defaultHeaders: {},
+          },
+        },
+        {
+          name: "ops-terminal",
+          type: "cli",
+          enabled: false,
+          timeoutMs: 30000,
+          retry: 0,
+          cli: {
+            command: "opsctl",
+            fixedArguments: ["tickets"],
+            allowedOperations: ["lookup"],
+            allowedInputKeys: ["ticket"],
+            workingDirectory: "/tmp",
+            environment: {},
+          },
+        },
+      ],
+    })),
+    getRoleCatalog: jest.fn(async () => ({
+      homeDirectory: "/tmp/.aevatar",
+      filePath: "/tmp/.aevatar/roles.json",
+      fileExists: true,
+      roles: [
+        {
+          id: "triage_operator",
+          name: "triage_operator",
+          systemPrompt: "",
+          provider: "openai",
+          model: "gpt-4.1",
+          connectors: ["web-search", "crm-sync"],
+        },
+      ],
+    })),
   },
 }));
 
@@ -380,6 +442,14 @@ describe("TeamDetailPage", () => {
 
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
+    useBreakpointSpy = jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
+      xs: false,
+      sm: true,
+      md: true,
+      lg: true,
+      xl: true,
+      xxl: true,
+    } as any);
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
       async () => mockCreateRunsCatalog(),
     );
@@ -400,6 +470,7 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("Health / Trust Rail")).toBeTruthy();
     expect(await screen.findByText("Run Compare / Change Diff")).toBeTruthy();
     expect(await screen.findByText("Human Escalation Playback")).toBeTruthy();
+    expect(await screen.findByText("Integrations Inspector")).toBeTruthy();
     expect(await screen.findByText("Governance Snapshot")).toBeTruthy();
     expect(await screen.findByText("Collaboration Canvas")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open Team Builder" })).toBeTruthy();
@@ -410,12 +481,18 @@ describe("TeamDetailPage", () => {
       expect(screen.getByText("Approve escalation")).toBeTruthy();
       expect(screen.getByText("Recent runtime events")).toBeTruthy();
       expect(screen.getByText("From focus")).toBeTruthy();
+      expect(screen.getByText("web-search")).toBeTruthy();
+      expect(screen.getByText("Referenced but undefined")).toBeTruthy();
+      expect(screen.getByText("crm-sync")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Open current run replay" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Inspect root actor" })).toBeTruthy();
+      expect(screen.getAllByText("Delayed").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Live").length).toBeGreaterThan(0);
     });
   });
 
-  it("keeps the collaboration canvas ahead of the activity rail on narrow screens", async () => {
+  it("keeps the collaboration canvas ahead of the auxiliary segmented panel on narrow screens", async () => {
+    useBreakpointSpy?.mockRestore();
     useBreakpointSpy = jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
       xs: true,
       sm: true,
@@ -428,12 +505,19 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     const collaborationHeading = await screen.findByText("Collaboration Canvas");
-    const activityHeading = await screen.findByText("Team Activity");
+    const segmentedActivity = await screen.findByText("Activity · Delayed");
 
     expect(
-      collaborationHeading.compareDocumentPosition(activityHeading) &
+      collaborationHeading.compareDocumentPosition(segmentedActivity) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(screen.getByText("Team Activity")).toBeTruthy();
+    expect(screen.queryByText("Health / Trust Rail")).toBeNull();
+
+    fireEvent.click(screen.getByText("Details · Delayed"));
+
+    expect(await screen.findByText("Health / Trust Rail")).toBeTruthy();
+    expect(screen.queryByText("Team Activity")).toBeNull();
   });
 
   it("surfaces team signal failures without leaking raw runtime errors", async () => {
@@ -494,5 +578,25 @@ describe("TeamDetailPage", () => {
     expect(params.get("runId")).toBe("run-current");
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("serviceId")).toBe("default");
+  });
+
+  it("lets member selection drive the inspector and explorer focus", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByText("Selected Member");
+    await screen.findByText("actor-risk");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Focus member RiskReviewAgent actor-risk",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open Explorer" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/runtime/explorer");
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("actorId")).toBe("actor-risk");
+    expect(params.get("scopeId")).toBe("scope-1");
   });
 });

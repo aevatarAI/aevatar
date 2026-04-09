@@ -247,7 +247,11 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
           : pageContainerChildrenViewportStyle
       }
       content={content}
-      extra={extra ? [extra] : undefined}
+      extra={
+        extra
+          ? [<React.Fragment key="aevatar-page-shell-extra">{extra}</React.Fragment>]
+          : undefined
+      }
       onBack={onBack}
       pageHeaderRender={pageHeaderRender}
       style={
