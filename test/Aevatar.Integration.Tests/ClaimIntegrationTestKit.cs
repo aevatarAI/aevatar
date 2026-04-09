@@ -104,7 +104,9 @@ internal static class ClaimIntegrationTestKit
         ClaimSubmitted command,
         CancellationToken ct)
     {
-        await EnsureRuntimeAsync(provider, definitionActorId, revision, runtimeActorId, ct);
+        var runtime = provider.GetRequiredService<IActorRuntime>();
+        if (!await runtime.ExistsAsync(runtimeActorId))
+            await EnsureRuntimeAsync(provider, definitionActorId, revision, runtimeActorId, ct);
 
         var commandPort = provider.GetRequiredService<IScriptRuntimeCommandPort>();
         var queryService = provider.GetRequiredService<IScriptReadModelQueryApplicationService>();
