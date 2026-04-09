@@ -3,8 +3,6 @@ import {
   EyeOutlined,
   RocketOutlined,
 } from "@ant-design/icons";
-import type { ProListMetas } from "@ant-design/pro-components";
-import { ProList } from "@ant-design/pro-components";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
@@ -92,6 +90,42 @@ function buildScopedServiceHref(scopeId: string, serviceId: string): string {
   params.set("serviceId", serviceId.trim());
   return `/services?${params.toString()}`;
 }
+
+type AssetCardProps = {
+  actions: React.ReactNode;
+  description: React.ReactNode;
+  subtitle: React.ReactNode;
+  title: React.ReactNode;
+};
+
+const assetCardStyle: React.CSSProperties = {
+  border: "1px solid var(--ant-color-border-secondary)",
+  borderRadius: 12,
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  padding: 16,
+};
+
+const AssetCard: React.FC<AssetCardProps> = ({
+  actions,
+  description,
+  subtitle,
+  title,
+}) => (
+  <div style={assetCardStyle}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Typography.Title level={5} style={{ margin: 0 }}>
+        {title}
+      </Typography.Title>
+      <div>{subtitle}</div>
+      <Typography.Paragraph style={{ margin: 0 }} type="secondary">
+        {description}
+      </Typography.Paragraph>
+    </div>
+    <Space wrap>{actions}</Space>
+  </div>
+);
 
 const ScopeOverviewPage: React.FC = () => {
   const queryClient = useQueryClient();
@@ -214,119 +248,11 @@ const ScopeOverviewPage: React.FC = () => {
     scopeServicesQuery.data?.find((service) => service.serviceId === binding?.serviceId) ??
     null;
 
-  const workflowMetas = useMemo<ProListMetas<ScopeWorkflowSummary>>(
-    () => ({
-      actions: {
-        render: (_, workflow) => [
-          <Button
-            icon={<EyeOutlined />}
-            key={`${workflow.workflowId}-inspect`}
-            onClick={() => setFocus({ kind: "workflow", id: workflow.workflowId })}
-            type="link"
-          >
-            Inspect
-          </Button>,
-          <Button
-            icon={<RocketOutlined />}
-            key={`${workflow.workflowId}-runs`}
-            onClick={() =>
-              history.push(
-                buildRuntimeRunsHref({
-                  scopeId,
-                }),
-              )
-            }
-            type="link"
-          >
-            Runs
-          </Button>,
-        ],
-      },
-      description: {
-        render: (_, workflow) =>
-          workflow.serviceKey
-            ? `Entrypoint ${workflow.serviceKey}`
-            : "Workflow asset is not yet published as a project entrypoint.",
-      },
-      subTitle: {
-        render: (_, workflow) => (
-          <Space wrap size={[8, 8]}>
-            <AevatarStatusTag
-              domain="asset"
-              status={workflow.activeRevisionId ? "active" : "draft"}
-            />
-            <AevatarStatusTag
-              domain="governance"
-              status={workflow.deploymentStatus || "draft"}
-            />
-          </Space>
-        ),
-      },
-      title: {
-        render: (_, workflow) => workflow.displayName || workflow.workflowId,
-      },
-    }),
-    [scopeId],
-  );
-  const scriptMetas = useMemo<ProListMetas<ScopeScriptSummary>>(
-    () => ({
-      actions: {
-        render: (_, script) => [
-          <Button
-            icon={<EyeOutlined />}
-            key={`${script.scriptId}-inspect`}
-            onClick={() => setFocus({ kind: "script", id: script.scriptId })}
-            type="link"
-          >
-            Inspect
-          </Button>,
-          <Button
-            icon={<CodeOutlined />}
-            key={`${script.scriptId}-studio`}
-            onClick={() =>
-              history.push(
-                buildStudioScriptsWorkspaceRoute({
-                  scriptId: script.scriptId,
-                }),
-              )
-            }
-            type="link"
-          >
-            Open scripts workspace
-          </Button>,
-        ],
-      },
-      description: {
-        render: (_, script) =>
-          script.activeSourceHash
-            ? `Source hash ${script.activeSourceHash}`
-            : "Script asset is waiting for a committed source hash.",
-      },
-      subTitle: {
-        render: (_, script) => (
-          <Space wrap size={[8, 8]}>
-            <AevatarStatusTag
-              domain="asset"
-              status={script.activeRevision ? "active" : "draft"}
-            />
-            <Typography.Text type="secondary">
-              Revision {script.activeRevision || "n/a"}
-            </Typography.Text>
-          </Space>
-        ),
-      },
-      title: {
-        render: (_, script) => script.scriptId,
-      },
-    }),
-    [],
-  );
-
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="Project Overview"
-      titleHelp="Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage."
+      title="Team Overview"
+      titleHelp="Team Overview keeps binding posture, asset surface, and next-step actions on one deep-link board."
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -334,12 +260,12 @@ const ScopeOverviewPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
               layoutMode="document"
-              title="Project Scope"
-              titleHelp="Everything downstream stays project-scoped once you load a scope."
+              title="Team Context"
+              titleHelp="Everything downstream stays team-scoped once you load a team."
             >
               <ScopeQueryCard
                 draft={draft}
-                loadLabel="Load project overview"
+                loadLabel="Load team overview"
                 onChange={setDraft}
                 onLoad={() => {
                   const nextDraft = normalizeScopeDraft(draft);
@@ -370,15 +296,15 @@ const ScopeOverviewPage: React.FC = () => {
               />
             </AevatarPanel>
 
-            <AevatarPanel title="Project Lanes">
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <AevatarPanel title="Team Lanes">
+              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                 <Button onClick={() => history.push(buildScopeHref("/scopes/assets", activeDraft))}>
-                  Open assets
+                  Open team assets
                 </Button>
                 <Button onClick={() => history.push(buildScopeHref("/scopes/invoke", activeDraft, {
                   serviceId: binding?.serviceId ?? "",
                 }))}>
-                  Open invoke lab
+                  Open Invoke Lab
                 </Button>
                 <Button
                   onClick={() =>
@@ -391,14 +317,14 @@ const ScopeOverviewPage: React.FC = () => {
                     )
                   }
                 >
-                  Manage GAgents
+                  Open Member Runtime
                 </Button>
                 <Button
                   onClick={() =>
                     history.push(buildStudioWorkflowWorkspaceRoute())
                   }
                 >
-                  Open workflow workspace
+                  Open Workflow Builder
                 </Button>
                 <Button
                   onClick={() =>
@@ -409,7 +335,7 @@ const ScopeOverviewPage: React.FC = () => {
                     )
                   }
                 >
-                  Open services
+                  Open Services
                 </Button>
               </Space>
             </AevatarPanel>
@@ -419,7 +345,7 @@ const ScopeOverviewPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {!scopeId ? (
               <Alert
-                title="Select a project to inspect its current binding, active revisions, and owned assets."
+                title="Select a team to inspect its current binding, active revisions, and owned assets."
                 showIcon
                 type="info"
               />
@@ -428,8 +354,8 @@ const ScopeOverviewPage: React.FC = () => {
             {scopeId ? (
               <>
                 <AevatarPanel
-                  title="Scope Status Board"
-                  titleHelp="The command surface users actually care about: whether the project is bound, serving, and ready to invoke."
+                  title="Team Status Board"
+                  titleHelp="The command surface users actually care about: whether the team is bound, serving, and ready to invoke."
                 >
                   <div
                     style={{
@@ -438,7 +364,7 @@ const ScopeOverviewPage: React.FC = () => {
                       gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                     }}
                   >
-                    <MetricCard label="Project" value={scopeId} />
+                    <MetricCard label="Team" value={scopeId} />
                     <MetricCard
                       label="Binding"
                       value={binding?.available ? binding.displayName || binding.serviceId : "Not bound"}
@@ -470,12 +396,12 @@ const ScopeOverviewPage: React.FC = () => {
                 </AevatarPanel>
 
                 <AevatarPanel
-                  title="Current Binding"
-                  titleHelp="The current project binding should be legible without leaving the overview page."
+                  title="Current Team Binding"
+                  titleHelp="The current team binding should be legible without leaving the overview page."
                 >
                   {!binding?.available || !activeRevision ? (
                     <Alert
-                      title="No published default binding is active for this project yet."
+                      title="No published default binding is active for this team yet."
                       showIcon
                       type="info"
                     />
@@ -521,7 +447,7 @@ const ScopeOverviewPage: React.FC = () => {
                             )
                           }
                         >
-                          Open in GAgents
+                          Open Member Runtime
                         </Button>
                         <Button
                           onClick={() =>
@@ -542,7 +468,7 @@ const ScopeOverviewPage: React.FC = () => {
 
                 <AevatarPanel
                   title="Revision Rollout"
-                  titleHelp="Binding revisions are treated as the project's runtime posture, not hidden on a secondary page."
+                  titleHelp="Binding revisions are treated as the team's runtime posture, not hidden on a secondary page."
                 >
                   {revisions.length > 0 ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -592,7 +518,7 @@ const ScopeOverviewPage: React.FC = () => {
                 >
                   <AevatarPanel
                     title="Published Services"
-                    titleHelp="Published services are the runtime surfaces users can actually invoke from this project."
+                    titleHelp="Published services are the runtime surfaces users can actually invoke from this team."
                   >
                     {scopeServicesQuery.error ? (
                       <Alert
@@ -629,56 +555,139 @@ const ScopeOverviewPage: React.FC = () => {
                       </div>
                     ) : (
                       <Empty
-                        description="No published services were found for this scope."
+                        description="No published services were found for this team."
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
                   </AevatarPanel>
 
                   <AevatarPanel title="Workflow Assets">
-                    <ProList<ScopeWorkflowSummary>
-                      dataSource={workflowsQuery.data ?? []}
-                      grid={{ gutter: 16, column: 1 }}
-                      itemCardProps={{
-                        bodyStyle: { padding: 16 },
-                        style: { borderRadius: 12 },
-                      }}
-                      locale={{
-                        emptyText: (
-                          <Empty
-                            description="No workflow assets were found for this scope."
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    {workflowsQuery.isLoading ? (
+                      <AevatarInspectorEmpty description="Loading workflow assets." />
+                    ) : workflowsQuery.data && workflowsQuery.data.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        {workflowsQuery.data.map((workflow) => (
+                          <AssetCard
+                            key={workflow.workflowId}
+                            actions={
+                              <>
+                                <Button
+                                  icon={<EyeOutlined />}
+                                  key={`${workflow.workflowId}-inspect`}
+                                  onClick={() =>
+                                    setFocus({ kind: "workflow", id: workflow.workflowId })
+                                  }
+                                  type="link"
+                                >
+                                  Inspect
+                                </Button>
+                                <Button
+                                  icon={<RocketOutlined />}
+                                  key={`${workflow.workflowId}-runs`}
+                                  onClick={() =>
+                                    history.push(
+                                      buildRuntimeRunsHref({
+                                        scopeId,
+                                      }),
+                                    )
+                                  }
+                                  type="link"
+                                >
+                                  Runs
+                                </Button>
+                              </>
+                            }
+                            description={
+                              workflow.serviceKey
+                                ? `Entrypoint ${workflow.serviceKey}`
+                                : "Workflow asset is not yet published as a team entrypoint."
+                            }
+                            subtitle={
+                              <Space wrap size={[8, 8]}>
+                                <AevatarStatusTag
+                                  domain="asset"
+                                  status={workflow.activeRevisionId ? "active" : "draft"}
+                                />
+                                <AevatarStatusTag
+                                  domain="governance"
+                                  status={workflow.deploymentStatus || "draft"}
+                                />
+                              </Space>
+                            }
+                            title={workflow.displayName || workflow.workflowId}
                           />
-                        ),
-                      }}
-                      metas={workflowMetas}
-                      pagination={false}
-                      rowKey="workflowId"
-                      split={false}
-                    />
+                        ))}
+                      </div>
+                    ) : (
+                      <Empty
+                        description="No workflow assets were found for this team."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    )}
                   </AevatarPanel>
 
                   <AevatarPanel title="Script Assets">
-                    <ProList<ScopeScriptSummary>
-                      dataSource={scriptsQuery.data ?? []}
-                      grid={{ gutter: 16, column: 1 }}
-                      itemCardProps={{
-                        bodyStyle: { padding: 16 },
-                        style: { borderRadius: 12 },
-                      }}
-                      locale={{
-                        emptyText: (
-                          <Empty
-                            description="No script assets were found for this scope."
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    {scriptsQuery.isLoading ? (
+                      <AevatarInspectorEmpty description="Loading script assets." />
+                    ) : scriptsQuery.data && scriptsQuery.data.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                        {scriptsQuery.data.map((script) => (
+                          <AssetCard
+                            key={script.scriptId}
+                            actions={
+                              <>
+                                <Button
+                                  icon={<EyeOutlined />}
+                                  key={`${script.scriptId}-inspect`}
+                                  onClick={() =>
+                                    setFocus({ kind: "script", id: script.scriptId })
+                                  }
+                                  type="link"
+                                >
+                                  Inspect
+                                </Button>
+                                <Button
+                                  icon={<CodeOutlined />}
+                                  key={`${script.scriptId}-studio`}
+                                  onClick={() =>
+                                    history.push(
+                                      buildStudioScriptsWorkspaceRoute({
+                                        scriptId: script.scriptId,
+                                      }),
+                                    )
+                                  }
+                                  type="link"
+                                >
+                                  Open scripts workspace
+                                </Button>
+                              </>
+                            }
+                            description={
+                              script.activeSourceHash
+                                ? `Source hash ${script.activeSourceHash}`
+                                : "Script asset is waiting for a committed source hash."
+                            }
+                            subtitle={
+                              <Space wrap size={[8, 8]}>
+                                <AevatarStatusTag
+                                  domain="asset"
+                                  status={script.activeRevision ? "active" : "draft"}
+                                />
+                                <Typography.Text type="secondary">
+                                  Revision {script.activeRevision || "n/a"}
+                                </Typography.Text>
+                              </Space>
+                            }
+                            title={script.scriptId}
                           />
-                        ),
-                      }}
-                      metas={scriptMetas}
-                      pagination={false}
-                      rowKey="scriptId"
-                      split={false}
-                    />
+                        ))}
+                      </div>
+                    ) : (
+                      <Empty
+                        description="No script assets were found for this team."
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      />
+                    )}
                   </AevatarPanel>
                 </div>
               </>
@@ -690,15 +699,15 @@ const ScopeOverviewPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setFocus(null)}
         open={Boolean(focus)}
-        subtitle="Scope inspector"
+        subtitle="Overview inspector"
         title={
           focus?.kind === "revision"
             ? focusedRevision?.revisionId || focus?.id || "Revision"
-            : focus?.id || "Scope detail"
+            : focus?.id || "Team detail"
         }
       >
         {!focus ? (
-          <AevatarInspectorEmpty description="Choose a revision, workflow, or script to inspect its role in the current project." />
+          <AevatarInspectorEmpty description="Choose a revision, workflow, or script to inspect its role in the current team." />
         ) : focus.kind === "revision" && focusedRevision ? (
           <AevatarPanel
             title="Revision Snapshot"
@@ -771,7 +780,7 @@ const ScopeOverviewPage: React.FC = () => {
                   )
                 }
               >
-                Open in GAgents
+                Open Member Runtime
               </Button>
             </Space>
           </AevatarPanel>
@@ -779,7 +788,7 @@ const ScopeOverviewPage: React.FC = () => {
           workflowDetailQuery.data?.available && workflowDetailQuery.data.workflow ? (
             <>
               <AevatarPanel title="Workflow Asset">
-                <Space direction="vertical" size={8}>
+                <Space orientation="vertical" size={8}>
                   <Space wrap size={[8, 8]}>
                     <AevatarStatusTag
                       domain="asset"
@@ -811,7 +820,7 @@ const ScopeOverviewPage: React.FC = () => {
           scriptDetailQuery.data?.available && scriptDetailQuery.data.script ? (
             <>
               <AevatarPanel title="Script Asset">
-                <Space direction="vertical" size={8}>
+                <Space orientation="vertical" size={8}>
                   <AevatarStatusTag
                     domain="asset"
                     status={scriptDetailQuery.data.script.activeRevision ? "active" : "draft"}
@@ -835,7 +844,7 @@ const ScopeOverviewPage: React.FC = () => {
             <AevatarInspectorEmpty description="Script detail is not available yet." />
           )
         ) : (
-          <AevatarInspectorEmpty description="No scope detail is available." />
+          <AevatarInspectorEmpty description="No team detail is available." />
         )}
       </AevatarContextDrawer>
     </AevatarPageShell>

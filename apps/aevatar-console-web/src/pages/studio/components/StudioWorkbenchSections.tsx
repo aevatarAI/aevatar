@@ -4050,7 +4050,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         key="recommended-run-step"
         type="success"
         title="Next step: Run draft"
-        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the project so Project Invoke can use the published entrypoint."
+        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the team entry so Invoke Lab can use the published entrypoint."
         compact
         action={
           <Space wrap>
@@ -4066,7 +4066,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               loading={publishPending}
               disabled={!canPublishWorkflow}
             >
-              Bind project
+              Bind team entry
             </Button>
           </Space>
         }
@@ -4077,8 +4077,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-bind-step"
         type="warning"
-        title="Next step: Bind project"
-        description="The workflow asset is ready, but Project Invoke still has no active default project binding. Bind this workflow when you want the published project path to use it."
+        title="Next step: Bind team entry"
+        description="The workflow asset is ready, but the current team still has no active default binding. Bind this workflow when you want the published team entrypoint to use it."
         compact
         action={
           <Space wrap>
@@ -4088,9 +4088,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               loading={publishPending}
               disabled={!canPublishWorkflow}
             >
-              Bind project
+              Bind team entry
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
+            <Button onClick={onOpenProjectOverview}>Open Team Workspace</Button>
           </Space>
         }
       />,
@@ -4100,15 +4100,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-invoke-step"
         type="success"
-        title="Next step: Open Project Invoke"
-        description="The default project binding is already active. Move to Project Invoke to test the published entrypoint, then continue in Runs for the full event trace."
+        title="Next step: Open Invoke Lab"
+        description="The default team binding is already active. Move to Invoke Lab to test the published entrypoint, then continue in Runs for the full event trace."
         compact
         action={
           <Space wrap>
             <Button type="primary" onClick={onOpenProjectInvoke}>
-              Open Project Invoke
+              Open Invoke Lab
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
+            <Button onClick={onOpenProjectOverview}>Open Team Workspace</Button>
             <Button
               onClick={onRunInConsole}
               disabled={!canOpenRunWorkflow}
@@ -4368,7 +4368,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   disabled={!canPublishWorkflow}
                   onClick={onPublishWorkflow}
                 >
-                  Bind project
+                  Bind team entry
                 </Button>
                 <Button
                   type="text"

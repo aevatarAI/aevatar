@@ -38,6 +38,7 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { servicesApi } from '@/shared/api/servicesApi';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
   buildRuntimeGAgentsHref,
   buildRuntimeRunsHref,
@@ -985,11 +986,11 @@ const ScopeInvokePage: React.FC = () => {
 
   const recommendedNextStep = !scopeId
     ? {
-        action: () => history.push('/scopes/overview'),
-        actionLabel: 'Open projects',
+        action: () => history.push(buildTeamWorkspaceRoute('')),
+        actionLabel: 'Open Teams',
         description:
-          'Invoke Lab only becomes useful after you anchor the console to a scope.',
-        title: 'Load a project first',
+          'Invoke Lab only becomes useful after you anchor the console to a team.',
+        title: 'Load a team first',
       }
     : services.length === 0
       ? {
@@ -1003,9 +1004,9 @@ const ScopeInvokePage: React.FC = () => {
                   currentBindingRevision?.staticActorTypeName || undefined,
               }),
             ),
-          actionLabel: 'Open GAgents',
+          actionLabel: 'Open Member Runtime',
           description:
-            'No published scope services were discovered. Manage the current binding before invoking.',
+            'No published team services were discovered. Manage the current binding before invoking.',
           title: 'Publish or switch the default binding',
         }
       : invokeResult.status === 'success'
@@ -1065,9 +1066,7 @@ const ScopeInvokePage: React.FC = () => {
           <Space size={12}>
             <Button
               icon={<ArrowLeftOutlined />}
-              onClick={() =>
-                history.push(buildScopeHref('/scopes/overview', activeDraft))
-              }
+              onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
               type="text"
             >
               Back
@@ -1118,7 +1117,7 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<DeploymentUnitOutlined />}
-                    subtitle="Scope selector and reset controls."
+                    subtitle="Team selector and reset controls."
                     title="Invocation Controls"
                   />
                 }
@@ -1126,11 +1125,11 @@ const ScopeInvokePage: React.FC = () => {
                 <div style={scrollColumnStyle}>
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Scope ID
+                      Team ID
                     </Typography.Text>
                     <Input
                       allowClear
-                      placeholder="Enter project scopeId"
+                      placeholder="Enter team ID"
                       value={draft.scopeId}
                       onChange={(event) =>
                         setDraft({
@@ -1149,7 +1148,7 @@ const ScopeInvokePage: React.FC = () => {
 
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Resolved project
+                      Resolved team
                     </Typography.Text>
                     {resolvedScope?.scopeId ? (
                       <>
@@ -1163,14 +1162,14 @@ const ScopeInvokePage: React.FC = () => {
                         {draft.scopeId.trim() !== resolvedScope.scopeId ? (
                           <div>
                             <Button size="small" onClick={handleUseResolvedScope}>
-                              Use resolved project
+                              Use resolved team
                             </Button>
                           </div>
                         ) : null}
                       </>
                     ) : (
                       <Typography.Text type="secondary">
-                        No project scope was resolved from the current session.
+                        No team context was resolved from the current session.
                       </Typography.Text>
                     )}
                   </div>
@@ -1193,7 +1192,7 @@ const ScopeInvokePage: React.FC = () => {
                 {!bindingQuery.data?.available || !currentBindingRevision ? (
                   <Alert
                     showIcon
-                    title="No published default binding is active for this project yet."
+                    title="No published default binding is active for this team yet."
                     type="info"
                   />
                 ) : (
@@ -1244,7 +1243,7 @@ const ScopeInvokePage: React.FC = () => {
                           )
                         }
                       >
-                        Manage in GAgents
+                        Open Member Runtime
                       </Button>
                     </div>
                   </div>
@@ -1303,7 +1302,7 @@ const ScopeInvokePage: React.FC = () => {
                           {!scopeId ? (
                             <Alert
                               showIcon
-                              title="Select a project to start chatting with a published service."
+                              title="Select a team to start chatting with a published service."
                               type="info"
                             />
                           ) : !selectedService || !selectedEndpoint ? (
@@ -1503,13 +1502,13 @@ const ScopeInvokePage: React.FC = () => {
                   {!scopeId ? (
                     <Alert
                       showIcon
-                      title="Select a project to load its published services."
+                      title="Select a team to load its published services."
                       type="info"
                     />
                   ) : !selectedService ? (
                     <Alert
                       showIcon
-                      title="No published project service is selected yet."
+                      title="No published team service is selected yet."
                       type="warning"
                     />
                   ) : (

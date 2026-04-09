@@ -37,7 +37,7 @@ const TeamsIndexPage: React.FC = () => {
   }
 
   const teamResolutionDescription = authSessionQuery.isError
-    ? "The current session could not be refreshed into a usable team context. Retry, or open the legacy workspace while the session context is repaired."
+    ? "The current session could not be refreshed into a usable team context. Retry, or open Settings while the team context is repaired."
     : "No current team context is available.";
 
   return (
@@ -53,7 +53,7 @@ const TeamsIndexPage: React.FC = () => {
             </Typography.Title>
           <Typography.Paragraph style={{ margin: 0 }}>
             The console could not resolve a current team from the active session.
-            Open the legacy project workspace or retry after your session context is restored.
+            Open Settings or retry after your session context is restored.
           </Typography.Paragraph>
           {authSessionQuery.isError ? (
             <Alert
@@ -68,8 +68,8 @@ const TeamsIndexPage: React.FC = () => {
             <Button onClick={() => void authSessionQuery.refetch()} type="primary">
               Retry
             </Button>
-            <Button onClick={() => history.push("/scopes/overview")}>
-              Open legacy project workspace
+            <Button onClick={() => history.push("/settings")}>
+              Open Settings
             </Button>
           </Space>
         </Space>

@@ -22,6 +22,7 @@ import {
 } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { history } from "@/shared/navigation/history";
+import { buildTeamWorkspaceRoute } from "@/shared/navigation/scopeRoutes";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { buildRuntimeGAgentsHref } from "@/shared/navigation/runtimeRoutes";
@@ -271,7 +272,7 @@ function buildScriptWorkspaceItems(
     .sort((left, right) => left.title.localeCompare(right.title));
 }
 
-const ProjectAssetsPage: React.FC = () => {
+const TeamAssetsPage: React.FC = () => {
   const { token } = theme.useToken();
   const surfaceToken = token as AevatarThemeSurfaceToken;
 
@@ -685,9 +686,9 @@ const ProjectAssetsPage: React.FC = () => {
         </Button>,
         <Button
           key="open-overview"
-          onClick={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
+          onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
         >
-          Open Project Overview
+          Open Team Workspace
         </Button>,
         <Button
           key="open-gagents"
@@ -702,14 +703,14 @@ const ProjectAssetsPage: React.FC = () => {
             )
           }
         >
-          Manage GAgents
+          Open Member Runtime
         </Button>,
       ]}
-      onBack={() => history.push(buildScopeHref("/scopes/overview", activeDraft))}
+      onBack={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
       title={
         <AevatarTitleWithHelp
-          help="Browse the workflows and scripts owned by the current project from a single asset workspace. Capability state stays on stage, while source detail moves into the inspector."
-          title="Project Assets"
+          help="Browse the workflows and scripts owned by the current team from a single asset workspace. Capability state stays on stage, while source detail moves into the inspector."
+          title="Team Assets"
         />
       }
     >
@@ -723,7 +724,7 @@ const ProjectAssetsPage: React.FC = () => {
       >
         <ScopeQueryCard
           draft={draft}
-          loadLabel="Load project assets"
+          loadLabel="Load team assets"
           onChange={setDraft}
           onLoad={() => {
             const nextDraft = normalizeScopeDraft(draft);
@@ -763,7 +764,7 @@ const ProjectAssetsPage: React.FC = () => {
         {!activeDraft.scopeId.trim() ? (
           <Alert
             showIcon
-            message="Select a project to inspect its workflow and script assets."
+            message="Select a team to inspect its workflow and script assets."
             type="info"
           />
         ) : (
@@ -771,7 +772,7 @@ const ProjectAssetsPage: React.FC = () => {
             <ProCard
               bodyStyle={{ padding: 18 }}
               style={buildAevatarPanelStyle(surfaceToken)}
-              title="Project asset summary"
+              title="Team asset summary"
             >
               <div
                 style={{
@@ -780,7 +781,7 @@ const ProjectAssetsPage: React.FC = () => {
                   gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
                 }}
               >
-                <SummaryMetric label="Project" value={activeDraft.scopeId} />
+                <SummaryMetric label="Team" value={activeDraft.scopeId} />
                 <SummaryMetric label="Default binding" value={currentBindingLabel} />
                 <SummaryMetric label="Binding kind" value={currentBindingKind} />
                 <SummaryMetric
@@ -822,7 +823,7 @@ const ProjectAssetsPage: React.FC = () => {
                   />
                   <SummaryField
                     label="Workflows"
-                    value={`${workflowCount} capability${workflowCount === 1 ? "" : "ies"} tracked in this project`}
+                    value={`${workflowCount} capability${workflowCount === 1 ? "" : "ies"} tracked in this team`}
                   />
                   <SummaryField
                     label="Scripts"
@@ -854,7 +855,7 @@ const ProjectAssetsPage: React.FC = () => {
                     Capability inventory
                   </Typography.Text>
                   <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-                    One working surface for project-owned assets. Inspectors carry the heavy detail, not the list.
+                    One working surface for team-owned assets. Inspectors carry the heavy detail, not the list.
                   </Typography.Text>
                 </Space>
                 <StatusTag
@@ -892,7 +893,7 @@ const ProjectAssetsPage: React.FC = () => {
                           },
                         }}
                         locale={{
-                          emptyText: "No workflow assets were found for this project.",
+                          emptyText: "No workflow assets were found for this team.",
                         }}
                         metas={workflowListMetas}
                         pagination={{ pageSize: 6, showSizeChanger: false }}
@@ -921,7 +922,7 @@ const ProjectAssetsPage: React.FC = () => {
                           },
                         }}
                         locale={{
-                          emptyText: "No script assets were found for this project.",
+                          emptyText: "No script assets were found for this team.",
                         }}
                         metas={scriptListMetas}
                         pagination={{ pageSize: 6, showSizeChanger: false }}
@@ -1164,4 +1165,4 @@ const ScopeScriptCatalogSummary: React.FC<{ catalog: ScopeScriptCatalog }> = ({
   </div>
 );
 
-export default ProjectAssetsPage;
+export default TeamAssetsPage;

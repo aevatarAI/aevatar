@@ -43,7 +43,7 @@ describe("TeamsIndexPage", () => {
 
     expect(await screen.findByText("Team context unavailable")).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Open legacy project workspace" }),
+      screen.getByRole("button", { name: "Open Settings" }),
     ).toBeTruthy();
   });
 
@@ -57,7 +57,7 @@ describe("TeamsIndexPage", () => {
     expect(await screen.findByText("Failed to resolve the current team")).toBeTruthy();
         expect(
             screen.getAllByText(
-                "The current session could not be refreshed into a usable team context. Retry, or open the legacy workspace while the session context is repaired.",
+                "The current session could not be refreshed into a usable team context. Retry, or open Settings while the team context is repaired.",
             ).length,
         ).toBeGreaterThan(0);
     expect(screen.queryByText("No stub for /api/auth/me")).toBeNull();

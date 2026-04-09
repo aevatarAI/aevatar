@@ -1,6 +1,7 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
   buildRuntimeRunsHref,
   buildRuntimeWorkflowsHref,
@@ -4435,11 +4436,7 @@ const StudioPage: React.FC = () => {
           onOpenWorkflowFromHistory={openWorkflowFromHistory}
           onStartExecution={() => void handleStartExecution()}
           onOpenProjectOverview={() => {
-            history.push(
-              resolvedStudioScopeId
-                ? `/scopes/overview?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
-                : '/scopes/overview',
-            );
+            history.push(buildTeamWorkspaceRoute(resolvedStudioScopeId));
           }}
           onOpenProjectInvoke={() => {
             history.push(

@@ -10,10 +10,7 @@
  * @param icon 配置路由的图标，取值参考 https://ant.design/components/icon-cn， 注意去除风格后缀和大小写，如想要配置图标为 <StepBackwardOutlined /> 则取值应为 stepBackward 或 StepBackward，如想要配置图标为 <UserOutlined /> 则取值应为 user 或者 User
  * @doc https://umijs.org/docs/guides/routes
  */
-const TEAM_FIRST_ENABLED = ['1', 'true', 'yes', 'on'].includes(
-  (process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED || '').trim().toLowerCase(),
-);
-const HOME_REDIRECT = TEAM_FIRST_ENABLED ? '/teams' : '/scopes/overview';
+const HOME_REDIRECT = '/teams';
 
 export default [
   {
@@ -36,6 +33,7 @@ export default [
     name: "Teams",
     component: "./teams",
     menuGroupKey: "home",
+    hideInMenu: false,
   },
   {
     path: "/teams/:scopeId",
@@ -50,30 +48,35 @@ export default [
     // postMenuData in app.tsx regroups flat routes into lifecycle menu sections.
     menuGroupKey: "build",
     menuBadgeKey: "build.assets",
+    hideInMenu: true,
   },
   {
     path: "/studio",
     name: "Studio",
     component: "./studio",
     menuGroupKey: "build",
+    hideInMenu: true,
   },
   {
     path: "/runtime/workflows",
     name: "Workflows",
     component: "./workflows",
     menuGroupKey: "build",
+    hideInMenu: true,
   },
   {
     path: "/runtime/primitives",
     name: "Capabilities",
     component: "./primitives",
     menuGroupKey: "build",
+    hideInMenu: true,
   },
   {
     path: "/chat",
     name: "Chat",
     component: "./chat",
     menuGroupKey: "chat",
+    hideInMenu: true,
   },
   {
     path: "/scopes/invoke",
@@ -81,13 +84,15 @@ export default [
     component: "./scopes/invoke",
     menuGroupKey: "live",
     menuBadgeKey: "live.invoke",
+    hideInMenu: true,
   },
   {
     path: "/runtime/runs",
     name: "Runs",
     component: "./runs",
-    menuGroupKey: "live",
+    menuGroupKey: "platform",
     menuBadgeKey: "live.runs",
+    hideInMenu: true,
   },
   {
     path: "/runtime/mission-control",
@@ -101,20 +106,21 @@ export default [
     path: "/runtime/explorer",
     name: "Topology",
     component: "./actors",
-    menuGroupKey: "live",
+    menuGroupKey: "platform",
     menuBadgeKey: "live.topology",
   },
   {
     path: "/runtime/gagents",
-    name: "GAgents",
+    name: "Member Runtime",
     component: "./gagents",
     menuGroupKey: "live",
+    hideInMenu: true,
   },
   {
     path: "/services",
     name: "Services",
     component: "./services",
-    menuGroupKey: "governance",
+    menuGroupKey: "platform",
     menuBadgeKey: "governance.services",
   },
   {
@@ -127,14 +133,14 @@ export default [
     path: "/deployments",
     name: "Deployments",
     component: "./Deployments",
-    menuGroupKey: "governance",
+    menuGroupKey: "platform",
     menuBadgeKey: "governance.deployments",
   },
   {
     path: "/governance",
     name: "Governance",
     component: "./governance",
-    menuGroupKey: "governance",
+    menuGroupKey: "platform",
     menuBadgeKey: "governance.audit",
   },
   {
@@ -163,64 +169,25 @@ export default [
   },
   {
     path: "/scopes/overview",
-    name: "Projects",
+    name: "Team Overview",
     component: "./scopes/overview",
     menuGroupKey: "settings",
+    hideInMenu: true,
   },
   {
     path: "/settings",
-    name: "Account",
+    name: "Settings",
     component: "./settings/account",
     menuGroupKey: "settings",
   },
   {
     path: "/scopes",
-    redirect: "/scopes/overview",
-    hideInMenu: true,
-  },
-  {
-    path: "/scopes/workflows",
-    component: "./scopes/workflows",
-    hideInMenu: true,
-  },
-  {
-    path: "/scopes/scripts",
-    component: "./scopes/scripts",
+    redirect: HOME_REDIRECT,
     hideInMenu: true,
   },
   {
     path: "/governance/audit",
     redirect: "/governance",
-    hideInMenu: true,
-  },
-  {
-    path: "/workflows",
-    redirect: "/runtime/workflows",
-    hideInMenu: true,
-  },
-  {
-    path: "/primitives",
-    redirect: "/runtime/primitives",
-    hideInMenu: true,
-  },
-  {
-    path: "/runs",
-    redirect: "/runtime/runs",
-    hideInMenu: true,
-  },
-  {
-    path: "/actors",
-    redirect: "/runtime/explorer",
-    hideInMenu: true,
-  },
-  {
-    path: "/gagents",
-    redirect: "/runtime/gagents",
-    hideInMenu: true,
-  },
-  {
-    path: "/mission-control",
-    redirect: "/runtime/mission-control",
     hideInMenu: true,
   },
   {

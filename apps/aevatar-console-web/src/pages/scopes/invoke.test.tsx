@@ -785,7 +785,7 @@ describe('ScopeInvokePage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No published project service is selected yet.'),
+        screen.getByText('No published team service is selected yet.'),
       ).toBeTruthy();
     });
 
