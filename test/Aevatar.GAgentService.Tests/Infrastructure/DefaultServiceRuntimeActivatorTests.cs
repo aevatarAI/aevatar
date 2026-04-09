@@ -301,9 +301,8 @@ public sealed class DefaultServiceRuntimeActivatorTests
                 "r2",
                 "deployment-actor"));
 
-        await act.Should().ThrowAsync<Exception>()
-            .Where(ex => ex is FileNotFoundException &&
-                         ex.Message.Contains("Missing.Assembly", StringComparison.Ordinal));
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Missing.StaticActor, Missing.Assembly*was not found*");
     }
 
     [Fact]

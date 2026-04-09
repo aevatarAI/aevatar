@@ -92,7 +92,7 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 
 当前推荐使用的 scope-first 入口：
 
-- `POST /api/scopes/{scopeId}/draft-run`
+- `POST /api/scopes/{scopeId}/workflow/draft-run`
 - `PUT /api/scopes/{scopeId}/binding`
 - `GET /api/scopes/{scopeId}/binding`
 - `GET /api/scopes/{scopeId}/revisions`

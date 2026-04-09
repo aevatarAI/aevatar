@@ -30,6 +30,31 @@ bash tools/Aevatar.Tools.Cli/reinstall-tool.sh
 
 The reinstall script rebuilds the frontend, packs and reinstalls the global tool, then starts `aevatar app` in the background on port `6688` by default. Set `AEVATAR_REINSTALL_RESTART_APP=0` when you want reinstall without auto-start.
 
+## Frontend workspace
+
+The embedded app frontend lives under `tools/Aevatar.Tools.Cli/Frontend` and uses `npm`.
+
+Install dependencies before running any frontend build or test command:
+
+```bash
+cd tools/Aevatar.Tools.Cli/Frontend
+npm ci
+```
+
+Common frontend commands:
+
+```bash
+cd tools/Aevatar.Tools.Cli/Frontend
+npm test
+npm run build
+```
+
+Notes:
+
+- Do not rely on globally installed `tsc` or `vite`; the workspace expects the local binaries from `node_modules/.bin`.
+- If you see `tsc: command not found` or `vite: command not found`, run `npm ci` again in `tools/Aevatar.Tools.Cli/Frontend`.
+- `bash tools/Aevatar.Tools.Cli/reinstall-tool.sh` already installs frontend dependencies and rebuilds the embedded assets before packing the tool.
+
 ## Commands
 
 ```bash

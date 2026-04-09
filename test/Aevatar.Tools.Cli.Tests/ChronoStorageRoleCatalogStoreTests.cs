@@ -326,6 +326,20 @@ public sealed class ChronoStorageRoleCatalogStoreTests
                     return CreateJsonResponse(HttpStatusCode.OK, new { data = new { deleted = true }, error = (object?)null });
                 }
 
+                if (request.Method == HttpMethod.Get && string.Equals(path, "api/buckets/aevatar-studio/objects/download", StringComparison.Ordinal))
+                {
+                    var key = GetRequiredQueryValue(uri, "key");
+                    if (!_server.Objects.TryGetValue($"aevatar-studio:{key}", out var payload))
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.NotFound);
+                    }
+
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new ByteArrayContent(payload),
+                    };
+                }
+
                 if (request.Method == HttpMethod.Get && string.Equals(path, "api/buckets/aevatar-studio/presigned-url", StringComparison.Ordinal))
                 {
                     var key = GetRequiredQueryValue(uri, "key");
@@ -415,6 +429,12 @@ public sealed class ChronoStorageRoleCatalogStoreTests
             protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 var uri = request.RequestUri ?? throw new InvalidOperationException("Request URI is required.");
+                if (request.Method == HttpMethod.Get &&
+                    string.Equals(uri.AbsolutePath.Trim('/'), "api/buckets/aevatar-studio/objects/download", StringComparison.Ordinal))
+                {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                }
+
                 if (request.Method == HttpMethod.Get &&
                     string.Equals(uri.AbsolutePath.Trim('/'), "api/buckets/aevatar-studio/presigned-url", StringComparison.Ordinal))
                 {

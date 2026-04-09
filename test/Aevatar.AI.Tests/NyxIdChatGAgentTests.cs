@@ -64,32 +64,38 @@ public class NyxIdChatGAgentTests
     [Fact]
     public async Task HandleChatRequest_ShouldContinueToolLoopAndPublishToolLifecycleEvents()
     {
+        // ─── Test fixture constants (single source of truth) ───
+        const string round1Text = "Confirmed the connector.";
+        const string round2Text = "Telegram Bot connection is ready.";
+        const string toolCallId = "catalog-call-1";
+        const string toolName = "nyxid_catalog";
+        const string toolArgs = """{"action":"show","slug":"telegram-bot"}""";
+        const string toolResult = """{"slug":"telegram-bot","provider_type":"api_key"}""";
+
         using var provider = BuildServiceProvider();
         var llmProviderFactory = new StreamingToolLoopProviderFactory(
             [
                 [
-                    new LLMStreamChunk { DeltaContent = "先确认一下。" },
+                    new LLMStreamChunk { DeltaContent = round1Text },
                     new LLMStreamChunk
                     {
                         DeltaToolCall = new ToolCall
                         {
-                            Id = "catalog-call-1",
-                            Name = "nyxid_catalog",
-                            ArgumentsJson = "{\"action\":\"show\",\"slug\":\"telegram-bot\"}",
+                            Id = toolCallId,
+                            Name = toolName,
+                            ArgumentsJson = toolArgs,
                         },
                     },
                 ],
                 [
-                    new LLMStreamChunk { DeltaContent = "已经确认 Telegram Bot 的连接方式。" },
+                    new LLMStreamChunk { DeltaContent = round2Text },
                 ],
             ]);
         var toolSources = new IAgentToolSource[]
         {
             new StaticToolSource(
             [
-                new DelegateTool(
-                    "nyxid_catalog",
-                    _ => "{\"slug\":\"telegram-bot\",\"provider_type\":\"api_key\"}"),
+                new DelegateTool(toolName, _ => toolResult),
             ]),
         };
         var agent = CreateAgent(provider, "nyxid-chat-tool-loop", llmProviderFactory, toolSources);
@@ -99,35 +105,55 @@ public class NyxIdChatGAgentTests
         await agent.ActivateAsync();
         await agent.HandleChatRequest(new ChatRequestEvent
         {
-            Prompt = "我想接一下 Telegram bot",
+            Prompt = "Connect the Telegram bot",
             SessionId = "session-tool-loop",
         });
 
-        llmProviderFactory.StreamRequests.Should().HaveCount(2);
+        // ─── LLM round assertions ───
+
+        // Two LLM rounds: initial + continuation after tool result
+        llmProviderFactory.StreamRequests.Should().HaveCount(2,
+            "tool call in round 1 should trigger a second LLM round");
+
+        // Round-2 messages must carry the tool result from round 1
         llmProviderFactory.StreamRequests[1].Messages.Should().ContainSingle(message =>
             message.Role == "tool" &&
-            message.ToolCallId == "catalog-call-1" &&
-            message.Content == "{\"slug\":\"telegram-bot\",\"provider_type\":\"api_key\"}");
+            message.ToolCallId == toolCallId &&
+            message.Content == toolResult);
+
+        // ─── Tool lifecycle events ───
 
         eventPublisher.Published.OfType<ToolCallEvent>()
             .Should()
             .ContainSingle(x =>
-                x.CallId == "catalog-call-1" &&
-                x.ToolName == "nyxid_catalog" &&
+                x.CallId == toolCallId &&
+                x.ToolName == toolName &&
                 x.ArgumentsJson.Contains("telegram-bot"));
         eventPublisher.Published.OfType<ToolResultEvent>()
             .Should()
             .ContainSingle(x =>
-                x.CallId == "catalog-call-1" &&
+                x.CallId == toolCallId &&
                 x.Success &&
                 x.ResultJson.Contains("telegram-bot"));
-        eventPublisher.Published.OfType<TextMessageContentEvent>()
-            .Select(x => x.Delta)
-            .Should()
-            .ContainInOrder("先确认一下。", "已经确认 Telegram Bot 的连接方式。");
-        eventPublisher.Published.OfType<TextMessageEndEvent>()
-            .Should()
-            .ContainSingle(x => x.Content == "先确认一下。已经确认 Telegram Bot 的连接方式。");
+
+        // ─── Streaming content events ───
+
+        // Both rounds' text must appear as content deltas in order
+        var deltas = eventPublisher.Published.OfType<TextMessageContentEvent>()
+            .Select(x => x.Delta).ToList();
+        deltas.Should().ContainInOrder(round1Text, round2Text);
+
+        // ─── Completion event ───
+
+        var endEvent = eventPublisher.Published.OfType<TextMessageEndEvent>()
+            .Should().ContainSingle().Subject;
+        // End event content must be exactly round1 + optional whitespace + round2.
+        // Substring extraction (not Replace) so duplicated text is caught.
+        endEvent.Content.Should().StartWith(round1Text);
+        endEvent.Content.Should().EndWith(round2Text);
+        var middle = endEvent.Content[round1Text.Length..^round2Text.Length];
+        middle.Should().MatchRegex(@"^\s*$",
+            "only whitespace separators allowed between round-1 and round-2 text");
     }
 
     private static ServiceProvider BuildServiceProvider()
