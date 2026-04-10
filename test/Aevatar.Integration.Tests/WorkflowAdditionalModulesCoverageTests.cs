@@ -1737,7 +1737,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         ctx.Sent.Should().ContainSingle();
         ctx.Sent[0].targetActorId.Should().Be("bridge:telegram:prod");
         var chatRequest = ctx.Sent[0].evt.Should().BeOfType<ChatRequestEvent>().Subject;
-        chatRequest.Headers["chat_id"].Should().Be("10001");
+        chatRequest.Metadata["chat_id"].Should().Be("10001");
         runtime.Created.Should().ContainSingle(x => x.actorId == "bridge:telegram:prod");
 
         await module.HandleAsync(

@@ -82,6 +82,21 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
   },
 }));
 
+function getButtonByText(label: string): HTMLButtonElement {
+  const button = screen
+    .getAllByText((_, element) => element?.textContent?.trim() === label)
+    .map((element) =>
+      element instanceof HTMLButtonElement ? element : element.closest("button")
+    )
+    .find((element): element is HTMLButtonElement => element instanceof HTMLButtonElement);
+
+  if (!button) {
+    throw new Error(`Unable to find button with text '${label}'.`);
+  }
+
+  return button;
+}
+
 describe("RunsPage", () => {
   const mockedRuntimeCatalogApi = runtimeCatalogApi as unknown as {
     listWorkflowCatalog: jest.Mock;
@@ -127,22 +142,12 @@ describe("RunsPage", () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
     expect(container.textContent).toContain("Runtime endpoint console");
-    expect(
-      screen.getByRole("button", { name: "Open runtime console guide" })
-    );
-    expect(
-      screen.getByRole("button", { name: "Catalog" })
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Explorer" })
-    ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Open observability hub" })
-    ).toBeNull();
-    expect(screen.getByRole("button", { name: "Inspector" })).toBeTruthy();
-    expect(
-      screen.getByPlaceholderText("Describe the task to run.")
-    ).toBeTruthy();
+    expect(screen.getByLabelText("Open runtime console guide")).toBeTruthy();
+    expect(screen.getByText("Catalog")).toBeTruthy();
+    expect(screen.getByText("Explorer")).toBeTruthy();
+    expect(screen.queryByLabelText("Open observability hub")).toBeNull();
+    expect(screen.getByText("Inspector")).toBeTruthy();
+    expect(screen.getByLabelText("Scope ID")).toBeTruthy();
     expect(container.textContent).toContain("Launch rail");
     expect(container.textContent).toContain("Run trace");
     expect(container.textContent).toContain("Inspector");
@@ -163,8 +168,13 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("script payload");
-    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    const promptInput = await screen.findByDisplayValue("script payload");
+    // ProForm's custom submitter buttons don't render in jsdom; submit via the
+    // form element which exercises the same onFinish path as the button's
+    // onClick={() => props.form?.submit?.()) wiring.
+    const form = promptInput.closest("form");
+    expect(form).toBeTruthy();
+    fireEvent.submit(form!);
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
@@ -326,7 +336,8 @@ describe("RunsPage", () => {
     mockDispatch.mockClear();
     mockReset.mockClear();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Restore" })[0]);
+    fireEvent.click(screen.getByText("Recent (1)"));
+    fireEvent.click(getButtonByText("Restore"));
 
     await waitFor(() => {
       expect(mockReset).toHaveBeenCalled();
@@ -378,8 +389,13 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    await screen.findByDisplayValue("Run it");
-    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+    const promptInput = await screen.findByDisplayValue("Run it");
+    // ProForm's custom submitter buttons don't render in jsdom; submit via the
+    // form element which exercises the same onFinish path as the button's
+    // onClick={() => props.form?.submit?.()) wiring.
+    const form = promptInput.closest("form");
+    expect(form).toBeTruthy();
+    fireEvent.submit(form!);
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(

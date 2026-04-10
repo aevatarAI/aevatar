@@ -20,6 +20,10 @@ cp .env.example .env.local
 pnpm install
 ```
 
+`max` is provided by the local `@umijs/max` dependency in this workspace. Do not assume a global `max` CLI is installed.
+Use `pnpm dev`, `pnpm build`, `pnpm preview`, or `pnpm exec max <command>` from `apps/aevatar-console-web`.
+If you see `max: command not found`, install dependencies first with `pnpm install` in this directory.
+
 `pnpm dev` reads proxy targets from `.env.local`. If you also want your shell to reuse the same values for manually starting backend processes, export the file first:
 
 ```bash

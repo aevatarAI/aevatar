@@ -40,7 +40,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var runtime = CreateRuntime(provider, streamBufferCapacity: 2);
         var chunks = new List<LLMStreamChunk>();
 
-        await foreach (var chunk in runtime.ChatStreamAsync("hello"))
+        await foreach (var chunk in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
             chunks.Add(chunk);
 
         chunks.Should().Contain(x => x.DeltaToolCall != null);
@@ -79,7 +79,7 @@ public sealed class ChatRuntimeStreamingBufferTests
         var captureMiddleware = new CaptureLLMResponseMiddleware();
         var runtime = CreateRuntime(provider, streamBufferCapacity: 2, llmMiddlewares: [captureMiddleware]);
 
-        await foreach (var _ in runtime.ChatStreamAsync("hello"))
+        await foreach (var _ in runtime.ChatStreamAsync("hello", maxToolRounds: 1))
         {
         }
 

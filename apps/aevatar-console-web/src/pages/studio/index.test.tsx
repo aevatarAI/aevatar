@@ -1989,7 +1989,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("loads discovered GAgent types and saved actor ids for the resolved scope", async () => {
+  it("loads discovered GAgent types and the resolved scope binding", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -2001,7 +2001,7 @@ describe("StudioPage", () => {
       expect(mockRuntimeGAgentApi.listTypes).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(mockRuntimeGAgentApi.listActors).toHaveBeenCalledWith("scope-1");
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
     });
   });
 

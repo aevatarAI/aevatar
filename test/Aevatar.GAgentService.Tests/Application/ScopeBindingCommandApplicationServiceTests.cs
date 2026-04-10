@@ -634,7 +634,7 @@ public sealed class ScopeBindingCommandApplicationServiceTests
                     ServiceEndpointKind.Chat.ToString(),
                     "type.googleapis.com/aevatar.ai.ChatRequestEvent",
                     "type.googleapis.com/aevatar.ai.ChatResponseEvent",
-                    "Workflow chat endpoint."),
+                    "Default chat endpoint."),
             ],
             [],
             DateTimeOffset.UtcNow));

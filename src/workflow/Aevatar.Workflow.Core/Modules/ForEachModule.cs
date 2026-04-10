@@ -77,9 +77,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
                 Expected = items.Length,
             };
 
-            if (state.Backpressure.MaxConcurrentWorkers == 0)
-                state.Backpressure = BackpressureHelper.Initialize(
-                    BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
+            state.Backpressure = BackpressureHelper.EnsureInitialized(
+                state.Backpressure,
+                BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
             ctx.Logger.LogInformation(
                 "ForEach {StepId}: {Count} items, sub_step_type={SubType}",
@@ -138,6 +138,9 @@ public sealed class ForEachModule : IEventModule<IWorkflowExecutionContext>
             parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Collected.Add(evt.ToForEachItemResult());
             state.Parents[parentKey] = parentState;
+            state.Backpressure = BackpressureHelper.EnsureInitialized(
+                state.Backpressure,
+                BackpressureHelper.DefaultMaxConcurrentWorkers);
             var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
 
             if (parentState.Collected.Count >= parentState.Expected)
