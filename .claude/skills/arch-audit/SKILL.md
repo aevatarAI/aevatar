@@ -69,6 +69,8 @@ If build fails because lockfile dependencies are not installed (`node_modules` m
 
 If build still fails after dependencies are present, tag as `DEMO_BLOCKER` with the failing project and missing dependency or compiler error listed.
 
+If an `env-tooling` issue blocks an upcoming milestone, keep it in the report as `MILESTONE_BLOCKER (env-tooling)` under release readiness, but do **not** count it as architecture evidence or architecture score unless you verified the failure persists in a correctly provisioned repo environment.
+
 ## Step 1: Automated Baseline
 
 ### 1a. Environment Validation (~10min)
@@ -224,7 +226,7 @@ Next milestones: [list with dates]
 | 读写分离 | X/10 | [query honesty results] |
 | 序列化 | X/10 | [Protobuf compliance] |
 | Actor 生命周期 | X/10 | [state leak count, shadow state] |
-| 前端可构建性 | X/10 | [build results] |
+| 前端可构建性（release readiness） | X/10 | [env-tooling vs repo-level build results] |
 | 测试覆盖 (关键路径) | X/10 | [milestone path test results] |
 | 产品 Thesis 体现度 | X/10 | [Harness Theory code evidence] |
 
@@ -258,5 +260,6 @@ From first audit (2026-04-08):
 
 1. **Milestone-orient everything.** Tag each finding as MILESTONE_BLOCKER or BACKLOG. Only MILESTONE_BLOCKER gets fixed now.
 2. **Classify guard failures.** VIOLATION vs env-tooling vs env-structural. env-structural = VIOLATION.
-3. **Check blind spots.** Every audit should verify CI guard scan roots cover all runtime code directories.
-4. **Scorecard goes to team meeting.** Ask: "which of these are intentional vs accidental?" Intentional = ADR. Accidental = fix.
+3. **Keep impact and category separate.** `env-tooling` can still be a `MILESTONE_BLOCKER`, but it should stay out of architecture evidence/scoring unless the repo remains broken after required dependencies and tools are present.
+4. **Check blind spots.** Every audit should verify CI guard scan roots cover all runtime code directories.
+5. **Scorecard goes to team meeting.** Ask: "which of these are intentional vs accidental?" Intentional = ADR. Accidental = fix.

@@ -13,6 +13,8 @@ Reviewed by: arch-audit skill, 5 parallel exploration agents
 > 本文档是首份 architecture audit scorecard 的详细证据版，包含每个维度的代码级证据、数据流分析和修复方案。
 >
 > 评分只纳入已验证证据；需要运行时进一步确认的风险在文中标记为 `NEEDS_VALIDATION`，不直接计入总分。
+>
+> `env-tooling` 问题若阻塞 04-17/04-18 里程碑，仍保留在 `MILESTONE_BLOCKER` 中跟踪；但除非已验证在依赖齐全、环境正确的仓库环境里仍稳定失败，否则不作为 architecture evidence，不计入综合架构健康度。
 
 ---
 
@@ -26,12 +28,12 @@ Reviewed by: arch-audit skill, 5 parallel exploration agents
 | 读写分离 | 8/10 | Application 层 Query 全部 CLEAN；Host 层投影 bypass 是唯一破口 |
 | 序列化 | 7/10 | 核心路径全 Protobuf；JSON 仅在 Host/Adapter 边界，合规 |
 | Actor 生命周期 | 5/10 | StreamingProxyGAgent 影子状态机 + agents/ 3 个 ConcurrentDictionary 单例 |
-| 前端可构建性 | 2/10 | CLI Frontend + Console Web 均构建失败 |
-| 测试覆盖 (全局) | 3/10 | 聚合覆盖率掩盖关键项目缺口；认证、Orleans Streaming 与 agents/ 仍缺回归保护 |
+| 前端可构建性（release readiness） | 2/10 | CLI Frontend + Console Web 当前被 env-tooling 阻塞；保留为里程碑阻塞项，但不计入 architecture evidence |
+| 测试覆盖 (全局) | 3/10 | 聚合覆盖率掩盖关键项目缺口；NyxID auth flow、Orleans Streaming 路径与 agents/ 恢复场景仍缺专项回归保护 |
 | AI.Core 中间件合规 | 4/10 | SkillRegistry 7 处 lock + StreamingToolExecutor + ToolApprovalMiddleware 违规 |
 | 工作流引擎韧性 | 5/10 | _executionItems 非持久化 + Sub-Workflow 无超时 + Lease 恢复风险 |
 | 投影端口合规 | 5/10 | EventSinkProjectionLifecyclePortBase §111 违规：ConcurrentDictionary 做订阅管理 |
-**综合架构健康度: 5.2 / 10** (11 dimensions)
+**综合架构健康度: 5.5 / 10** (10 architecture dimensions; env-tooling build-readiness blockers tracked separately)
 
 ---
 
@@ -368,8 +370,8 @@ JSON 仅在边界: ChatWebSocketCommandParser, SseChatTransport, EventQueryTool 
 | 3 | `agents/.../StreamingProxyGAgent.cs:34` | Actor 执行模型 | Critical | `_proxyState` 影子状态机不参与 event sourcing，grain 重激活后状态不一致。 |
 | 4 | `agents/` 关键路径回归 | 测试要求 | High | `Aevatar.AI.Tests` 已覆盖 endpoints/store/happy-path，但缺少面向持久化替换与跨重启恢复的专项回归测试。 |
 | 5 | `test/.../ScopeServiceEndpointsTests.cs:1087` | — | High | InvokeStreamEndpoint 3 个测试失败 (500 error)。 |
-| 6 | `tools/Aevatar.Tools.Cli/Frontend/` | — | High | TypeScript 编译失败。缺 @types/node, @tanstack/react-virtual, vitest。 |
-| 7 | `apps/aevatar-console-web/` | — | High | 构建失败。`max` CLI 未安装。 |
+| 6 | `tools/Aevatar.Tools.Cli/Frontend/` | env-tooling / build-readiness | High | TypeScript 编译失败。缺 @types/node, @tanstack/react-virtual, vitest。保留为交付阻塞项，不计入 architecture evidence。 |
+| 7 | `apps/aevatar-console-web/` | env-tooling / build-readiness | High | 构建失败。`max` CLI 未安装。保留为交付阻塞项，不计入 architecture evidence。 |
 
 ### ARCHITECTURAL_DEBT (记录但不修)
 
@@ -473,18 +475,15 @@ agents/
 **实际覆盖统计**:
 - src 项目总数: ~87
 - 被测试触达（直接或传递）: **~80 (92%)**
-- 真正零覆盖: **7-9 个项目 (8%)**
+- 需要补充专项验证的项目: **7-9 个项目 (8%)**
 - 被门禁排除但有测试: 12 个项目
 
-### 12.3 真正零覆盖的项目
+### 12.3 需要补充专项验证的项目
 
-以下项目**没有任何测试项目直接或传递引用**:
+以下项目在本轮审计中**未确认具备足够的专项回归保护**。其中 Authentication 相关项目已有直接测试引用，因此不再归类为“零覆盖”：
 
 | 项目 | 职责 | 风险 |
 |------|------|------|
-| `Aevatar.Authentication.Abstractions` | 认证抽象 | Medium — NyxID M0 关键路径 |
-| `Aevatar.Authentication.Hosting` | 认证宿主 | Medium |
-| `Aevatar.Authentication.Providers.NyxId` | NyxID 认证提供者 | High — NyxID M0 关键路径 |
 | `Aevatar.Foundation.ExternalLinks.WebSocket` | WebSocket 传输 | Medium |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming` | Orleans 流式传输 | High — 事件分发核心 |
 | `Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider` | Kafka 传输 | Medium — 生产传输层 |
@@ -514,8 +513,8 @@ agents/
 
 **主要风险不是覆盖面，而是**:
 1. **聚合门禁掩盖个体缺口** — 单个项目 0% 不触发失败
-2. **认证层完全裸奔** — 3 个 Authentication 项目零测试，NyxID M0 关键路径
-3. **Orleans Streaming 零测试** — 事件分发核心无回归保护
+2. **认证层已有直接测试引用，但 NyxID M0 主流程仍缺更贴近真实场景的专项集成覆盖**
+3. **Orleans Streaming 路径仍缺明确专项回归保护** — 事件分发核心风险较高
 4. **agents/ 专项回归仍偏薄** — 已有 `Aevatar.AI.Tests` 覆盖，但持久化替换与跨重启恢复仍缺专项验证
 
 ### 12.6 修复建议
@@ -523,7 +522,7 @@ agents/
 | 优先级 | 目标 | 测试类型 |
 |--------|------|---------|
 | P0 | `agents/` 全部 3 个项目 | 单元 + 集成：actor 创建/消息/状态恢复 |
-| P0 | `Authentication.Providers.NyxId` | 集成测试：认证流程 |
+| P0 | `Authentication.Providers.NyxId` | 集成测试：NyxID M0 认证主流程 |
 | P1 | `Orleans.Streaming` | 集成测试：事件分发端到端 |
 | P1 | 覆盖率门禁改为**逐项目阈值** | 防止聚合掩盖个体缺口 |
 | P2 | 门禁排除项中的 Provider 实现 | 至少 happy-path 测试 |
@@ -710,13 +709,13 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 | 读写分离 | 8/10 | 8/10 | 无变化 |
 | 序列化 | 7/10 | 7/10 | 无变化 |
 | Actor 生命周期 | 5/10 | 5/10 | 无变化 |
-| 前端可构建性 | 2/10 | 2/10 | 无变化 |
+| 前端可构建性（release readiness） | 2/10 | 2/10 | 继续作为 env-tooling milestone blocker 跟踪，但不计入 architecture evidence |
 | 测试覆盖 (全局) | 0/10 | 3/10 | 聚合覆盖率高于单项目现实；关键路径仍存在明显空洞 |
 | **AI.Core 中间件合规** | — | **4/10** | **新增维度**: SkillRegistry + StreamingToolExecutor + ToolApprovalMiddleware 违规 |
 | **工作流引擎韧性** | — | **5/10** | **新增维度**: _executionItems 非持久化 + Sub-Workflow 无超时 + Lease 恢复风险 |
 | **投影端口合规** | — | **5/10** | **新增维度**: EventSinkProjectionLifecyclePortBase §111 违规 |
 
-**更新后综合架构健康度: 5.2 / 10** (11 dimensions)
+**更新后综合架构健康度: 5.5 / 10** (10 architecture dimensions; env-tooling build-readiness blockers tracked separately)
 
 ---
 
@@ -731,7 +730,7 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 | 21 | `CQRS.Projection.Core/.../EventSinkProjectionLifecyclePortBase.cs:23` | §111 | High | ConcurrentDictionary 做订阅管理，应改 lease/session |
 | 22 | `Workflow.Core/WorkflowRunGAgent.cs:113-133` | Actor 执行模型 | High | `_executionItems` 非持久化，actor 重激活后丢失 |
 | 23 | `Workflow.Core/Primitives/SubWorkflowOrchestrator.cs` | Actor 执行模型 | Medium | 定义解析阶段已有 durable timeout；子工作流完成续接仍需补充 timeout/compensation 证据 |
-| 24 | 7-9 个 src/ 项目零覆盖 + 聚合门禁掩盖个体缺口 | 测试要求 | High | 认证层 + Orleans Streaming 零测试；门禁不检查逐项目覆盖率，agents/ 也缺恢复类专项回归 |
+| 24 | 7-9 个 src/ 项目专项验证不足 + 聚合门禁掩盖个体缺口 | 测试要求 | High | Authentication 已有直接测试引用，但 NyxID auth flow、Orleans Streaming 与 agents/ 恢复类场景仍缺专项回归；门禁不检查逐项目覆盖率 |
 | 25 | `architecture_guards.sh` | CI 门禁完整性 | Medium | 仍有目录扫描盲区与硬编码扫描根问题 |
 
 ---
