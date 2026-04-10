@@ -64,6 +64,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
             "registration_id": {
               "type": "string",
               "description": "Registration ID (for delete)"
+            },
+            "confirm": {
+              "type": "boolean",
+              "description": "Must be true to execute delete. First call delete without confirm to see details, then call again with confirm=true."
             }
           }
         }
@@ -124,6 +128,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
             ? webhookBaseUrl.TrimEnd('/') + callbackPath
             : string.Empty;
 
+        // Snapshot existing IDs before dispatch so we can identify the NEW entry after.
+        var existingIds = (await _queryPort.QueryAllAsync(ct)).Select(e => e.Id).ToHashSet();
+
         var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);
@@ -151,13 +158,41 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
+        // Poll for the NEW registration ID (not in the pre-dispatch snapshot).
+        // Retry up to 5 times with 500ms delay to bridge eventual consistency.
+        string? registrationId = null;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            await Task.Delay(500, ct);
+            var all = await _queryPort.QueryAllAsync(ct);
+            var newEntry = all.FirstOrDefault(e => !existingIds.Contains(e.Id));
+            if (newEntry != null)
+            {
+                registrationId = newEntry.Id;
+                break;
+            }
+        }
+
+        if (registrationId != null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "registered",
+                registration_id = registrationId,
+                platform = cmd.Platform,
+                nyx_provider_slug = cmd.NyxProviderSlug,
+                callback_url = $"{callbackPath}/{registrationId}",
+                webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
+            });
+        }
+
         return JsonSerializer.Serialize(new
         {
             status = "accepted",
             platform = cmd.Platform,
             nyx_provider_slug = cmd.NyxProviderSlug,
             callback_url_pattern = $"{callbackPath}/{{registration_id}}",
-            note = "Registration ID is generated asynchronously. Use 'list' action to retrieve it.",
+            note = "Registration accepted but ID not yet available. Use 'list' action to retrieve it.",
         });
     }
 
@@ -170,6 +205,21 @@ public sealed class ChannelRegistrationTool : IAgentTool
         var exists = await _queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
+
+        // Require explicit confirm=true. First call without confirm shows details for user review.
+        var confirm = args.TryGetProperty("confirm", out var cv) && cv.ValueKind == JsonValueKind.True;
+        if (!confirm)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "confirm_required",
+                registration_id = exists.Id,
+                platform = exists.Platform,
+                nyx_provider_slug = exists.NyxProviderSlug,
+                scope_id = exists.ScopeId,
+                note = "Call again with confirm=true to delete this registration. This action cannot be undone.",
+            });
+        }
 
         var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
