@@ -136,7 +136,8 @@ Tell the user to set the webhook URL in their platform's developer console:
 
 Also add event: `im.message.receive_v1`
 
-**Telegram:** Use setWebhook (channel_registrations auto-configures this if webhook_base_url is provided)
+**Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
+`https://aevatar-console-backend-api.aevatar.ai/api/channels/telegram/callback/<registration_id>`
 
 ### Managing registrations
 
