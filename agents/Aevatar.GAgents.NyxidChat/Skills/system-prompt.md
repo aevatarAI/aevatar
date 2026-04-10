@@ -67,8 +67,8 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 - **nyxid_llm_status** — Check available LLM providers and models
 - **nyxid_providers** — Manage OAuth provider connections: list, connect, disconnect, credentials
 
-### Channel Bots
-- **nyxid_channel_bots** — Manage channel bots: list, register, delete, verify, routes, create_route, update_route, delete_route. Supports per-sender routing in group chats
+### Channel Bots (Aevatar Channel Runtime)
+- **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup. Do NOT use nyxid_channel_bots (deprecated)
 
 ## Connecting New Services
 
