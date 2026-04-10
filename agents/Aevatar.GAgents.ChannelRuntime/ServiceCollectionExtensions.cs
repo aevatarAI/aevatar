@@ -13,11 +13,11 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddChannelRuntime(this IServiceCollection services)
     {
-        services.TryAddSingleton<ChannelBotRegistrationStore>();
-
-        // Projection pipeline for device registrations
+        // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+
+        // ─── Device Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
             DeviceRegistrationMaterializationContext,
             DeviceRegistrationMaterializationRuntimeLease,
@@ -34,6 +34,24 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();
+
+        // ─── Channel Bot Registration projection pipeline ───
+        services.AddProjectionMaterializationRuntimeCore<
+            ChannelBotRegistrationMaterializationContext,
+            ChannelBotRegistrationMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<ChannelBotRegistrationMaterializationContext>>(
+            static scopeKey => new ChannelBotRegistrationMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new ChannelBotRegistrationMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            ChannelBotRegistrationMaterializationContext,
+            ChannelBotRegistrationProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
+            ChannelBotRegistrationDocumentMetadataProvider>();
+        services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
 
         // Register platform adapters (add more as platforms are onboarded)
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());

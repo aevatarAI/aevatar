@@ -9,12 +9,12 @@ using Xunit;
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="ChannelBotRegistrationGAgent"/> — validates command handling,
+/// Unit tests for <see cref="DeviceRegistrationGAgent"/> — validates command handling,
 /// state transitions, and event sourcing behavior.
 /// </summary>
-public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
+public class DeviceRegistrationGAgentTests : IAsyncLifetime
 {
-    private ChannelBotRegistrationGAgent _agent = null!;
+    private DeviceRegistrationGAgent _agent = null!;
     private ServiceProvider _serviceProvider = null!;
 
     public async Task InitializeAsync()
@@ -28,11 +28,11 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
 
         _serviceProvider = services.BuildServiceProvider();
 
-        _agent = new ChannelBotRegistrationGAgent
+        _agent = new DeviceRegistrationGAgent
         {
             Services = _serviceProvider,
             EventSourcingBehaviorFactory =
-                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<ChannelBotRegistrationStoreState>>(),
+                _serviceProvider.GetRequiredService<IEventSourcingBehaviorFactory<DeviceRegistrationState>>(),
         };
 
         await _agent.ActivateAsync();
@@ -47,32 +47,28 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleRegister_CreatesEntryInState()
     {
-        var cmd = new ChannelBotRegisterCommand
+        var cmd = new DeviceRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            NyxUserToken = "token-123",
-            VerificationToken = "verify-456",
             ScopeId = "scope-1",
+            HmacKey = "key-1",
+            Description = "Test device",
         };
 
         await _agent.HandleRegister(cmd);
 
         _agent.State.Registrations.Should().HaveCount(1);
         var entry = _agent.State.Registrations[0];
-        entry.Platform.Should().Be("lark");
-        entry.NyxProviderSlug.Should().Be("api-lark-bot");
-        entry.NyxUserToken.Should().Be("token-123");
-        entry.VerificationToken.Should().Be("verify-456");
         entry.ScopeId.Should().Be("scope-1");
+        entry.HmacKey.Should().Be("key-1");
+        entry.Description.Should().Be("Test device");
         entry.Id.Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
     public async Task HandleRegister_GeneratesUniqueId()
     {
-        var cmd1 = new ChannelBotRegisterCommand { Platform = "lark", NyxProviderSlug = "slug-1", NyxUserToken = "t1" };
-        var cmd2 = new ChannelBotRegisterCommand { Platform = "telegram", NyxProviderSlug = "slug-2", NyxUserToken = "t2" };
+        var cmd1 = new DeviceRegisterCommand { ScopeId = "scope-a", HmacKey = "k1" };
+        var cmd2 = new DeviceRegisterCommand { ScopeId = "scope-b", HmacKey = "k2" };
 
         await _agent.HandleRegister(cmd1);
         await _agent.HandleRegister(cmd2);
@@ -84,63 +80,36 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task HandleRegister_AllFieldsPersisted()
+    public async Task HandleRegister_RequiredFieldsPersisted()
     {
-        var cmd = new ChannelBotRegisterCommand
+        var cmd = new DeviceRegisterCommand
         {
-            Platform = "lark",
-            NyxProviderSlug = "api-lark-bot",
-            NyxUserToken = "token-abc",
-            VerificationToken = "verify-xyz",
             ScopeId = "scope-x",
-            WebhookUrl = "https://example.com/callback",
+            HmacKey = "hmac-secret",
+            NyxConversationId = "conv-42",
+            Description = "Living room sensor hub",
         };
 
         await _agent.HandleRegister(cmd);
 
         _agent.State.Registrations.Should().HaveCount(1);
         var entry = _agent.State.Registrations[0];
-        entry.Platform.Should().Be("lark");
-        entry.NyxProviderSlug.Should().Be("api-lark-bot");
-        entry.NyxUserToken.Should().Be("token-abc");
-        entry.VerificationToken.Should().Be("verify-xyz");
         entry.ScopeId.Should().Be("scope-x");
-        entry.WebhookUrl.Should().Be("https://example.com/callback");
+        entry.HmacKey.Should().Be("hmac-secret");
+        entry.NyxConversationId.Should().Be("conv-42");
+        entry.Description.Should().Be("Living room sensor hub");
         entry.CreatedAt.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task HandleRegister_NullOptionalFieldsStoreEmpty()
-    {
-        var cmd = new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "slug",
-            NyxUserToken = "token",
-        };
-
-        await _agent.HandleRegister(cmd);
-
-        var entry = _agent.State.Registrations[0];
-        entry.VerificationToken.Should().BeEmpty();
-        entry.ScopeId.Should().BeEmpty();
-        entry.WebhookUrl.Should().BeEmpty();
     }
 
     [Fact]
     public async Task HandleUnregister_RemovesEntry()
     {
-        var cmd = new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "slug",
-            NyxUserToken = "token",
-        };
+        var cmd = new DeviceRegisterCommand { ScopeId = "scope-del", HmacKey = "k" };
         await _agent.HandleRegister(cmd);
 
         var registrationId = _agent.State.Registrations[0].Id;
 
-        await _agent.HandleUnregister(new ChannelBotUnregisterCommand { RegistrationId = registrationId });
+        await _agent.HandleUnregister(new DeviceUnregisterCommand { RegistrationId = registrationId });
 
         _agent.State.Registrations.Should().BeEmpty();
     }
@@ -148,17 +117,12 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
     [Fact]
     public async Task HandleUnregister_NonExistent_NoStateChange()
     {
-        var cmd = new ChannelBotRegisterCommand
-        {
-            Platform = "lark",
-            NyxProviderSlug = "slug",
-            NyxUserToken = "token",
-        };
+        var cmd = new DeviceRegisterCommand { ScopeId = "scope-keep", HmacKey = "k" };
         await _agent.HandleRegister(cmd);
 
         // Unregister a non-existent ID — should not throw and should not change state
         var act = () => _agent.HandleUnregister(
-            new ChannelBotUnregisterCommand { RegistrationId = "does-not-exist" });
+            new DeviceUnregisterCommand { RegistrationId = "does-not-exist" });
 
         await act.Should().NotThrowAsync();
         _agent.State.Registrations.Should().HaveCount(1);

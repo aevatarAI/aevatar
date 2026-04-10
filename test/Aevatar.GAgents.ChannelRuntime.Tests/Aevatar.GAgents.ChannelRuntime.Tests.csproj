@@ -11,10 +11,14 @@
   <ItemGroup>
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChannelRuntime\Aevatar.GAgents.ChannelRuntime.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Abstractions\Aevatar.Foundation.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Foundation.Core\Aevatar.Foundation.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="xunit" />

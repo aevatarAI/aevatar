@@ -95,6 +95,46 @@ message DeviceRegistrationDocument {
   string actor_id = 9;                    // Source actor ID
 }
 
+// ─── Channel Bot Registration (Actor-backed, same pattern as DeviceRegistration) ───
+
+// Domain events for ChannelBotRegistrationGAgent
+message ChannelBotRegisteredEvent {
+  ChannelBotRegistrationEntry entry = 1;
+}
+
+message ChannelBotUnregisteredEvent {
+  string registration_id = 1;
+}
+
+// Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
+message ChannelBotRegisterCommand {
+  string platform = 1;
+  string nyx_provider_slug = 2;
+  string nyx_user_token = 3;
+  string verification_token = 4;
+  string scope_id = 5;
+  string webhook_url = 6;
+}
+
+message ChannelBotUnregisterCommand {
+  string registration_id = 1;
+}
+
+// Projection read model for channel bot registrations
+message ChannelBotRegistrationDocument {
+  string id = 1;                            // Registration ID (= document key)
+  string platform = 2;
+  string nyx_provider_slug = 3;
+  string scope_id = 4;
+  string verification_token = 5;
+  string webhook_url = 6;
+  int64 state_version = 7;
+  string last_event_id = 8;
+  google.protobuf.Timestamp updated_at_utc = 9;
+  string actor_id = 10;                     // Source actor ID
+  string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
+}
+
 // Callback endpoint → ChannelUserGAgent inbound dispatch
 message ChannelInboundEvent {
   string text = 1;

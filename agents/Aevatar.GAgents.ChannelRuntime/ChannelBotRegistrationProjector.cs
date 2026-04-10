@@ -6,25 +6,22 @@ using Aevatar.Foundation.Abstractions;
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Materializes <see cref="DeviceRegistrationState"/> into per-entry
-/// <see cref="DeviceRegistrationDocument"/> documents for query-side read model.
+/// Materializes <see cref="ChannelBotRegistrationStoreState"/> into per-entry
+/// <see cref="ChannelBotRegistrationDocument"/> documents for query-side read model.
 ///
 /// Known limitation: <see cref="IProjectionWriteDispatcher{T}"/> only supports
-/// <c>UpsertAsync</c>. When a device is unregistered, the state no longer contains
+/// <c>UpsertAsync</c>. When a bot is unregistered, the state no longer contains
 /// that entry, but the orphaned document is not deleted. A future
 /// <c>IProjectionWriteDispatcher.DeleteAsync</c> is needed to close this gap.
-/// Until then, the <see cref="DeviceRegistrationQueryPort"/> should filter by
-/// cross-referencing the actor's authoritative state version if strict consistency
-/// is required.
 /// </summary>
-public sealed class DeviceRegistrationProjector
-    : ICurrentStateProjectionMaterializer<DeviceRegistrationMaterializationContext>
+public sealed class ChannelBotRegistrationProjector
+    : ICurrentStateProjectionMaterializer<ChannelBotRegistrationMaterializationContext>
 {
-    private readonly IProjectionWriteDispatcher<DeviceRegistrationDocument> _writeDispatcher;
+    private readonly IProjectionWriteDispatcher<ChannelBotRegistrationDocument> _writeDispatcher;
     private readonly IProjectionClock _clock;
 
-    public DeviceRegistrationProjector(
-        IProjectionWriteDispatcher<DeviceRegistrationDocument> writeDispatcher,
+    public ChannelBotRegistrationProjector(
+        IProjectionWriteDispatcher<ChannelBotRegistrationDocument> writeDispatcher,
         IProjectionClock clock)
     {
         _writeDispatcher = writeDispatcher ?? throw new ArgumentNullException(nameof(writeDispatcher));
@@ -32,14 +29,14 @@ public sealed class DeviceRegistrationProjector
     }
 
     public async ValueTask ProjectAsync(
-        DeviceRegistrationMaterializationContext context,
+        ChannelBotRegistrationMaterializationContext context,
         EventEnvelope envelope,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(envelope);
 
-        if (!CommittedStateEventEnvelope.TryUnpackState<DeviceRegistrationState>(
+        if (!CommittedStateEventEnvelope.TryUnpackState<ChannelBotRegistrationStoreState>(
                 envelope,
                 out _,
                 out var stateEvent,
@@ -52,20 +49,20 @@ public sealed class DeviceRegistrationProjector
 
         var updatedAt = CommittedStateEventEnvelope.ResolveTimestamp(envelope, _clock.UtcNow);
 
-        // NOTE: only upserts current entries. Orphaned documents from unregistered
-        // devices remain until IProjectionWriteDispatcher gains DeleteAsync support.
         foreach (var entry in state.Registrations)
         {
             if (string.IsNullOrWhiteSpace(entry.Id))
                 continue;
 
-            var document = new DeviceRegistrationDocument
+            var document = new ChannelBotRegistrationDocument
             {
                 Id = entry.Id,
+                Platform = entry.Platform ?? string.Empty,
+                NyxProviderSlug = entry.NyxProviderSlug ?? string.Empty,
                 ScopeId = entry.ScopeId ?? string.Empty,
-                HmacKey = entry.HmacKey ?? string.Empty,
-                NyxConversationId = entry.NyxConversationId ?? string.Empty,
-                Description = entry.Description ?? string.Empty,
+                VerificationToken = entry.VerificationToken ?? string.Empty,
+                WebhookUrl = entry.WebhookUrl ?? string.Empty,
+                NyxUserToken = entry.NyxUserToken ?? string.Empty,
                 StateVersion = stateEvent.Version,
                 LastEventId = stateEvent.EventId ?? string.Empty,
                 ActorId = context.RootActorId,

@@ -7,6 +7,9 @@
     <RootNamespace>Aevatar.GAgents.ChannelRuntime</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Aevatar.GAgents.ChannelRuntime.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <ProjectReference Include="..\..\src\Aevatar.AI.ToolProviders.NyxId\Aevatar.AI.ToolProviders.NyxId.csproj" />

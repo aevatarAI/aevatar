@@ -1,8 +1,6 @@
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Aevatar.GAgents.Household;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Xunit;
@@ -10,35 +8,11 @@ using Xunit;
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
 
 /// <summary>
-/// Tests for DeviceEventEndpoints private helper methods via reflection.
-/// The endpoint handler methods are private static; we invoke them directly
-/// to verify HMAC verification and callback payload parsing logic.
+/// Tests for DeviceEventEndpoints internal helper methods.
+/// Uses InternalsVisibleTo to call ParseCallbackPayload and VerifyHmacSignature directly.
 /// </summary>
 public class DeviceEventEndpointsTests
 {
-    // ─── Reflection helpers ───
-
-    private static readonly System.Type EndpointType = typeof(DeviceEventEndpoints);
-
-    private static readonly MethodInfo ParseCallbackPayloadMethod =
-        EndpointType.GetMethod("ParseCallbackPayload", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new MissingMethodException("ParseCallbackPayload not found");
-
-    private static readonly MethodInfo VerifyHmacSignatureMethod =
-        EndpointType.GetMethod("VerifyHmacSignature", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new MissingMethodException("VerifyHmacSignature not found");
-
-    private static DeviceInbound InvokeParseCallbackPayload(byte[] bodyBytes)
-    {
-        return (DeviceInbound)ParseCallbackPayloadMethod.Invoke(null, [bodyBytes])!;
-    }
-
-    private static bool InvokeVerifyHmacSignature(
-        HttpContext http, byte[] bodyBytes, DeviceRegistrationEntry registration, DeviceEventOptions options)
-    {
-        return (bool)VerifyHmacSignatureMethod.Invoke(null, [http, bodyBytes, registration, options])!;
-    }
-
     // ─── Parse Callback Payload Tests ───
 
     [Fact]
@@ -61,7 +35,7 @@ public class DeviceEventEndpointsTests
         });
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = InvokeParseCallbackPayload(bodyBytes);
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
         inbound.Should().NotBeNull();
         inbound.EventId.Should().Be("evt-001");
@@ -77,11 +51,9 @@ public class DeviceEventEndpointsTests
     {
         var bodyBytes = Encoding.UTF8.GetBytes("not valid json {{{");
 
-        var act = () => InvokeParseCallbackPayload(bodyBytes);
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
-        // Reflection wraps the original exception in TargetInvocationException
-        act.Should().Throw<TargetInvocationException>()
-            .WithInnerException<JsonException>();
+        act.Should().Throw<JsonException>();
     }
 
     [Fact]
@@ -94,10 +66,9 @@ public class DeviceEventEndpointsTests
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
 
-        var act = () => InvokeParseCallbackPayload(bodyBytes);
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
-        act.Should().Throw<TargetInvocationException>()
-            .WithInnerException<Exception>();
+        act.Should().Throw<Exception>();
     }
 
     [Fact]
@@ -111,11 +82,10 @@ public class DeviceEventEndpointsTests
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
 
-        var act = () => InvokeParseCallbackPayload(bodyBytes);
+        var act = () => DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
         // Empty string is not valid JSON for inner parsing
-        act.Should().Throw<TargetInvocationException>()
-            .WithInnerException<JsonException>();
+        act.Should().Throw<JsonException>();
     }
 
     [Fact]
@@ -131,7 +101,7 @@ public class DeviceEventEndpointsTests
         });
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
-        var inbound = InvokeParseCallbackPayload(bodyBytes);
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
 
         inbound.EventId.Should().Be("evt-partial");
         inbound.Source.Should().BeEmpty();
@@ -173,7 +143,7 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration(hmacKey);
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = InvokeVerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeTrue();
     }
@@ -188,7 +158,7 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("my-secret-key");
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = InvokeVerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeFalse();
     }
@@ -203,7 +173,7 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("my-secret-key");
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = InvokeVerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeFalse();
     }
@@ -218,7 +188,7 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration(hmacKey: "");
         var options = new DeviceEventOptions { SkipHmacVerification = false };
 
-        var result = InvokeVerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeFalse();
     }
@@ -233,7 +203,7 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("any-key");
         var options = new DeviceEventOptions { SkipHmacVerification = true };
 
-        var result = InvokeVerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeTrue();
     }
@@ -248,7 +218,7 @@ public class DeviceEventEndpointsTests
         var registration = MakeRegistration("secret");
         var options = new DeviceEventOptions { SkipHmacVerification = true };
 
-        var result = InvokeVerifyHmacSignature(context, bodyBytes, registration, options);
+        var result = DeviceEventEndpoints.VerifyHmacSignature(context, bodyBytes, registration, options);
 
         result.Should().BeTrue();
     }

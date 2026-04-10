@@ -1,124 +1,82 @@
+using Aevatar.Foundation.Abstractions.Attributes;
+using Aevatar.Foundation.Core;
+using Aevatar.Foundation.Core.EventSourcing;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
-/// Persistent store for channel bot registrations.
-/// Uses Protobuf file-based storage at ~/.aevatar/channel-registrations.bin.
-/// Thread-safe via lock; suitable for low-frequency config operations.
+/// Actor-backed channel bot registration store.
+/// State is event-sourced and persisted in the cluster event store — no local
+/// filesystem dependency. Suitable for cloud deployment.
+///
+/// Actor ID convention: a single well-known instance "channel-bot-registration-store".
+/// CLAUDE.md: "long-lived actor for fact owners: definition/catalog/manager/index"
 /// </summary>
-public sealed class ChannelBotRegistrationStore
+public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistrationStoreState>
 {
-    private readonly string _filePath;
-    private readonly ILogger<ChannelBotRegistrationStore> _logger;
-    private readonly object _lock = new();
-    private ChannelBotRegistrationStoreState _state;
+    public const string WellKnownId = "channel-bot-registration-store";
 
-    public ChannelBotRegistrationStore(ILogger<ChannelBotRegistrationStore> logger)
-    {
-        _logger = logger;
-        var aevatarDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aevatar");
-        Directory.CreateDirectory(aevatarDir);
-        _filePath = Path.Combine(aevatarDir, "channel-registrations.bin");
-        _state = Load();
-    }
+    protected override ChannelBotRegistrationStoreState TransitionState(ChannelBotRegistrationStoreState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ChannelBotRegisteredEvent>(ApplyRegistered)
+            .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
+            .OrCurrent();
 
-    public ChannelBotRegistrationEntry? Get(string registrationId)
-    {
-        lock (_lock)
-        {
-            return _state.Registrations.FirstOrDefault(r => r.Id == registrationId);
-        }
-    }
+    // ─── Commands ───
 
-    public IReadOnlyList<ChannelBotRegistrationEntry> List()
-    {
-        lock (_lock)
-        {
-            return _state.Registrations.ToList();
-        }
-    }
-
-    public ChannelBotRegistrationEntry Register(
-        string platform,
-        string nyxProviderSlug,
-        string nyxUserToken,
-        string? verificationToken,
-        string? scopeId,
-        string? webhookUrl = null)
+    [EventHandler]
+    public async Task HandleRegister(ChannelBotRegisterCommand cmd)
     {
         var entry = new ChannelBotRegistrationEntry
         {
             Id = Guid.NewGuid().ToString("N"),
-            Platform = platform,
-            NyxProviderSlug = nyxProviderSlug,
-            NyxUserToken = nyxUserToken,
-            VerificationToken = verificationToken ?? string.Empty,
-            ScopeId = scopeId ?? string.Empty,
-            WebhookUrl = webhookUrl ?? string.Empty,
-            CreatedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Platform = cmd.Platform,
+            NyxProviderSlug = cmd.NyxProviderSlug,
+            NyxUserToken = cmd.NyxUserToken,
+            VerificationToken = cmd.VerificationToken,
+            ScopeId = cmd.ScopeId,
+            WebhookUrl = cmd.WebhookUrl,
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
-        lock (_lock)
-        {
-            _state.Registrations.Add(entry);
-            Save();
-        }
-
-        _logger.LogInformation("Registered channel bot: id={Id}, platform={Platform}, slug={Slug}",
-            entry.Id, platform, nyxProviderSlug);
-        return entry;
+        await PersistDomainEventAsync(new ChannelBotRegisteredEvent { Entry = entry });
+        Logger.LogInformation("Registered channel bot: id={Id}, platform={Platform}, slug={Slug}",
+            entry.Id, entry.Platform, entry.NyxProviderSlug);
     }
 
-    public bool Delete(string registrationId)
+    [EventHandler]
+    public async Task HandleUnregister(ChannelBotUnregisterCommand cmd)
     {
-        lock (_lock)
+        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
+        if (!exists)
         {
-            var entry = _state.Registrations.FirstOrDefault(r => r.Id == registrationId);
-            if (entry is null)
-                return false;
-
-            _state.Registrations.Remove(entry);
-            Save();
-
-            _logger.LogInformation("Deleted channel bot registration: id={Id}", registrationId);
-            return true;
+            Logger.LogWarning("Cannot unregister: channel bot registration not found: {Id}", cmd.RegistrationId);
+            return;
         }
+
+        await PersistDomainEventAsync(new ChannelBotUnregisteredEvent { RegistrationId = cmd.RegistrationId });
+        Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
     }
 
-    private ChannelBotRegistrationStoreState Load()
-    {
-        try
-        {
-            if (File.Exists(_filePath))
-            {
-                var bytes = File.ReadAllBytes(_filePath);
-                var state = ChannelBotRegistrationStoreState.Parser.ParseFrom(bytes);
-                _logger.LogInformation("Loaded {Count} channel bot registrations from {Path}",
-                    state.Registrations.Count, _filePath);
-                return state;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to load channel registrations from {Path}, starting fresh", _filePath);
-        }
+    // ─── State transitions ───
 
-        return new ChannelBotRegistrationStoreState();
+    private static ChannelBotRegistrationStoreState ApplyRegistered(ChannelBotRegistrationStoreState current, ChannelBotRegisteredEvent evt)
+    {
+        var next = current.Clone();
+        next.Registrations.Add(evt.Entry);
+        return next;
     }
 
-    private void Save()
+    private static ChannelBotRegistrationStoreState ApplyUnregistered(ChannelBotRegistrationStoreState current, ChannelBotUnregisteredEvent evt)
     {
-        try
-        {
-            var bytes = _state.ToByteArray();
-            File.WriteAllBytes(_filePath, bytes);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to save channel registrations to {Path}", _filePath);
-        }
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (entry is not null)
+            next.Registrations.Remove(entry);
+        return next;
     }
 }

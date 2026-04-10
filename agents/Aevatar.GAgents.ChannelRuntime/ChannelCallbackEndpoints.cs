@@ -29,6 +29,18 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
+    /// Gets or creates the well-known ChannelBotRegistrationGAgent singleton actor.
+    /// Lifecycle: created on first request, never destroyed (long-lived fact owner per CLAUDE.md).
+    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
+    /// CreateAsync calls from multiple requests safely converge to the same grain.
+    /// </summary>
+    private static async Task<IActor> GetOrCreateRegistrationActorAsync(IActorRuntime actorRuntime)
+    {
+        return await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+               ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(ChannelBotRegistrationGAgent.WellKnownId);
+    }
+
+    /// <summary>
     /// Receives a platform webhook callback directly.
     /// 1. Handles verification challenges (returns immediately).
     /// 2. Parses inbound message.
@@ -39,7 +51,7 @@ public static class ChannelCallbackEndpoints
         HttpContext http,
         string platform,
         string registrationId,
-        [FromServices] ChannelBotRegistrationStore registrationStore,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] ILoggerFactory loggerFactory,
@@ -47,8 +59,8 @@ public static class ChannelCallbackEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
 
-        // Resolve registration
-        var registration = registrationStore.Get(registrationId);
+        // Resolve registration from projection read model
+        var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
         {
             logger.LogWarning("Channel callback for unknown registration: {RegistrationId}", registrationId);
@@ -93,7 +105,7 @@ public static class ChannelCallbackEndpoints
 
     /// <summary>
     /// Background task: dispatch inbound message to ChannelUserGAgent.
-    /// The user actor handles the full flow: identity tracking → chat → reply.
+    /// The user actor handles the full flow: identity tracking -> chat -> reply.
     /// </summary>
     private static async Task DispatchToUserActorAsync(
         InboundMessage inbound,
@@ -159,7 +171,7 @@ public static class ChannelCallbackEndpoints
 
     private static async Task<IResult> HandleRegisterAsync(
         HttpContext http,
-        [FromServices] ChannelBotRegistrationStore store,
+        [FromServices] IActorRuntime actorRuntime,
         [FromServices] IEnumerable<IPlatformAdapter> adapters,
         [FromServices] NyxIdApiClient nyxClient,
         [FromServices] ILoggerFactory loggerFactory,
@@ -202,110 +214,89 @@ public static class ChannelCallbackEndpoints
         if (!string.IsNullOrWhiteSpace(request.WebhookBaseUrl))
         {
             var baseUrl = request.WebhookBaseUrl.Trim().TrimEnd('/');
-            // Will be completed with /{registrationId} after registration
             webhookUrl = baseUrl + callbackPath;
         }
 
-        var entry = store.Register(
-            request.Platform.Trim().ToLowerInvariant(),
-            request.NyxProviderSlug.Trim(),
-            request.NyxUserToken.Trim(),
-            request.VerificationToken?.Trim(),
-            request.ScopeId?.Trim(),
-            webhookUrl: webhookUrl != null ? $"{webhookUrl}/{null}" : null);
-
-        // Complete the webhook URL with the registration ID
-        var fullCallbackUrl = $"{callbackPath}/{entry.Id}";
-        if (webhookUrl != null)
+        // Dispatch register command to actor
+        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
+        var cmd = new ChannelBotRegisterCommand
         {
-            var fullWebhookUrl = $"{webhookUrl}/{entry.Id}";
+            Platform = platformNormalized,
+            NyxProviderSlug = request.NyxProviderSlug.Trim(),
+            NyxUserToken = request.NyxUserToken.Trim(),
+            VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
+            ScopeId = request.ScopeId?.Trim() ?? string.Empty,
+            WebhookUrl = webhookUrl != null ? $"{webhookUrl}/{null}" : string.Empty,
+        };
 
-            // Auto-configure platform webhook via NyxID proxy
-            try
-            {
-                await ConfigureWebhookAsync(
-                    entry, fullWebhookUrl, nyxClient, logger, ct);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex,
-                    "Failed to auto-configure webhook for {Platform} registration {Id}. " +
-                    "Webhook can be configured manually later.",
-                    entry.Platform, entry.Id);
-            }
-        }
-
-        return Results.Ok(new
+        var cmdEnvelope = new EventEnvelope
         {
-            id = entry.Id,
-            platform = entry.Platform,
-            nyx_provider_slug = entry.NyxProviderSlug,
-            callback_url = fullCallbackUrl,
-            webhook_url = webhookUrl != null ? $"{webhookUrl}/{entry.Id}" : (string?)null,
-            created_at = entry.CreatedAt.ToDateTimeOffset(),
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(cmd),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        await actor.HandleEventAsync(cmdEnvelope);
+
+        // Command accepted — the projection pipeline will materialize the read model.
+        // Return accepted with the command details (eventual consistency).
+        // Note: registration ID is generated inside the actor; the response reflects
+        // accepted state. Clients should list registrations to get the full entry.
+        return Results.Accepted(value: new
+        {
+            status = "accepted",
+            platform = platformNormalized,
+            nyx_provider_slug = request.NyxProviderSlug.Trim(),
+            callback_url_pattern = $"{callbackPath}/{{registration_id}}",
         });
     }
 
-    private static Task<IResult> HandleListRegistrationsAsync(
-        [FromServices] ChannelBotRegistrationStore store)
+    private static async Task<IResult> HandleListRegistrationsAsync(
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        CancellationToken ct)
     {
-        var registrations = store.List().Select(e => new
+        var registrations = await queryPort.ListAsync(ct);
+        var result = registrations.Select(e => new
         {
             id = e.Id,
             platform = e.Platform,
             nyx_provider_slug = e.NyxProviderSlug,
             scope_id = e.ScopeId,
             callback_url = $"/api/channels/{e.Platform}/callback/{e.Id}",
-            created_at = e.CreatedAt.ToDateTimeOffset(),
         });
 
-        return Task.FromResult(Results.Ok(registrations));
+        return Results.Ok(result);
     }
 
-    private static Task<IResult> HandleDeleteRegistrationAsync(
+    private static async Task<IResult> HandleDeleteRegistrationAsync(
         string registrationId,
-        [FromServices] ChannelBotRegistrationStore store)
-    {
-        var deleted = store.Delete(registrationId);
-        return Task.FromResult(deleted
-            ? Results.Ok(new { status = "deleted" })
-            : Results.NotFound(new { error = "Registration not found" }));
-    }
-
-    /// <summary>
-    /// Auto-configure platform webhook via NyxID proxy.
-    /// For Telegram: calls setWebhook to register the callback URL.
-    /// </summary>
-    private static async Task ConfigureWebhookAsync(
-        ChannelBotRegistrationEntry entry,
-        string webhookUrl,
-        NyxIdApiClient nyxClient,
-        ILogger logger,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
-        if (string.Equals(entry.Platform, "telegram", StringComparison.OrdinalIgnoreCase))
-        {
-            // Call Telegram Bot API setWebhook via NyxID proxy.
-            // NyxID proxy auto-prepends "bot<TOKEN>/" so we pass the bare method name.
-            var body = JsonSerializer.Serialize(new { url = webhookUrl });
-            var result = await nyxClient.ProxyRequestAsync(
-                entry.NyxUserToken,
-                entry.NyxProviderSlug,
-                "setWebhook",
-                "POST",
-                body,
-                extraHeaders: null,
-                ct);
+        var exists = await queryPort.GetAsync(registrationId, ct);
+        if (exists is null)
+            return Results.NotFound(new { error = "Registration not found" });
 
-            logger.LogInformation(
-                "Telegram setWebhook configured: registration={Id}, url={Url}, result={Result}",
-                entry.Id, webhookUrl, result?.Length > 200 ? result[..200] : result);
-        }
-        else
+        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
+        var cmd = new ChannelBotUnregisterCommand { RegistrationId = registrationId };
+        var cmdEnvelope = new EventEnvelope
         {
-            logger.LogDebug(
-                "No auto-webhook configuration for platform {Platform}", entry.Platform);
-        }
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(cmd),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        await actor.HandleEventAsync(cmdEnvelope);
+        return Results.Ok(new { status = "deleted" });
     }
 
     private sealed record RegistrationRequest(

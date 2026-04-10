@@ -43,8 +43,8 @@ public static class DeviceEventEndpoints
     /// 1. Lookup registration from projection read model.
     /// 2. HMAC verification (configurable).
     /// 3. Parse CallbackPayload → DeviceInbound.
-    /// 4. Fire-and-forget dispatch to HouseholdEntity actor with retry.
-    /// 5. Return 202 Accepted.
+    /// 4. Synchronous dispatch to HouseholdEntity actor.
+    /// 5. Return 202 Accepted (or 502 on dispatch failure — NyxID retries at transport level).
     /// </summary>
     private static async Task<IResult> HandleDeviceCallbackAsync(
         HttpContext http,
@@ -97,13 +97,27 @@ public static class DeviceEventEndpoints
         // Resolve HouseholdEntity actor
         var householdActorId = $"household-{registration.ScopeId}";
 
-        // Fire-and-forget dispatch with retry
-        _ = Task.Run(() => DispatchToHouseholdAsync(
-            inbound, householdActorId, actorRuntime, loggerFactory));
+        // Synchronous dispatch — failure returns 502 so NyxID retries at transport level
+        try
+        {
+            await DispatchToHouseholdAsync(inbound, householdActorId, actorRuntime, loggerFactory);
+        }
+        catch (Exception ex)
+        {
+            var logger2 = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.DeviceEvent");
+            logger2.LogError(ex, "Device event dispatch failed: event_id={EventId}", inbound.EventId);
+            return Results.StatusCode(502);
+        }
 
         return Results.Accepted();
     }
 
+    /// <summary>
+    /// Gets or creates the well-known DeviceRegistrationGAgent singleton actor.
+    /// Lifecycle: created on first request, never destroyed (long-lived fact owner per CLAUDE.md).
+    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
+    /// CreateAsync calls from multiple requests safely converge to the same grain.
+    /// </summary>
     private static async Task<IActor> GetOrCreateRegistrationActorAsync(IActorRuntime actorRuntime)
     {
         return await actorRuntime.GetAsync(DeviceRegistrationGAgent.WellKnownId)
@@ -178,7 +192,12 @@ public static class DeviceEventEndpoints
     }
 
     /// <summary>
-    /// Background dispatch to HouseholdEntity actor with retry (2 retries on failure).
+    /// Dispatches a device event to the HouseholdEntity actor (single attempt).
+    /// On failure the caller returns 502, allowing NyxID to retry at transport level.
+    /// Lifecycle: the household actor is created on first request for a given scope,
+    /// never destroyed (long-lived fact owner per CLAUDE.md).
+    /// Thread safety: Orleans grain runtime guarantees single-activation, so concurrent
+    /// CreateAsync calls from multiple requests safely converge to the same grain.
     /// </summary>
     private static async Task DispatchToHouseholdAsync(
         DeviceInbound inbound,
@@ -187,43 +206,26 @@ public static class DeviceEventEndpoints
         ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.DeviceEvent");
-        const int maxRetries = 2;
 
-        for (var attempt = 0; attempt <= maxRetries; attempt++)
+        var actor = await actorRuntime.GetAsync(householdActorId)
+                    ?? await actorRuntime.CreateAsync<HouseholdEntity>(householdActorId);
+
+        var envelope = new EventEnvelope
         {
-            try
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(inbound),
+            Route = new EnvelopeRoute
             {
-                var actor = await actorRuntime.GetAsync(householdActorId)
-                            ?? await actorRuntime.CreateAsync<HouseholdEntity>(householdActorId);
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
 
-                var envelope = new EventEnvelope
-                {
-                    Id = Guid.NewGuid().ToString("N"),
-                    Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                    Payload = Any.Pack(inbound),
-                    Route = new EnvelopeRoute
-                    {
-                        Direct = new DirectRoute { TargetActorId = actor.Id },
-                    },
-                };
+        await actor.HandleEventAsync(envelope);
 
-                await actor.HandleEventAsync(envelope);
-
-                logger.LogInformation(
-                    "Device event dispatched: event_id={EventId}, target={HouseholdActorId}",
-                    inbound.EventId, householdActorId);
-                return;
-            }
-            catch (Exception ex)
-            {
-                if (attempt >= maxRetries)
-                {
-                    logger.LogError(ex,
-                        "Device event dispatch failed: event_id={EventId}, error={Error}",
-                        inbound.EventId, ex.Message);
-                }
-            }
-        }
+        logger.LogInformation(
+            "Device event dispatched: event_id={EventId}, target={HouseholdActorId}",
+            inbound.EventId, householdActorId);
     }
 
     // ─── Registration CRUD ───
