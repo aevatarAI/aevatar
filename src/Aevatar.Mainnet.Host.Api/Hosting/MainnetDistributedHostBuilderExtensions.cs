@@ -20,9 +20,12 @@ public static class MainnetDistributedHostBuilderExtensions
             optional: true,
             reloadOnChange: false);
 
-        // Re-add environment variables so they can override Distributed.json values.
-        // Without this, Distributed.json (loaded after CreateBuilder's default sources)
-        // would silently shadow environment variable overrides.
+        // Re-add environment variables so they take precedence over Distributed.json.
+        // CreateBuilder and AddAevatarConfig register env var sources before this method,
+        // but Distributed.json (loaded above) would shadow them without this re-add.
+        // Both prefixed (AEVATAR_ActorRuntime__*, AEVATAR_Orleans__*) and bare
+        // (Projection__*, ASPNETCORE_ENVIRONMENT) are used by CI/cluster scripts.
+        builder.Configuration.AddEnvironmentVariables("AEVATAR_");
         builder.Configuration.AddEnvironmentVariables();
 
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
