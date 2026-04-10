@@ -55,8 +55,7 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdNotificationsTool(_client),
             new NyxIdLlmStatusTool(_client),
             new NyxIdProvidersTool(_client),
-            // NyxIdChannelBotsTool removed — NyxID channel mode deprecated per #191.
-            // Channel bot registration now handled by Aevatar's channel_registrations tool.
+            new NyxIdChannelBotsDeprecatedStub(),
         ];
 
         _logger.LogInformation(
