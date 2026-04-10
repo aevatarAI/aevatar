@@ -64,7 +64,7 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task DeviceQueryPort_ListAsync_ReturnsMappedEntries()
+    public async Task DeviceQueryPort_QueryAllAsync_ReturnsMappedEntries()
     {
         var reader = Substitute.For<IProjectionDocumentReader<DeviceRegistrationDocument, string>>();
         reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
@@ -86,7 +86,7 @@ public sealed class RegistrationQueryPortTests
             }));
 
         var queryPort = new DeviceRegistrationQueryPort(reader);
-        var result = await queryPort.ListAsync();
+        var result = await queryPort.QueryAllAsync();
 
         result.Should().HaveCount(2);
         result[0].Id.Should().Be("reg-1");
@@ -94,14 +94,14 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task DeviceQueryPort_ListAsync_ReturnsEmpty_WhenNoDocuments()
+    public async Task DeviceQueryPort_QueryAllAsync_ReturnsEmpty_WhenNoDocuments()
     {
         var reader = Substitute.For<IProjectionDocumentReader<DeviceRegistrationDocument, string>>();
         reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(ProjectionDocumentQueryResult<DeviceRegistrationDocument>.Empty));
 
         var queryPort = new DeviceRegistrationQueryPort(reader);
-        var result = await queryPort.ListAsync();
+        var result = await queryPort.QueryAllAsync();
 
         result.Should().BeEmpty();
     }
@@ -166,7 +166,7 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task BotQueryPort_ListAsync_ReturnsMappedEntries()
+    public async Task BotQueryPort_QueryAllAsync_ReturnsMappedEntries()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
         reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
@@ -188,7 +188,7 @@ public sealed class RegistrationQueryPortTests
             }));
 
         var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.ListAsync();
+        var result = await queryPort.QueryAllAsync();
 
         result.Should().HaveCount(2);
         result[0].Id.Should().Be("bot-1");
@@ -198,14 +198,14 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
-    public async Task BotQueryPort_ListAsync_ReturnsEmpty_WhenNoDocuments()
+    public async Task BotQueryPort_QueryAllAsync_ReturnsEmpty_WhenNoDocuments()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
         reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>.Empty));
 
         var queryPort = new ChannelBotRegistrationQueryPort(reader);
-        var result = await queryPort.ListAsync();
+        var result = await queryPort.QueryAllAsync();
 
         result.Should().BeEmpty();
     }

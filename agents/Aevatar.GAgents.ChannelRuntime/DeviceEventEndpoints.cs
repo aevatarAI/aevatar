@@ -302,7 +302,7 @@ public static class DeviceEventEndpoints
         [FromServices] IDeviceRegistrationQueryPort queryPort,
         CancellationToken ct)
     {
-        var registrations = await queryPort.ListAsync(ct);
+        var registrations = await queryPort.QueryAllAsync(ct);
         var result = registrations.Select(e => new
         {
             id = e.Id,

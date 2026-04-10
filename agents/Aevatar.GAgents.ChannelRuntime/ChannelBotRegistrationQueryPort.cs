@@ -21,7 +21,7 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
         return document == null ? null : ToEntry(document);
     }
 
-    public async Task<IReadOnlyList<ChannelBotRegistrationEntry>> ListAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<ChannelBotRegistrationEntry>> QueryAllAsync(CancellationToken ct = default)
     {
         var result = await _documentReader.QueryAsync(
             new ProjectionDocumentQuery { Take = 1000 },

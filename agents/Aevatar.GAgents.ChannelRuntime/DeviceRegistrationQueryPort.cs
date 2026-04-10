@@ -21,7 +21,7 @@ public sealed class DeviceRegistrationQueryPort : IDeviceRegistrationQueryPort
         return document == null ? null : ToEntry(document);
     }
 
-    public async Task<IReadOnlyList<DeviceRegistrationEntry>> ListAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<DeviceRegistrationEntry>> QueryAllAsync(CancellationToken ct = default)
     {
         var result = await _documentReader.QueryAsync(
             new ProjectionDocumentQuery { Take = 1000 },
