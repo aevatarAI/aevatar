@@ -101,9 +101,9 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
 
             state.Parents[evt.StepId] = parentState;
 
-            if (state.Backpressure.MaxConcurrentWorkers == 0)
-                state.Backpressure = BackpressureHelper.Initialize(
-                    BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
+            state.Backpressure = BackpressureHelper.EnsureInitialized(
+                state.Backpressure,
+                BackpressureHelper.ResolveMaxConcurrent(evt.Parameters));
 
             var inputPreview = evt.Input.Length > 150 ? evt.Input[..150] + "..." : evt.Input;
             ctx.Logger.LogInformation("ParallelFanOut: step={StepId} fanout to {Count} workers, vote={VoteType}, input=({Len} chars) {Preview}",
@@ -180,6 +180,9 @@ public sealed class ParallelFanOutModule : IEventModule<IWorkflowExecutionContex
             parentState.CollectedStepIds.Add(evt.StepId);
             parentState.Collected.Add(evt.ToParallelItemResult());
             state.Parents[parent] = parentState;
+            state.Backpressure = BackpressureHelper.EnsureInitialized(
+                state.Backpressure,
+                BackpressureHelper.DefaultMaxConcurrentWorkers);
             var drained = BackpressureHelper.TryDrainOne(state.Backpressure);
             ctx.Logger.LogInformation("ParallelFanOut: collected {StepId} ({Count}/{Expected})",
                 evt.StepId, parentState.Collected.Count, parentState.Expected);

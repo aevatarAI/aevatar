@@ -85,4 +85,13 @@ internal static class BackpressureHelper
     /// <summary>Initializes backpressure state with the resolved max concurrency.</summary>
     public static BackpressureQueueState Initialize(int maxConcurrent) =>
         new() { MaxConcurrentWorkers = maxConcurrent };
+
+    /// <summary>
+    /// Ensures a usable backpressure state exists. Proto message fields may be null on older
+    /// persisted state or on paths that complete before the admission path initialized them.
+    /// </summary>
+    public static BackpressureQueueState EnsureInitialized(BackpressureQueueState? current, int maxConcurrent) =>
+        current != null && current.MaxConcurrentWorkers > 0
+            ? current
+            : Initialize(maxConcurrent);
 }
