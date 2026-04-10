@@ -104,38 +104,44 @@ If user asks to connect a service and you don't know the slug, browse with `nyxi
 
 ## Channel Bot Setup (Multi-Platform)
 
-Complete all 3 steps in one conversation using tools — do NOT ask the user to go to the dashboard:
+Aevatar owns the channel runtime. Webhooks go directly to Aevatar, NOT through NyxID.
+NyxID only stores bot credentials and proxies outbound API calls (api-lark-bot, api-telegram-bot).
 
-### Step 1: Register bot
+**IMPORTANT:** Do NOT use `nyxid_channel_bots` — that is deprecated. Use `channel_registrations` instead.
 
-**Telegram** (user gives BotFather token):
-`nyxid_channel_bots action=register platform=telegram bot_token=<token> label="My Bot"`
+### Step 1: Ensure NyxID has the bot's outbound service
 
-**Lark / Feishu** (user gives app credentials from Developer Console):
-`nyxid_channel_bots action=register platform=lark app_id=<app_id> app_secret=<app_secret> label="My Lark Bot"`
+The user needs an `api-lark-bot` (or `api-telegram-bot`) service in NyxID for outbound replies:
+`nyxid_services action=list` → check if the service exists
+If not: `nyxid_catalog action=list` → find the slug → guide user to add it
 
-**Discord** (user gives bot token + public key from Developer Portal):
-`nyxid_channel_bots action=register platform=discord bot_token=<token> public_key=<ed25519_hex> label="My Discord Bot"`
+### Step 2: Register channel bot in Aevatar
 
-→ All return `id` (this is the bot_id). Extra credential fields are passed through to the NyxID server which validates platform-specific requirements.
+`channel_registrations action=register platform=lark nyx_provider_slug=api-lark-bot`
 
-For Discord/Lark/Feishu: tell the user to set the webhook URL in the platform's developer console:
-`https://<nyxid-server>/api/v1/webhooks/channel/<platform>/<bot-id>`
+For **Lark/Feishu**, also ask for the Verification Token from Lark developer console (事件与回调 → 加密策略):
+`channel_registrations action=register platform=lark nyx_provider_slug=api-lark-bot verification_token=<token>`
 
-### Step 2: Create API key with callback_url
+For **Telegram**:
+`channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
 
-`nyxid_api_keys action=create name="<platform>-relay" scopes="read write proxy" callback_url=<relay_url_from_config>`
-→ returns `id` (this is the api_key_id)
+→ Returns the registration ID and the callback URL.
 
-### Step 3: Create default route
+### Step 3: Configure platform webhook
 
-`nyxid_channel_bots action=create_route channel_bot_id=<bot_id> agent_api_key_id=<api_key_id> default_agent=true`
+Tell the user to set the webhook URL in their platform's developer console:
 
-### Managing routes
+**Lark/Feishu:** 开发者后台 → 事件与回调 → 事件配置 → 请求地址:
+`https://aevatar-console-backend-api.aevatar.ai/api/channels/lark/callback/<registration_id>`
 
-- List routes: `nyxid_channel_bots action=routes channel_bot_id=<bot_id>`
-- Update route agent: `nyxid_channel_bots action=update_route id=<route_id> agent_api_key_id=<new_key>`
-- Delete route: `nyxid_channel_bots action=delete_route id=<route_id>`
+Also add event: `im.message.receive_v1`
+
+**Telegram:** Use setWebhook (channel_registrations auto-configures this if webhook_base_url is provided)
+
+### Managing registrations
+
+- List: `channel_registrations action=list`
+- Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
 
 ## Notifications & Approvals
 
