@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.GAgents.ChannelRuntime;
@@ -95,12 +96,55 @@ public static class ChannelCallbackEndpoints
             return Results.Ok(new { status = "ignored" });
         }
 
-        // Return 200 OK immediately — process async in background.
-        // Platforms like Lark have ~3s webhook timeout; we can't wait for LLM response.
-        _ = Task.Run(() => DispatchToUserActorAsync(
-            inbound, registration, actorRuntime, loggerFactory));
+        // Dedup: Lark retries up to 5x for unacknowledged webhooks.
+        // Two-phase TTL: set short TTL (10s) immediately to block concurrent duplicates,
+        // then extend to 5 minutes after successful dispatch. If dispatch fails, the
+        // short TTL expires naturally so Lark's next retry (~30s later) gets processed.
+        // Note: volatile — dedup state lost on restart. Phase 2 migrates to durable dedup.
+        var cache = http.RequestServices.GetService<IMemoryCache>();
+        string? dedupeKey = null;
+        if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
+        {
+            dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
+            if (cache.TryGetValue(dedupeKey, out _))
+            {
+                logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
+                return Results.Accepted(value: new { status = "deduplicated" });
+            }
 
-        return Results.Ok(new { status = "accepted" });
+            // Short TTL blocks concurrent duplicates; extended after successful dispatch.
+            cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
+        }
+
+        // Return 202 Accepted immediately — process async in background.
+        // Platforms like Lark have ~5s webhook timeout; we can't wait for LLM response.
+        // Note: Task.Run is a Phase 1 pragmatic compromise. Phase 2 refactors to actor
+        // self-message dispatch to comply with CLAUDE.md actor execution model.
+        _ = Task.Run(async () =>
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            try
+            {
+                await DispatchToUserActorAsync(
+                    inbound, registration, actorRuntime, cache, loggerFactory, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                var bgLogger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
+                bgLogger.LogWarning(
+                    "Channel inbound dispatch timed out: platform={Platform}, registrationId={RegistrationId}",
+                    inbound.Platform, registration.Id);
+            }
+            catch (Exception ex)
+            {
+                var bgLogger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
+                bgLogger.LogError(ex,
+                    "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
+                    inbound.Platform, registration.Id);
+            }
+        });
+
+        return Results.Accepted(value: new { status = "accepted" });
     }
 
     /// <summary>
@@ -111,55 +155,56 @@ public static class ChannelCallbackEndpoints
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         IActorRuntime actorRuntime,
-        ILoggerFactory loggerFactory)
+        IMemoryCache? cache,
+        ILoggerFactory loggerFactory,
+        CancellationToken ct = default)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
 
-        try
+        // Per-sender user actor — owns identity state and orchestrates chat + reply
+        var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
+        var userActor = await actorRuntime.GetAsync(userActorId)
+                        ?? await actorRuntime.CreateAsync<ChannelUserGAgent>(userActorId);
+
+        var inboundEvent = new ChannelInboundEvent
         {
-            // Per-sender user actor — owns identity state and orchestrates chat + reply
-            var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
-            var userActor = await actorRuntime.GetAsync(userActorId)
-                            ?? await actorRuntime.CreateAsync<ChannelUserGAgent>(userActorId);
+            Text = inbound.Text,
+            SenderId = inbound.SenderId,
+            SenderName = inbound.SenderName,
+            ConversationId = inbound.ConversationId,
+            MessageId = inbound.MessageId ?? string.Empty,
+            ChatType = inbound.ChatType ?? string.Empty,
+            Platform = inbound.Platform,
+            RegistrationId = registration.Id,
+            RegistrationToken = registration.NyxUserToken,
+            RegistrationScopeId = registration.ScopeId,
+            NyxProviderSlug = registration.NyxProviderSlug,
+        };
 
-            var inboundEvent = new ChannelInboundEvent
-            {
-                Text = inbound.Text,
-                SenderId = inbound.SenderId,
-                SenderName = inbound.SenderName,
-                ConversationId = inbound.ConversationId,
-                MessageId = inbound.MessageId ?? string.Empty,
-                ChatType = inbound.ChatType ?? string.Empty,
-                Platform = inbound.Platform,
-                RegistrationId = registration.Id,
-                RegistrationToken = registration.NyxUserToken,
-                RegistrationScopeId = registration.ScopeId,
-                NyxProviderSlug = registration.NyxProviderSlug,
-            };
-
-            var envelope = new EventEnvelope
-            {
-                Id = Guid.NewGuid().ToString("N"),
-                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-                Payload = Google.Protobuf.WellKnownTypes.Any.Pack(inboundEvent),
-                Route = new EnvelopeRoute
-                {
-                    Direct = new DirectRoute { TargetActorId = userActor.Id },
-                },
-            };
-
-            await userActor.HandleEventAsync(envelope);
-
-            logger.LogInformation(
-                "Channel inbound dispatched: platform={Platform}, sender={SenderId}",
-                inbound.Platform, inbound.SenderId);
-        }
-        catch (Exception ex)
+        var envelope = new EventEnvelope
         {
-            logger.LogError(ex,
-                "Channel callback dispatch failed: platform={Platform}, sender={SenderId}",
-                inbound.Platform, inbound.SenderId);
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(inboundEvent),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = userActor.Id },
+            },
+        };
+
+        await userActor.HandleEventAsync(envelope);
+
+        // Set dedup AFTER successful dispatch — if dispatch threw, no entry is set,
+        // so Lark retries will be processed instead of silently dropped.
+        if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
+        {
+            var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
+            cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
         }
+
+        logger.LogInformation(
+            "Channel inbound dispatched: platform={Platform}, sender={SenderId}",
+            inbound.Platform, inbound.SenderId);
     }
 
     // ─── Registration CRUD ───
@@ -226,7 +271,7 @@ public static class ChannelCallbackEndpoints
             NyxUserToken = request.NyxUserToken.Trim(),
             VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
-            WebhookUrl = webhookUrl != null ? $"{webhookUrl}/{null}" : string.Empty,
+            WebhookUrl = webhookUrl ?? string.Empty,
         };
 
         var cmdEnvelope = new EventEnvelope

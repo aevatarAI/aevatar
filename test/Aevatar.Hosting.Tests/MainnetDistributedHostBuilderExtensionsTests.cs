@@ -16,17 +16,21 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
     [Fact]
     public void AddMainnetDistributedOrleansHost_WhenKafkaProviderConfigured_ShouldRegisterKafkaTransport()
     {
+        // Use env vars for values that must survive Distributed.json loading.
+        // appsettings.Distributed.json is copied to the test output directory
+        // by the build and would override in-memory collection values.
+        using var streamBackend = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansStreamBackend", "KafkaProvider");
+        using var persistence = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansPersistenceBackend", "Garnet");
+        using var garnetConn = new EnvironmentVariableScope("AEVATAR_ActorRuntime__OrleansGarnetConnectionString", "127.0.0.1:6379");
+        using var kafkaServers = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaBootstrapServers", "localhost:19092");
+        using var topicName = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaTopicName", "mainnet-kafka-provider-events");
+        using var consumerGroup = new EnvironmentVariableScope("AEVATAR_ActorRuntime__KafkaConsumerGroup", "mainnet-kafka-provider-group");
+        using var queueCount = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCount", "6");
+        using var queueCacheSize = new EnvironmentVariableScope("AEVATAR_Orleans__QueueCacheSize", "512");
+
         var builder = CreateBuilder(new Dictionary<string, string?>
         {
             ["ActorRuntime:Provider"] = "Orleans",
-            ["ActorRuntime:OrleansStreamBackend"] = "KafkaProvider",
-            ["ActorRuntime:OrleansPersistenceBackend"] = "Garnet",
-            ["ActorRuntime:OrleansGarnetConnectionString"] = "127.0.0.1:6379",
-            ["ActorRuntime:KafkaBootstrapServers"] = "localhost:19092",
-            ["ActorRuntime:KafkaTopicName"] = "mainnet-kafka-provider-events",
-            ["ActorRuntime:KafkaConsumerGroup"] = "mainnet-kafka-provider-group",
-            ["Orleans:QueueCount"] = "6",
-            ["Orleans:QueueCacheSize"] = "512",
         });
 
         builder.AddAevatarDefaultHost();
@@ -61,16 +65,23 @@ public sealed class MainnetDistributedHostBuilderExtensionsTests
         });
 
         // Set env vars that should override the above after AddMainnetDistributedOrleansHost.
-        using var prefixed = new EnvironmentVariableScope(
+        // Both stream and persistence must be InMemory together to pass validation.
+        using var prefixedStream = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__OrleansStreamBackend", "InMemory");
+        using var prefixedPersistence = new EnvironmentVariableScope(
             "AEVATAR_ActorRuntime__OrleansPersistenceBackend", "InMemory");
+        using var prefixedRuntimeEnv = new EnvironmentVariableScope(
+            "AEVATAR_ActorRuntime__Policies__Environment", "Development");
         using var bare = new EnvironmentVariableScope(
             "Projection__Policies__Environment", "Development");
 
         builder.AddAevatarDefaultHost();
         builder.AddMainnetDistributedOrleansHost();
 
-        // AEVATAR_ prefixed env var should win.
+        // AEVATAR_ prefixed env vars should win.
         builder.Configuration["ActorRuntime:OrleansPersistenceBackend"]
+            .Should().Be("InMemory", "AEVATAR_ prefixed env vars must override Distributed.json");
+        builder.Configuration["ActorRuntime:OrleansStreamBackend"]
             .Should().Be("InMemory", "AEVATAR_ prefixed env vars must override Distributed.json");
 
         // Bare env var should win.

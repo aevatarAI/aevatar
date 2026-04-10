@@ -497,3 +497,8 @@ docs/agents-working-space/*
 
 # Docs triage working directory
 docs/.triage/
+
+# MemPalace
+mempalace.yaml
+entities.json
+.mempalace/

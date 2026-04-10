@@ -79,12 +79,12 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken;
         chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = orgToken;
         chatRequest.Metadata["scope_id"] = evt.RegistrationScopeId;
-        chatRequest.Metadata["channel.platform"] = evt.Platform;
-        chatRequest.Metadata["channel.sender_id"] = evt.SenderId;
-        chatRequest.Metadata["channel.sender_name"] = evt.SenderName;
-        chatRequest.Metadata["channel.message_id"] = evt.MessageId;
-        chatRequest.Metadata["channel.chat_type"] = evt.ChatType;
-        chatRequest.Metadata["channel.user_actor_id"] = Id;
+        chatRequest.Metadata[ChannelMetadataKeys.Platform] = evt.Platform;
+        chatRequest.Metadata[ChannelMetadataKeys.SenderId] = evt.SenderId;
+        chatRequest.Metadata[ChannelMetadataKeys.SenderName] = evt.SenderName;
+        chatRequest.Metadata[ChannelMetadataKeys.MessageId] = evt.MessageId;
+        chatRequest.Metadata[ChannelMetadataKeys.ChatType] = evt.ChatType;
+        chatRequest.Metadata[ChannelMetadataKeys.UserActorId] = Id;
 
         // Subscribe to response stream and wait
         var replyText = await CollectChatResponseAsync(chatActor, chatRequest, sessionId);
