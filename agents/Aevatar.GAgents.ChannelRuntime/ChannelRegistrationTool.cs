@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -13,15 +14,17 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class ChannelRegistrationTool : IAgentTool
 {
-    private readonly IChannelBotRegistrationQueryPort _queryPort;
-    private readonly IActorRuntime _actorRuntime;
+    private readonly IServiceProvider _serviceProvider;
 
-    public ChannelRegistrationTool(
-        IChannelBotRegistrationQueryPort queryPort,
-        IActorRuntime actorRuntime)
+    /// <summary>
+    /// Constructor takes IServiceProvider only. Dependencies (IChannelBotRegistrationQueryPort,
+    /// IActorRuntime) are resolved lazily in ExecuteAsync — at call time the Orleans silo is
+    /// fully started and all services are available. This avoids construction-time DI failures
+    /// when the tool is instantiated during grain activation.
+    /// </summary>
+    public ChannelRegistrationTool(IServiceProvider serviceProvider)
     {
-        _queryPort = queryPort;
-        _actorRuntime = actorRuntime;
+        _serviceProvider = serviceProvider;
     }
 
     public string Name => "channel_registrations";
@@ -79,25 +82,31 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
+        // Lazy resolve at call time — silo is fully started, all services available
+        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
+        if (queryPort is null || actorRuntime is null)
+            return """{"error":"Channel runtime not available. IChannelBotRegistrationQueryPort or IActorRuntime not registered in DI."}""";
+
         using var doc = JsonDocument.Parse(argumentsJson);
         var root = doc.RootElement;
         var action = GetStr(root, "action") ?? "list";
 
         return action switch
         {
-            "list" => await ListAsync(ct),
-            "register" => await RegisterAsync(token, root, ct),
-            "delete" => await DeleteAsync(root, ct),
-            _ => await ListAsync(ct),
+            "list" => await ListAsync(queryPort, ct),
+            "register" => await RegisterAsync(queryPort, actorRuntime, token, root, ct),
+            "delete" => await DeleteAsync(queryPort, actorRuntime, root, ct),
+            _ => await ListAsync(queryPort, ct),
         };
     }
 
     private static string? GetStr(JsonElement el, string prop) =>
         el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
-    private async Task<string> ListAsync(CancellationToken ct)
+    private async Task<string> ListAsync(IChannelBotRegistrationQueryPort queryPort, CancellationToken ct)
     {
-        var registrations = await _queryPort.QueryAllAsync(ct);
+        var registrations = await queryPort.QueryAllAsync(ct);
         var result = registrations.Select(e => new
         {
             id = e.Id,
@@ -112,7 +121,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower });
     }
 
-    private async Task<string> RegisterAsync(string token, JsonElement args, CancellationToken ct)
+    private async Task<string> RegisterAsync(
+        IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
+        string token, JsonElement args, CancellationToken ct)
     {
         var platform = GetStr(args, "platform");
         if (string.IsNullOrWhiteSpace(platform))
@@ -128,11 +139,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
             ? webhookBaseUrl.TrimEnd('/') + callbackPath
             : string.Empty;
 
-        // Snapshot existing IDs before dispatch so we can identify the NEW entry after.
-        var existingIds = (await _queryPort.QueryAllAsync(ct)).Select(e => e.Id).ToHashSet();
+        var existingIds = (await queryPort.QueryAllAsync(ct)).Select(e => e.Id).ToHashSet();
 
-        var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-                    ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
+        var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+                    ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);
 
         var cmd = new ChannelBotRegisterCommand
@@ -164,7 +174,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         for (var attempt = 0; attempt < 5; attempt++)
         {
             await Task.Delay(500, ct);
-            var all = await _queryPort.QueryAllAsync(ct);
+            var all = await queryPort.QueryAllAsync(ct);
             var newEntry = all.FirstOrDefault(e => !existingIds.Contains(e.Id));
             if (newEntry != null)
             {
@@ -196,17 +206,18 @@ public sealed class ChannelRegistrationTool : IAgentTool
         });
     }
 
-    private async Task<string> DeleteAsync(JsonElement args, CancellationToken ct)
+    private async Task<string> DeleteAsync(
+        IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
+        JsonElement args, CancellationToken ct)
     {
         var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
         if (string.IsNullOrWhiteSpace(registrationId))
             return """{"error":"'registration_id' is required for delete"}""";
 
-        var exists = await _queryPort.GetAsync(registrationId, ct);
+        var exists = await queryPort.GetAsync(registrationId, ct);
         if (exists is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
 
-        // Require explicit confirm=true. First call without confirm shows details for user review.
         var confirm = args.TryGetProperty("confirm", out var cv) && cv.ValueKind == JsonValueKind.True;
         if (!confirm)
         {
@@ -221,8 +232,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
             });
         }
 
-        var actor = await _actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
-                    ?? await _actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
+        var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+                    ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);
 
         var cmd = new ChannelBotUnregisterCommand { RegistrationId = registrationId };

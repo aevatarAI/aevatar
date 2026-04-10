@@ -1,14 +1,13 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
 /// Tool source that exposes channel_registrations tool to NyxIdChatGAgent.
-/// Uses IServiceProvider for lazy resolution to avoid DI failures during
-/// Orleans grain activation (IActorRuntime may not be available at singleton
-/// construction time).
+/// Only depends on IServiceProvider — the tool itself lazy-resolves its
+/// dependencies (IActorRuntime, IChannelBotRegistrationQueryPort) at call
+/// time in ExecuteAsync, not at construction time. This avoids DI failures
+/// during Orleans grain activation when services may not yet be available.
 /// </summary>
 public sealed class ChannelRegistrationToolSource : IAgentToolSource
 {
@@ -21,13 +20,7 @@ public sealed class ChannelRegistrationToolSource : IAgentToolSource
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        var queryPort = _serviceProvider.GetService<IChannelBotRegistrationQueryPort>();
-        var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
-
-        if (queryPort is null || actorRuntime is null)
-            return Task.FromResult<IReadOnlyList<IAgentTool>>([]);
-
-        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(queryPort, actorRuntime)];
+        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(_serviceProvider)];
         return Task.FromResult(tools);
     }
 }

@@ -61,8 +61,11 @@ public static class ServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, TelegramPlatformAdapter>());
 
-        // channel_registrations tool is discovered via NyxIdAgentToolSource (reflection-based
-        // lazy resolution) to avoid DI scope issues with IActorRuntime in grain context.
+        // channel_registrations tool — the tool itself lazy-resolves IActorRuntime and
+        // IChannelBotRegistrationQueryPort at ExecuteAsync time, not construction time.
+        // This avoids DI failures during Orleans grain activation.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, ChannelRegistrationToolSource>());
 
         return services;
     }
