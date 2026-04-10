@@ -1,6 +1,6 @@
 ---
 name: arch-audit
-description: Use when auditing architecture compliance against CLAUDE.md, checking for drift before milestones, validating code health after large merges, or running periodic architecture checks. Triggers on "架构审计", "architecture audit", "check drift", "code health".
+description: Use when auditing architecture compliance against CLAUDE.md, checking for drift before milestones, validating architecture drift after large merges, or running periodic architecture checks. Triggers on "架构审计", "architecture audit", "architecture drift".
 ---
 
 # Architecture Audit

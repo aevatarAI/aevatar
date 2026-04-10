@@ -20,7 +20,7 @@ Reviewed by: arch-audit skill, 5 parallel exploration agents
 
 | Dimension | Score | Summary |
 |-----------|-------|---------|
-| CI Guards 合规 | 8/10 | 全通过，但 agents/+apps/ 不在扫描范围；3 条规则未自动化 |
+| CI Guards 合规 | 8/10 | 全通过，但 agents/+apps/ 不在扫描范围；部分 guard 仍依赖硬编码扫描根 |
 | 分层合规 | 6/10 | Application 层干净；Host 层 ScopeServiceEndpoints 是 God Class，直达 Infrastructure |
 | 投影一致性 | 4/10 | Host 层 6+ 处直接订阅 EventEnvelope + TCS 阻塞，完全绕过 Projection Pipeline |
 | 读写分离 | 8/10 | Application 层 Query 全部 CLEAN；Host 层投影 bypass 是唯一破口 |
@@ -516,7 +516,7 @@ agents/
 1. **聚合门禁掩盖个体缺口** — 单个项目 0% 不触发失败
 2. **认证层完全裸奔** — 3 个 Authentication 项目零测试，NyxID M0 关键路径
 3. **Orleans Streaming 零测试** — 事件分发核心无回归保护
-4. **agents/ 零测试** — 已在 §9 #4 标记为 MILESTONE_BLOCKER
+4. **agents/ 专项回归仍偏薄** — 已有 `Aevatar.AI.Tests` 覆盖，但持久化替换与跨重启恢复仍缺专项验证
 
 ### 12.6 修复建议
 
@@ -704,7 +704,7 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 
 | Dimension | 原评分 | 补充后评分 | 变化原因 |
 |-----------|--------|-----------|---------|
-| CI Guards 合规 | 9/10 | 8/10 | 3 个规则未自动化执行 |
+| CI Guards 合规 | 9/10 | 8/10 | 目录扫描盲区与硬编码扫描根仍存在 |
 | 分层合规 | 6/10 | 6/10 | 无变化 |
 | 投影一致性 | 4/10 | 4/10 | 无变化 |
 | 读写分离 | 8/10 | 8/10 | 无变化 |
@@ -731,7 +731,7 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 | 21 | `CQRS.Projection.Core/.../EventSinkProjectionLifecyclePortBase.cs:23` | §111 | High | ConcurrentDictionary 做订阅管理，应改 lease/session |
 | 22 | `Workflow.Core/WorkflowRunGAgent.cs:113-133` | Actor 执行模型 | High | `_executionItems` 非持久化，actor 重激活后丢失 |
 | 23 | `Workflow.Core/Primitives/SubWorkflowOrchestrator.cs` | Actor 执行模型 | Medium | 定义解析阶段已有 durable timeout；子工作流完成续接仍需补充 timeout/compensation 证据 |
-| 24 | 7-9 个 src/ 项目零覆盖 + 聚合门禁掩盖个体缺口 | 测试要求 | High | 认证层 + Orleans Streaming 零测试；门禁不检查逐项目覆盖率 |
+| 24 | 7-9 个 src/ 项目零覆盖 + 聚合门禁掩盖个体缺口 | 测试要求 | High | 认证层 + Orleans Streaming 零测试；门禁不检查逐项目覆盖率，agents/ 也缺恢复类专项回归 |
 | 25 | `architecture_guards.sh` | CI 门禁完整性 | Medium | 仍有目录扫描盲区与硬编码扫描根问题 |
 
 ---
@@ -743,8 +743,8 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 | 投影一致性 | 3 处绕过 | 6 处绕过 (agents/ 新发现) | 证据更充分 |
 | Actor 生命周期 | ConcurrentDictionary 违规 | + 影子状态机 + 18 处状态字段全量清单 | 更完整 |
 | 分层合规 | Host 耦合度高 | + God Class 量化 + 3 处直操 actor + 依赖方向分析 | 8→6 |
-| CI Guards | 1 个盲区 | agents/ + apps/ 双盲区 + 3 条规则未自动化 | 9→8 |
-| 测试覆盖 | agents/ 零测试 | **修正**: 聚合覆盖率不能代表关键路径安全；认证、Streaming、agents/ 仍有缺口 | 0→3 (口径收紧) |
+| CI Guards | 1 个盲区 | agents/ + apps/ 双盲区 + 部分 guard 仍写死扫描根 | 9→8 |
+| 测试覆盖 | agents/ 覆盖判断过严 | **修正**: 聚合覆盖率不能代表关键路径安全；认证、Streaming 零测试，agents/ 仍缺恢复类专项回归 | 0→3 (口径收紧) |
 | AI.Core 中间件 | 未审计 | **新增维度**: SkillRegistry 7 lock + StreamingToolExecutor + ToolApprovalMiddleware | 新增 4/10 |
 | 工作流引擎韧性 | 未审计 | **新增维度**: _executionItems 非持久化；其余恢复风险待运行时验证 | 新增 5/10 |
 | 投影端口合规 | 未审计 | **新增维度**: EventSinkProjectionLifecyclePortBase §111 违规 | 新增 5/10 |
