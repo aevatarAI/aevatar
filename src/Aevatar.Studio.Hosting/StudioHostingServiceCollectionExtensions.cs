@@ -6,6 +6,7 @@ using Aevatar.Studio.Hosting.Controllers;
 using Aevatar.Studio.Hosting.Endpoints;
 using Aevatar.Studio.Infrastructure.DependencyInjection;
 using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Projection.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,6 +30,7 @@ internal static class StudioHostingServiceCollectionExtensions
         services.AddSingleton<IAppScopeResolver, DefaultAppScopeResolver>();
         services.AddStudioApplication();
         services.AddStudioInfrastructure(configuration);
+        services.AddStudioProjectionComponents();
         return services;
     }
 

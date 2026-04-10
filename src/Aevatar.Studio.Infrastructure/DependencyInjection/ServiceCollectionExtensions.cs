@@ -33,7 +33,6 @@ public static class ServiceCollectionExtensions
         // ── Actor-backed stores (replacing ChronoStorage* implementations) ──
         services.AddSingleton<IGAgentActorStore, ActorBackedGAgentActorStore>();
         services.AddSingleton<IStreamingProxyParticipantStore, ActorBackedStreamingProxyParticipantStore>();
-        services.AddSingleton<IUserConfigStore, ActorBackedUserConfigStore>();
         services.AddSingleton<INyxIdUserLlmPreferencesStore, ActorBackedNyxIdUserLlmPreferencesStore>();
         services.AddSingleton<IUserMemoryStore, ActorBackedUserMemoryStore>();
         services.AddSingleton<IConnectorCatalogStore, ActorBackedConnectorCatalogStore>();

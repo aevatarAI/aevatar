@@ -128,136 +128,9 @@ public sealed class ActorBackedStoreAdapterTests
                 : null;
     }
 
-    // ════════════════════════════════════════════════════════════
-    // UserConfigStore: defaults when actor does not exist
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task UserConfigStore_GetAsync_NoActor_ReturnsDefaults()
-    {
-        var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "test-user" };
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        // No actor exists, returns defaults
-        var config = await store.GetAsync();
-
-        config.DefaultModel.Should().BeEmpty();
-        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway);
-        config.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode);
-        config.LocalRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl);
-        config.RemoteRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl);
-        config.MaxToolRounds.Should().Be(0);
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // UserConfigStore: state mapping
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task UserConfigStore_GetAsync_WithState_MapsFieldsCorrectly()
-    {
-        var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-42" };
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        // Register write actor with state
-        var state = new UserConfigGAgentState
-        {
-            DefaultModel = "gpt-4",
-            PreferredLlmRoute = "/api/v1/proxy/s/custom",
-            RuntimeMode = "remote",
-            LocalRuntimeBaseUrl = "http://localhost:9090",
-            RemoteRuntimeBaseUrl = "https://remote.example.com",
-            MaxToolRounds = 5,
-        };
-        runtime.RegisterActor("user-config-user-42", new FakeAgent("user-config-user-42", state));
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        var config = await store.GetAsync();
-
-        config.DefaultModel.Should().Be("gpt-4");
-        config.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/custom");
-        config.RuntimeMode.Should().Be("remote");
-        config.LocalRuntimeBaseUrl.Should().Be("http://localhost:9090");
-        config.RemoteRuntimeBaseUrl.Should().Be("https://remote.example.com");
-        config.MaxToolRounds.Should().Be(5);
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // UserConfigStore: empty string fields apply defaults
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task UserConfigStore_GetAsync_EmptyStringFields_ApplyDefaults()
-    {
-        var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "user-empty" };
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        // Register write actor with mostly-empty state
-        var state = new UserConfigGAgentState { DefaultModel = "claude-3" };
-        runtime.RegisterActor("user-config-user-empty", new FakeAgent("user-config-user-empty", state));
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        var config = await store.GetAsync();
-
-        config.DefaultModel.Should().Be("claude-3");
-        config.PreferredLlmRoute.Should().Be(UserConfigLlmRouteDefaults.Gateway,
-            "empty PreferredLlmRoute should fall back to Gateway default");
-        config.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.LocalMode,
-            "empty RuntimeMode should fall back to local");
-        config.LocalRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.LocalRuntimeBaseUrl,
-            "empty LocalRuntimeBaseUrl should fall back to default");
-        config.RemoteRuntimeBaseUrl.Should().Be(UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl,
-            "empty RemoteRuntimeBaseUrl should fall back to default");
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // UserConfigStore: SaveAsync sends UserConfigUpdatedEvent
-    // ════════════════════════════════════════════════════════════
-
-    [Fact]
-    public async Task UserConfigStore_SaveAsync_SendsUserConfigUpdatedEvent()
-    {
-        var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "save-scope" };
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        var config = new UserConfig(
-            DefaultModel: "gpt-4-turbo",
-            PreferredLlmRoute: "/api/v1/proxy/s/openai",
-            RuntimeMode: "remote",
-            LocalRuntimeBaseUrl: "http://127.0.0.1:8080",
-            RemoteRuntimeBaseUrl: "https://api.example.com",
-            MaxToolRounds: 10);
-
-        await store.SaveAsync(config);
-
-        var actorId = "user-config-save-scope";
-        runtime.Actors.Should().ContainKey(actorId);
-
-        var actor = runtime.Actors[actorId];
-        actor.ReceivedEnvelopes.Should().HaveCount(1);
-
-        var envelope = actor.ReceivedEnvelopes[0];
-        envelope.Payload.Should().NotBeNull();
-        envelope.Payload.Is(UserConfigUpdatedEvent.Descriptor).Should().BeTrue();
-
-        var evt = envelope.Payload.Unpack<UserConfigUpdatedEvent>();
-        evt.DefaultModel.Should().Be("gpt-4-turbo");
-        evt.MaxToolRounds.Should().Be(10);
-    }
+    // UserConfigStore tests removed — ActorBackedUserConfigStore replaced by
+    // IUserConfigQueryPort (projection) + IUserConfigCommandService (dispatch).
+    // See ActorDispatchUserConfigCommandService tests in projection test project.
 
     // ════════════════════════════════════════════════════════════
     // NyxIdUserLlmPreferencesStore: delegation
@@ -383,47 +256,16 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
-    // Envelope structure verification
+    // Helper: stub IUserConfigQueryPort for NyxId delegation tests
     // ════════════════════════════════════════════════════════════
 
-    [Fact]
-    public async Task SaveAsync_EnvelopeContainsIdAndTimestamp()
-    {
-        var runtime = new FakeActorRuntime();
-        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "ts-scope" };
-        var logger = NullLogger<ActorBackedUserConfigStore>.Instance;
-
-        var store = new ActorBackedUserConfigStore(
-            runtime, scopeResolver, Options.Create(new StudioStorageOptions()), logger);
-
-        var beforeUtc = DateTimeOffset.UtcNow;
-
-        await store.SaveAsync(new UserConfig(DefaultModel: "model"));
-
-        var afterUtc = DateTimeOffset.UtcNow;
-        var envelope = runtime.Actors["user-config-ts-scope"].ReceivedEnvelopes[0];
-
-        envelope.Id.Should().NotBeNullOrWhiteSpace("envelope must have a unique ID");
-        envelope.Id.Length.Should().Be(32, "ID should be a Guid without dashes");
-
-        var ts = envelope.Timestamp.ToDateTimeOffset();
-        ts.Should().BeOnOrAfter(beforeUtc).And.BeOnOrBefore(afterUtc);
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // Helper: stub IUserConfigStore for NyxId delegation tests
-    // ════════════════════════════════════════════════════════════
-
-    private sealed class StubUserConfigStore : IUserConfigStore
+    private sealed class StubUserConfigStore : IUserConfigQueryPort
     {
         private readonly UserConfig _config;
 
         public StubUserConfigStore(UserConfig config) => _config = config;
 
-        public Task<UserConfig> GetAsync(CancellationToken cancellationToken = default) =>
+        public Task<UserConfig> GetAsync(CancellationToken ct = default) =>
             Task.FromResult(_config);
-
-        public Task SaveAsync(UserConfig config, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
     }
 }

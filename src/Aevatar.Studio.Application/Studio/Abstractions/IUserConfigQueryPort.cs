@@ -1,6 +1,4 @@
-using Aevatar.Studio.Application.Studio.Abstractions;
-
-namespace Aevatar.Studio.Projection.QueryPorts;
+namespace Aevatar.Studio.Application.Studio.Abstractions;
 
 /// <summary>
 /// Pure-read query port for user configuration.

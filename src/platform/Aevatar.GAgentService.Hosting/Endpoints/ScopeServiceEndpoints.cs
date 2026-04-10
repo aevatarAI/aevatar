@@ -1881,7 +1881,7 @@ public static class ScopeServiceEndpoints
         InjectBearerToken(http, scopedHeaders);
         if (http != null)
         {
-            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
             if (userConfigStore != null)
             {
                 try

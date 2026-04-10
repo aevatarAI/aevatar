@@ -2,7 +2,6 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.Storage;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -21,18 +20,21 @@ public sealed class UserConfigController : ControllerBase
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly IUserConfigStore _userConfigStore;
+    private readonly IUserConfigQueryPort _queryPort;
+    private readonly IUserConfigCommandService _commandService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<UserConfigController> _logger;
 
     public UserConfigController(
-        IUserConfigStore userConfigStore,
+        IUserConfigQueryPort queryPort,
+        IUserConfigCommandService commandService,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<UserConfigController> logger)
     {
-        _userConfigStore = userConfigStore;
+        _queryPort = queryPort;
+        _commandService = commandService;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
@@ -43,12 +45,7 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            return Ok(await _userConfigStore.GetAsync(cancellationToken));
-        }
-        catch (ChronoStorageServiceException exception)
-        {
-            _logger.LogWarning(exception, "Chrono-storage is unavailable when reading user config");
-            return ChronoStorageErrorResponses.ToActionResult(exception);
+            return Ok(await _queryPort.GetAsync(cancellationToken));
         }
         catch (InvalidOperationException exception)
         {
@@ -68,20 +65,15 @@ public sealed class UserConfigController : ControllerBase
     {
         try
         {
-            var current = await _userConfigStore.GetAsync(cancellationToken);
+            var current = await _queryPort.GetAsync(cancellationToken);
             var merged = new UserConfig(
                 DefaultModel: request.DefaultModel is null ? current.DefaultModel : request.DefaultModel.Trim(),
                 PreferredLlmRoute: request.PreferredLlmRoute is null ? current.PreferredLlmRoute : UserConfigLlmRoute.Normalize(request.PreferredLlmRoute),
                 RuntimeMode: request.RuntimeMode is null ? current.RuntimeMode : request.RuntimeMode.Trim(),
                 LocalRuntimeBaseUrl: request.LocalRuntimeBaseUrl is null ? current.LocalRuntimeBaseUrl : request.LocalRuntimeBaseUrl.Trim(),
                 RemoteRuntimeBaseUrl: request.RemoteRuntimeBaseUrl is null ? current.RemoteRuntimeBaseUrl : request.RemoteRuntimeBaseUrl.Trim());
-            await _userConfigStore.SaveAsync(merged, cancellationToken);
+            await _commandService.SaveAsync(merged, cancellationToken);
             return Ok(merged);
-        }
-        catch (ChronoStorageServiceException exception)
-        {
-            _logger.LogWarning(exception, "Chrono-storage is unavailable when saving user config");
-            return ChronoStorageErrorResponses.ToActionResult(exception);
         }
         catch (InvalidOperationException exception)
         {
