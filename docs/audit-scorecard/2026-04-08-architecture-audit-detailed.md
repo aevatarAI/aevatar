@@ -10,7 +10,7 @@ Audit scope: Milestone-oriented (Living with AI Demo 04-17, NyxID M0 04-18)
 Audit method: Automated baseline plus manual deep dives on projection, lifecycle, and guard blind spots
 Reviewed by: arch-audit skill, 5 parallel exploration agents
 
-> 本文档是 `2026-04-08-architecture-audit.md` 的深度展开版，包含每个维度的代码级证据、数据流分析和修复方案。
+> 本文档是首份 architecture audit scorecard 的详细证据版，包含每个维度的代码级证据、数据流分析和修复方案。
 >
 > 评分只纳入已验证证据；需要运行时进一步确认的风险在文中标记为 `NEEDS_VALIDATION`，不直接计入总分。
 
@@ -366,7 +366,7 @@ JSON 仅在边界: ChatWebSocketCommandParser, SseChatTransport, EventQueryTool 
 | 1 | `agents/.../NyxIdChatActorStore.cs:20` | 中间层状态约束 | Critical | Singleton ConcurrentDictionary。进程重启丢失所有对话。Phase 2 (持久化) 未实现。 |
 | 2 | `agents/.../StreamingProxyActorStore.cs:11-12` | 中间层状态约束 | Critical | 2 个 Singleton ConcurrentDictionary (rooms + participants)。同 #1。 |
 | 3 | `agents/.../StreamingProxyGAgent.cs:34` | Actor 执行模型 | Critical | `_proxyState` 影子状态机不参与 event sourcing，grain 重激活后状态不一致。 |
-| 4 | `agents/` 全部 3 个项目 | 测试要求 | Critical | 零测试覆盖。NyxID M0 关键路径无自动化验证。 |
+| 4 | `agents/` 关键路径回归 | 测试要求 | High | `Aevatar.AI.Tests` 已覆盖 endpoints/store/happy-path，但缺少面向持久化替换与跨重启恢复的专项回归测试。 |
 | 5 | `test/.../ScopeServiceEndpointsTests.cs:1087` | — | High | InvokeStreamEndpoint 3 个测试失败 (500 error)。 |
 | 6 | `tools/Aevatar.Tools.Cli/Frontend/` | — | High | TypeScript 编译失败。缺 @types/node, @tanstack/react-virtual, vitest。 |
 | 7 | `apps/aevatar-console-web/` | — | High | 构建失败。`max` CLI 未安装。 |
@@ -534,7 +534,7 @@ agents/
 
 ### 13.1 SkillRegistry 进程内注册表
 
-**文件**: `src/Aevatar.AI.Core/Tools/SkillRegistry.cs:16-77`
+**文件**: `src/Aevatar.AI.ToolProviders.Skills/SkillRegistry.cs:16-77`
 
 ```
 private readonly Dictionary<string, SkillDefinition> _skills = new();
@@ -600,7 +600,7 @@ private readonly Dictionary<string, object> _executionItems = new();
 
 ### 14.2 Sub-Workflow 续接无超时兜底 (`NEEDS_VALIDATION`)
 
-**文件**: `src/workflow/Aevatar.Workflow.Core/Orchestration/SubWorkflowOrchestrator.cs`
+**文件**: `src/workflow/Aevatar.Workflow.Core/Primitives/SubWorkflowOrchestrator.cs`
 
 **问题**: 父工作流发起子工作流后，等待 `SubWorkflowCompletedEvent`。从代码阅读看，若子工作流：
 - 执行失败但未发出完成事件
@@ -676,7 +676,7 @@ private readonly ConcurrentDictionary<object, IAsyncDisposable> _sinkSubscriptio
 
 ### 17.1 TypeUrl.Contains() 未做动态 grep
 
-**现状**: `projection_route_mapping_guard.sh` 验证路由结构使用 `StringComparer.Ordinal`，但**不 grep `.Contains(` 用法**。
+**现状**: `architecture_guards.sh` 已在 `src/` / `demos/` 范围内 grep `TypeUrl.Contains`，但这条规则尚未覆盖 `agents/` 等盲区目录。
 
 **建议**: 在 `architecture_guards.sh` 中增加：
 ```bash
@@ -684,13 +684,13 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
   | grep -i 'typeurl\|eventtype' && exit 1
 ```
 
-### 17.2 Reducer 测试覆盖未自动化
+### 17.2 Reducer 测试覆盖自动化范围偏窄
 
 **CLAUDE.md 行 176**: "新增非抽象 Reducer 类必须被测试引用"
 
-**现状**: 无自动化检查。新增 Reducer 可跳过测试。
+**现状**: `architecture_guards.sh` 已对现有 reducer 根目录执行“非抽象 Reducer 必须被测试引用”的自动化检查，但扫描根是硬编码的。若后续新增 reducer 目录而未纳入 guard，仍可能漏检。
 
-**建议**: 创建 `reducer_test_coverage_guard.sh`，扫描所有非抽象 Reducer 类名并验证至少一个 test 文件引用。
+**建议**: 将现有 reducer coverage guard 抽成可复用脚本，或改为动态扫描所有受支持的 reducer 根目录，避免新目录默认失守。
 
 ### 17.3 StateVersion 权威源仅抽查
 
@@ -726,13 +726,13 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 
 | # | 位置 | 违反规则 | 严重度 | 备注 |
 |---|------|---------|--------|------|
-| 19 | `Aevatar.AI.Core/Tools/SkillRegistry.cs:16-77` | §95 + §105 | High | 7 处 lock + Dictionary 注册表，非 Actor 持有 |
+| 19 | `Aevatar.AI.ToolProviders.Skills/SkillRegistry.cs:16-77` | §95 + §105 | High | 7 处 lock + Dictionary 注册表，非 Actor 持有 |
 | 20 | `Aevatar.AI.Core/Tools/StreamingToolExecutor.cs:31` | §95 | Medium | 2 处 lock，工具执行状态保护 |
 | 21 | `CQRS.Projection.Core/.../EventSinkProjectionLifecyclePortBase.cs:23` | §111 | High | ConcurrentDictionary 做订阅管理，应改 lease/session |
 | 22 | `Workflow.Core/WorkflowRunGAgent.cs:113-133` | Actor 执行模型 | High | `_executionItems` 非持久化，actor 重激活后丢失 |
-| 23 | `Workflow.Core/Orchestration/SubWorkflowOrchestrator.cs` | Actor 执行模型 | Medium | 子工作流续接无超时兜底 |
+| 23 | `Workflow.Core/Primitives/SubWorkflowOrchestrator.cs` | Actor 执行模型 | Medium | 定义解析阶段已有 durable timeout；子工作流完成续接仍需补充 timeout/compensation 证据 |
 | 24 | 7-9 个 src/ 项目零覆盖 + 聚合门禁掩盖个体缺口 | 测试要求 | High | 认证层 + Orleans Streaming 零测试；门禁不检查逐项目覆盖率 |
-| 25 | `architecture_guards.sh` | CI 门禁完整性 | Medium | 3 条 CLAUDE.md 规则未自动化 |
+| 25 | `architecture_guards.sh` | CI 门禁完整性 | Medium | 仍有目录扫描盲区与硬编码扫描根问题 |
 
 ---
 

@@ -31,7 +31,7 @@ Step 2: Hot Path Deep Dive (serial, checkpoints between each)
     |
 Step 3: Milestone Path Verification (E2E for next milestone)
     |
-Output: docs/audit-scorecard/YYYY-MM-DD-architecture-audit.md
+Output: docs/audit-scorecard/YYYY-MM-DD-architecture-audit.md (or `-detailed.md` when shipping an evidence appendix)
 ```
 
 ## Step 0.5: Frontend Build Check (~10min)
@@ -187,6 +187,8 @@ Look for: Goal/Scope/ObjectiveFunction modeling, three-layer governance (order d
 3. Check if that path has integration tests: `find test/ -name "*<keyword>*"`
 4. Run relevant integration tests: `dotnet test <test-project> --filter "FullyQualifiedName~<keyword>"`
 5. Tag test failures as `MILESTONE_BLOCKER`
+
+Do not label a module as "zero coverage" unless you verified both that no test project references it and that no existing tests exercise its public behavior indirectly.
 
 **Blind spot check:** Does `architecture_guards.sh` scan the milestone-critical directories? If not, that's a guard supplement finding.
 
