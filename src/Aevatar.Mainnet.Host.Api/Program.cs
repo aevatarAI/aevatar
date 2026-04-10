@@ -41,6 +41,8 @@ builder.Services.AddNyxIdChat(builder.Configuration);
 builder.Services.AddStreamingProxy();
 builder.Services.AddChatbotClassifier();
 builder.Services.AddChannelRuntime();
+builder.Services.Configure<Aevatar.GAgents.ChannelRuntime.DeviceEventOptions>(
+    builder.Configuration.GetSection("Aevatar:DeviceEvents"));
 builder.Services.AddNyxIdTools(o =>
 {
     o.BaseUrl = builder.Configuration["Aevatar:NyxId:Authority"]
@@ -60,5 +62,6 @@ app.UseAevatarDefaultHost();
 app.MapNyxIdChatEndpoints();
 app.MapStreamingProxyEndpoints();
 app.MapChannelCallbackEndpoints();
+app.MapDeviceEventEndpoints();
 
 app.Run();

@@ -127,3 +127,18 @@ message SafetyStateChangedEvent {
 message TimePeriodChangedEvent {
   string new_period = 1;    // "morning" | "afternoon" | "evening" | "night"
 }
+
+// ─── Device Inbound (from DeviceEventEndpoints via EventEnvelope) ───
+
+// Normalized device event from NyxID relay's CallbackPayload.
+// Defined in Household domain because it's the inbound contract for
+// HouseholdEntity; DeviceEventEndpoints (boundary layer) references
+// this project, keeping dependency direction correct (Host → Domain).
+message DeviceInbound {
+  string event_id = 1;       // NyxID event envelope's event_id
+  string source = 2;         // "camera-analyzer", "temperature-sensor", etc.
+  string event_type = 3;     // "person_detected", "temperature_change", "motion_detected"
+  string timestamp = 4;      // RFC 3339
+  string payload_json = 5;   // Raw device payload JSON (temporary — will evolve to typed sub-messages)
+  string device_id = 6;      // Device identifier (optional)
+}

@@ -12,9 +12,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-// ReSharper disable once RedundantUsingDirective
-using Timestamp = Google.Protobuf.WellKnownTypes.Timestamp;
-
 namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class DeviceEventOptions

@@ -77,4 +77,3 @@ public sealed class DeviceRegistrationGAgent : GAgentBase<DeviceRegistrationStat
         return next;
     }
 }
-

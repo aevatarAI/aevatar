@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.Middleware;
@@ -178,6 +179,80 @@ public class HouseholdEntity : AIGAgentBase<HouseholdEntityState>
     public Task HandleSafetyStateChanged(SafetyStateChangedEvent evt)
     {
         return PersistDomainEventAsync(evt);
+    }
+
+    [EventHandler]
+    public async Task HandleDeviceInbound(DeviceInbound evt)
+    {
+        Logger.LogInformation(
+            "[Household] Processing device signal: type={EventType}, source={Source}, device={DeviceId}",
+            evt.EventType, evt.Source, evt.DeviceId);
+
+        try
+        {
+            switch (evt.EventType)
+            {
+                case "temperature_change":
+                {
+                    using var doc = JsonDocument.Parse(evt.PayloadJson);
+                    var root = doc.RootElement;
+                    var sensorEvt = new SensorDataEvent();
+                    if (root.TryGetProperty("temperature", out var temp)) sensorEvt.Temperature = temp.GetDouble();
+                    if (root.TryGetProperty("humidity", out var hum)) sensorEvt.Humidity = hum.GetDouble();
+                    if (root.TryGetProperty("light_level", out var light)) sensorEvt.LightLevel = light.GetDouble();
+                    if (root.TryGetProperty("motion", out var motion)) sensorEvt.MotionDetected = motion.GetBoolean();
+                    await HandleSensorData(sensorEvt);
+                    break;
+                }
+                case "person_detected":
+                case "scene_summary":
+                {
+                    using var doc = JsonDocument.Parse(evt.PayloadJson);
+                    var root = doc.RootElement;
+                    var desc = root.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+                    await HandleCameraScene(new CameraSceneEvent { SceneDescription = desc });
+                    break;
+                }
+                case "motion_detected":
+                {
+                    var sensorEvt = new SensorDataEvent { MotionDetected = true };
+                    await HandleSensorData(sensorEvt);
+                    break;
+                }
+                case "speech_detected":
+                {
+                    using var doc = JsonDocument.Parse(evt.PayloadJson);
+                    var root = doc.RootElement;
+                    var text = root.TryGetProperty("text", out var t) ? t.GetString() ?? "" : "";
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        await HandleChat(new HouseholdChatEvent
+                        {
+                            Prompt = text,
+                            SessionId = evt.EventId,
+                        });
+                    }
+                    break;
+                }
+                default:
+                    Logger.LogWarning(
+                        "[Household] Unknown device event type: {EventType}, source={Source}",
+                        evt.EventType, evt.Source);
+                    break;
+            }
+        }
+        catch (JsonException ex)
+        {
+            Logger.LogWarning(ex,
+                "[Household] Failed to parse device event payload: type={EventType}, source={Source}",
+                evt.EventType, evt.Source);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex,
+                "[Household] Error processing device event: type={EventType}, source={Source}",
+                evt.EventType, evt.Source);
+        }
     }
 
     // ─── Reasoning (Reason + Act) ───

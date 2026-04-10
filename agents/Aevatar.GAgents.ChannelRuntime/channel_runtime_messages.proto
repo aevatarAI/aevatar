@@ -46,6 +46,55 @@ message ChannelUserBoundEvent {
   string nyxid_access_token = 2;
 }
 
+// ─── Device Registration (Actor-backed, #164 pattern) ───
+
+message DeviceRegistrationEntry {
+  string id = 1;
+  string scope_id = 2;                    // Maps to household-{scope_id} actor
+  string hmac_key = 3;                    // HMAC-SHA256 signing key for NyxID relay verification
+  string nyx_conversation_id = 4;         // NyxID conversation ID
+  string description = 5;                 // Human-readable label
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message DeviceRegistrationState {
+  repeated DeviceRegistrationEntry registrations = 1;
+}
+
+// Domain events for DeviceRegistrationGAgent
+message DeviceRegisteredEvent {
+  DeviceRegistrationEntry entry = 1;
+}
+
+message DeviceUnregisteredEvent {
+  string registration_id = 1;
+}
+
+// Commands dispatched to DeviceRegistrationGAgent via EventEnvelope
+message DeviceRegisterCommand {
+  string scope_id = 1;
+  string hmac_key = 2;
+  string nyx_conversation_id = 3;
+  string description = 4;
+}
+
+message DeviceUnregisterCommand {
+  string registration_id = 1;
+}
+
+// Projection read model for device registrations
+message DeviceRegistrationDocument {
+  string id = 1;                          // Registration ID (= document key)
+  string scope_id = 2;
+  string hmac_key = 3;
+  string nyx_conversation_id = 4;
+  string description = 5;
+  int64 state_version = 6;
+  string last_event_id = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+  string actor_id = 9;                    // Source actor ID
+}
+
 // Callback endpoint → ChannelUserGAgent inbound dispatch
 message ChannelInboundEvent {
   string text = 1;
