@@ -933,6 +933,52 @@ jest.mock("./components/StudioShell", () => ({
 jest.mock("./components/StudioWorkbenchSections", () => {
   const React = require("react");
 
+  const dedupeStudioWorkflowSummaries = (
+    workflows: readonly any[],
+    selectedWorkflowId = ""
+  ) => {
+    const deduped = new Map<string, any>();
+
+    const readTimestamp = (value: string) => {
+      const timestamp = Date.parse(value);
+      return Number.isFinite(timestamp) ? timestamp : 0;
+    };
+
+    const comparePriority = (left: any, right: any) => {
+      const leftSelected = left.workflowId === selectedWorkflowId;
+      const rightSelected = right.workflowId === selectedWorkflowId;
+      if (leftSelected !== rightSelected) {
+        return leftSelected ? -1 : 1;
+      }
+
+      const updatedDelta =
+        readTimestamp(right.updatedAtUtc) - readTimestamp(left.updatedAtUtc);
+      if (updatedDelta !== 0) {
+        return updatedDelta;
+      }
+
+      if (left.stepCount !== right.stepCount) {
+        return right.stepCount - left.stepCount;
+      }
+
+      return String(left.workflowId ?? "").localeCompare(
+        String(right.workflowId ?? "")
+      );
+    };
+
+    for (const workflow of workflows) {
+      const key =
+        String(workflow.name ?? "").trim().toLowerCase() ||
+        String(workflow.workflowId ?? "").trim().toLowerCase();
+      const current = deduped.get(key);
+      if (!current || comparePriority(workflow, current) < 0) {
+        deduped.set(key, workflow);
+      }
+    }
+
+    return Array.from(deduped.values()).sort(comparePriority);
+  };
+
   const renderNoticeTitle = (
     key: string,
     notice: MockNotice,
@@ -1484,6 +1530,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
 
   return {
     __esModule: true,
+    dedupeStudioWorkflowSummaries,
     StudioConnectorsPage,
     StudioEditorPage,
     StudioExecutionPage,
@@ -1568,10 +1615,8 @@ describe("StudioPage", () => {
     expect(screen.getByPlaceholderText("Search workflows")).toBeTruthy();
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
-      flex: "1",
       flexDirection: "column",
-      minHeight: "0",
-      overflow: "hidden",
+      minWidth: "0",
     });
   });
 
