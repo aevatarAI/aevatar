@@ -25,10 +25,14 @@ import {
 } from './sseUtils';
 import { markdownToPlainText, parseMarkdownBlocks, sanitizeAssistantMessageContent, tokenizeInlineContent } from './chatContent';
 import type { ChatMessage, ServiceOption, StepInfo, ToolCallInfo, ConversationMeta, AttachmentInfo, ContentPartDto } from './chatTypes';
+import type { ActiveRunState } from './runState';
+import { applyRuntimeEventToActiveRun } from './runState';
 import * as api from '../api';
 import * as nyxid from '../auth/nyxid';
 import { NYXID_API_URL } from '../auth/nyxid';
 import { createPortal } from 'react-dom';
+import RunStatusBanner from './RunStatusBanner';
+import WorkflowRuntimeSidebar from './WorkflowRuntimeSidebar';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -1947,6 +1951,8 @@ export default function ScopePage() {
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [runtimeSidebarOpen, setRuntimeSidebarOpen] = useState(true);
+  const [activeRun, setActiveRun] = useState<ActiveRunState | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [globalDefaultModel, setGlobalDefaultModel] = useState('');
   const [globalPreferredRoute, setGlobalPreferredRoute] = useState(USER_LLM_ROUTE_GATEWAY);
@@ -2139,6 +2145,7 @@ export default function ScopePage() {
       setMessages([]);
       setDebugEvents([]);
       setActiveConvId(null);
+      setActiveRun(null);
       streamingProxyRoomRef.current = null;
       setComposerText('');
       setConversationRoute(undefined);
@@ -2151,6 +2158,7 @@ export default function ScopePage() {
     nyxidChatBoundRef.current = false;
     streamingProxyRoomRef.current = null;
     setOnboardingState(null);
+    setActiveRun(null);
   }, [scopeId]);
 
   // Load conversation index when scope changes
@@ -2327,6 +2335,7 @@ export default function ScopePage() {
     setMessages(nextMessages);
     setIsStreaming(true);
     setDebugEvents([]);
+    setActiveRun(null);
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -2379,6 +2388,14 @@ export default function ScopePage() {
       }
 
       updateAssistant(patch);
+    };
+
+    const updateActiveRunFromEvent = (evt: RuntimeEvent) => {
+      setActiveRun(prev => applyRuntimeEventToActiveRun(prev, evt, {
+        serviceId: activeService.id,
+        serviceLabel: activeService.label,
+        fallbackActorId: resolvedActorId || trimOptional(activeConvId ?? undefined),
+      }));
     };
 
     const flushParticipantQueue = async () => {
@@ -2453,6 +2470,16 @@ export default function ScopePage() {
       if (!resolvedActorId && evt.type === 'RUN_STARTED' && typeof evt.threadId === 'string' && evt.threadId.trim()) {
         resolvedActorId = evt.threadId.trim();
         setActiveConvId(prev => prev || resolvedActorId);
+      }
+
+      updateActiveRunFromEvent(evt);
+      if (!runtimeSidebarOpen && (
+        evt.type === 'RUN_STARTED' ||
+        evt.type === 'STEP_STARTED' ||
+        evt.type === 'HUMAN_INPUT_REQUEST' ||
+        (evt.type === 'CUSTOM' && String(evt.name || '').startsWith('aevatar.'))
+      )) {
+        setRuntimeSidebarOpen(true);
       }
 
       const wasReasoning = lastWasReasoning;
@@ -2669,6 +2696,19 @@ export default function ScopePage() {
             break;
           }
 
+          if (String(evt.name || '') === 'aevatar.workflow.waiting_signal') {
+            const raw = (evt.payload ?? evt.value ?? {}) as any;
+            const p = (raw?.value ?? raw) as any;
+            const signalName = String(p?.signalName ?? p?.signal_name ?? '');
+            const prompt = String(p?.prompt ?? p?.Prompt ?? '');
+            setIsStreaming(false);
+            updateCurrentAssistant({
+              content: prompt || (signalName ? `Waiting for signal "${signalName}"...` : 'Waiting for a signal...'),
+              status: 'complete',
+            });
+            break;
+          }
+
           const stepOutput = extractStepCompletedOutput(evt);
           if (stepOutput && !contentText) {
             contentText = stepOutput;
@@ -2781,6 +2821,15 @@ export default function ScopePage() {
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
         const errorText = e?.message || e?.code || JSON.stringify(e);
+        setActiveRun(prev => prev ? {
+          ...prev,
+          status: 'error',
+          error: String(errorText),
+          waitingKind: undefined,
+          waitingPrompt: undefined,
+          waitingSignalName: undefined,
+          lastEventAt: Date.now(),
+        } : prev);
         if (activeService.kind === 'streaming-proxy' && (hasParticipantReply || pendingParticipantMessages.length > 0)) {
           pendingStreamError = errorText;
           streamFinished = true;
@@ -2815,7 +2864,7 @@ export default function ScopePage() {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, messages, activeService, activeConvId, conversationHeaders, saveCurrentConversation, ensureStreamingProxyRoom]);
+  }, [scopeId, isStreaming, messages, activeService, activeConvId, conversationHeaders, saveCurrentConversation, ensureStreamingProxyRoom, runtimeSidebarOpen]);
 
   const handleAttach = useCallback((files: FileList) => {
     const maxSize = 50 * 1024 * 1024; // 50 MB
@@ -2886,6 +2935,15 @@ export default function ScopePage() {
     };
 
     try {
+      setActiveRun(prev => prev ? {
+        ...prev,
+        status: 'running',
+        waitingKind: undefined,
+        waitingPrompt: undefined,
+        waitingSignalName: undefined,
+        lastEventAt: Date.now(),
+      } : prev);
+
       await api.scope.resumeRun(
         scopeId,
         serviceId,
@@ -2902,6 +2960,12 @@ export default function ScopePage() {
       updateAssistant({ status: 'complete' });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Resume failed';
+      setActiveRun(prev => prev ? {
+        ...prev,
+        status: 'error',
+        error: errorMsg,
+        lastEventAt: Date.now(),
+      } : prev);
       updateAssistant({ status: 'error', error: errorMsg });
     } finally {
       setIsStreaming(false);
@@ -3101,6 +3165,7 @@ export default function ScopePage() {
         }
       }
       setActiveConvId(null);
+      setActiveRun(null);
       streamingProxyRoomRef.current = null;
       setConversationRoute(undefined);
       setConversationModel(undefined);
@@ -3125,6 +3190,7 @@ export default function ScopePage() {
     setMessages(messages.slice(0, messageIndex));
     setDebugEvents([]);
     setActiveConvId(null);
+    setActiveRun(null);
     streamingProxyRoomRef.current = null;
   }, [messages]);
 
@@ -3162,6 +3228,13 @@ export default function ScopePage() {
       );
 
     if (!approved) {
+      setActiveRun(prev => prev ? {
+        ...prev,
+        waitingKind: undefined,
+        waitingPrompt: undefined,
+        currentToolName: undefined,
+        lastEventAt: Date.now(),
+      } : prev);
       setMessages(prev => {
         const updated = clearPendingApproval(prev);
         saveCurrentConversation(updated);
@@ -3173,6 +3246,14 @@ export default function ScopePage() {
     abortRef.current = controller;
     setIsStreaming(true);
     setDebugEvents([]);
+    setActiveRun(prev => prev ? {
+      ...prev,
+      status: 'running',
+      waitingKind: undefined,
+      waitingPrompt: undefined,
+      currentToolName: undefined,
+      lastEventAt: Date.now(),
+    } : prev);
     setMessages(prev => prev.map(message =>
       message.id === targetMessageId
         ? { ...message, pendingApproval: undefined, status: 'streaming' }
@@ -3279,7 +3360,14 @@ export default function ScopePage() {
       if ((err as Error | undefined)?.name === 'AbortError') {
         finalizeApprovalAssistant('complete');
       } else {
-        finalizeApprovalAssistant('error', err instanceof Error ? err.message : 'Approval failed');
+        const errorMessage = err instanceof Error ? err.message : 'Approval failed';
+        setActiveRun(prev => prev ? {
+          ...prev,
+          status: 'error',
+          error: errorMessage,
+          lastEventAt: Date.now(),
+        } : prev);
+        finalizeApprovalAssistant('error', errorMessage);
       }
     } finally {
       setIsStreaming(false);
@@ -3315,6 +3403,7 @@ export default function ScopePage() {
     setMessages([]);
     setDebugEvents([]);
     setActiveConvId(null);
+    setActiveRun(null);
     streamingProxyRoomRef.current = null;
     setComposerText('');
     setConversationRoute(undefined);
@@ -3343,6 +3432,7 @@ export default function ScopePage() {
         error: m.error ?? undefined, thinking: m.thinking ?? undefined,
       })));
       setActiveConvId(convId);
+      setActiveRun(null);
       setConversationRoute(conv?.llmRoute);
       setConversationModel(trimOptional(conv?.llmModel));
       setDebugEvents([]);
@@ -3362,6 +3452,7 @@ export default function ScopePage() {
       if (activeConvId === convId) {
         setMessages([]);
         setActiveConvId(null);
+        setActiveRun(null);
         streamingProxyRoomRef.current = null;
         setConversationRoute(undefined);
         setConversationModel(undefined);
@@ -3863,6 +3954,17 @@ export default function ScopePage() {
 
         {/* Chat Column */}
         <div className="flex-1 min-h-0 flex flex-col">
+      {activeRun && (
+        <div className="flex-shrink-0 border-b border-[#E6E3DE] bg-[#FAFAF8] px-4 pt-4">
+          <div className="mx-auto max-w-3xl">
+            <RunStatusBanner
+              run={activeRun}
+              sidebarOpen={runtimeSidebarOpen}
+              onToggleSidebar={() => setRuntimeSidebarOpen(v => !v)}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Chat Area — virtualized with Pretext height estimation */}
       <div
@@ -3891,6 +3993,36 @@ export default function ScopePage() {
                 {activeService.kind === 'nyxid-chat'
                   ? 'Chat with NyxID about services, credentials, and configuration.'
                   : `Invoke the "${activeService.label}" service with a chat message.`}
+              </div>
+              <div className="mt-6 grid w-full max-w-2xl gap-3 text-left sm:grid-cols-3">
+                <div className="rounded-[22px] border border-[#E6E3DE] bg-white/90 px-4 py-3 shadow-sm shadow-stone-200/50">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-400">Visible Run</div>
+                  <div className="mt-1 text-[13px] font-medium text-stone-800">See current step, status, and elapsed time.</div>
+                </div>
+                <div className="rounded-[22px] border border-[#E6E3DE] bg-white/90 px-4 py-3 shadow-sm shadow-stone-200/50">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-400">Waiting State</div>
+                  <div className="mt-1 text-[13px] font-medium text-stone-800">Know whether the workflow is waiting for you or the system.</div>
+                </div>
+                <div className="rounded-[22px] border border-[#E6E3DE] bg-white/90 px-4 py-3 shadow-sm shadow-stone-200/50">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-400">Timeline</div>
+                  <div className="mt-1 text-[13px] font-medium text-stone-800">Open the run panel to inspect steps and recent events.</div>
+                </div>
+              </div>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+                {[
+                  'Design a support triage workflow with one approval step.',
+                  'Create a workflow that waits for a release approval signal.',
+                  'Build a short content review workflow and explain each step.',
+                ].map(prompt => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    onClick={() => setComposerText(prompt)}
+                    className="rounded-full border border-[#E6E3DE] bg-white px-3 py-1.5 text-[12px] text-stone-600 transition-colors hover:bg-[#F5F2EC] hover:text-stone-900"
+                  >
+                    {prompt}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -3987,6 +4119,12 @@ export default function ScopePage() {
       </div>
 
         </div>
+
+        <WorkflowRuntimeSidebar
+          run={activeRun}
+          open={runtimeSidebarOpen}
+          onToggle={() => setRuntimeSidebarOpen(v => !v)}
+        />
       </div>
       )}
     </div>
