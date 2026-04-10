@@ -5,10 +5,12 @@ import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ScopeQueryDraft } from './scopeQuery';
 
 type ScopeQueryCardProps = {
+  activeScopeId?: string | null;
   draft: ScopeQueryDraft;
   onChange: (draft: ScopeQueryDraft) => void;
   onLoad: () => void;
   onReset?: () => void;
+  resetDisabled?: boolean;
   loadLabel?: string;
   resolvedScopeId?: string | null;
   resolvedScopeSource?: string | null;
@@ -16,21 +18,32 @@ type ScopeQueryCardProps = {
 };
 
 const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
+  activeScopeId,
   draft,
   onChange,
   onLoad,
   onReset,
-  loadLabel = 'Load team',
+  resetDisabled,
+  loadLabel = 'Load scope',
   resolvedScopeId,
   resolvedScopeSource,
   onUseResolvedScope,
 }) => {
+  const normalizedDraftScopeId = draft.scopeId.trim();
+  const normalizedActiveScopeId = activeScopeId?.trim() ?? '';
   const normalizedResolvedScopeId = resolvedScopeId?.trim() ?? '';
   const normalizedResolvedScopeSource = resolvedScopeSource?.trim() ?? '';
   const canUseResolvedScope =
     normalizedResolvedScopeId.length > 0 &&
-    draft.scopeId.trim() !== normalizedResolvedScopeId &&
+    normalizedDraftScopeId !== normalizedResolvedScopeId &&
     onUseResolvedScope;
+  const loadIsNoOp =
+    normalizedDraftScopeId.length > 0 &&
+    normalizedDraftScopeId === normalizedActiveScopeId;
+  const computedResetDisabled =
+    normalizedDraftScopeId === normalizedResolvedScopeId &&
+    normalizedActiveScopeId === normalizedResolvedScopeId;
+  const resetIsNoOp = (resetDisabled ?? computedResetDisabled) === true;
   const { token } = theme.useToken();
   const helperLabelStyle = {
     color: token.colorTextSecondary,
@@ -68,7 +81,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
       >
         <Input
           allowClear
-          placeholder="Enter team ID"
+          placeholder="输入团队 scopeId"
           style={{ flex: '1 1 240px', minWidth: 0, width: '100%' }}
           value={draft.scopeId}
           onChange={(event) =>
@@ -78,10 +91,14 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
           }
           onPressEnter={onLoad}
         />
-        <Button type="primary" onClick={onLoad}>
+        <Button disabled={!normalizedDraftScopeId || loadIsNoOp} type="primary" onClick={onLoad}>
           {loadLabel}
         </Button>
-        {onReset ? <Button onClick={onReset}>Reset</Button> : null}
+        {onReset ? (
+          <Button disabled={resetDisabled ?? computedResetDisabled} onClick={onReset}>
+            重置
+          </Button>
+        ) : null}
       </div>
       <div
         style={{
@@ -94,7 +111,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
         {normalizedResolvedScopeId ? (
           <>
             <Typography.Text style={helperLabelStyle}>
-              Resolved team
+              已解析团队
             </Typography.Text>
             <Typography.Paragraph
               copyable={{ text: normalizedResolvedScopeId }}
@@ -113,13 +130,23 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
                   wordBreak: 'break-word',
                 }}
               >
-                Resolved from the current session via {normalizedResolvedScopeSource}
+                当前会话已通过 {normalizedResolvedScopeSource} 解析出这个团队
+              </Typography.Text>
+            ) : null}
+            {loadIsNoOp ? (
+              <Typography.Text style={helperCopyStyle}>
+                当前已加载这个团队，所以“{loadLabel}”不会再触发变化。
+              </Typography.Text>
+            ) : null}
+            {resetIsNoOp ? (
+              <Typography.Text style={helperCopyStyle}>
+                当前已经回到会话解析出的团队，所以“重置”不会再触发变化。
               </Typography.Text>
             ) : null}
             {canUseResolvedScope ? (
               <div>
                 <Button size="small" onClick={onUseResolvedScope}>
-                  Use resolved team
+                  使用会话团队
                 </Button>
               </div>
             ) : null}
@@ -135,9 +162,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
               wordBreak: 'break-word',
             }}
           >
-            No team context was resolved from the current session. Enter a
-            team ID manually. tenantId and appId stay platform-managed and
-            hidden in this flow.
+            当前会话里没有自动解析出团队。请手动输入一个 scopeId。
           </Typography.Text>
         )}
       </div>

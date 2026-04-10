@@ -6,4 +6,14 @@ namespace Aevatar.Studio.Application.Studio.Abstractions;
 public interface IWorkflowStoragePort
 {
     Task UploadWorkflowYamlAsync(string workflowId, string workflowName, string yaml, CancellationToken ct);
+
+    Task<IReadOnlyList<StoredWorkflowYaml>> ListWorkflowYamlsAsync(CancellationToken ct);
+
+    Task<StoredWorkflowYaml?> GetWorkflowYamlAsync(string workflowId, CancellationToken ct);
 }
+
+public sealed record StoredWorkflowYaml(
+    string WorkflowId,
+    string WorkflowName,
+    string Yaml,
+    DateTimeOffset? UpdatedAtUtc);

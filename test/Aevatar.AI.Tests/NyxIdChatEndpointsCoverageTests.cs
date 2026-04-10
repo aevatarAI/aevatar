@@ -187,6 +187,205 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleStreamMessageAsync_ShouldDispatchChatRequest_AndWriteRunFinished()
+    {
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<INyxIdUserLlmPreferencesStore>(new StubPreferencesStore("relay-model", "/relay-route", 7))
+                .AddSingleton<IUserMemoryStore>(new StubUserMemoryStore("remember this"))
+                .BuildServiceProvider(),
+        };
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        var runtime = new StubActorRuntime();
+        var subscriptions = new StubSubscriptionProvider
+        {
+            Messages =
+            {
+                new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) },
+                new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "hello" }) },
+                new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+            },
+        };
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello there"),
+            runtime,
+            subscriptions,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        runtime.CreateCalls.Should().ContainSingle();
+        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
+        var chatRequest = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ChatRequestEvent>();
+        chatRequest.Prompt.Should().Be("hello there");
+        chatRequest.ScopeId.Should().Be("scope-a");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken].Should().Be("valid-token");
+        chatRequest.Metadata["scope_id"].Should().Be("scope-a");
+        chatRequest.Metadata[LLMRequestMetadataKeys.ModelOverride].Should().Be("relay-model");
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdRoutePreference].Should().Be("/relay-route");
+        chatRequest.Metadata[LLMRequestMetadataKeys.MaxToolRoundsOverride].Should().Be("7");
+        chatRequest.Metadata[LLMRequestMetadataKeys.UserMemoryPrompt].Should().Be("remember this");
+
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("TEXT_MESSAGE_START");
+        body.Should().Contain("hello");
+        body.Should().Contain("TEXT_MESSAGE_END");
+        body.Should().Contain("RUN_FINISHED");
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+    }
+
+    [Fact]
+    public async Task HandleStreamMessageAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        var runtime = new StubActorRuntime();
+        runtime.Actors["actor-1"] = new StubActor("actor-1");
+
+        await InvokeTaskAsync(
+            "HandleStreamMessageAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdChatStreamRequest("hello"),
+            runtime,
+            new ThrowingSubscriptionProvider(new InvalidOperationException("subscription failed")),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("subscription failed");
+    }
+
+    [Fact]
+    public async Task HandleApproveAsync_ShouldDispatchDecision_AndWriteRunFinished()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        var runtime = new StubActorRuntime();
+        runtime.Actors["actor-1"] = new StubActor("actor-1");
+        var subscriptions = new StubSubscriptionProvider
+        {
+            Messages =
+            {
+                new EventEnvelope { Payload = Any.Pack(new TextMessageStartEvent()) },
+                new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+            },
+        };
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1", Approved: false, Reason: "deny", SessionId: "session-1"),
+            runtime,
+            subscriptions,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        var actor = runtime.Actors["actor-1"].Should().BeOfType<StubActor>().Subject;
+        var decision = actor.HandledEnvelopes.Should().ContainSingle().Subject.Payload.Unpack<ToolApprovalDecisionEvent>();
+        decision.RequestId.Should().Be("req-1");
+        decision.Approved.Should().BeFalse();
+        decision.Reason.Should().Be("deny");
+        decision.SessionId.Should().Be("session-1");
+
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_FINISHED");
+    }
+
+    [Fact]
+    public async Task HandleApproveAsync_ShouldReturn500_WhenFailureOccursBeforeWriterStarts()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
+            new ThrowingActorRuntime(new InvalidOperationException("runtime failed")),
+            new StubSubscriptionProvider(),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+    }
+
+    [Fact]
+    public async Task HandleApproveAsync_ShouldWriteRunError_WhenFailureOccursAfterWriterStarts()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer valid-token";
+        context.Response.Body = new MemoryStream();
+
+        var runtime = new StubActorRuntime();
+        runtime.Actors["actor-1"] = new StubActor("actor-1");
+
+        await InvokeTaskAsync(
+            "HandleApproveAsync",
+            context,
+            "scope-a",
+            "actor-1",
+            new NyxIdChatEndpoints.NyxIdApprovalRequest("req-1"),
+            runtime,
+            new ThrowingSubscriptionProvider(new InvalidOperationException("approval subscription failed")),
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("RUN_STARTED");
+        body.Should().Contain("RUN_ERROR");
+        body.Should().Contain("approval subscription failed");
+    }
+
+    [Fact]
     public async Task HandleRelayWebhookAsync_ShouldReturnParseError_ForInvalidJson()
     {
         var context = new DefaultHttpContext();
@@ -256,6 +455,117 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldReturnPartialResponse_WhenTimedOut()
+    {
+        var payload = """
+            {
+              "message_id":"msg-1",
+              "platform":"slack",
+              "agent":{"api_key_id":"scope-a"},
+              "conversation":{"platform_id":"room-1"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = "not-a-jwt";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var runtime = new StubActorRuntime();
+        var subscriptions = new StubSubscriptionProvider
+        {
+            Messages =
+            {
+                new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "partial reply" }) },
+            },
+        };
+        var store = new NyxIdChatActorStore();
+
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            runtime,
+            subscriptions,
+            store,
+            new NyxIdRelayOptions { ResponseTimeoutSeconds = 0 },
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("partial reply");
+        (await store.ListActorsAsync("scope-a")).Should().ContainSingle("nyxid-relay-slack-room-1");
+    }
+
+    [Fact]
+    public async Task HandleRelayWebhookAsync_ShouldClassifyError_AndAppendDiagnostics()
+    {
+        var payload = """
+            {
+              "message_id":"msg-2",
+              "platform":"discord",
+              "agent":{"api_key_id":"scope-b"},
+              "conversation":{"id":"conv-1","platform_id":"room-2"},
+              "content":{"text":"hello"}
+            }
+            """;
+        var context = new DefaultHttpContext
+        {
+            RequestServices = new ServiceCollection()
+                .AddLogging()
+                .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Aevatar:NyxId:DefaultModel"] = "server-fallback",
+                    })
+                    .Build())
+                .BuildServiceProvider(),
+        };
+        context.Request.ContentType = "application/json";
+        context.Request.Headers["X-NyxID-User-Token"] = "not-a-jwt";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+
+        var result = await InvokeResultAsync(
+            "HandleRelayWebhookAsync",
+            context,
+            new StubActorRuntime(),
+            new StubSubscriptionProvider
+            {
+                Messages =
+                {
+                    new EventEnvelope
+                    {
+                        Payload = Any.Pack(new TextMessageEndEvent
+                        {
+                            Content = "[[AEVATAR_LLM_ERROR]]request failed with 403",
+                        }),
+                    },
+                },
+            },
+            new NyxIdChatActorStore(),
+            new NyxIdRelayOptions
+            {
+                ResponseTimeoutSeconds = 1,
+                EnableDebugDiagnostics = true,
+            },
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        var response = await ExecuteResultAsync(result);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        response.Body.Should().Contain("403 Forbidden");
+        response.Body.Should().Contain("[Debug]");
+        response.Body.Should().Contain("Route: gateway");
+        response.Body.Should().Contain("Token: present");
+        response.Body.Should().Contain("Scope: scope-b");
+    }
+
+    [Fact]
     public void ExtractBearerToken_ShouldParseBearerHeaderAndIgnoreOthers()
     {
         var context = new DefaultHttpContext();
@@ -296,6 +606,27 @@ public class NyxIdChatEndpointsCoverageTests
 
         var emptyContext = (string)method.Invoke(null, ["""{"services":[]}"""])!;
         emptyContext.Should().Contain("No services connected yet");
+    }
+
+    [Fact]
+    public void BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
+    {
+        var method = EndpointsType.GetMethod("BuildConnectedServicesContext", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        var dataPayload = """
+            {
+              "data":[
+                {"slug":"github","name":"GitHub","endpoint_url":"https://api.github.com"}
+              ]
+            }
+            """;
+        var dataContext = (string)method.Invoke(null, [dataPayload])!;
+        dataContext.Should().Contain("GitHub");
+        dataContext.Should().Contain("https://api.github.com");
+
+        var invalidContext = (string)method.Invoke(null, ["{ invalid"])!;
+        invalidContext.Should().Contain("No services connected yet");
+        invalidContext.Should().Contain("Use nyxid_proxy");
     }
 
     [Fact]
@@ -378,6 +709,191 @@ public class NyxIdChatEndpointsCoverageTests
             terminal.Should().BeNull();
             body.Should().Contain("TEXT_MESSAGE_START");
         }
+    }
+
+    [Fact]
+    public async Task MapAndWriteEventAsync_ShouldSerializeContentToolingMediaAndNormalEnd()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+
+        var writer = AgentCoverageTestSupport.CreateNonPublicInstance(
+            typeof(NyxIdChatEndpoints).Assembly,
+            "Aevatar.GAgents.NyxidChat.NyxIdChatSseWriter",
+            context.Response);
+
+        var method = EndpointsType.GetMethod("MapAndWriteEventAsync", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope { Payload = Any.Pack(new TextMessageContentEvent { Delta = "delta-1" }) },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new ToolCallEvent
+                {
+                    ToolName = "search",
+                    CallId = "call-1",
+                    ArgumentsJson = "{\"q\":\"abc\"}",
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new ToolResultEvent
+                {
+                    CallId = "call-1",
+                    ResultJson = "{\"ok\":true}",
+                    Success = true,
+                    Error = string.Empty,
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new ToolApprovalRequestEvent
+                {
+                    RequestId = "req-1",
+                    SessionId = "s1",
+                    ToolName = "connector.run",
+                    ToolCallId = "call-1",
+                    ArgumentsJson = "{}",
+                    IsDestructive = true,
+                    TimeoutSeconds = 30,
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new MediaContentEvent
+                {
+                    SessionId = "session-1",
+                    AgentId = "agent-1",
+                    Part = new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Image,
+                        Uri = "https://example.com/cat.png",
+                        MediaType = "image/png",
+                        Name = "cat",
+                    },
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new MediaContentEvent
+                {
+                    SessionId = "session-1",
+                    AgentId = "agent-1",
+                    Part = new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Audio,
+                        DataBase64 = "YXVkaW8=",
+                        MediaType = "audio/mpeg",
+                        Name = "clip",
+                    },
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new MediaContentEvent
+                {
+                    SessionId = "session-1",
+                    AgentId = "agent-1",
+                    Part = new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Video,
+                        Uri = "https://example.com/video.mp4",
+                        MediaType = "video/mp4",
+                        Name = "clip-video",
+                    },
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new MediaContentEvent
+                {
+                    SessionId = "session-1",
+                    AgentId = "agent-1",
+                    Part = new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Text,
+                        Text = "inline note",
+                    },
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new MediaContentEvent
+                {
+                    SessionId = "session-1",
+                    AgentId = "agent-1",
+                    Part = new ChatContentPart
+                    {
+                        Kind = ChatContentPartKind.Unspecified,
+                        Name = "mystery",
+                    },
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope
+            {
+                Payload = Any.Pack(new MediaContentEvent
+                {
+                    SessionId = "session-1",
+                    AgentId = "agent-1",
+                }),
+            },
+            "m-2",
+            writer)).Should().BeNull();
+        (await InvokeValueTaskAsync<string?>(
+            method,
+            new EventEnvelope { Payload = Any.Pack(new TextMessageEndEvent { Content = "done" }) },
+            "m-2",
+            writer)).Should().Be("TEXT_MESSAGE_END");
+
+        context.Response.Body.Position = 0;
+        var body = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        body.Should().Contain("delta-1");
+        body.Should().Contain("search");
+        body.Should().Contain("call-1");
+        body.Should().Contain("req-1");
+        body.Should().Contain("cat.png");
+        body.Should().Contain("\"kind\":\"audio\"");
+        body.Should().Contain("\"kind\":\"video\"");
+        body.Should().Contain("\"kind\":\"text\"");
+        body.Should().Contain("\"kind\":\"unknown\"");
+        body.Should().Contain("TEXT_MESSAGE_END");
     }
 
     private static async Task<IResult> InvokeResultAsync(string methodName, params object[] args)
@@ -466,9 +982,14 @@ public class NyxIdChatEndpointsCoverageTests
 
         public string Id { get; }
         public IAgent Agent { get; } = new StubAgent();
+        public List<EventEnvelope> HandledEnvelopes { get; } = [];
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
-        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default)
+        {
+            HandledEnvelopes.Add(envelope);
+            return Task.CompletedTask;
+        }
         public Task<string?> GetParentIdAsync() => Task.FromResult<string?>(null);
         public Task<IReadOnlyList<string>> GetChildrenIdsAsync() => Task.FromResult<IReadOnlyList<string>>([]);
     }
@@ -485,6 +1006,27 @@ public class NyxIdChatEndpointsCoverageTests
 
     private sealed class StubSubscriptionProvider : IActorEventSubscriptionProvider
     {
+        public List<EventEnvelope> Messages { get; } = [];
+
+        public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
+            string actorId,
+            Func<TMessage, Task> handler,
+            CancellationToken ct = default)
+            where TMessage : class, IMessage, new()
+        {
+            _ = actorId;
+            _ = ct;
+            if (typeof(TMessage) == typeof(EventEnvelope))
+            {
+                foreach (var message in Messages)
+                    handler((TMessage)(object)message).GetAwaiter().GetResult();
+            }
+            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
+        }
+    }
+
+    private sealed class ThrowingSubscriptionProvider(Exception exception) : IActorEventSubscriptionProvider
+    {
         public Task<IAsyncDisposable> SubscribeAsync<TMessage>(
             string actorId,
             Func<TMessage, Task> handler,
@@ -494,8 +1036,56 @@ public class NyxIdChatEndpointsCoverageTests
             _ = actorId;
             _ = handler;
             _ = ct;
-            return Task.FromResult<IAsyncDisposable>(new NoopDisposable());
+            throw exception;
         }
+    }
+
+    private sealed class ThrowingActorRuntime(Exception exception) : IActorRuntime
+    {
+        public Task<IActor?> GetAsync(string id)
+        {
+            _ = id;
+            throw exception;
+        }
+
+        public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
+            where TAgent : IAgent =>
+            throw exception;
+
+        public Task<IActor> CreateAsync(System.Type agentType, string? id = null, CancellationToken ct = default)
+        {
+            _ = agentType;
+            _ = id;
+            _ = ct;
+            throw exception;
+        }
+
+        public Task DestroyAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<bool> ExistsAsync(string id) => Task.FromResult(false);
+        public Task LinkAsync(string parentId, string childId, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UnlinkAsync(string childId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class StubPreferencesStore(string model, string route, int maxToolRounds) : INyxIdUserLlmPreferencesStore
+    {
+        public Task<NyxIdUserLlmPreferences> GetAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new NyxIdUserLlmPreferences(model, route, maxToolRounds));
+    }
+
+    private sealed class StubUserMemoryStore(string promptSection) : IUserMemoryStore
+    {
+        public Task<UserMemoryDocument> GetAsync(CancellationToken ct = default) =>
+            Task.FromResult(UserMemoryDocument.Empty);
+
+        public Task SaveAsync(UserMemoryDocument document, CancellationToken ct = default) => Task.CompletedTask;
+
+        public Task<UserMemoryEntry> AddEntryAsync(string category, string content, string source, CancellationToken ct = default) =>
+            Task.FromResult(new UserMemoryEntry("id", category, content, source, 0, 0));
+
+        public Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default) => Task.FromResult(true);
+
+        public Task<string> BuildPromptSectionAsync(int maxChars = 2000, CancellationToken ct = default) =>
+            Task.FromResult(promptSection);
     }
 
     private sealed class NoopDisposable : IAsyncDisposable

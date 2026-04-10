@@ -3,6 +3,8 @@ import {
   EyeOutlined,
   RocketOutlined,
 } from "@ant-design/icons";
+import type { ProListMetas } from "@ant-design/pro-components";
+import { ProList } from "@ant-design/pro-components";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, Button, Empty, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
@@ -10,6 +12,7 @@ import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
+import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {
   buildRuntimeGAgentsHref,
   buildRuntimeRunsHref,
@@ -42,9 +45,7 @@ import {
 import { resolveStudioScopeContext } from "./components/resolvedScope";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
-  buildTeamWorkspaceRoute,
   buildScopeHref,
-  buildScopeOverviewHref,
   normalizeScopeDraft,
   readScopeQueryDraft,
   type ScopeQueryDraft,
@@ -91,42 +92,6 @@ function buildScopedServiceHref(scopeId: string, serviceId: string): string {
   params.set("serviceId", serviceId.trim());
   return `/services?${params.toString()}`;
 }
-
-type AssetCardProps = {
-  actions: React.ReactNode;
-  description: React.ReactNode;
-  subtitle: React.ReactNode;
-  title: React.ReactNode;
-};
-
-const assetCardStyle: React.CSSProperties = {
-  border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 12,
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  padding: 16,
-};
-
-const AssetCard: React.FC<AssetCardProps> = ({
-  actions,
-  description,
-  subtitle,
-  title,
-}) => (
-  <div style={assetCardStyle}>
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <Typography.Title level={5} style={{ margin: 0 }}>
-        {title}
-      </Typography.Title>
-      <div>{subtitle}</div>
-      <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-        {description}
-      </Typography.Paragraph>
-    </div>
-    <Space wrap>{actions}</Space>
-  </div>
-);
 
 const ScopeOverviewPage: React.FC = () => {
   const queryClient = useQueryClient();
@@ -224,7 +189,7 @@ const ScopeOverviewPage: React.FC = () => {
 
   useEffect(() => {
     history.replace(
-      buildScopeOverviewHref(activeDraft, {
+      buildScopeHref("/teams", activeDraft, {
         revisionId: focus?.kind === "revision" ? focus.id : "",
         workflowId: focus?.kind === "workflow" ? focus.id : "",
         scriptId: focus?.kind === "script" ? focus.id : "",
@@ -249,12 +214,121 @@ const ScopeOverviewPage: React.FC = () => {
     scopeServicesQuery.data?.find((service) => service.serviceId === binding?.serviceId) ??
     null;
 
+  const workflowMetas = useMemo<ProListMetas<ScopeWorkflowSummary>>(
+    () => ({
+      actions: {
+        render: (_, workflow) => [
+          <Button
+            icon={<EyeOutlined />}
+            key={`${workflow.workflowId}-inspect`}
+            onClick={() => setFocus({ kind: "workflow", id: workflow.workflowId })}
+            type="link"
+          >
+            查看
+          </Button>,
+          <Button
+            icon={<RocketOutlined />}
+            key={`${workflow.workflowId}-runs`}
+            onClick={() =>
+              history.push(
+                buildRuntimeRunsHref({
+                  scopeId,
+                }),
+              )
+            }
+            type="link"
+          >
+            事件流
+          </Button>,
+        ],
+      },
+      description: {
+        render: (_, workflow) =>
+          workflow.serviceKey
+            ? `入口 ${workflow.serviceKey}`
+            : "该行为定义还没有发布为团队默认入口。",
+      },
+      subTitle: {
+        render: (_, workflow) => (
+          <Space wrap size={[8, 8]}>
+            <AevatarStatusTag
+              domain="asset"
+              status={workflow.activeRevisionId ? "active" : "draft"}
+            />
+            <AevatarStatusTag
+              domain="governance"
+              status={workflow.deploymentStatus || "draft"}
+            />
+          </Space>
+        ),
+      },
+      title: {
+        render: (_, workflow) => workflow.displayName || workflow.workflowId,
+      },
+    }),
+    [scopeId],
+  );
+  const scriptMetas = useMemo<ProListMetas<ScopeScriptSummary>>(
+    () => ({
+      actions: {
+        render: (_, script) => [
+          <Button
+            icon={<EyeOutlined />}
+            key={`${script.scriptId}-inspect`}
+            onClick={() => setFocus({ kind: "script", id: script.scriptId })}
+            type="link"
+          >
+            查看
+          </Button>,
+          <Button
+            icon={<CodeOutlined />}
+            key={`${script.scriptId}-studio`}
+            onClick={() =>
+              history.push(
+                buildStudioScriptsWorkspaceRoute({
+                  scopeId,
+                  scopeLabel: scopeId,
+                  scriptId: script.scriptId,
+                }),
+              )
+            }
+            type="link"
+          >
+            打开脚本行为
+          </Button>,
+        ],
+      },
+      description: {
+        render: (_, script) =>
+          script.activeSourceHash
+            ? `源码哈希 ${script.activeSourceHash}`
+            : "该脚本行为正在等待已提交的源码哈希。",
+      },
+      subTitle: {
+        render: (_, script) => (
+          <Space wrap size={[8, 8]}>
+            <AevatarStatusTag
+              domain="asset"
+              status={script.activeRevision ? "active" : "draft"}
+            />
+            <Typography.Text type="secondary">
+              Revision {script.activeRevision || "n/a"}
+            </Typography.Text>
+          </Space>
+        ),
+      },
+      title: {
+        render: (_, script) => script.scriptId,
+      },
+    }),
+    [],
+  );
+
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="Legacy Team Workspace"
-      content="Team home now lives under /teams. Keep this page for binding, revision, and asset inspection while the team-first flow finishes taking over."
-      titleHelp="This is the legacy deep-link workspace for binding, revisions, and assets. It is no longer the primary team home."
+      title="我的团队"
+      titleHelp="当前团队首页继续复用 scope 级状态板，但会用 Team 语义组织默认绑定、成员资产和下一步动作。"
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -262,12 +336,13 @@ const ScopeOverviewPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
               layoutMode="document"
-              title="Team Context"
-              titleHelp="Everything downstream stays team-scoped once you load a team."
+              title="团队范围"
+              titleHelp="这里先锁定当前 Team（Scope），后续成员、事件流和高级编辑都会沿用这个上下文。"
             >
               <ScopeQueryCard
+                activeScopeId={scopeId}
                 draft={draft}
-                loadLabel="Load team overview"
+                loadLabel="加载团队状态"
                 onChange={setDraft}
                 onLoad={() => {
                   const nextDraft = normalizeScopeDraft(draft);
@@ -282,6 +357,12 @@ const ScopeOverviewPage: React.FC = () => {
                   setActiveDraft(nextDraft);
                   setFocus(null);
                 }}
+                resetDisabled={
+                  normalizeScopeDraft(draft).scopeId ===
+                    (resolvedScope?.scopeId?.trim() ?? "") &&
+                  scopeId === (resolvedScope?.scopeId?.trim() ?? "") &&
+                  focus == null
+                }
                 onUseResolvedScope={() => {
                   if (!resolvedScope?.scopeId) {
                     return;
@@ -298,25 +379,45 @@ const ScopeOverviewPage: React.FC = () => {
               />
             </AevatarPanel>
 
-            <AevatarPanel title="Legacy Workspace Actions">
-              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+            <AevatarPanel title="团队操作">
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
                 <Button
+                  disabled={!scopeId}
                   onClick={() =>
                     history.push(
-                      scopeId ? buildTeamWorkspaceRoute(scopeId) : "/teams",
+                      scopeId
+                        ? buildTeamDetailHref({
+                            scopeId,
+                          })
+                        : "/teams",
                     )
                   }
                   type="primary"
                 >
-                  Open Team Home
+                  打开团队详情
+                </Button>
+                <Button
+                  disabled={!scopeId}
+                  onClick={() =>
+                    history.push(
+                      scopeId
+                        ? buildTeamDetailHref({
+                            scopeId,
+                            tab: "advanced",
+                          })
+                        : "/teams",
+                    )
+                  }
+                >
+                  打开高级编辑
                 </Button>
                 <Button onClick={() => history.push(buildScopeHref("/scopes/assets", activeDraft))}>
-                  Open team assets
+                  打开团队资产
                 </Button>
                 <Button onClick={() => history.push(buildScopeHref("/scopes/invoke", activeDraft, {
                   serviceId: binding?.serviceId ?? "",
                 }))}>
-                  Open Invoke Lab
+                  打开测试入口
                 </Button>
                 <Button
                   onClick={() =>
@@ -329,18 +430,19 @@ const ScopeOverviewPage: React.FC = () => {
                     )
                   }
                 >
-                  Open Member Runtime
+                  管理成员
                 </Button>
                 <Button
                   onClick={() =>
                     history.push(
                       buildStudioWorkflowWorkspaceRoute({
                         scopeId,
+                        scopeLabel: scopeId,
                       }),
                     )
                   }
                 >
-                  Open Team Builder
+                  打开行为定义
                 </Button>
                 <Button
                   onClick={() =>
@@ -351,7 +453,7 @@ const ScopeOverviewPage: React.FC = () => {
                     )
                   }
                 >
-                  Open Services
+                  打开平台服务
                 </Button>
               </Space>
             </AevatarPanel>
@@ -361,25 +463,17 @@ const ScopeOverviewPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {!scopeId ? (
               <Alert
-                title="Select a team to inspect its binding, revisions, and owned assets."
+                title="选择一个团队以查看当前默认成员、版本发布和已拥有资产。"
                 showIcon
                 type="info"
               />
             ) : null}
 
             {scopeId ? (
-              <Alert
-                description="Team home is now the primary surface. Use this legacy workspace when you need binding rollout detail, asset inspection, or older deep links."
-                showIcon
-                type="warning"
-              />
-            ) : null}
-
-            {scopeId ? (
               <>
                 <AevatarPanel
-                  title="Team Status Board"
-                  titleHelp="The command surface users actually care about: whether the team is bound, serving, and ready to invoke."
+                  title="团队状态"
+                  titleHelp="团队首页会把默认入口、成员资产和是否可测试集中展示，不再暴露 project 术语。"
                 >
                   <div
                     style={{
@@ -388,44 +482,44 @@ const ScopeOverviewPage: React.FC = () => {
                       gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                     }}
                   >
-                    <MetricCard label="Team" value={scopeId} />
+                    <MetricCard label="团队" value={scopeId} />
                     <MetricCard
-                      label="Binding"
+                      label="默认成员"
                       value={binding?.available ? binding.displayName || binding.serviceId : "Not bound"}
                     />
                     <MetricCard
-                      label="Binding target"
+                      label="绑定目标"
                       value={currentBindingTarget}
                     />
                     <MetricCard
-                      label="Binding kind"
+                      label="实现类型"
                       value={formatStudioScopeBindingImplementationKind(
                         activeRevision?.implementationKind,
                       )}
                     />
                     <MetricCard
-                      label="Workflows"
+                      label="行为定义"
                       value={workflowsQuery.data?.length ?? 0}
                     />
-                    <MetricCard label="Scripts" value={scriptsQuery.data?.length ?? 0} />
+                    <MetricCard label="脚本行为" value={scriptsQuery.data?.length ?? 0} />
                     <MetricCard
-                      label="Services"
+                      label="成员服务"
                       value={scopeServicesQuery.data?.length ?? 0}
                     />
                     <MetricCard
-                      label="Serving"
+                      label="发布状态"
                       value={binding?.deploymentStatus || "draft"}
                     />
                   </div>
                 </AevatarPanel>
 
                 <AevatarPanel
-                  title="Current Team Binding"
-                  titleHelp="The current team binding should be legible without leaving the overview page."
+                  title="当前默认成员"
+                  titleHelp="这里展示当前团队默认服务绑定到的成员实现，便于继续进入事件流或高级编辑。"
                 >
                   {!binding?.available || !activeRevision ? (
                     <Alert
-                      title="No published default binding is active for this team yet."
+                      title="当前团队还没有可用的默认成员绑定。"
                       showIcon
                       type="info"
                     />
@@ -438,24 +532,24 @@ const ScopeOverviewPage: React.FC = () => {
                           gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
                         }}
                       >
-                        <MetricCard label="Service" value={binding.displayName || binding.serviceId} />
-                        <MetricCard label="Target" value={currentBindingTarget} />
+                        <MetricCard label="成员" value={binding.displayName || binding.serviceId} />
+                        <MetricCard label="目标" value={currentBindingTarget} />
                         <MetricCard
-                          label="Revision"
+                          label="版本"
                           value={activeRevision.revisionId}
                         />
                         <MetricCard
-                          label="Actor"
+                          label="实例"
                           value={currentBindingActor || "n/a"}
                         />
                       </div>
                       {currentBindingContext ? (
-                        <Alert
-                          description={currentBindingContext}
-                          showIcon
-                          title="Binding detail"
-                          type="info"
-                        />
+                      <Alert
+                        description={currentBindingContext}
+                        showIcon
+                        title="绑定详情"
+                        type="info"
+                      />
                       ) : null}
                       <Space wrap>
                         <Button
@@ -471,7 +565,7 @@ const ScopeOverviewPage: React.FC = () => {
                             )
                           }
                         >
-                          Open Member Runtime
+                          在成员页查看
                         </Button>
                         <Button
                           onClick={() =>
@@ -483,7 +577,7 @@ const ScopeOverviewPage: React.FC = () => {
                           }
                           type="primary"
                         >
-                          Test in Invoke Lab
+                          打开测试入口
                         </Button>
                       </Space>
                     </>
@@ -491,8 +585,8 @@ const ScopeOverviewPage: React.FC = () => {
                 </AevatarPanel>
 
                 <AevatarPanel
-                  title="Revision Rollout"
-                  titleHelp="Binding revisions are treated as the team's runtime posture, not hidden on a secondary page."
+                  title="版本发布"
+                  titleHelp="团队默认入口的历史版本仍然保留在这里，方便继续切换或退役。"
                 >
                   {revisions.length > 0 ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -527,7 +621,7 @@ const ScopeOverviewPage: React.FC = () => {
                     </div>
                   ) : (
                     <Empty
-                      description="No binding revisions are available yet."
+                      description="当前团队还没有可切换的版本。"
                       image={Empty.PRESENTED_IMAGE_SIMPLE}
                     />
                   )}
@@ -541,8 +635,8 @@ const ScopeOverviewPage: React.FC = () => {
                   }}
                 >
                   <AevatarPanel
-                    title="Published Services"
-                    titleHelp="Published services are the runtime surfaces users can actually invoke from this team."
+                    title="已发布成员"
+                    titleHelp="当前团队下已发布的 service 会在这里展示，并作为成员列表和连接器聚合的基础。"
                   >
                     {scopeServicesQuery.error ? (
                       <Alert
@@ -550,12 +644,12 @@ const ScopeOverviewPage: React.FC = () => {
                         title={
                           scopeServicesQuery.error instanceof Error
                             ? scopeServicesQuery.error.message
-                            : "Failed to load published services."
+                            : "加载已发布成员失败。"
                         }
                         type="error"
                       />
                     ) : scopeServicesQuery.isLoading ? (
-                      <AevatarInspectorEmpty description="Loading published services." />
+                      <AevatarInspectorEmpty description="正在加载已发布成员。" />
                     ) : scopeServicesQuery.data && scopeServicesQuery.data.length > 0 ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                         {scopeServicesQuery.data.map((service) => (
@@ -579,140 +673,56 @@ const ScopeOverviewPage: React.FC = () => {
                       </div>
                     ) : (
                       <Empty
-                        description="No published services were found for this team."
+                        description="当前团队还没有已发布成员。"
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
                   </AevatarPanel>
 
-                  <AevatarPanel title="Workflow Assets">
-                    {workflowsQuery.isLoading ? (
-                      <AevatarInspectorEmpty description="Loading workflow assets." />
-                    ) : workflowsQuery.data && workflowsQuery.data.length > 0 ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                        {workflowsQuery.data.map((workflow) => (
-                          <AssetCard
-                            key={workflow.workflowId}
-                            actions={
-                              <>
-                                <Button
-                                  icon={<EyeOutlined />}
-                                  key={`${workflow.workflowId}-inspect`}
-                                  onClick={() =>
-                                    setFocus({ kind: "workflow", id: workflow.workflowId })
-                                  }
-                                  type="link"
-                                >
-                                  Inspect
-                                </Button>
-                                <Button
-                                  icon={<RocketOutlined />}
-                                  key={`${workflow.workflowId}-runs`}
-                                  onClick={() =>
-                                    history.push(
-                                      buildRuntimeRunsHref({
-                                        scopeId,
-                                      }),
-                                    )
-                                  }
-                                  type="link"
-                                >
-                                  Runs
-                                </Button>
-                              </>
-                            }
-                            description={
-                              workflow.serviceKey
-                                ? `Entrypoint ${workflow.serviceKey}`
-                                : "Workflow asset is not yet published as a team entrypoint."
-                            }
-                            subtitle={
-                              <Space wrap size={[8, 8]}>
-                                <AevatarStatusTag
-                                  domain="asset"
-                                  status={workflow.activeRevisionId ? "active" : "draft"}
-                                />
-                                <AevatarStatusTag
-                                  domain="governance"
-                                  status={workflow.deploymentStatus || "draft"}
-                                />
-                              </Space>
-                            }
-                            title={workflow.displayName || workflow.workflowId}
+                  <AevatarPanel title="行为定义资产">
+                    <ProList<ScopeWorkflowSummary>
+                      dataSource={workflowsQuery.data ?? []}
+                      grid={{ gutter: 16, column: 1 }}
+                      itemCardProps={{
+                        bodyStyle: { padding: 16 },
+                        style: { borderRadius: 12 },
+                      }}
+                      locale={{
+                        emptyText: (
+                          <Empty
+                            description="当前团队还没有行为定义资产。"
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
                           />
-                        ))}
-                      </div>
-                    ) : (
-                      <Empty
-                        description="No workflow assets were found for this team."
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      />
-                    )}
+                        ),
+                      }}
+                      metas={workflowMetas}
+                      pagination={false}
+                      rowKey="workflowId"
+                      split={false}
+                    />
                   </AevatarPanel>
 
-                  <AevatarPanel title="Script Assets">
-                    {scriptsQuery.isLoading ? (
-                      <AevatarInspectorEmpty description="Loading script assets." />
-                    ) : scriptsQuery.data && scriptsQuery.data.length > 0 ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                        {scriptsQuery.data.map((script) => (
-                          <AssetCard
-                            key={script.scriptId}
-                            actions={
-                              <>
-                                <Button
-                                  icon={<EyeOutlined />}
-                                  key={`${script.scriptId}-inspect`}
-                                  onClick={() =>
-                                    setFocus({ kind: "script", id: script.scriptId })
-                                  }
-                                  type="link"
-                                >
-                                  Inspect
-                                </Button>
-                                <Button
-                                  icon={<CodeOutlined />}
-                                  key={`${script.scriptId}-studio`}
-                                  onClick={() =>
-                                    history.push(
-                                      buildStudioScriptsWorkspaceRoute({
-                                        scopeId,
-                                        scriptId: script.scriptId,
-                                      }),
-                                    )
-                                  }
-                                  type="link"
-                                >
-                                  Open Team Builder
-                                </Button>
-                              </>
-                            }
-                            description={
-                              script.activeSourceHash
-                                ? `Source hash ${script.activeSourceHash}`
-                                : "Script asset is waiting for a committed source hash."
-                            }
-                            subtitle={
-                              <Space wrap size={[8, 8]}>
-                                <AevatarStatusTag
-                                  domain="asset"
-                                  status={script.activeRevision ? "active" : "draft"}
-                                />
-                                <Typography.Text type="secondary">
-                                  Revision {script.activeRevision || "n/a"}
-                                </Typography.Text>
-                              </Space>
-                            }
-                            title={script.scriptId}
+                  <AevatarPanel title="脚本行为资产">
+                    <ProList<ScopeScriptSummary>
+                      dataSource={scriptsQuery.data ?? []}
+                      grid={{ gutter: 16, column: 1 }}
+                      itemCardProps={{
+                        bodyStyle: { padding: 16 },
+                        style: { borderRadius: 12 },
+                      }}
+                      locale={{
+                        emptyText: (
+                          <Empty
+                            description="当前团队还没有脚本行为资产。"
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
                           />
-                        ))}
-                      </div>
-                    ) : (
-                      <Empty
-                        description="No script assets were found for this team."
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      />
-                    )}
+                        ),
+                      }}
+                      metas={scriptMetas}
+                      pagination={false}
+                      rowKey="scriptId"
+                      split={false}
+                    />
                   </AevatarPanel>
                 </div>
               </>
@@ -724,18 +734,18 @@ const ScopeOverviewPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setFocus(null)}
         open={Boolean(focus)}
-        subtitle="Overview inspector"
+        subtitle="团队检查器"
         title={
           focus?.kind === "revision"
-            ? focusedRevision?.revisionId || focus?.id || "Revision"
-            : focus?.id || "Team detail"
+            ? focusedRevision?.revisionId || focus?.id || "版本"
+            : focus?.id || "团队详情"
         }
       >
         {!focus ? (
-          <AevatarInspectorEmpty description="Choose a revision, workflow, or script to inspect its role in the current team." />
+          <AevatarInspectorEmpty description="选择一个版本、行为定义或脚本行为来查看它在当前团队中的作用。" />
         ) : focus.kind === "revision" && focusedRevision ? (
           <AevatarPanel
-            title="Revision Snapshot"
+            title="版本快照"
             titleHelp="Revision posture, rollout identity, and activation affordance stay in one place."
           >
             <div
@@ -745,20 +755,20 @@ const ScopeOverviewPage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <MetricCard label="Revision" value={focusedRevision.revisionId} />
+              <MetricCard label="版本" value={focusedRevision.revisionId} />
               <MetricCard
-                label="Implementation"
+                label="实现类型"
                 value={formatStudioScopeBindingImplementationKind(
                   focusedRevision.implementationKind,
                 )}
               />
               <MetricCard
-                label="Target"
+                label="目标"
                 value={describeStudioScopeBindingRevisionTarget(focusedRevision)}
               />
-              <MetricCard label="Serving state" value={focusedRevision.servingState || focusedRevision.status} />
+              <MetricCard label="发布状态" value={focusedRevision.servingState || focusedRevision.status} />
               <MetricCard
-                label="Actor"
+                label="实例"
                 value={focusedRevision.primaryActorId || "n/a"}
               />
             </div>
@@ -768,7 +778,7 @@ const ScopeOverviewPage: React.FC = () => {
                   focusedRevision,
                 )}
                 showIcon
-                title="Binding detail"
+                title="绑定详情"
                 type="info"
               />
             ) : null}
@@ -805,15 +815,15 @@ const ScopeOverviewPage: React.FC = () => {
                   )
                 }
               >
-                Open Member Runtime
+                在成员页查看
               </Button>
             </Space>
           </AevatarPanel>
         ) : focus.kind === "workflow" ? (
           workflowDetailQuery.data?.available && workflowDetailQuery.data.workflow ? (
             <>
-              <AevatarPanel title="Workflow Asset">
-                <Space orientation="vertical" size={8}>
+              <AevatarPanel title="行为定义资产">
+                <Space direction="vertical" size={8}>
                   <Space wrap size={[8, 8]}>
                     <AevatarStatusTag
                       domain="asset"
@@ -828,24 +838,24 @@ const ScopeOverviewPage: React.FC = () => {
                     {workflowDetailQuery.data.workflow.displayName || workflowDetailQuery.data.workflow.workflowId}
                   </Typography.Text>
                   <Typography.Text type="secondary">
-                    {workflowDetailQuery.data.workflow.serviceKey || "No published entrypoint"}
+                    {workflowDetailQuery.data.workflow.serviceKey || "当前还没有已发布入口"}
                   </Typography.Text>
                 </Space>
               </AevatarPanel>
-              <AevatarPanel title="Workflow Source">
+              <AevatarPanel title="行为定义源码">
                 <pre style={codeBlockStyle}>
-                  {workflowDetailQuery.data.source?.workflowYaml || "No workflow YAML available."}
+                  {workflowDetailQuery.data.source?.workflowYaml || "当前还没有可查看的行为定义 YAML。"}
                 </pre>
               </AevatarPanel>
             </>
           ) : (
-            <AevatarInspectorEmpty description="Workflow detail is not available yet." />
+            <AevatarInspectorEmpty description="当前还没有可查看的行为定义详情。" />
           )
         ) : focus.kind === "script" ? (
           scriptDetailQuery.data?.available && scriptDetailQuery.data.script ? (
             <>
-              <AevatarPanel title="Script Asset">
-                <Space orientation="vertical" size={8}>
+              <AevatarPanel title="脚本行为资产">
+                <Space direction="vertical" size={8}>
                   <AevatarStatusTag
                     domain="asset"
                     status={scriptDetailQuery.data.script.activeRevision ? "active" : "draft"}
@@ -854,22 +864,22 @@ const ScopeOverviewPage: React.FC = () => {
                     {scriptDetailQuery.data.script.scriptId}
                   </Typography.Text>
                   <Typography.Text type="secondary">
-                    Revision {scriptDetailQuery.data.script.activeRevision || "n/a"} · Hash{" "}
+                    版本 {scriptDetailQuery.data.script.activeRevision || "n/a"} · 哈希{" "}
                     {scriptDetailQuery.data.script.activeSourceHash || "n/a"}
                   </Typography.Text>
                 </Space>
               </AevatarPanel>
-              <AevatarPanel title="Source Snapshot">
+              <AevatarPanel title="源码快照">
                 <pre style={codeBlockStyle}>
-                  {scriptDetailQuery.data.source?.sourceText || "No script source available."}
+                  {scriptDetailQuery.data.source?.sourceText || "当前还没有可查看的脚本源码。"}
                 </pre>
               </AevatarPanel>
             </>
           ) : (
-            <AevatarInspectorEmpty description="Script detail is not available yet." />
+            <AevatarInspectorEmpty description="当前还没有可查看的脚本行为详情。" />
           )
         ) : (
-          <AevatarInspectorEmpty description="No team detail is available." />
+          <AevatarInspectorEmpty description="当前还没有可查看的团队详情。" />
         )}
       </AevatarContextDrawer>
     </AevatarPageShell>
@@ -938,19 +948,19 @@ const ScopeServiceCard: React.FC<{
       />
     </Space>
     <Typography.Text type="secondary">
-      {service.endpoints.length} endpoints · Revision{" "}
+      {service.endpoints.length} 个端点 · 版本{" "}
       {service.activeServingRevisionId ||
         service.defaultServingRevisionId ||
         "n/a"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Actor {service.primaryActorId || "n/a"} · Updated {formatDateTime(service.updatedAt)}
+      实例 {service.primaryActorId || "n/a"} · 更新时间 {formatDateTime(service.updatedAt)}
     </Typography.Text>
     <Space wrap>
       <Button onClick={onOpenInvoke} type="primary">
-        Open invoke
+        打开测试入口
       </Button>
-      <Button onClick={onOpenServices}>Open services</Button>
+      <Button onClick={onOpenServices}>打开平台服务</Button>
     </Space>
   </div>
 );
@@ -1042,12 +1052,12 @@ const RevisionCard: React.FC<{
         wordBreak: "break-word",
       }}
     >
-      Actor {revision.primaryActorId || "n/a"} · Deployment{" "}
+      实例 {revision.primaryActorId || "n/a"} · 部署{" "}
       {revision.deploymentId || "draft"}
     </Typography.Text>
     <Space wrap>
       <Button icon={<EyeOutlined />} onClick={onInspect}>
-        Inspect
+        查看
       </Button>
       <Button
         disabled={!canActivate}

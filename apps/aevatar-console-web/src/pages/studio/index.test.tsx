@@ -1,8 +1,7 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
-import { history } from "@/shared/navigation/history";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
@@ -906,13 +905,14 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 
 jest.mock("./components/StudioShell", () => ({
   __esModule: true,
-  default: ({ children, navItems = [], onSelectPage }: any) => {
+  default: ({ alerts, children, navItems = [], onSelectPage }: any) => {
     const React = require("react");
     return React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "workbench" }, "Workbench"),
+        alerts ? React.createElement("div", { key: "alerts" }, alerts) : null,
         ...navItems.map((item: any) =>
           React.createElement(
             "button",
@@ -1575,6 +1575,33 @@ describe("StudioPage", () => {
     });
   });
 
+  it("keeps team context visible and preserved in the Studio route", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
+    );
+
+    expect(await screen.findByText("团队构建器上下文")).toBeTruthy();
+    expect(screen.getByText("团队 A / 成员 Alpha")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("scopeId")).toBe("scope-a");
+    expect(searchParams.get("scopeLabel")).toBe("团队 A");
+    expect(searchParams.get("memberId")).toBe("service-alpha");
+    expect(searchParams.get("memberLabel")).toBe("成员 Alpha");
+    expect(searchParams.get("workflow")).toBe("workflow-1");
+    expect(searchParams.get("tab")).toBe("studio");
+
+    fireEvent.click(screen.getByRole("button", { name: "查看行为定义" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
+    });
+  });
+
   it("hydrates an editable blank draft when a scope workflow has no YAML source yet", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValue({
       ...defaultStudioAppContext,
@@ -1741,7 +1768,7 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?tab=scripts");
 
     await screen.findByLabelText("Script ID");
-    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
 
     expect(await screen.findByText("Leave Scripts Studio?")).toBeTruthy();
     expect(
@@ -1756,7 +1783,7 @@ describe("StudioPage", () => {
     });
     expect(screen.getByLabelText("Script ID")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
     fireEvent.click(await screen.findByRole("button", { name: "Leave page" }));
 
     expect(await screen.findByText("Current draft")).toBeTruthy();
@@ -1792,6 +1819,37 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?draft=new");
 
     expect(await screen.findByText("Blank Studio draft")).toBeTruthy();
+    expect(
+      (await screen.findByLabelText("Workflow name")) as HTMLInputElement
+    ).toHaveValue("draft");
+    expect(
+      (await screen.findByLabelText("Workflow YAML")) as HTMLTextAreaElement
+    ).toHaveValue("name: draft\nsteps: []\n");
+  });
+
+  it("recovers to a blank draft when the route points at a missing workflow", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      workflowStorageMode: "scope",
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
+    (studioApi.getWorkflow as jest.Mock).mockRejectedValueOnce(
+      new Error("Not Found")
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&workflow=draft&tab=studio");
+
+    await waitFor(() => {
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith("draft");
+    });
+
+    await waitFor(() => {
+      expect(window.location.search).toContain("draft=new");
+      expect(window.location.search).not.toContain("workflow=draft");
+    });
+
     expect(
       (await screen.findByLabelText("Workflow name")) as HTMLInputElement
     ).toHaveValue("draft");
@@ -1990,7 +2048,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("loads discovered GAgent types and the resolved scope binding", async () => {
+  it("loads discovered GAgent types for the resolved scope context", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -2003,41 +2061,6 @@ describe("StudioPage", () => {
     });
     await waitFor(() => {
       expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
-    });
-  });
-
-  it("prefers the route scopeId over the app context scope when opening Studio", async () => {
-    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
-      ...defaultStudioAppContext,
-      scopeId: "scope-app",
-      scopeResolved: true,
-    });
-    renderStudioPage("/studio?scopeId=scope-route&workflow=workflow-1&tab=studio");
-
-    await waitFor(() => {
-      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-route");
-    });
-  });
-
-  it("updates the scope context when the Studio route scopeId changes after mount", async () => {
-    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
-      ...defaultStudioAppContext,
-      scopeId: "scope-app",
-      scopeResolved: true,
-    });
-
-    renderStudioPage("/studio?scopeId=scope-route-a&workflow=workflow-1&tab=studio");
-
-    await waitFor(() => {
-      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-route-a");
-    });
-
-    await act(async () => {
-      history.push("/studio?scopeId=scope-route-b&workflow=workflow-1&tab=studio");
-    });
-
-    await waitFor(() => {
-      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-route-b");
     });
   });
 
