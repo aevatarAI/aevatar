@@ -7,10 +7,12 @@ owner: Loning
 # Architecture Health Scorecard — 2026-04-08 (Detailed)
 
 Audit scope: Milestone-oriented (Living with AI Demo 04-17, NyxID M0 04-18)
-Audit method: Two-layer (CLAUDE.md compliance + hot-path deep dive) + 5-dimension parallel probe
+Audit method: Automated baseline plus manual deep dives on projection, lifecycle, and guard blind spots
 Reviewed by: arch-audit skill, 5 parallel exploration agents
 
 > 本文档是 `2026-04-08-architecture-audit.md` 的深度展开版，包含每个维度的代码级证据、数据流分析和修复方案。
+>
+> 评分只纳入已验证证据；需要运行时进一步确认的风险在文中标记为 `NEEDS_VALIDATION`，不直接计入总分。
 
 ---
 
@@ -25,11 +27,11 @@ Reviewed by: arch-audit skill, 5 parallel exploration agents
 | 序列化 | 7/10 | 核心路径全 Protobuf；JSON 仅在 Host/Adapter 边界，合规 |
 | Actor 生命周期 | 5/10 | StreamingProxyGAgent 影子状态机 + agents/ 3 个 ConcurrentDictionary 单例 |
 | 前端可构建性 | 2/10 | CLI Frontend + Console Web 均构建失败 |
-| 测试覆盖 (全局) | 6/10 | 92% 项目被测试触达；7-9 项目真正零覆盖；聚合门禁掩盖个体缺口 |
+| 测试覆盖 (全局) | 3/10 | 聚合覆盖率掩盖关键项目缺口；认证、Orleans Streaming 与 agents/ 仍缺回归保护 |
 | AI.Core 中间件合规 | 4/10 | SkillRegistry 7 处 lock + StreamingToolExecutor + ToolApprovalMiddleware 违规 |
 | 工作流引擎韧性 | 5/10 | _executionItems 非持久化 + Sub-Workflow 无超时 + Lease 恢复风险 |
 | 投影端口合规 | 5/10 | EventSinkProjectionLifecyclePortBase §111 违规：ConcurrentDictionary 做订阅管理 |
-**综合架构健康度: 5.3 / 10** (11 dimensions)
+**综合架构健康度: 5.2 / 10** (11 dimensions)
 
 ---
 
@@ -88,7 +90,7 @@ HandleContinueChatStreamAsync (L769): TCS<string> + SubscribeAsync + MapAndWrite
 
 每处的 `MapAndWriteEventAsync` 在 callback 中解析 EventEnvelope，检测终端帧（TEXT_MESSAGE_END 等），触发 `tcs.TrySetResult(terminalFrame)`。
 
-**分布式影响**: `SubscribeAsync` 实现依赖本地 stream provider。Orleans 跨节点部署时，Actor 可能在远程 silo 执行，本地订阅无法收到事件 → **SSE 流静默超时**。
+**NEEDS_VALIDATION — 分布式影响**: `SubscribeAsync` 实现依赖本地 stream provider。若 Orleans 跨节点部署时订阅无法跨 silo 透传，Actor 在远程节点执行时可能导致 **SSE 流静默超时**。这一点需要结合实际 provider 配置做运行时验证。
 
 ### 2.4 正面证据 — 正确的投影路径
 
@@ -596,11 +598,11 @@ private readonly Dictionary<string, object> _executionItems = new();
 
 **影响范围**: 所有长时间运行的工作流（跨 actor 去激活周期）。
 
-### 14.2 Sub-Workflow 续接无超时兜底
+### 14.2 Sub-Workflow 续接无超时兜底 (`NEEDS_VALIDATION`)
 
 **文件**: `src/workflow/Aevatar.Workflow.Core/Orchestration/SubWorkflowOrchestrator.cs`
 
-**问题**: 父工作流发起子工作流后，等待 `SubWorkflowCompletedEvent`。若子工作流：
+**问题**: 父工作流发起子工作流后，等待 `SubWorkflowCompletedEvent`。从代码阅读看，若子工作流：
 - 执行失败但未发出完成事件
 - 所在 silo 宕机且未恢复
 - 事件在传输层丢失
@@ -609,7 +611,7 @@ private readonly Dictionary<string, object> _executionItems = new();
 
 **修复**: 在 `SubWorkflowOrchestrator` 中增加 durable timeout + 重试/补偿策略。
 
-### 14.3 Callback Lease 恢复风险
+### 14.3 Callback Lease 恢复风险 (`NEEDS_VALIDATION`)
 
 **文件**: `src/workflow/Aevatar.Workflow.Core/WorkflowRunGAgent.cs`
 
@@ -618,7 +620,7 @@ private readonly Dictionary<string, object> _executionItems = new();
 - 进程重启后定时器未自动恢复
 → 超时回调永远不触发，工作流卡死。
 
-需确认：lease 恢复是否在 actor 重激活时自动重建。
+需确认：lease 恢复是否在 actor 重激活时自动重建。确认前将其视为恢复风险，不直接纳入分数。
 
 ---
 
@@ -709,12 +711,12 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 | 序列化 | 7/10 | 7/10 | 无变化 |
 | Actor 生命周期 | 5/10 | 5/10 | 无变化 |
 | 前端可构建性 | 2/10 | 2/10 | 无变化 |
-| 测试覆盖 (全局) | 0/10 | 3/10 | 扩展到全局：25/81 项目有测试 (31%)，核心路径覆盖不足 |
+| 测试覆盖 (全局) | 0/10 | 3/10 | 聚合覆盖率高于单项目现实；关键路径仍存在明显空洞 |
 | **AI.Core 中间件合规** | — | **4/10** | **新增维度**: SkillRegistry + StreamingToolExecutor + ToolApprovalMiddleware 违规 |
 | **工作流引擎韧性** | — | **5/10** | **新增维度**: _executionItems 非持久化 + Sub-Workflow 无超时 + Lease 恢复风险 |
 | **投影端口合规** | — | **5/10** | **新增维度**: EventSinkProjectionLifecyclePortBase §111 违规 |
 
-**更新后综合架构健康度: 5.3 / 10** (11 dimensions)
+**更新后综合架构健康度: 5.2 / 10** (11 dimensions)
 
 ---
 
@@ -742,8 +744,8 @@ rg '\.Contains\(' --glob '**/*Projection*/**/*.cs' --glob '**/*Reducer*/**/*.cs'
 | Actor 生命周期 | ConcurrentDictionary 违规 | + 影子状态机 + 18 处状态字段全量清单 | 更完整 |
 | 分层合规 | Host 耦合度高 | + God Class 量化 + 3 处直操 actor + 依赖方向分析 | 8→6 |
 | CI Guards | 1 个盲区 | agents/ + apps/ 双盲区 + 3 条规则未自动化 | 9→8 |
-| 测试覆盖 | agents/ 零测试 | **修正**: 92% 项目被测试触达；真正零覆盖 7-9 个；聚合门禁掩盖个体缺口 | 0→6 (方法论修正) |
+| 测试覆盖 | agents/ 零测试 | **修正**: 聚合覆盖率不能代表关键路径安全；认证、Streaming、agents/ 仍有缺口 | 0→3 (口径收紧) |
 | AI.Core 中间件 | 未审计 | **新增维度**: SkillRegistry 7 lock + StreamingToolExecutor + ToolApprovalMiddleware | 新增 4/10 |
-| 工作流引擎韧性 | 未审计 | **新增维度**: _executionItems 非持久化 + Sub-Workflow 无超时 + Lease 恢复 | 新增 5/10 |
+| 工作流引擎韧性 | 未审计 | **新增维度**: _executionItems 非持久化；其余恢复风险待运行时验证 | 新增 5/10 |
 | 投影端口合规 | 未审计 | **新增维度**: EventSinkProjectionLifecyclePortBase §111 违规 | 新增 5/10 |
-| **综合评分** | **5.1/10 (8维)** | **5.3/10 (11维)** | **+0.2 (测试修正+3; 新增3个低分维度-1.8; 净+0.2)** |
+| **综合评分** | **5.1/10 (8维)** | **5.2/10 (11维)** | **本版起统一按已验证证据计分，详细结论以本表和总表为准** |

@@ -40,12 +40,34 @@ Check all frontend projects can build. Use whichever package manager is availabl
 
 ```bash
 # Find frontend projects
-find . -name "package.json" -not -path "*/node_modules/*" -not -path "*/obj/*" | head -10
-# Try building each
-npm run build 2>&1 | tail -10
+frontend_failed=0
+while IFS= read -r pkg; do
+  dir=$(dirname "$pkg")
+  echo "==> $dir"
+  if [ -f "$dir/pnpm-lock.yaml" ]; then
+    (cd "$dir" && pnpm build) || { frontend_failed=1; break; }
+  elif [ -f "$dir/package-lock.json" ]; then
+    (cd "$dir" && npm run build) || { frontend_failed=1; break; }
+  elif [ -f "$dir/bun.lockb" ] || [ -f "$dir/bun.lock" ]; then
+    (cd "$dir" && bun run build) || { frontend_failed=1; break; }
+  elif command -v pnpm >/dev/null 2>&1; then
+    (cd "$dir" && pnpm build) || { frontend_failed=1; break; }
+  elif command -v npm >/dev/null 2>&1; then
+    (cd "$dir" && npm run build) || { frontend_failed=1; break; }
+  elif command -v bun >/dev/null 2>&1; then
+    (cd "$dir" && bun run build) || { frontend_failed=1; break; }
+  else
+    echo "No supported package manager found"
+    frontend_failed=1
+    break
+  fi
+done < <(find . -name "package.json" -not -path "*/node_modules/*" -not -path "*/obj/*")
+test "$frontend_failed" -eq 0
 ```
 
-If build fails: tag as `DEMO_BLOCKER` with missing dependencies listed.
+If build fails because lockfile dependencies are not installed (`node_modules` missing, `tsc`/`vite` not found), classify as `env-tooling`.
+
+If build still fails after dependencies are present, tag as `DEMO_BLOCKER` with the failing project and missing dependency or compiler error listed.
 
 ## Step 1: Automated Baseline
 
@@ -90,7 +112,7 @@ Check if host layer bypasses the unified projection pipeline.
 
 ```bash
 rg "SubscribeAsync<EventEnvelope>|AGUISseWriter|TryMapEnvelopeToAguiEvent|TaskCompletionSource" \
-  src/platform/Aevatar.GAgentService.Hosting src/workflow
+  src/platform/Aevatar.GAgentService.Hosting src/workflow agents/
 ```
 
 **Judgment criteria:**
@@ -118,8 +140,9 @@ Scan for forbidden singleton state patterns. **Include all directories that cont
 
 ```bash
 rg "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" \
-  src/platform src/Aevatar.CQRS.Projection.Core \
+  src/platform src/Aevatar.AI.Core src/Aevatar.CQRS.Projection.Core \
   src/workflow/Aevatar.Workflow.Application \
+  src/workflow/Aevatar.Workflow.Core \
   src/Aevatar.Scripting.Infrastructure \
   agents/
 ```
@@ -128,7 +151,25 @@ rg "Dictionary<|ConcurrentDictionary<|HashSet<|Queue<" \
 
 **Flag:** Any `ConcurrentDictionary` field in a Singleton-registered service = **VIOLATION** (middle-layer state constraint).
 
-### 2d. Governance Substance
+### 2d. Actor Continuity And Durable Lifecycle
+
+Read lifecycle-sensitive actors and orchestrators that keep execution context across turns.
+
+Key files:
+- `WorkflowRunGAgent.cs` — look for non-persisted execution context such as `_executionItems`
+- `SubWorkflowOrchestrator.cs` — verify continuation wake-up has timeout/compensation
+- `StreamingProxyGAgent.cs` — verify actor-owned runtime state rehydrates from committed facts
+
+**Evidence rule:** mark a finding as `VERIFIED` only when the state loss or missing timeout path is directly visible in code. Use `NEEDS_VALIDATION` when the risk depends on runtime behavior you did not execute.
+
+### 2e. Projection Lifecycle Ownership
+
+Read projection lifecycle orchestration code and confirm session/subscription ownership is carried by explicit handles rather than process-local registries.
+
+Key file:
+- `EventSinkProjectionLifecyclePortBase.cs`
+
+### 2f. Governance Substance
 
 Read the Governance subsystem core files and answer one question: **is this organizational governance or config CRUD?**
 
@@ -148,6 +189,12 @@ Look for: Goal/Scope/ObjectiveFunction modeling, three-layer governance (order d
 5. Tag test failures as `MILESTONE_BLOCKER`
 
 **Blind spot check:** Does `architecture_guards.sh` scan the milestone-critical directories? If not, that's a guard supplement finding.
+
+## Evidence Discipline
+
+- Separate findings into `Automated evidence`, `Manual verified evidence`, and `Needs validation`.
+- If a section cites code outside the scripted scan roots, include either the exact command used or a short note that it came from manual file review.
+- Do not mix hypotheses into the score calculation unless they are upgraded to `VERIFIED`.
 
 ## Scorecard Template
 
