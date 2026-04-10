@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
+        services.AddHostedService<ChannelBotRegistrationStartupService>();
         services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
             static doc => doc.Id, static key => key);
 
