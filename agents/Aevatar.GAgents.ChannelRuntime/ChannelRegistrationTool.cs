@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
@@ -172,7 +173,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
-        // ID was generated before dispatch — return immediately, no polling needed.
+        // Write registration document directly to InMemory store so the callback
+        // endpoint can find it via QueryPort. The projection pipeline's scope agent
+        // is not bootstrapped, so we write-through here as a workaround.
+        await WriteRegistrationDocumentAsync(cmd, registrationId, ct);
+
         return JsonSerializer.Serialize(new
         {
             status = "registered",
@@ -228,5 +233,34 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
         return JsonSerializer.Serialize(new { status = "deleted", registration_id = registrationId });
+    }
+
+    /// <summary>
+    /// Write registration document directly to the InMemory store so
+    /// HandleCallbackAsync can find it via QueryPort.GetAsync().
+    /// This is a workaround for the projection scope agent not being activated.
+    /// </summary>
+    private async Task WriteRegistrationDocumentAsync(
+        ChannelBotRegisterCommand cmd, string registrationId, CancellationToken ct)
+    {
+        var writer = _serviceProvider.GetService<IProjectionDocumentWriter<ChannelBotRegistrationDocument>>();
+        if (writer is null) return;
+
+        var doc = new ChannelBotRegistrationDocument
+        {
+            Id = registrationId,
+            Platform = cmd.Platform,
+            NyxProviderSlug = cmd.NyxProviderSlug,
+            ScopeId = cmd.ScopeId,
+            VerificationToken = cmd.VerificationToken,
+            WebhookUrl = cmd.WebhookUrl,
+            NyxUserToken = cmd.NyxUserToken,
+            StateVersion = 1,
+            LastEventId = string.Empty,
+            ActorId = ChannelBotRegistrationGAgent.WellKnownId,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+
+        await writer.UpsertAsync(doc, ct);
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
@@ -290,6 +291,27 @@ public static class ChannelCallbackEndpoints
         };
 
         await actor.HandleEventAsync(cmdEnvelope);
+
+        // Write-through to InMemory store so callback endpoint can find the registration.
+        // Workaround: projection scope agent not bootstrapped.
+        var docWriter = http.RequestServices.GetService<IProjectionDocumentWriter<ChannelBotRegistrationDocument>>();
+        if (docWriter != null)
+        {
+            var doc = new ChannelBotRegistrationDocument
+            {
+                Id = registrationId,
+                Platform = platformNormalized,
+                NyxProviderSlug = cmd.NyxProviderSlug,
+                ScopeId = cmd.ScopeId,
+                VerificationToken = cmd.VerificationToken,
+                WebhookUrl = cmd.WebhookUrl,
+                NyxUserToken = cmd.NyxUserToken,
+                StateVersion = 1,
+                ActorId = ChannelBotRegistrationGAgent.WellKnownId,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            await docWriter.UpsertAsync(doc, ct);
+        }
 
         return Results.Accepted(value: new
         {
