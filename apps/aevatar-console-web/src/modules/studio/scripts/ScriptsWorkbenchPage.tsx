@@ -25,6 +25,7 @@ import {
 import type { MenuProps } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import type { StudioAppContext } from '@/shared/studio/models';
 import {
   addPackageFile,
@@ -1646,17 +1647,18 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         type: 'success',
         message: `Updated scope ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
         description:
-          'Review the active binding, revision rollout, and saved script assets from the scope views.',
+          'Review the active binding, revision rollout, and saved script assets from the team views.',
         actions: [
           {
-            label: 'Open Scope Scripts',
-            href: buildScopePageHref('/scopes/scripts', resolvedScopeId, {
+            label: 'Open Team Assets',
+            href: buildScopePageHref('/scopes/assets', resolvedScopeId, {
+              tab: 'scripts',
               scriptId,
             }),
           },
           {
-            label: 'Open Scope Overview',
-            href: buildScopePageHref('/scopes/overview', resolvedScopeId),
+            label: 'Open Team Workspace',
+            href: buildTeamWorkspaceRoute(resolvedScopeId),
           },
         ],
       });

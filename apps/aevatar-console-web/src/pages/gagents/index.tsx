@@ -257,7 +257,7 @@ function createBindingEndpointDraft(
     requestTypeUrl:
       overrides?.requestTypeUrl ?? DEFAULT_GAGENT_REQUEST_TYPE_URL,
     responseTypeUrl: overrides?.responseTypeUrl ?? '',
-    description: overrides?.description ?? 'Run the published GAgent.',
+    description: overrides?.description ?? 'Run the published team entry.',
   };
 }
 
@@ -626,18 +626,18 @@ const GAgentsPage: React.FC = () => {
 
   const bindingImpactMessage = useMemo(() => {
     if (!selectedType) {
-      return 'Select a discovered GAgent type to prepare a published binding.';
+      return 'Select a discovered member type to prepare a published binding.';
     }
 
     if (!bindingQuery.data?.available || !currentBindingRevision) {
-      return 'This will create the first published default service for the current scope.';
+      return 'This will create the first published default service for the current team.';
     }
 
     if (currentBindingMatchesSelectedType) {
-      return 'This will publish a new revision for the current GAgent service without changing the product surface.';
+      return 'This will publish a new revision for the current team entry without changing the product surface.';
     }
 
-    return `This will replace the current default service (${formatRuntimeGAgentBindingImplementationKind(currentBindingRevision.implementationKind)} · ${describeRuntimeGAgentBindingRevisionTarget(currentBindingRevision)}) with the selected GAgent type.`;
+    return `This will replace the current default service (${formatRuntimeGAgentBindingImplementationKind(currentBindingRevision.implementationKind)} · ${describeRuntimeGAgentBindingRevisionTarget(currentBindingRevision)}) with the selected member type.`;
   }, [
     bindingQuery.data?.available,
     currentBindingMatchesSelectedType,
@@ -812,7 +812,7 @@ const GAgentsPage: React.FC = () => {
       setRegistryNotice({
         type: 'error',
         message:
-          'Select a scope, choose a GAgent type, and enter an actor id before saving.',
+          'Select a team, choose a member type, and enter an actor id before saving.',
       });
       return;
     }
@@ -862,7 +862,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId) {
       setRegistryNotice({
         type: 'error',
-        message: 'Scope is required before removing a saved actor.',
+        message: 'Team context is required before removing a saved actor.',
       });
       return;
     }
@@ -1023,7 +1023,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Resolve the current scope before publishing a GAgent binding.',
+          'Resolve the current team before publishing a binding.',
       });
       return;
     }
@@ -1031,7 +1031,7 @@ const GAgentsPage: React.FC = () => {
     if (!actorTypeName) {
       setBindingNotice({
         type: 'error',
-        message: 'Choose a discovered GAgent type before publishing a binding.',
+        message: 'Choose a discovered member type before publishing a binding.',
       });
       return;
     }
@@ -1041,7 +1041,7 @@ const GAgentsPage: React.FC = () => {
       setBindingNotice({
         type: 'error',
         message:
-          'Add at least one published endpoint before binding the selected GAgent.',
+          'Add at least one published endpoint before binding the selected member type.',
       });
       return;
     }
@@ -1128,7 +1128,7 @@ const GAgentsPage: React.FC = () => {
       setIsRevisionDrawerOpen(true);
       setBindingNotice({
         type: 'success',
-        message: `Scope ${result.scopeId} is now serving revision ${result.revisionId}.`,
+        message: `Team ${result.scopeId} is now serving revision ${result.revisionId}.`,
       });
     } catch (error) {
       setBindingNotice({
@@ -1181,7 +1181,7 @@ const GAgentsPage: React.FC = () => {
     if (!normalizedScopeId || !normalizedActorTypeName || !normalizedPrompt) {
       setRunState((current) => ({
         ...current,
-        error: 'Scope, GAgent type, and prompt are required before running.',
+        error: 'Team, member type, and prompt are required before running.',
         status: 'error',
       }));
       return;
@@ -1357,17 +1357,17 @@ const GAgentsPage: React.FC = () => {
   const rail = (
     <div style={cliRailShellStyle}>
       <div style={cliRailSectionStyle}>
-        <div style={cliCardLabelStyle}>Scope Context</div>
+        <div style={cliCardLabelStyle}>Team Context</div>
         <Input
-          aria-label="Scope ID"
+          aria-label="Team ID"
           onChange={(event) => setScopeId(event.target.value)}
-          placeholder="Scope ID"
+          placeholder="Team ID"
           value={scopeId}
         />
         <Typography.Text type="secondary">
           {resolvedScope?.scopeId
-            ? `NyxID resolved scope: ${resolvedScope.scopeId}`
-            : 'No scope was resolved from the current session.'}
+            ? `NyxID resolved team: ${resolvedScope.scopeId}`
+            : 'No team was resolved from the current session.'}
         </Typography.Text>
         {bindingQuery.data?.available ? (
           <div
@@ -1418,7 +1418,7 @@ const GAgentsPage: React.FC = () => {
               justifyContent: 'space-between',
             }}
           >
-            <div style={cliCardLabelStyle}>GAgent Types</div>
+            <div style={cliCardLabelStyle}>Member Types</div>
             <Button
               icon={<ReloadOutlined />}
               onClick={() => void gAgentTypesQuery.refetch()}
@@ -1429,9 +1429,9 @@ const GAgentsPage: React.FC = () => {
             </Button>
           </div>
           <Input
-            aria-label="Filter GAgent types"
+            aria-label="Filter member types"
             onChange={(event) => setTypeFilter(event.target.value)}
-            placeholder="Filter GAgent types"
+            placeholder="Filter member types"
             value={typeFilter}
           />
           {gAgentTypesQuery.error ? (
@@ -1448,8 +1448,8 @@ const GAgentsPage: React.FC = () => {
             <Empty
               description={
                 gAgentTypesQuery.isLoading
-                  ? 'Loading runtime GAgent types.'
-                  : 'No GAgent types matched the current filter.'
+                  ? 'Loading runtime member types.'
+                  : 'No member types matched the current filter.'
               }
               image={Empty.PRESENTED_IMAGE_SIMPLE}
             />
@@ -1532,7 +1532,7 @@ const GAgentsPage: React.FC = () => {
 
   const selectedTypePanel = (
     <WorkbenchCard
-      description="Current type selection that drives both draft runs and published bindings."
+      description="Current member type selection that drives both draft runs and published bindings."
       eyebrow="Selected Type"
       extra={
         <Space size={[8, 8]} wrap>
@@ -1597,7 +1597,7 @@ const GAgentsPage: React.FC = () => {
           </div>
         </div>
       ) : (
-        <AevatarInspectorEmpty description="Choose a discovered GAgent type from the left rail to prepare draft runs or published bindings." />
+        <AevatarInspectorEmpty description="Choose a discovered member type from the left rail to prepare draft runs or published bindings." />
       )}
     </WorkbenchCard>
   );
@@ -1691,7 +1691,7 @@ const GAgentsPage: React.FC = () => {
                 {runState.assistantText}
               </Typography.Paragraph>
             ) : (
-              <AevatarInspectorEmpty description="Run a draft prompt to watch the streamed GAgent response here." />
+              <AevatarInspectorEmpty description="Run a draft prompt to watch the streamed member response here." />
             ),
           },
           {
@@ -1740,8 +1740,8 @@ const GAgentsPage: React.FC = () => {
     <WorkbenchCard
       description={
         selectedType
-          ? `Reusable actor ids saved for ${selectedType.typeName} in this scope.`
-          : 'Reusable actor ids saved for this scope.'
+          ? `Reusable actor ids saved for ${selectedType.typeName} in this team.`
+          : 'Reusable actor ids saved for this team.'
       }
       eyebrow="Actor Registry"
       extra={
@@ -1774,7 +1774,7 @@ const GAgentsPage: React.FC = () => {
           placeholder={
             selectedType
               ? `Save actor id for ${selectedType.typeName}`
-              : 'Select a GAgent type before saving an actor'
+              : 'Select a member type before saving an actor'
           }
           value={registryActorIdInput}
         />
@@ -1794,7 +1794,7 @@ const GAgentsPage: React.FC = () => {
           <Typography.Text type="secondary">
             {selectedType
               ? `Saving under ${selectedType.fullName}.`
-              : 'Saved actors follow the currently selected GAgent type.'}
+              : 'Saved actors follow the currently selected member type.'}
           </Typography.Text>
         </Space>
 
@@ -1809,7 +1809,7 @@ const GAgentsPage: React.FC = () => {
             description={
               gAgentActorsQuery.isLoading
                 ? 'Loading actor registry.'
-                : 'No saved actors were found for this scope.'
+                : 'No saved actors were found for this team.'
             }
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
@@ -1938,8 +1938,8 @@ const GAgentsPage: React.FC = () => {
 
   const currentBindingPanel = (
     <WorkbenchCard
-      description="Current default service for this scope."
-      eyebrow="Current Scope Binding"
+      description="Current default service for this team."
+      eyebrow="Current Team Binding"
       extra={
         <Space size={[8, 8]} wrap>
           <Button
@@ -1975,7 +1975,7 @@ const GAgentsPage: React.FC = () => {
         ) : bindingQuery.isLoading ? (
           <AevatarInspectorEmpty description="Loading the current published binding." />
         ) : !bindingQuery.data?.available ? (
-          <AevatarInspectorEmpty description="No default scope service has been published yet." />
+          <AevatarInspectorEmpty description="No default team service has been published yet." />
         ) : (
           <>
             <div
@@ -2067,8 +2067,8 @@ const GAgentsPage: React.FC = () => {
 
   const publishBindingPanel = (
     <WorkbenchCard
-      description="Publish the selected GAgent type as this scope's default service."
-      eyebrow="Publish Binding"
+      description="Publish the selected member type as this team's default service."
+      eyebrow="Publish Team Binding"
       extra={
         <Button
           disabled={!selectedType}
@@ -2081,12 +2081,12 @@ const GAgentsPage: React.FC = () => {
       title={
         selectedType
           ? `Publish ${selectedType.typeName}`
-          : 'Publish GAgent Binding'
+          : 'Publish Team Binding'
       }
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {!selectedType ? (
-          <AevatarInspectorEmpty description="Choose a discovered GAgent type before configuring a published binding." />
+          <AevatarInspectorEmpty description="Choose a discovered member type before configuring a published binding." />
         ) : (
           <>
             <Tabs
@@ -2387,14 +2387,14 @@ const GAgentsPage: React.FC = () => {
               showIcon
               type={bindingQuery.data?.available ? 'warning' : 'info'}
               title={bindingImpactMessage}
-              description="Type = template. Binding = published default service. Actor = runtime instance created by activation or invocation."
+              description="Type = template. Binding = published team entry. Actor = runtime instance created by activation or invocation."
             />
 
             <Checkbox
               checked={publishAcknowledged}
               onChange={(event) => setPublishAcknowledged(event.target.checked)}
             >
-              I understand this changes the scope's published default service.
+              I understand this changes the team's published default service.
             </Checkbox>
 
             <Space size={[8, 8]} wrap>
@@ -2452,7 +2452,7 @@ const GAgentsPage: React.FC = () => {
           <AevatarInspectorEmpty description="Loading binding revisions." />
         ) : !bindingQuery.data?.available ||
           bindingQuery.data.revisions.length === 0 ? (
-          <AevatarInspectorEmpty description="Publish the selected GAgent to create the first revision." />
+          <AevatarInspectorEmpty description="Publish the selected member type to create the first revision." />
         ) : (
           <div style={compactListStyle}>
             {bindingQuery.data.revisions.map((revision) => {
@@ -2586,7 +2586,7 @@ const GAgentsPage: React.FC = () => {
 
   const draftRunPanel = (
     <WorkbenchCard
-      description="Test the selected GAgent type before publishing."
+      description="Test the selected member type before publishing."
       eyebrow="Draft Run"
       extra={
         <Space size={[8, 8]} wrap>
@@ -2594,7 +2594,7 @@ const GAgentsPage: React.FC = () => {
           {runState.runId ? <Tag>{runState.runId}</Tag> : null}
         </Space>
       }
-      title={selectedType ? selectedType.typeName : 'GAgent Draft Run'}
+      title={selectedType ? selectedType.typeName : 'Member Draft Run'}
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         {selectedType ? (
@@ -2625,7 +2625,7 @@ const GAgentsPage: React.FC = () => {
             </div>
           </div>
         ) : (
-          <AevatarInspectorEmpty description="Select a discovered GAgent type before drafting a direct run." />
+          <AevatarInspectorEmpty description="Select a discovered member type before drafting a direct run." />
         )}
 
         <Select
@@ -2688,7 +2688,7 @@ const GAgentsPage: React.FC = () => {
           aria-label="Draft prompt"
           autoSize={{ minRows: 4, maxRows: 8 }}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Enter a direct prompt for the selected GAgent type"
+          placeholder="Enter a direct prompt for the selected member type"
           value={prompt}
         />
 
@@ -2789,14 +2789,14 @@ const GAgentsPage: React.FC = () => {
       layoutMode="document"
       extra={
         <Space size={[8, 8]} wrap>
-          <Typography.Text type="secondary">Scope</Typography.Text>
+          <Typography.Text type="secondary">Team</Typography.Text>
           <Typography.Text style={{ maxWidth: 320 }} strong>
             {normalizedScopeId || resolvedScope?.scopeId || 'Not resolved'}
           </Typography.Text>
         </Space>
       }
-      title="GAgents"
-      titleHelp="Discover runtime GAgent types, publish scope bindings, reuse actors, and verify draft and serving paths from one workbench."
+      title="Member Runtime"
+      titleHelp="Discover runtime member types, publish team bindings, reuse actors, and verify draft and serving paths from one workbench."
     >
       <AevatarWorkbenchLayout
         layoutMode="document"

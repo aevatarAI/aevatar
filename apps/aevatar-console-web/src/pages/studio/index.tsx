@@ -1,6 +1,7 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
   buildRuntimeRunsHref,
   buildRuntimeWorkflowsHref,
@@ -10,6 +11,7 @@ import {
   Button,
   Modal,
   Space,
+  message,
 } from 'antd';
 import React, {
   useCallback,
@@ -112,6 +114,7 @@ import {
 } from './components/StudioWorkbenchSections';
 
 type StudioRouteState = {
+  scopeId: string;
   workflowId: string;
   scriptId: string;
   templateWorkflow: string;
@@ -801,9 +804,12 @@ function buildBlankDraftYaml(workflowName: string): string {
   return `name: ${normalizedName}\nsteps: []\n`;
 }
 
-function readInitialStudioRouteState(): StudioRouteState {
-  if (typeof window === 'undefined') {
+function readInitialStudioRouteState(
+  search = typeof window === 'undefined' ? '' : window.location.search,
+): StudioRouteState {
+  if (typeof window === 'undefined' && !search) {
     return {
+      scopeId: '',
       workflowId: '',
       scriptId: '',
       templateWorkflow: '',
@@ -816,8 +822,9 @@ function readInitialStudioRouteState(): StudioRouteState {
     };
   }
 
-  const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(search);
   return {
+    scopeId: trimOptional(params.get('scopeId')),
     workflowId: trimOptional(params.get('workflow')),
     scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
@@ -906,9 +913,29 @@ function readValidationSummary(
 }
 
 const StudioPage: React.FC = () => {
-  const initialState = useMemo(() => readInitialStudioRouteState(), []);
+  const [messageApi, messageContextHolder] = message.useMessage();
+  const locationSearch = React.useSyncExternalStore(
+    (listener) => {
+      if (typeof window === 'undefined') {
+        return () => undefined;
+      }
+
+      window.addEventListener('popstate', listener);
+      return () => {
+        window.removeEventListener('popstate', listener);
+      };
+    },
+    () => (typeof window === 'undefined' ? '' : window.location.search),
+    () => '',
+  );
+  const routeState = useMemo(
+    () => readInitialStudioRouteState(locationSearch),
+    [locationSearch],
+  );
+  const initialState = React.useRef(routeState).current;
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
+  const routeScopeId = routeState.scopeId;
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
     readInitialWorkspacePage(initialState),
   );
@@ -1099,6 +1126,7 @@ const StudioPage: React.FC = () => {
     queryFn: () => studioApi.getAppContext(),
   });
   const resolvedStudioScopeId =
+    trimOptional(routeScopeId) ||
     trimOptional(appContextQuery.data?.scopeId) ||
     trimOptional(authSessionQuery.data?.scopeId) ||
     '';
@@ -1455,6 +1483,10 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    if (!window.location.pathname.startsWith('/studio')) {
+      return;
+    }
+
     const tab: StudioTab =
       workspacePage === 'studio'
         ? studioView === 'execution'
@@ -1463,6 +1495,7 @@ const StudioPage: React.FC = () => {
         : workspacePage;
 
     window.history.replaceState(null, '', buildStudioRoute({
+      scopeId: routeScopeId || undefined,
       workflowId: selectedWorkflowId || undefined,
       scriptId: selectedScriptId || undefined,
       template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
@@ -1487,6 +1520,7 @@ const StudioPage: React.FC = () => {
     draftMode,
     legacySource,
     logsPopoutMode,
+    routeScopeId,
     selectedExecutionId,
     selectedScriptId,
     selectedWorkflowId,
@@ -4402,11 +4436,7 @@ const StudioPage: React.FC = () => {
           onOpenWorkflowFromHistory={openWorkflowFromHistory}
           onStartExecution={() => void handleStartExecution()}
           onOpenProjectOverview={() => {
-            history.push(
-              resolvedStudioScopeId
-                ? `/scopes/overview?scopeId=${encodeURIComponent(resolvedStudioScopeId)}`
-                : '/scopes/overview',
-            );
+            history.push(buildTeamWorkspaceRoute(resolvedStudioScopeId));
           }}
           onOpenProjectInvoke={() => {
             history.push(

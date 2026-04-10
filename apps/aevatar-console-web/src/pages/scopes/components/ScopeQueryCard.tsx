@@ -20,7 +20,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
   onChange,
   onLoad,
   onReset,
-  loadLabel = 'Load scope',
+  loadLabel = 'Load team',
   resolvedScopeId,
   resolvedScopeSource,
   onUseResolvedScope,
@@ -68,7 +68,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
       >
         <Input
           allowClear
-          placeholder="Enter project scopeId"
+          placeholder="Enter team ID"
           style={{ flex: '1 1 240px', minWidth: 0, width: '100%' }}
           value={draft.scopeId}
           onChange={(event) =>
@@ -94,7 +94,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
         {normalizedResolvedScopeId ? (
           <>
             <Typography.Text style={helperLabelStyle}>
-              Resolved project
+              Resolved team
             </Typography.Text>
             <Typography.Paragraph
               copyable={{ text: normalizedResolvedScopeId }}
@@ -119,7 +119,7 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
             {canUseResolvedScope ? (
               <div>
                 <Button size="small" onClick={onUseResolvedScope}>
-                  Use resolved project
+                  Use resolved team
                 </Button>
               </div>
             ) : null}
@@ -135,8 +135,8 @@ const ScopeQueryCard: React.FC<ScopeQueryCardProps> = ({
               wordBreak: 'break-word',
             }}
           >
-            No project scope was resolved from the current session. Enter a
-            scopeId manually. tenantId and appId stay platform-managed and
+            No team context was resolved from the current session. Enter a
+            team ID manually. tenantId and appId stay platform-managed and
             hidden in this flow.
           </Typography.Text>
         )}

@@ -4,12 +4,8 @@ import {
   ProConfigProvider,
 } from "@ant-design/pro-components";
 import {
-  AppstoreOutlined,
-  DashboardOutlined,
   DownOutlined,
   LogoutOutlined,
-  MessageOutlined,
-  SafetyCertificateOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -27,6 +23,7 @@ import {
   ensureActiveAuthSession,
   hasRestorableAuthSession,
 } from "./shared/auth/client";
+import { isTeamFirstEnabled } from "@/shared/config/consoleFeatures";
 import { getNyxIDRuntimeConfig } from "./shared/auth/config";
 import {
   buildAuthInitialState,
@@ -42,6 +39,7 @@ import { readMissionControlRouteContext } from "@/pages/MissionControl/services/
 import { loadRecentRuns } from "@/shared/runs/recentRuns";
 import { queryClient } from "./shared/query/queryClient";
 import { aevatarThemeConfig } from "@/shared/ui/aevatarWorkbench";
+import { getNavigationGroupOrder } from "@/shared/navigation/navigationGroups";
 
 const PUBLIC_ROUTES = new Set(["/login", "/auth/callback"]);
 const DEFAULT_PROTECTED_ROUTE = CONSOLE_HOME_ROUTE;
@@ -107,13 +105,6 @@ type NavigationMenuItem = {
   [key: string]: unknown;
 };
 
-type NavigationGroup = {
-  flattenSingleItem?: boolean;
-  icon: React.ReactNode;
-  key: string;
-  label: string;
-};
-
 type AuthSessionBootstrapProps = {
   pathname: string;
   children: React.ReactNode;
@@ -123,34 +114,6 @@ const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
 const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
-const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
-  {
-    icon: <AppstoreOutlined />,
-    key: "build",
-    label: "Build / Studio",
-  },
-  {
-    flattenSingleItem: true,
-    icon: <MessageOutlined />,
-    key: "chat",
-    label: "Chat",
-  },
-  {
-    icon: <DashboardOutlined />,
-    key: "live",
-    label: "Live Ops",
-  },
-  {
-    icon: <SafetyCertificateOutlined />,
-    key: "governance",
-    label: "Governance",
-  },
-  {
-    icon: <SettingOutlined />,
-    key: "settings",
-    label: "Settings",
-  },
-] as const;
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,
   pendingCount: 0,
@@ -478,7 +441,8 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
     grouped.set(groupKey, [item]);
   }
 
-  const menuGroups = NAVIGATION_GROUP_ORDER.flatMap((group) => {
+  const navigationGroupOrder = getNavigationGroupOrder();
+  const menuGroups = navigationGroupOrder.flatMap((group) => {
     const children = grouped.get(group.key);
     if (!children || children.length === 0) {
       return [];

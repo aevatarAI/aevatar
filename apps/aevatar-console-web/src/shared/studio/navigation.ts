@@ -1,6 +1,7 @@
 export type StudioTab =
   | 'workflows'
   | 'studio'
+  | 'files'
   | 'scripts'
   | 'executions'
   | 'roles'
@@ -8,6 +9,7 @@ export type StudioTab =
   | 'settings';
 
 type StudioRouteOptions = {
+  scopeId?: string;
   workflowId?: string;
   scriptId?: string;
   template?: string;
@@ -47,6 +49,9 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
 
 export function buildStudioRoute(options?: StudioRouteOptions): string {
   const params = new URLSearchParams();
+  if (options?.scopeId?.trim()) {
+    params.set('scopeId', options.scopeId.trim());
+  }
   if (options?.workflowId?.trim()) {
     params.set('workflow', options.workflowId.trim());
   }
@@ -80,13 +85,26 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   return query ? `/studio?${query}` : '/studio';
 }
 
-export function buildStudioWorkflowWorkspaceRoute(): string {
+export function buildStudioWorkflowWorkspaceRoute(options?: {
+  scopeId?: string;
+}): string {
   return buildStudioRoute({
+    ...options,
     tab: 'workflows',
   });
 }
 
+export function buildStudioFilesWorkspaceRoute(options?: {
+  scopeId?: string;
+}): string {
+  return buildStudioRoute({
+    ...options,
+    tab: 'files',
+  });
+}
+
 export function buildStudioWorkflowEditorRoute(options?: {
+  scopeId?: string;
   workflowId?: string;
   template?: string;
   draftMode?: 'new';
@@ -100,6 +118,7 @@ export function buildStudioWorkflowEditorRoute(options?: {
 }
 
 export function buildStudioScriptsWorkspaceRoute(options?: {
+  scopeId?: string;
   scriptId?: string;
 }): string {
   return buildStudioRoute({

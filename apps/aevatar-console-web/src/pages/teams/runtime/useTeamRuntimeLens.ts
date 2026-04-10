@@ -1,0 +1,173 @@
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
+import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { scopesApi } from "@/shared/api/scopesApi";
+import { servicesApi } from "@/shared/api/servicesApi";
+import { studioApi } from "@/shared/studio/api";
+import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens";
+
+const scopeServiceAppId = "default";
+const scopeServiceNamespace = "default";
+
+export function useTeamRuntimeLens(scopeId: string) {
+  const normalizedScopeId = scopeId.trim();
+
+  const bindingQuery = useQuery({
+    enabled: normalizedScopeId.length > 0,
+    queryKey: ["teams", "binding", normalizedScopeId],
+    queryFn: () => studioApi.getScopeBinding(normalizedScopeId),
+  });
+  const workflowsQuery = useQuery({
+    enabled: normalizedScopeId.length > 0,
+    queryKey: ["teams", "workflows", normalizedScopeId],
+    queryFn: () => scopesApi.listWorkflows(normalizedScopeId),
+  });
+  const scriptsQuery = useQuery({
+    enabled: normalizedScopeId.length > 0,
+    queryKey: ["teams", "scripts", normalizedScopeId],
+    queryFn: () => scopesApi.listScripts(normalizedScopeId),
+  });
+  const servicesQuery = useQuery({
+    enabled: normalizedScopeId.length > 0,
+    queryKey: ["teams", "services", normalizedScopeId],
+    queryFn: () =>
+      servicesApi.listServices({
+        tenantId: normalizedScopeId,
+        appId: scopeServiceAppId,
+        namespace: scopeServiceNamespace,
+      }),
+  });
+  const actorsQuery = useQuery({
+    enabled: normalizedScopeId.length > 0,
+    queryKey: ["teams", "actors", normalizedScopeId],
+    queryFn: () => runtimeGAgentApi.listActors(normalizedScopeId),
+  });
+
+  const serviceId =
+    bindingQuery.data?.serviceId ||
+    servicesQuery.data?.[0]?.serviceId ||
+    "";
+  const runsQuery = useQuery({
+    enabled: normalizedScopeId.length > 0 && serviceId.length > 0,
+    queryKey: ["teams", "runs", normalizedScopeId, serviceId],
+    queryFn: () =>
+      scopeRuntimeApi.listServiceRuns(normalizedScopeId, serviceId, {
+        take: 12,
+      }),
+  });
+
+  const compareRuns = useMemo(
+    () => selectTeamCompareRuns(runsQuery.data?.runs ?? []),
+    [runsQuery.data?.runs],
+  );
+  const currentRunId = compareRuns.currentRun?.runId?.trim() || "";
+  const baselineRunId = compareRuns.baselineRun?.runId?.trim() || "";
+
+  const focusActorId =
+    compareRuns.currentRun?.actorId?.trim() ||
+    bindingQuery.data?.primaryActorId?.trim() ||
+    actorsQuery.data?.flatMap((group) => group.actorIds)[0] ||
+    "";
+
+  const currentRunAuditQuery = useQuery({
+    enabled:
+      normalizedScopeId.length > 0 &&
+      serviceId.length > 0 &&
+      currentRunId.length > 0,
+    queryKey: [
+      "teams",
+      "run-audit",
+      normalizedScopeId,
+      serviceId,
+      currentRunId,
+      compareRuns.currentRun?.actorId,
+    ],
+    queryFn: () =>
+      scopeRuntimeApi.getServiceRunAudit(
+        normalizedScopeId,
+        serviceId,
+        currentRunId,
+        {
+          actorId: compareRuns.currentRun?.actorId || undefined,
+        },
+      ),
+  });
+  const baselineRunAuditQuery = useQuery({
+    enabled:
+      normalizedScopeId.length > 0 &&
+      serviceId.length > 0 &&
+      baselineRunId.length > 0,
+    queryKey: [
+      "teams",
+      "baseline-run-audit",
+      normalizedScopeId,
+      serviceId,
+      baselineRunId,
+      compareRuns.baselineRun?.actorId,
+    ],
+    queryFn: () =>
+      scopeRuntimeApi.getServiceRunAudit(
+        normalizedScopeId,
+        serviceId,
+        baselineRunId,
+        {
+          actorId: compareRuns.baselineRun?.actorId || undefined,
+        },
+      ),
+  });
+  const actorGraphQuery = useQuery({
+    enabled: focusActorId.length > 0,
+    queryKey: ["teams", "actor-graph", focusActorId],
+    queryFn: () =>
+      runtimeActorsApi.getActorGraphEnriched(focusActorId, {
+        depth: 2,
+        direction: "Both",
+        take: 24,
+      }),
+  });
+
+  const lens = useMemo(
+    () =>
+      deriveTeamRuntimeLens({
+        scopeId: normalizedScopeId,
+        binding: bindingQuery.data ?? null,
+        services: servicesQuery.data ?? [],
+        actors: actorsQuery.data ?? [],
+        runs: runsQuery.data?.runs ?? [],
+        actorGraph: actorGraphQuery.data ?? null,
+        currentRunAudit: currentRunAuditQuery.data ?? null,
+        baselineRunAudit: baselineRunAuditQuery.data ?? null,
+        workflowCount: workflowsQuery.data?.length ?? 0,
+        scriptCount: scriptsQuery.data?.length ?? 0,
+      }),
+    [
+      actorGraphQuery.data,
+      actorsQuery.data,
+      baselineRunAuditQuery.data,
+      bindingQuery.data,
+      baselineRunId,
+      currentRunAuditQuery.data,
+      currentRunId,
+      normalizedScopeId,
+      runsQuery.data?.runs,
+      scriptsQuery.data?.length,
+      servicesQuery.data,
+      workflowsQuery.data?.length,
+    ],
+  );
+
+  return {
+    actorGraphQuery,
+    actorsQuery,
+    baselineRunAuditQuery,
+    bindingQuery,
+    currentRunAuditQuery,
+    lens,
+    runsQuery,
+    scriptsQuery,
+    servicesQuery,
+    workflowsQuery,
+  };
+}

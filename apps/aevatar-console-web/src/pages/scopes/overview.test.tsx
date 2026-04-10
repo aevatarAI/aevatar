@@ -173,23 +173,23 @@ describe('ScopeOverviewPage', () => {
   it('renders the scope status board and asset summaries', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Scope Status Board')).toBeTruthy();
+    expect(await screen.findByText('Team Status Board')).toBeTruthy();
     expect(
       screen.queryByText(
-        'Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage.',
+        'Team Overview keeps binding posture, asset surface, and next-step actions on one deep-link board.',
       ),
     ).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
-    expect(await screen.findByText('Current Binding')).toBeTruthy();
+    expect(await screen.findByText('Current Team Binding')).toBeTruthy();
     expect(await screen.findByText('Revision Rollout')).toBeTruthy();
     expect(screen.getByText('Revision Rollout')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
     expect(await screen.findByText('script-alpha')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Open workflow workspace' })
+      screen.getByRole('button', { name: 'Open Workflow Builder' })
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open assets' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open invoke lab' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open team assets' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Invoke Lab' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
   });
 

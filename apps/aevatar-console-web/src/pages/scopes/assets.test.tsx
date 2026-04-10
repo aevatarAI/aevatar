@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import ProjectAssetsPage from './assets';
+import TeamAssetsPage from './assets';
 
 jest.mock('@/shared/api/scopesApi', () => ({
   scopesApi: {
@@ -74,18 +74,18 @@ jest.mock('@/shared/studio/api', () => ({
   },
 }));
 
-describe('ProjectAssetsPage', () => {
+describe('TeamAssetsPage', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/scopes/assets?scopeId=scope-a');
   });
 
   it('shows the unified project asset summary and workflow detail drawer', async () => {
-    renderWithQueryClient(React.createElement(ProjectAssetsPage));
+    renderWithQueryClient(React.createElement(TeamAssetsPage));
 
-    expect(await screen.findByText('Project asset summary')).toBeTruthy();
+    expect(await screen.findByText('Team asset summary')).toBeTruthy();
     expect(await screen.findByText('Workspace Demo')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Manage GAgents' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Member Runtime' })).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]);
 
@@ -100,9 +100,9 @@ describe('ProjectAssetsPage', () => {
   });
 
   it('switches to script assets and opens catalog detail in the same workspace', async () => {
-    renderWithQueryClient(React.createElement(ProjectAssetsPage));
+    renderWithQueryClient(React.createElement(TeamAssetsPage));
 
-    expect(await screen.findByText('Project asset summary')).toBeTruthy();
+    expect(await screen.findByText('Team asset summary')).toBeTruthy();
     fireEvent.click(await screen.findByRole('tab', { name: 'Scripts (1)' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]);
 
@@ -117,7 +117,7 @@ describe('ProjectAssetsPage', () => {
   });
 
   it('opens a selected workflow in the Studio editor route', async () => {
-    renderWithQueryClient(React.createElement(ProjectAssetsPage));
+    renderWithQueryClient(React.createElement(TeamAssetsPage));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open workflow editor' }));
 
