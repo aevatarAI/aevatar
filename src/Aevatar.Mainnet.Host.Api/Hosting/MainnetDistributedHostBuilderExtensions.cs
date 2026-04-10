@@ -20,6 +20,11 @@ public static class MainnetDistributedHostBuilderExtensions
             optional: true,
             reloadOnChange: false);
 
+        // Re-add environment variables so they can override Distributed.json values.
+        // Without this, Distributed.json (loaded after CreateBuilder's default sources)
+        // would silently shadow environment variable overrides.
+        builder.Configuration.AddEnvironmentVariables();
+
         var runtimeOptions = ResolveRuntimeOptions(builder.Configuration);
         if (!string.Equals(runtimeOptions.Provider, AevatarActorRuntimeOptions.ProviderOrleans, StringComparison.OrdinalIgnoreCase))
             return builder;
