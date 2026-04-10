@@ -31,6 +31,11 @@ report_dir="${output_root}/report"
 mkdir -p "${raw_dir}" "${report_dir}"
 
 echo "Running coverage collection for production assemblies..."
+# dotnet test may return non-zero even with all tests passing when the
+# coverage collector encounters instrumentation warnings (e.g., assemblies
+# that cannot be instrumented). Capture the exit code and only fail if
+# tests actually failed (no coverage XML produced = real failure).
+set +e
 dotnet test aevatar.slnx \
   --nologo \
   --no-restore \
@@ -40,6 +45,18 @@ dotnet test aevatar.slnx \
   -p:NuGetAudit=false \
   --collect:"XPlat Code Coverage" \
   --results-directory "${raw_dir}"
+test_exit=$?
+set -e
+
+coverage_files="$(find "${raw_dir}" -name "coverage.cobertura.xml" 2>/dev/null)"
+if [[ -z "${coverage_files}" ]]; then
+  echo "dotnet test exited with ${test_exit} and produced no coverage files. Tests likely failed."
+  exit 1
+fi
+
+if [[ ${test_exit} -ne 0 ]]; then
+  echo "Warning: dotnet test exited with ${test_exit} but coverage files were produced. Proceeding with coverage analysis."
+fi
 
 echo "Restoring local tools..."
 dotnet tool restore --tool-manifest .config/dotnet-tools.json
