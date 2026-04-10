@@ -158,6 +158,70 @@ type StudioSelectedGraphEdge = {
   readonly implicit: boolean;
 };
 
+function readWorkflowSortTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function compareWorkflowSummaryPriority(
+  left: StudioWorkflowSummary,
+  right: StudioWorkflowSummary,
+  selectedWorkflowId = '',
+): number {
+  const leftSelected = left.workflowId === selectedWorkflowId;
+  const rightSelected = right.workflowId === selectedWorkflowId;
+  if (leftSelected !== rightSelected) {
+    return leftSelected ? -1 : 1;
+  }
+
+  const updatedDelta =
+    readWorkflowSortTimestamp(right.updatedAtUtc) -
+    readWorkflowSortTimestamp(left.updatedAtUtc);
+  if (updatedDelta !== 0) {
+    return updatedDelta;
+  }
+
+  if (left.stepCount !== right.stepCount) {
+    return right.stepCount - left.stepCount;
+  }
+
+  const leftDescriptionLength = left.description.trim().length;
+  const rightDescriptionLength = right.description.trim().length;
+  if (leftDescriptionLength !== rightDescriptionLength) {
+    return rightDescriptionLength - leftDescriptionLength;
+  }
+
+  return left.workflowId.localeCompare(right.workflowId);
+}
+
+export function dedupeStudioWorkflowSummaries(
+  workflows: readonly StudioWorkflowSummary[],
+  selectedWorkflowId = '',
+): StudioWorkflowSummary[] {
+  const dedupedWorkflows = new Map<string, StudioWorkflowSummary>();
+
+  for (const workflow of workflows) {
+    const key =
+      workflow.name.trim().toLowerCase() ||
+      workflow.workflowId.trim().toLowerCase();
+    const current = dedupedWorkflows.get(key);
+    if (!current) {
+      dedupedWorkflows.set(key, workflow);
+      continue;
+    }
+
+    if (
+      compareWorkflowSummaryPriority(workflow, current, selectedWorkflowId) < 0
+    ) {
+      dedupedWorkflows.set(key, workflow);
+    }
+  }
+
+  return Array.from(dedupedWorkflows.values()).sort((left, right) =>
+    compareWorkflowSummaryPriority(left, right, selectedWorkflowId),
+  );
+}
+
 const DEFAULT_GAGENT_REQUEST_TYPE_URL =
   'type.googleapis.com/google.protobuf.StringValue';
 
@@ -1803,11 +1867,16 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
 }) => {
   const directories = workspaceSettings.data?.directories ?? [];
   const isScopeMode = workflowStorageMode === 'scope';
+  const visibleWorkflows = React.useMemo(
+    () =>
+      dedupeStudioWorkflowSummaries(workflows.data ?? [], selectedWorkflowId),
+    [selectedWorkflowId, workflows.data],
+  );
   const activeDirectory =
     directories.find((directory) => directory.directoryId === selectedDirectoryId) ||
     directories[0] ||
     null;
-  const filteredWorkflows = (workflows.data ?? []).filter((workflow) => {
+  const filteredWorkflows = visibleWorkflows.filter((workflow) => {
     const keyword = workflowSearch.trim().toLowerCase();
     if (!keyword) {
       return true;

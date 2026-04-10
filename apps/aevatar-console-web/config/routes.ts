@@ -10,8 +10,6 @@
  * @param icon 配置路由的图标，取值参考 https://ant.design/components/icon-cn， 注意去除风格后缀和大小写，如想要配置图标为 <StepBackwardOutlined /> 则取值应为 stepBackward 或 StepBackward，如想要配置图标为 <UserOutlined /> 则取值应为 user 或者 User
  * @doc https://umijs.org/docs/guides/routes
  */
-const HOME_REDIRECT = '/teams';
-
 export default [
   {
     path: "/login",
@@ -25,73 +23,63 @@ export default [
   },
   {
     path: "/overview",
-    redirect: HOME_REDIRECT,
+    redirect: "/teams",
     hideInMenu: true,
   },
   {
     path: "/teams",
-    name: "Teams",
-    component: "./teams",
-    menuGroupKey: "home",
-    hideInMenu: false,
+    name: "我的团队",
+    component: "./scopes/overview",
+    menuGroupKey: "teams",
+  },
+  {
+    path: "/teams/new",
+    name: "组建团队",
+    component: "./teams/new",
+    menuGroupKey: "teams",
   },
   {
     path: "/teams/:scopeId",
-    component: "./teams/detail",
+    name: "团队详情",
+    component: "./teams",
     hideInMenu: true,
     parentKeys: ["/teams"],
   },
   {
     path: "/scopes/assets",
-    name: "Assets",
     component: "./scopes/assets",
-    // postMenuData in app.tsx regroups flat routes into lifecycle menu sections.
-    menuGroupKey: "build",
-    menuBadgeKey: "build.assets",
     hideInMenu: true,
   },
   {
     path: "/studio",
-    name: "Studio",
     component: "./studio",
-    menuGroupKey: "build",
     hideInMenu: true,
   },
   {
     path: "/runtime/workflows",
-    name: "Workflows",
     component: "./workflows",
-    menuGroupKey: "build",
     hideInMenu: true,
   },
   {
     path: "/runtime/primitives",
-    name: "Capabilities",
+    name: "连接器",
     component: "./primitives",
-    menuGroupKey: "build",
     hideInMenu: true,
   },
   {
     path: "/chat",
-    name: "Chat",
     component: "./chat",
-    menuGroupKey: "chat",
     hideInMenu: true,
   },
   {
     path: "/scopes/invoke",
-    name: "Invoke Lab",
     component: "./scopes/invoke",
-    menuGroupKey: "live",
-    menuBadgeKey: "live.invoke",
     hideInMenu: true,
   },
   {
     path: "/runtime/runs",
-    name: "Runs",
+    name: "事件流",
     component: "./runs",
-    menuGroupKey: "platform",
-    menuBadgeKey: "live.runs",
     hideInMenu: true,
   },
   {
@@ -99,21 +87,17 @@ export default [
     name: "Mission Control",
     component: "./MissionControl",
     hideInMenu: true,
-    menuGroupKey: "live",
-    menuBadgeKey: "live.attention",
   },
   {
     path: "/runtime/explorer",
     name: "Topology",
     component: "./actors",
     menuGroupKey: "platform",
-    menuBadgeKey: "live.topology",
   },
   {
     path: "/runtime/gagents",
-    name: "Member Runtime",
+    name: "成员",
     component: "./gagents",
-    menuGroupKey: "live",
     hideInMenu: true,
   },
   {
@@ -121,7 +105,6 @@ export default [
     name: "Services",
     component: "./services",
     menuGroupKey: "platform",
-    menuBadgeKey: "governance.services",
   },
   {
     path: "/services/:serviceId",
@@ -134,14 +117,12 @@ export default [
     name: "Deployments",
     component: "./Deployments",
     menuGroupKey: "platform",
-    menuBadgeKey: "governance.deployments",
   },
   {
     path: "/governance",
     name: "Governance",
     component: "./governance",
     menuGroupKey: "platform",
-    menuBadgeKey: "governance.audit",
   },
   {
     path: "/governance/policies",
@@ -169,20 +150,28 @@ export default [
   },
   {
     path: "/scopes/overview",
-    name: "Team Overview",
-    component: "./scopes/overview",
-    menuGroupKey: "settings",
+    redirect: "/teams",
     hideInMenu: true,
   },
   {
     path: "/settings",
-    name: "Settings",
+    name: "设置",
     component: "./settings/account",
     menuGroupKey: "settings",
   },
   {
     path: "/scopes",
-    redirect: HOME_REDIRECT,
+    redirect: "/teams",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/workflows",
+    component: "./scopes/workflows",
+    hideInMenu: true,
+  },
+  {
+    path: "/scopes/scripts",
+    component: "./scopes/scripts",
     hideInMenu: true,
   },
   {
@@ -191,8 +180,38 @@ export default [
     hideInMenu: true,
   },
   {
+    path: "/workflows",
+    redirect: "/runtime/workflows",
+    hideInMenu: true,
+  },
+  {
+    path: "/primitives",
+    redirect: "/runtime/primitives",
+    hideInMenu: true,
+  },
+  {
+    path: "/runs",
+    redirect: "/runtime/runs",
+    hideInMenu: true,
+  },
+  {
+    path: "/actors",
+    redirect: "/runtime/explorer",
+    hideInMenu: true,
+  },
+  {
+    path: "/gagents",
+    redirect: "/runtime/gagents",
+    hideInMenu: true,
+  },
+  {
+    path: "/mission-control",
+    redirect: "/runtime/mission-control",
+    hideInMenu: true,
+  },
+  {
     path: "/",
-    redirect: HOME_REDIRECT,
+    redirect: "/teams",
   },
   {
     component: "404",

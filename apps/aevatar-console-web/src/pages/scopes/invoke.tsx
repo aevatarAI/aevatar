@@ -144,15 +144,16 @@ const pageHeaderStyle: React.CSSProperties = {
 };
 const workspaceViewportStyle: React.CSSProperties = {
   display: 'flex',
-  flex: '1 0 auto',
+  flex: '1 1 auto',
   minHeight: 0,
-  overflow: 'visible',
+  overflow: 'hidden',
 };
 const workspaceGridStyle: React.CSSProperties = {
-  alignItems: 'start',
+  alignItems: 'stretch',
   display: 'grid',
   gap: 12,
   gridTemplateColumns: '250px minmax(0, 1fr) 300px',
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
   width: '100%',
@@ -282,7 +283,7 @@ const playgroundChatComposerStyle: React.CSSProperties = {
   background: '#ffffff',
   borderTop: '1px solid #e7e5e4',
   flexShrink: 0,
-  padding: '14px 20px',
+  padding: '14px 20px 18px',
 };
 const consoleShellStyle: React.CSSProperties = {
   background: 'var(--ant-color-bg-container)',
@@ -329,20 +330,63 @@ function createClientId(): string {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function buildServiceOptions(
+function compareServicePriority(
+  left: ServiceCatalogSnapshot,
+  right: ServiceCatalogSnapshot,
+  defaultServiceId?: string,
+): number {
+  const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
+  const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+
+  if (leftIsDefault !== rightIsDefault) {
+    return rightIsDefault - leftIsDefault;
+  }
+
+  const endpointDelta = right.endpoints.length - left.endpoints.length;
+  if (endpointDelta !== 0) {
+    return endpointDelta;
+  }
+
+  const leftHasDisplayName = left.displayName.trim() ? 1 : 0;
+  const rightHasDisplayName = right.displayName.trim() ? 1 : 0;
+  if (leftHasDisplayName !== rightHasDisplayName) {
+    return rightHasDisplayName - leftHasDisplayName;
+  }
+
+  const updatedAtDelta = right.updatedAt.localeCompare(left.updatedAt);
+  if (updatedAtDelta !== 0) {
+    return updatedAtDelta;
+  }
+
+  const serviceIdDelta = left.serviceId.localeCompare(right.serviceId);
+  if (serviceIdDelta !== 0) {
+    return serviceIdDelta;
+  }
+
+  return left.serviceKey.localeCompare(right.serviceKey);
+}
+
+export function buildServiceOptions(
   services: readonly ServiceCatalogSnapshot[],
   defaultServiceId?: string,
 ): ServiceCatalogSnapshot[] {
-  return [...services].sort((left, right) => {
-    const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
-    const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+  const deduped = new Map<string, ServiceCatalogSnapshot>();
 
-    if (leftIsDefault !== rightIsDefault) {
-      return rightIsDefault - leftIsDefault;
+  services.forEach((service) => {
+    const current = deduped.get(service.serviceId);
+    if (!current) {
+      deduped.set(service.serviceId, service);
+      return;
     }
 
-    return left.serviceId.localeCompare(right.serviceId);
+    if (compareServicePriority(service, current, defaultServiceId) < 0) {
+      deduped.set(service.serviceId, service);
+    }
   });
+
+  return [...deduped.values()].sort((left, right) =>
+    compareServicePriority(left, right, defaultServiceId),
+  );
 }
 
 function isChatEndpoint(
@@ -1106,8 +1150,8 @@ const ScopeInvokePage: React.FC = () => {
           </Space>
         </div>
 
-        <div style={workspaceViewportStyle}>
-          <div style={workspaceGridStyle}>
+        <div data-testid="invoke-lab-workspace-viewport" style={workspaceViewportStyle}>
+          <div data-testid="invoke-lab-workspace-grid" style={workspaceGridStyle}>
             <div style={columnStyle}>
               <ProCard
                 bodyStyle={viewportCardBodyStyle}

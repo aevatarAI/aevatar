@@ -9,6 +9,7 @@ import {
 import { saveRecentRun } from "@/shared/runs/recentRuns";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
 
@@ -82,21 +83,6 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
   },
 }));
 
-function getButtonByText(label: string): HTMLButtonElement {
-  const button = screen
-    .getAllByText((_, element) => element?.textContent?.trim() === label)
-    .map((element) =>
-      element instanceof HTMLButtonElement ? element : element.closest("button")
-    )
-    .find((element): element is HTMLButtonElement => element instanceof HTMLButtonElement);
-
-  if (!button) {
-    throw new Error(`Unable to find button with text '${label}'.`);
-  }
-
-  return button;
-}
-
 describe("RunsPage", () => {
   const mockedRuntimeCatalogApi = runtimeCatalogApi as unknown as {
     listWorkflowCatalog: jest.Mock;
@@ -109,6 +95,7 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
     window.history.replaceState({}, "", "/runtime/runs");
@@ -136,21 +123,74 @@ describe("RunsPage", () => {
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
+    mockedParseBackendSSEStream.mockImplementation(
+      () => (async function* () {})()
+    );
   });
 
   it("renders the runtime run console header and navigation actions", async () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
     expect(container.textContent).toContain("Runtime endpoint console");
-    expect(screen.getByLabelText("Open runtime console guide")).toBeTruthy();
-    expect(screen.getByText("Catalog")).toBeTruthy();
-    expect(screen.getByText("Explorer")).toBeTruthy();
-    expect(screen.queryByLabelText("Open observability hub")).toBeNull();
-    expect(screen.getByText("Inspector")).toBeTruthy();
-    expect(screen.getByLabelText("Scope ID")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open runtime console guide" })
+    );
+    expect(
+      screen.getByRole("button", { name: "Catalog" })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "返回团队高级编辑" })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Explorer" })
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open observability hub" })
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Inspector" })).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("Describe the task to run.")
+    ).toBeTruthy();
     expect(container.textContent).toContain("Launch rail");
     expect(container.textContent).toContain("Run trace");
     expect(container.textContent).toContain("Inspector");
+  });
+
+  it("navigates back to the team advanced tab from the runs console", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "返回团队高级编辑" })
+    );
+
+    expect(window.location.pathname).toBe("/teams/scope-1");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
+      "advanced"
+    );
+  });
+
+  it("keeps the trace workspace viewport stretchable so the inner console can scroll", async () => {
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    const tabs = container.querySelectorAll(".ant-tabs");
+    expect(tabs[0]).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+    });
+
+    const contentHolder = tabs[0]?.querySelector(".ant-tabs-content-holder");
+    expect(contentHolder).not.toBeNull();
+    expect(contentHolder).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+      overflow: "hidden",
+    });
   });
 
   it("uses the generic invoke path for prepared service invocation drafts", async () => {
@@ -168,13 +208,8 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    const promptInput = await screen.findByDisplayValue("script payload");
-    // ProForm's custom submitter buttons don't render in jsdom; submit via the
-    // form element which exercises the same onFinish path as the button's
-    // onClick={() => props.form?.submit?.()) wiring.
-    const form = promptInput.closest("form");
-    expect(form).toBeTruthy();
-    fireEvent.submit(form!);
+    await screen.findByDisplayValue("script payload");
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.invokeEndpoint).toHaveBeenCalledWith(
@@ -235,6 +270,120 @@ describe("RunsPage", () => {
 
     expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
+  });
+
+  it("retries chat runs against the scope default binding when a stale service id is missing", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D"
+    );
+
+    mockedRuntimeRunsApi.streamChat
+      .mockRejectedValueOnce(
+        new Error(
+          "Service 'scope-1:default:default:hello-chat' was not found."
+        )
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {},
+      });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("scope-1");
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      1,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: "scope-1:default:default:hello-chat",
+      }
+    );
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      2,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: undefined,
+      }
+    );
+  });
+
+  it("retries streamed chat runs against the scope default binding when the stream reports a missing service", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D"
+    );
+
+    mockedRuntimeRunsApi.streamChat
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {},
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {},
+      });
+    mockedParseBackendSSEStream
+      .mockImplementationOnce(
+        () =>
+          (async function* () {
+            yield {
+              type: "RUN_ERROR",
+              message: "Service 'scope-1:default:default:hello-chat' was not found.",
+            };
+          })()
+      )
+      .mockImplementationOnce(() => (async function* () {})());
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("scope-1");
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      1,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: "scope-1:default:default:hello-chat",
+      }
+    );
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      2,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: undefined,
+      }
+    );
   });
 
   it("hydrates observed run sessions without starting a new invoke", async () => {
@@ -336,8 +485,7 @@ describe("RunsPage", () => {
     mockDispatch.mockClear();
     mockReset.mockClear();
 
-    fireEvent.click(screen.getByText("Recent (1)"));
-    fireEvent.click(getButtonByText("Restore"));
+    fireEvent.click(screen.getAllByRole("button", { name: "Restore" })[0]);
 
     await waitFor(() => {
       expect(mockReset).toHaveBeenCalled();
@@ -389,13 +537,8 @@ describe("RunsPage", () => {
 
     renderWithQueryClient(React.createElement(RunsPage));
 
-    const promptInput = await screen.findByDisplayValue("Run it");
-    // ProForm's custom submitter buttons don't render in jsdom; submit via the
-    // form element which exercises the same onFinish path as the button's
-    // onClick={() => props.form?.submit?.()) wiring.
-    const form = promptInput.closest("form");
-    expect(form).toBeTruthy();
-    fireEvent.submit(form!);
+    await screen.findByDisplayValue("Run it");
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
 
     await waitFor(() => {
       expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledWith(

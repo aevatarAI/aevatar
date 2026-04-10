@@ -162,17 +162,27 @@ public sealed class AppScopedWorkflowService
         ArgumentNullException.ThrowIfNull(request);
 
         var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var requestedWorkflowName = string.IsNullOrWhiteSpace(request.WorkflowName)
+            ? string.Empty
+            : request.WorkflowName.Trim();
         var normalizedYaml = NormalizeRequired(request.Yaml, nameof(request.Yaml));
+        if (!string.IsNullOrWhiteSpace(requestedWorkflowName))
+        {
+            normalizedYaml = AlignWorkflowYamlName(normalizedYaml, requestedWorkflowName);
+        }
+
         var parsed = _yamlDocumentService.Parse(normalizedYaml);
-        var workflowName = !string.IsNullOrWhiteSpace(parsed.Document?.Name)
+        var workflowName = !string.IsNullOrWhiteSpace(requestedWorkflowName)
+            ? requestedWorkflowName
+            : !string.IsNullOrWhiteSpace(parsed.Document?.Name)
             ? parsed.Document.Name.Trim()
             : NormalizeRequired(request.WorkflowName, nameof(request.WorkflowName));
         var workflowId = string.IsNullOrWhiteSpace(request.WorkflowId)
             ? StudioDocumentIdNormalizer.Normalize(workflowName, "workflow")
             : NormalizeRequired(request.WorkflowId, nameof(request.WorkflowId));
-        var displayName = string.IsNullOrWhiteSpace(request.WorkflowName)
+        var displayName = string.IsNullOrWhiteSpace(requestedWorkflowName)
             ? workflowId
-            : request.WorkflowName.Trim();
+            : requestedWorkflowName;
 
         ScopeWorkflowUpsertResult upsert;
         if (_workflowCommandPort != null)
@@ -220,6 +230,24 @@ public sealed class AppScopedWorkflowService
             normalizedYaml,
             request.Layout,
             parsed);
+    }
+
+    private string AlignWorkflowYamlName(string yaml, string workflowName)
+    {
+        if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
+            return yaml;
+
+        var parsed = _yamlDocumentService.Parse(yaml);
+        if (parsed.Document == null)
+            return yaml;
+
+        if (string.Equals(parsed.Document.Name?.Trim(), workflowName, StringComparison.Ordinal))
+            return yaml;
+
+        return _yamlDocumentService.Serialize(parsed.Document with
+        {
+            Name = workflowName,
+        });
     }
 
     public static WorkflowDirectorySummary CreateScopeDirectory(string scopeId) =>

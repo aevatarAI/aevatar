@@ -462,8 +462,11 @@ export const workbenchHudBodyStyle = {
 } as const;
 
 export const workbenchOverviewGridStyle = {
+  display: "flex",
   flex: 1,
+  flexDirection: "column",
   minHeight: 0,
+  overflow: "hidden",
 } as const;
 
 export const workbenchOverviewCardStyle = {

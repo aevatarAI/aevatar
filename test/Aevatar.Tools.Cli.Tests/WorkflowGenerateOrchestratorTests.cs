@@ -82,6 +82,48 @@ public class WorkflowGenerateOrchestratorTests
             .WithMessage("*valid workflow YAML*");
     }
 
+    [Fact]
+    public async Task GenerateAsync_ShouldNormalizeAiHallucinatedStepFieldsBeforeFailing()
+    {
+        var orchestrator = CreateOrchestrator();
+
+        var result = await orchestrator.GenerateAsync(
+            new WorkflowGenerateRequest(
+                "Create the simplest possible chat workflow",
+                null,
+                [],
+                null),
+            (prompt, metadata, ct) =>
+            {
+                _ = prompt;
+                _ = metadata;
+                _ = ct;
+                return Task.FromResult<string?>(
+                    """
+                    name: ai-draft
+                    steps:
+                      - id: chat
+                        type: llm_call
+                        model: gpt-5.4
+                        messages:
+                          - role: user
+                            content: hello
+                        params:
+                          prompt_prefix: "Reply clearly."
+                    """);
+            },
+            null,
+            CancellationToken.None);
+
+        result.Attempts.Should().Be(1);
+        result.Yaml.Should().Contain("name: ai-draft");
+        result.Yaml.Should().Contain("id: chat");
+        result.Yaml.Should().Contain("type: llm_call");
+        result.Yaml.Should().NotContain("model:");
+        result.Yaml.Should().NotContain("messages:");
+        result.Yaml.Should().NotContain("params:");
+    }
+
     [Theory]
     [InlineData("```yaml\nname: sample\nsteps:\n  - id: a\n    type: llm_call\n```", "name: sample")]
     [InlineData("name: sample\nsteps:\n  - id: a\n    type: llm_call", "name: sample")]

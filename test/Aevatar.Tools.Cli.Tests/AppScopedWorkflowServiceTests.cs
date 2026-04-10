@@ -2,12 +2,14 @@ using System.Net;
 using System.Text;
 using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.GAgentService.Abstractions;
 using Aevatar.GAgentService.Abstractions.Ports;
 using Aevatar.Studio.Domain.Studio.Models;
 using Aevatar.Workflow.Application.Abstractions.Runs;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
+using System.Text.RegularExpressions;
 
 namespace Aevatar.Tools.Cli.Tests;
 
@@ -92,6 +94,34 @@ public sealed class AppScopedWorkflowServiceTests
         response.Findings[0].Message.Should().Be("Workflow YAML is not available yet.");
     }
 
+    [Fact]
+    public async Task SaveAsync_ShouldRewriteYamlNameFromRequestedWorkflowName()
+    {
+        var commandPort = new StubScopeWorkflowCommandPort();
+        var service = new AppScopedWorkflowService(
+            new StubHttpClientFactory(new HttpClient(new StubHttpMessageHandler(_ => throw new InvalidOperationException("HTTP backend should not be called.")))
+            {
+                BaseAddress = new Uri("https://backend.example"),
+            }),
+            new StubWorkflowYamlDocumentService(),
+            workflowCommandPort: commandPort);
+
+        var response = await service.SaveAsync(
+            "scope-1",
+            new SaveWorkflowFileRequest(
+                WorkflowId: null,
+                DirectoryId: "scope:scope-1",
+                WorkflowName: "renamed-workflow",
+                FileName: null,
+                Yaml: "name: draft\nsteps: []\n"));
+
+        commandPort.LastRequest.Should().NotBeNull();
+        commandPort.LastRequest!.WorkflowName.Should().Be("renamed-workflow");
+        commandPort.LastRequest.WorkflowYaml.Should().StartWith("name: renamed-workflow");
+        response.Name.Should().Be("renamed-workflow");
+        response.Yaml.Should().StartWith("name: renamed-workflow");
+    }
+
     private static AppScopedWorkflowService CreateService(
         Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
     {
@@ -139,9 +169,48 @@ public sealed class AppScopedWorkflowServiceTests
 
     private sealed class StubWorkflowYamlDocumentService : IWorkflowYamlDocumentService
     {
-        public WorkflowParseResult Parse(string yaml) => new(null, []);
+        private static readonly Regex NameRegex = new(@"(?m)^name:\s*(.+?)\s*$", RegexOptions.Compiled);
 
-        public string Serialize(WorkflowDocument document) => string.Empty;
+        public WorkflowParseResult Parse(string yaml)
+        {
+            if (string.IsNullOrWhiteSpace(yaml))
+                return new(null, []);
+
+            var match = NameRegex.Match(yaml ?? string.Empty);
+            return new(new WorkflowDocument
+            {
+                Name = match.Success ? match.Groups[1].Value.Trim() : string.Empty,
+            }, []);
+        }
+
+        public string Serialize(WorkflowDocument document) => $"name: {document.Name}\nsteps: []\n";
+    }
+
+    private sealed class StubScopeWorkflowCommandPort : IScopeWorkflowCommandPort
+    {
+        public ScopeWorkflowUpsertRequest? LastRequest { get; private set; }
+
+        public Task<ScopeWorkflowUpsertResult> UpsertAsync(
+            ScopeWorkflowUpsertRequest request,
+            CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(new ScopeWorkflowUpsertResult(
+                new ScopeWorkflowSummary(
+                    ScopeId: request.ScopeId,
+                    WorkflowId: request.WorkflowId,
+                    DisplayName: request.DisplayName ?? request.WorkflowName ?? request.WorkflowId,
+                    ServiceKey: $"{request.ScopeId}:default:default:{request.WorkflowId}",
+                    WorkflowName: request.WorkflowName ?? request.WorkflowId,
+                    ActorId: "actor-1",
+                    ActiveRevisionId: "rev-1",
+                    DeploymentId: "deploy-1",
+                    DeploymentStatus: "draft",
+                    UpdatedAt: DateTimeOffset.UtcNow),
+                RevisionId: "rev-1",
+                DefinitionActorIdPrefix: "actor",
+                ExpectedActorId: "actor-1"));
+        }
     }
 
     private sealed class StubScopeWorkflowQueryPort : IScopeWorkflowQueryPort

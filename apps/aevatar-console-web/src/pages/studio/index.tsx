@@ -1,17 +1,20 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { history } from '@/shared/navigation/history';
-import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
+import {
+  buildTeamDetailHref,
+  buildTeamsHref,
+} from '@/shared/navigation/teamRoutes';
 import {
   buildRuntimeRunsHref,
   buildRuntimeWorkflowsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import type { Node } from '@xyflow/react';
 import {
+  Alert,
   Button,
   Modal,
   Space,
-  message,
 } from 'antd';
 import React, {
   useCallback,
@@ -98,6 +101,7 @@ import StudioShell, {
 } from './components/StudioShell';
 import ScriptsWorkbenchPage from '@/modules/studio/scripts/ScriptsWorkbenchPage';
 import {
+  dedupeStudioWorkflowSummaries,
   type StudioCatalogDraftMeta,
   type StudioConnectorCatalogItem,
   type StudioConnectorDraftItem,
@@ -115,6 +119,9 @@ import {
 
 type StudioRouteState = {
   scopeId: string;
+  scopeLabel: string;
+  memberId: string;
+  memberLabel: string;
   workflowId: string;
   scriptId: string;
   templateWorkflow: string;
@@ -804,12 +811,13 @@ function buildBlankDraftYaml(workflowName: string): string {
   return `name: ${normalizedName}\nsteps: []\n`;
 }
 
-function readInitialStudioRouteState(
-  search = typeof window === 'undefined' ? '' : window.location.search,
-): StudioRouteState {
-  if (typeof window === 'undefined' && !search) {
+function readInitialStudioRouteState(): StudioRouteState {
+  if (typeof window === 'undefined') {
     return {
       scopeId: '',
+      scopeLabel: '',
+      memberId: '',
+      memberLabel: '',
       workflowId: '',
       scriptId: '',
       templateWorkflow: '',
@@ -822,9 +830,12 @@ function readInitialStudioRouteState(
     };
   }
 
-  const params = new URLSearchParams(search);
+  const params = new URLSearchParams(window.location.search);
   return {
     scopeId: trimOptional(params.get('scopeId')),
+    scopeLabel: trimOptional(params.get('scopeLabel')),
+    memberId: trimOptional(params.get('memberId')),
+    memberLabel: trimOptional(params.get('memberLabel')),
     workflowId: trimOptional(params.get('workflow')),
     scriptId: trimOptional(params.get('script')),
     templateWorkflow: trimOptional(params.get('template')),
@@ -912,30 +923,18 @@ function readValidationSummary(
       };
 }
 
-const StudioPage: React.FC = () => {
-  const [messageApi, messageContextHolder] = message.useMessage();
-  const locationSearch = React.useSyncExternalStore(
-    (listener) => {
-      if (typeof window === 'undefined') {
-        return () => undefined;
-      }
+function isWorkflowNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
 
-      window.addEventListener('popstate', listener);
-      return () => {
-        window.removeEventListener('popstate', listener);
-      };
-    },
-    () => (typeof window === 'undefined' ? '' : window.location.search),
-    () => '',
-  );
-  const routeState = useMemo(
-    () => readInitialStudioRouteState(locationSearch),
-    [locationSearch],
-  );
-  const initialState = React.useRef(routeState).current;
+  return /not found/i.test(error.message);
+}
+
+const StudioPage: React.FC = () => {
+  const initialState = useMemo(() => readInitialStudioRouteState(), []);
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
-  const routeScopeId = routeState.scopeId;
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
     readInitialWorkspacePage(initialState),
   );
@@ -1126,7 +1125,7 @@ const StudioPage: React.FC = () => {
     queryFn: () => studioApi.getAppContext(),
   });
   const resolvedStudioScopeId =
-    trimOptional(routeScopeId) ||
+    initialState.scopeId ||
     trimOptional(appContextQuery.data?.scopeId) ||
     trimOptional(authSessionQuery.data?.scopeId) ||
     '';
@@ -1197,11 +1196,19 @@ const StudioPage: React.FC = () => {
     retry: false,
     queryFn: () => runtimeQueryApi.listPrimitives(),
   });
+  const visibleWorkflowSummaries = useMemo(
+    () =>
+      dedupeStudioWorkflowSummaries(
+        workflowsQuery.data ?? [],
+        selectedWorkflowId,
+      ),
+    [selectedWorkflowId, workflowsQuery.data],
+  );
   const matchingWorkspaceWorkflow = useMemo(
     () =>
-      (workflowsQuery.data ?? []).find((item) => item.name === templateWorkflow) ??
+      visibleWorkflowSummaries.find((item) => item.name === templateWorkflow) ??
       null,
-    [templateWorkflow, workflowsQuery.data],
+    [templateWorkflow, visibleWorkflowSummaries],
   );
   const templateWorkflowQuery = useQuery({
     queryKey: ['studio-template-workflow', templateWorkflow],
@@ -1215,8 +1222,8 @@ const StudioPage: React.FC = () => {
   const activeWorkflowFile = selectedWorkflowQuery.data ?? null;
   const activeTemplate = templateWorkflowQuery.data ?? null;
   const workflowNames = useMemo(
-    () => (workflowsQuery.data ?? []).map((item) => item.name),
-    [workflowsQuery.data],
+    () => visibleWorkflowSummaries.map((item) => item.name),
+    [visibleWorkflowSummaries],
   );
   const availableStepTypes = useMemo(() => {
     const stepTypes = new Set<string>();
@@ -1317,13 +1324,51 @@ const StudioPage: React.FC = () => {
       selectedWorkflowId ||
       templateWorkflow ||
       draftMode === 'new' ||
-      (workflowsQuery.data?.length ?? 0) === 0
+      visibleWorkflowSummaries.length === 0
     ) {
       return;
     }
 
-    setSelectedWorkflowId(workflowsQuery.data?.[0]?.workflowId ?? '');
-  }, [draftMode, selectedWorkflowId, templateWorkflow, workflowsQuery.data]);
+    setSelectedWorkflowId(visibleWorkflowSummaries[0]?.workflowId ?? '');
+  }, [draftMode, selectedWorkflowId, templateWorkflow, visibleWorkflowSummaries]);
+
+  useEffect(() => {
+    if (
+      !selectedWorkflowId ||
+      !selectedWorkflowQuery.isError ||
+      !isWorkflowNotFoundError(selectedWorkflowQuery.error)
+    ) {
+      return;
+    }
+
+    const fallbackWorkflowId =
+      visibleWorkflowSummaries.find(
+        (workflow) => workflow.workflowId !== selectedWorkflowId,
+      )?.workflowId ?? '';
+
+    if (fallbackWorkflowId) {
+      setSelectedWorkflowId(fallbackWorkflowId);
+      setTemplateWorkflow('');
+      setDraftMode('');
+      setLegacySource('');
+      setSaveNotice(null);
+      return;
+    }
+
+    setSelectedWorkflowId('');
+    setTemplateWorkflow('');
+    setDraftMode('new');
+    setLegacySource('');
+    setDraftDirectoryId((current) => current || defaultDirectoryId);
+    setDraftWorkflowLayout(null);
+    setSaveNotice(null);
+  }, [
+    defaultDirectoryId,
+    selectedWorkflowId,
+    selectedWorkflowQuery.error,
+    selectedWorkflowQuery.isError,
+    visibleWorkflowSummaries,
+  ]);
 
   useEffect(() => {
     if (!templateWorkflow || selectedWorkflowId || !matchingWorkspaceWorkflow) {
@@ -1483,10 +1528,6 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    if (!window.location.pathname.startsWith('/studio')) {
-      return;
-    }
-
     const tab: StudioTab =
       workspacePage === 'studio'
         ? studioView === 'execution'
@@ -1495,7 +1536,10 @@ const StudioPage: React.FC = () => {
         : workspacePage;
 
     window.history.replaceState(null, '', buildStudioRoute({
-      scopeId: routeScopeId || undefined,
+      scopeId: resolvedStudioScopeId || undefined,
+      scopeLabel: initialState.scopeLabel || undefined,
+      memberId: initialState.memberId || undefined,
+      memberLabel: initialState.memberLabel || undefined,
       workflowId: selectedWorkflowId || undefined,
       scriptId: selectedScriptId || undefined,
       template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
@@ -1520,7 +1564,6 @@ const StudioPage: React.FC = () => {
     draftMode,
     legacySource,
     logsPopoutMode,
-    routeScopeId,
     selectedExecutionId,
     selectedScriptId,
     selectedWorkflowId,
@@ -1615,7 +1658,7 @@ const StudioPage: React.FC = () => {
       throw new Error('Workflow YAML is required.');
     }
 
-    const workspaceWorkflows = workflowsQuery.data ?? [];
+    const workspaceWorkflows = visibleWorkflowSummaries;
     const availableWorkflowNames = workspaceWorkflows.map((item) => item.name);
     const workflowIdsByName = new Map(
       workspaceWorkflows.map((item) => [item.name, item.workflowId]),
@@ -1689,7 +1732,7 @@ const StudioPage: React.FC = () => {
     availableStepTypes,
     draftWorkflowName,
     draftYaml,
-    workflowsQuery.data,
+    visibleWorkflowSummaries,
   ]);
   const recentPromptHistory = useMemo(
     () => promptHistory.slice(0, 3),
@@ -1936,7 +1979,7 @@ const StudioPage: React.FC = () => {
       return;
     }
 
-    const workspaceWorkflow = (workflowsQuery.data ?? []).find(
+    const workspaceWorkflow = visibleWorkflowSummaries.find(
       (item) => item.name === normalizedWorkflowName,
     );
     if (workspaceWorkflow) {
@@ -1982,7 +2025,7 @@ const StudioPage: React.FC = () => {
     }
 
     const fallbackWorkflowId =
-      selectedWorkflowId || workflowsQuery.data?.[0]?.workflowId || '';
+      selectedWorkflowId || visibleWorkflowSummaries[0]?.workflowId || '';
     if (fallbackWorkflowId) {
       setSelectedWorkflowId(fallbackWorkflowId);
       setTemplateWorkflow('');
@@ -2010,7 +2053,7 @@ const StudioPage: React.FC = () => {
     sourceWorkflowLayout,
     sourceWorkflowName,
     sourceYaml,
-    workflowsQuery.data,
+    visibleWorkflowSummaries,
   ]);
 
   const handleSwitchStudioView = useCallback(
@@ -4028,40 +4071,40 @@ const StudioPage: React.FC = () => {
   const navItems: StudioShellNavItem[] = [
     {
       key: 'workflows',
-      label: 'Workflows',
-      description: 'Browse workspace workflows and start new drafts.',
-      count: workflowsQuery.data?.length ?? 0,
+      label: '行为定义',
+      description: '浏览团队可用的行为定义并开始新的草稿。',
+      count: visibleWorkflowSummaries.length,
     },
     {
       key: 'studio',
-      label: 'Studio',
-      description: 'Edit the active draft and inspect execution runs.',
+      label: '成员编辑器',
+      description: '编辑当前成员草稿，并查看测试运行状态。',
       count: executionsQuery.data?.length ?? 0,
     },
     {
       key: 'roles',
-      label: 'Roles',
-      description: 'Edit, import, and save workflow role definitions.',
+      label: 'Agent 角色',
+      description: '编辑、导入并保存 Agent 角色定义。',
       count: rolesQuery.data?.roles.length ?? 0,
     },
     {
       key: 'connectors',
-      label: 'Connectors',
-      description: 'Edit, import, and save Studio connectors.',
+      label: '集成',
+      description: '编辑、导入并保存团队可用集成。',
       count: connectorsQuery.data?.connectors.length ?? 0,
     },
     {
       key: 'settings',
-      label: 'Workspace settings',
-      description: 'Manage AI providers and review runtime and workflow setup.',
+      label: '编辑器设置',
+      description: '管理 AI Provider，并检查运行时与行为定义配置。',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
   ];
   if (appContextQuery.data?.features.scripts) {
     navItems.splice(2, 0, {
       key: 'scripts',
-      label: 'Scripts',
-      description: 'Author, validate, run, and promote scope-aware scripts.',
+      label: '脚本行为',
+      description: '编写、校验、测试并发布 scope 感知脚本。',
     });
   }
 
@@ -4086,18 +4129,18 @@ const StudioPage: React.FC = () => {
 
   const pageTitle =
     workspacePage === 'workflows'
-      ? 'Workflows'
+      ? '行为定义'
       : workspacePage === 'scripts'
-        ? 'Scripts Studio'
+        ? '脚本行为'
       : workspacePage === 'studio'
         ? studioView === 'execution'
-          ? 'Studio execution view'
-          : 'Studio editor'
+          ? '测试运行'
+          : '成员编辑器'
         : workspacePage === 'roles'
-          ? 'Role catalog'
+          ? 'Agent 角色'
           : workspacePage === 'connectors'
-            ? 'Connector catalog'
-            : 'Workspace settings';
+            ? '集成'
+            : '编辑器设置';
 
   const pageToolbar =
     workspacePage === 'studio' ? (
@@ -4106,33 +4149,80 @@ const StudioPage: React.FC = () => {
           type={studioView === 'editor' ? 'primary' : 'default'}
           onClick={() => handleSwitchStudioView('editor')}
         >
-          Edit
+          编辑画布
         </Button>
         <Button
           type={studioView === 'execution' ? 'primary' : 'default'}
           onClick={() => handleSwitchStudioView('execution')}
         >
-          Runs
+          测试运行
         </Button>
         <Button onClick={() => setWorkspacePage('workflows')}>
-          Workflow library
+          行为定义
         </Button>
       </Space>
     ) : workspacePage === 'scripts' ? (
       <Space wrap size={[8, 8]}>
         <Button onClick={() => setWorkspacePage('workflows')}>
-          Workflow library
+          行为定义
         </Button>
       </Space>
     ) : undefined;
 
+  const studioContextScopeLabel = initialState.scopeLabel || resolvedStudioScopeId;
+  const studioContextMemberLabel = initialState.memberLabel;
+  const studioContextAlert =
+    resolvedStudioScopeId || studioContextMemberLabel ? (
+      <Alert
+        action={
+          <Space wrap size={[8, 8]}>
+            {resolvedStudioScopeId ? (
+              <Button
+                onClick={() =>
+                  history.push(
+                    buildTeamDetailHref({
+                      scopeId: resolvedStudioScopeId,
+                      tab: 'advanced',
+                      serviceId: scopeBindingQuery.data?.serviceId || undefined,
+                    }),
+                  )
+                }
+                size="small"
+                type="link"
+              >
+                返回团队
+              </Button>
+            ) : null}
+            <Button
+              onClick={() => setWorkspacePage('workflows')}
+              size="small"
+              type="link"
+            >
+              查看行为定义
+            </Button>
+          </Space>
+        }
+        description={
+          studioContextMemberLabel
+            ? `${studioContextScopeLabel || '当前团队'} / ${studioContextMemberLabel}`
+            : `${studioContextScopeLabel || '当前团队'}`
+        }
+        message="团队构建器上下文"
+        showIcon
+        type="info"
+      />
+    ) : null;
+
   const workspaceAlerts = (
-    <StudioWorkspaceAlerts
-      authSession={authRecoveryPending ? null : authSessionQuery.data}
-      templateWorkflow={templateWorkflow}
-      draftMode={draftMode}
-      legacySource={legacySource}
-    />
+    <>
+      {studioContextAlert}
+      <StudioWorkspaceAlerts
+        authSession={authRecoveryPending ? null : authSessionQuery.data}
+        templateWorkflow={templateWorkflow}
+        draftMode={draftMode}
+        legacySource={legacySource}
+      />
+    </>
   );
 
   const inspectorContent = (
@@ -4201,7 +4291,12 @@ const StudioPage: React.FC = () => {
         }}
       >
         <StudioWorkflowsPage
-          workflows={workflowsQuery}
+          workflows={{
+            isLoading: workflowsQuery.isLoading,
+            isError: workflowsQuery.isError,
+            error: workflowsQuery.error,
+            data: visibleWorkflowSummaries,
+          }}
           workspaceSettings={workspaceSettingsQuery}
           workflowStorageMode={
             appContextQuery.data?.workflowStorageMode || 'workspace'
@@ -4436,7 +4531,15 @@ const StudioPage: React.FC = () => {
           onOpenWorkflowFromHistory={openWorkflowFromHistory}
           onStartExecution={() => void handleStartExecution()}
           onOpenProjectOverview={() => {
-            history.push(buildTeamWorkspaceRoute(resolvedStudioScopeId));
+            history.push(
+              resolvedStudioScopeId
+                ? buildTeamDetailHref({
+                    scopeId: resolvedStudioScopeId,
+                    tab: 'advanced',
+                    serviceId: scopeBindingQuery.data?.serviceId || undefined,
+                  })
+                : buildTeamsHref(),
+            );
           }}
           onOpenProjectInvoke={() => {
             history.push(

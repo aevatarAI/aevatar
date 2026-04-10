@@ -247,11 +247,7 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
           : pageContainerChildrenViewportStyle
       }
       content={content}
-      extra={
-        extra
-          ? [<React.Fragment key="aevatar-page-shell-extra">{extra}</React.Fragment>]
-          : undefined
-      }
+      extra={extra}
       onBack={onBack}
       pageHeaderRender={pageHeaderRender}
       style={
@@ -410,7 +406,7 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
         {title || description || extra ? (
           <div style={sectionHeaderStyle}>
             <Space
-              orientation="vertical"
+              direction="vertical"
               size={4}
               style={{ flex: 1, minWidth: 0 }}
             >
@@ -469,7 +465,7 @@ export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
       }
       styles={{ body: aevatarDrawerBodyStyle }}
       title={
-        <Space orientation="vertical" size={2}>
+        <Space direction="vertical" size={2}>
           <Typography.Text strong>{title}</Typography.Text>
           {subtitle ? (
             <Typography.Text style={{ color: token.colorTextSecondary }}>
@@ -515,7 +511,7 @@ export const AevatarInspectorEmpty: React.FC<{
   return (
     <Empty
       description={
-        <Space orientation="vertical" size={4}>
+        <Space direction="vertical" size={4}>
           <Typography.Text strong>{title}</Typography.Text>
           <Typography.Text style={{ color: token.colorTextSecondary }}>
             {description}
