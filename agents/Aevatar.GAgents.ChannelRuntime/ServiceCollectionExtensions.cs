@@ -59,6 +59,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>,
             ChannelBotRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
+        services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
             static doc => doc.Id, static key => key);
 
