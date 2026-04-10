@@ -43,7 +43,7 @@ export default [
   },
   {
     path: "/scopes/assets",
-    name: "Assets",
+    name: "Legacy Team Assets",
     component: "./scopes/assets",
     // postMenuData in app.tsx regroups flat routes into lifecycle menu sections.
     menuGroupKey: "build",
@@ -80,7 +80,7 @@ export default [
   },
   {
     path: "/scopes/invoke",
-    name: "Invoke Lab",
+    name: "Legacy Invoke Lab",
     component: "./scopes/invoke",
     menuGroupKey: "live",
     menuBadgeKey: "live.invoke",
@@ -169,7 +169,7 @@ export default [
   },
   {
     path: "/scopes/overview",
-    name: "Team Overview",
+    name: "Legacy Team Workspace",
     component: "./scopes/overview",
     menuGroupKey: "settings",
     hideInMenu: true,

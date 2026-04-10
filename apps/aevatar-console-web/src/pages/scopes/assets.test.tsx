@@ -1,5 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
+import { history } from '@/shared/navigation/history';
+import { buildStudioWorkflowEditorRoute } from '@/shared/studio/navigation';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import TeamAssetsPage from './assets';
 
@@ -82,9 +84,22 @@ describe('TeamAssetsPage', () => {
   it('shows the unified project asset summary and workflow detail drawer', async () => {
     renderWithQueryClient(React.createElement(TeamAssetsPage));
 
-    expect(await screen.findByText('Team asset summary')).toBeTruthy();
+    expect(await screen.findByText('Legacy Team Assets')).toBeTruthy();
+    expect(await screen.findByText('Legacy asset summary')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Team home now lives under /teams. Keep this page for older asset deep links, source inspection, and catalog detail while the team-first flow finishes taking over.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Team home is now the primary surface. Use this legacy asset workspace when you need source inspection, catalog state, or older deep links.',
+      ),
+    ).toBeTruthy();
     expect(await screen.findByText('Workspace Demo')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Team Builder' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Open Team Home' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open Member Runtime' })).toBeTruthy();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]);
@@ -102,7 +117,7 @@ describe('TeamAssetsPage', () => {
   it('switches to script assets and opens catalog detail in the same workspace', async () => {
     renderWithQueryClient(React.createElement(TeamAssetsPage));
 
-    expect(await screen.findByText('Team asset summary')).toBeTruthy();
+    expect(await screen.findByText('Legacy asset summary')).toBeTruthy();
     fireEvent.click(await screen.findByRole('tab', { name: 'Scripts (1)' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect' })[0]);
 
@@ -116,14 +131,17 @@ describe('TeamAssetsPage', () => {
     });
   });
 
-  it('opens a selected workflow in the Studio editor route', async () => {
+  it('opens a selected workflow in the Team Builder route with team context', async () => {
+    const pushSpy = jest.spyOn(history, 'push');
     renderWithQueryClient(React.createElement(TeamAssetsPage));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Open workflow editor' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit in Team Builder' }));
 
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/studio');
-      expect(window.location.search).toBe('?workflow=workflow-alpha&tab=studio');
-    });
+    expect(pushSpy).toHaveBeenCalledWith(
+      buildStudioWorkflowEditorRoute({
+        scopeId: 'scope-a',
+        workflowId: 'workflow-alpha',
+      }),
+    );
   });
 });

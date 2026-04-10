@@ -52,6 +52,7 @@ import {
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import {
+  buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
 import {
@@ -296,21 +297,29 @@ const TeamDetailPage: React.FC = () => {
     }
 
     const workflows = workflowsQuery.data ?? [];
-    const activeWorkflowName = trimText(lens.activeRevision.workflowName);
-    if (activeWorkflowName) {
-      const matchedWorkflow =
-        workflows.find(
-          (workflow) =>
-            trimText(workflow.workflowName) === activeWorkflowName ||
-            trimText(workflow.displayName) === activeWorkflowName,
-        ) ?? null;
-      if (matchedWorkflow) {
-        return matchedWorkflow;
+    const workflowNameHints = [
+      trimText(lens.activeRevision.workflowName),
+      trimText(lens.currentRun?.workflowName),
+      trimText(lens.currentRunAudit?.audit.workflowName),
+      trimText(lens.currentRunAudit?.summary.workflowName),
+      trimText(lens.playback.workflowName),
+    ].filter(Boolean);
+    if (workflowNameHints.length > 0) {
+      for (const workflowNameHint of workflowNameHints) {
+        const matchedWorkflow =
+          workflows.find(
+            (workflow) =>
+              trimText(workflow.workflowName) === workflowNameHint ||
+              trimText(workflow.displayName) === workflowNameHint,
+          ) ?? null;
+        if (matchedWorkflow) {
+          return matchedWorkflow;
+        }
       }
     }
 
     return workflows.length === 1 ? workflows[0] : null;
-  }, [lens.activeRevision, workflowsQuery.data]);
+  }, [lens.activeRevision, lens.currentRun, lens.currentRunAudit, lens.playback.workflowName, workflowsQuery.data]);
   const teamWorkflowDetailQuery = useQuery({
     enabled:
       scopeId.length > 0 &&
@@ -483,6 +492,17 @@ const TeamDetailPage: React.FC = () => {
           : { label: "Partial", status: "partial" };
   const runtimeServiceId =
     lens.currentService?.serviceId || lens.currentRun?.serviceId || undefined;
+  const teamBuilderRoute =
+    trimText(activeWorkflowSummary?.workflowId).length > 0
+      ? buildStudioWorkflowEditorRoute({
+          scopeId,
+          workflowId: activeWorkflowSummary?.workflowId,
+        })
+      : buildStudioWorkflowWorkspaceRoute({
+          scopeId,
+        });
+  const teamBuilderLabel =
+    "Open Team Builder";
   const availableActorIds = React.useMemo(
     () =>
       Array.from(
@@ -633,8 +653,8 @@ const TeamDetailPage: React.FC = () => {
             status={activityProvenance.status}
           />
         }
-        title="Team Activity"
-        titleHelp="Recent service runs are the shortest path from the team shell to real operational truth."
+        title="Recent Activity"
+        titleHelp="Start here when you need proof of what this team just did and whether it needs attention."
       >
         {runsQuery.isLoading ? (
           <AevatarInspectorEmpty description="Loading recent team activity." />
@@ -699,8 +719,8 @@ const TeamDetailPage: React.FC = () => {
             status={compareProvenance.status}
           />
         }
-        title="Run Compare / Change Diff"
-        titleHelp="Compare the latest visible team run with the closest prior good run so operators can explain what changed."
+        title="What Changed"
+        titleHelp="Compare the latest visible run with the last solid baseline so the team story is explainable."
       >
         {!currentRunAuditQuery.isError && !baselineRunAuditQuery.isError && lens.compare.available ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -755,8 +775,8 @@ const TeamDetailPage: React.FC = () => {
             status={playbackProvenance.status}
           />
         }
-        title="Human Escalation Playback"
-        titleHelp="Playback keeps the current human gate, the recent step sequence, and the latest runtime events on one rail so operators can explain why the team is paused."
+        title="Human Handoff"
+        titleHelp="Keep the current human gate, the recent step sequence, and the latest runtime events on one rail so the pause makes sense."
       >
         {!currentRunAuditQuery.isError && lens.playback.available ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -975,7 +995,7 @@ const TeamDetailPage: React.FC = () => {
           />
         }
         title="Collaboration Canvas"
-        titleHelp="The canvas stays focused on the actor implied by the latest run or current serving revision, then shows the nearby relationship surface around it."
+        titleHelp="Keep one member in focus, then show the nearby collaboration surface around that person."
       >
         {actorGraphQuery.isLoading ? (
           <AevatarInspectorEmpty description="Loading the current team collaboration focus." />
@@ -1130,8 +1150,8 @@ const TeamDetailPage: React.FC = () => {
             status={contextProvenance.status}
           />
         }
-        title="Team Composition"
-        titleHelp="The team shell keeps members, service surface, and current binding context visible on one stage."
+        title="Visible Members"
+        titleHelp="Keep the people, roles, and active runtime surface for this team on one stage."
       >
         <div
           style={{
@@ -1220,8 +1240,8 @@ const TeamDetailPage: React.FC = () => {
             status={effectiveActorId ? "live" : "partial"}
           />
         }
-        title="Selected Member"
-        titleHelp="Member selection should drive the canvas, playback rail, and inspector together, so the user never has to rebuild context across separate pages."
+        title="Member Focus"
+        titleHelp="Pick one visible member and keep the canvas, activity, and inspector pointed at the same person."
       >
         {selectedMember || effectiveActorId ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -1276,8 +1296,8 @@ const TeamDetailPage: React.FC = () => {
             status={contextProvenance.status}
           />
         }
-        title="Health / Trust Rail"
-        titleHelp="This rail answers whether the team is healthy, blocked, degraded, human-overridden, or still missing critical runtime signals."
+        title="Team Health"
+        titleHelp="Answer the simple question first: is this team healthy, blocked, degraded, or still missing critical runtime proof?"
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <SignalCard
@@ -1316,8 +1336,8 @@ const TeamDetailPage: React.FC = () => {
             status={currentServingProvenance.status}
           />
         }
-        title="Current Serving"
-        titleHelp="This keeps the active target, revision, and service identity in one place so operators do not need to jump into Studio immediately."
+        title="Live Configuration"
+        titleHelp="Keep the active workflow, revision, and service identity together before deciding whether to open Studio."
       >
         <Space orientation="vertical" size={8} style={{ width: "100%" }}>
           <Typography.Text strong>{lens.currentBindingTarget}</Typography.Text>
@@ -1334,6 +1354,31 @@ const TeamDetailPage: React.FC = () => {
               type="info"
             />
           ) : null}
+          <Space wrap size={[8, 8]}>
+            <Button
+              onClick={() => history.push(teamBuilderRoute)}
+              type="primary"
+            >
+              {teamBuilderLabel}
+            </Button>
+            <Button
+              onClick={() =>
+                history.push(
+                  buildRuntimeRunsHref({
+                    scopeId,
+                    serviceId: lens.currentService?.serviceId || undefined,
+                    actorId: lens.currentRun?.actorId || undefined,
+                  }),
+                )
+              }
+            >
+              Review activity
+            </Button>
+          </Space>
+          <Typography.Text type="secondary">
+            Use Team Builder when the live workflow needs to change. Use activity when
+            you need proof before editing.
+          </Typography.Text>
         </Space>
       </AevatarPanel>
 
@@ -1345,8 +1390,8 @@ const TeamDetailPage: React.FC = () => {
             status={integrationsProvenance.status}
           />
         }
-        title="Integrations Inspector"
-        titleHelp="Integrations are external systems and connection capabilities around the team, not additional team members."
+        title="Connected Systems"
+        titleHelp="Show the external systems and connection capabilities around this team, not extra team members."
       >
         {workspaceSettingsQuery.isLoading &&
         connectorCatalogQuery.isLoading &&
@@ -1489,7 +1534,7 @@ const TeamDetailPage: React.FC = () => {
             status={contextProvenance.status}
           />
         }
-        title="Governance Snapshot"
+        title="Trust Summary"
         titleHelp="This is the buyer-readable trust summary, not a replacement for the full Governance console."
       >
         <Space orientation="vertical" size={10} style={{ width: "100%" }}>
@@ -1537,8 +1582,8 @@ const TeamDetailPage: React.FC = () => {
   if (!scopeId) {
     return (
       <AevatarPageShell
-        title="Team workspace"
-        content="Open a concrete team route before entering the Team-first workspace."
+        title="Team home"
+        content="Open a concrete team route before entering this team home."
       >
         <AevatarPanel title="No team selected">
           <AevatarInspectorEmpty description="A concrete team scope is required to render this workspace." />
@@ -1560,20 +1605,14 @@ const TeamDetailPage: React.FC = () => {
           <Tag>{scopeId}</Tag>
         </Space>
       }
-      content={`${lens.subtitle}. Team-first keeps the team shell readable while proving runtime truth with runs, revisions, and focused collaboration context.`}
+      content={`${lens.subtitle}. Start here to see whether the team needs attention, what changed most recently, and where to edit it.`}
       extra={
         <Space key="team-detail-actions" wrap>
           <Button
-            onClick={() =>
-              history.push(
-                buildStudioWorkflowWorkspaceRoute({
-                  scopeId,
-                }),
-              )
-            }
+            onClick={() => history.push(teamBuilderRoute)}
             type="primary"
           >
-            Open Team Builder
+            {teamBuilderLabel}
           </Button>
           <Button
             onClick={() =>
@@ -1586,7 +1625,7 @@ const TeamDetailPage: React.FC = () => {
               )
             }
           >
-            Open Runs
+            Open Activity
           </Button>
           <Button
             onClick={() =>
@@ -1599,11 +1638,11 @@ const TeamDetailPage: React.FC = () => {
               )
             }
           >
-            Open Explorer
+            Open Topology
           </Button>
         </Space>
       }
-      titleHelp="This workspace keeps the team as the surface-level story while grounding every module in current runtime, service, and binding truth."
+      titleHelp="This home keeps the team as the top-level story while grounding every module in current runtime, service, and binding truth."
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {teamSignalIssues.length > 0 ? (

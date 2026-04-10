@@ -1,5 +1,10 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
+import { history } from '@/shared/navigation/history';
+import {
+  buildTeamWorkspaceRoute,
+} from '@/shared/navigation/scopeRoutes';
+import { buildStudioWorkflowWorkspaceRoute } from '@/shared/studio/navigation';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
 import ScopeOverviewPage from './overview';
 
@@ -173,24 +178,47 @@ describe('ScopeOverviewPage', () => {
   it('renders the scope status board and asset summaries', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
+    expect(await screen.findByText('Legacy Team Workspace')).toBeTruthy();
     expect(await screen.findByText('Team Status Board')).toBeTruthy();
     expect(
-      screen.queryByText(
-        'Team Overview keeps binding posture, asset surface, and next-step actions on one deep-link board.',
+      screen.getByText(
+        'Team home now lives under /teams. Keep this page for binding, revision, and asset inspection while the team-first flow finishes taking over.',
       ),
-    ).toBeNull();
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Team home is now the primary surface. Use this legacy workspace when you need binding rollout detail, asset inspection, or older deep links.',
+      ),
+    ).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
     expect(await screen.findByText('Current Team Binding')).toBeTruthy();
     expect(await screen.findByText('Revision Rollout')).toBeTruthy();
     expect(screen.getByText('Revision Rollout')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
     expect(await screen.findByText('script-alpha')).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: 'Open Workflow Builder' })
-    ).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Open Team Builder' }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Open Team Home' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open team assets' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Open Invoke Lab' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
+  });
+
+  it('routes legacy actions back into team home and team-scoped Studio', async () => {
+    const pushSpy = jest.spyOn(history, 'push');
+    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+
+    await screen.findByText('Team Status Board');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Team Home' }));
+    expect(pushSpy).toHaveBeenCalledWith(buildTeamWorkspaceRoute('scope-a'));
+
+    window.history.replaceState({}, '', '/scopes/overview?scopeId=scope-a');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Open Team Builder' })[0]);
+    expect(pushSpy).toHaveBeenLastCalledWith(
+      buildStudioWorkflowWorkspaceRoute({
+        scopeId: 'scope-a',
+      }),
+    );
   });
 
   it('activates a historical revision from the overview page', async () => {

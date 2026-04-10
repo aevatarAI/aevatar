@@ -449,12 +449,13 @@ const TeamAssetsPage: React.FC = () => {
             onClick={() =>
               history.push(
                 buildStudioWorkflowEditorRoute({
+                  scopeId: activeDraft.scopeId.trim(),
                   workflowId: record.assetId,
                 }),
               )
             }
           >
-            Open workflow editor
+            Edit in Team Builder
           </Button>,
         ],
       },
@@ -547,7 +548,7 @@ const TeamAssetsPage: React.FC = () => {
         ),
       },
     }),
-    [surfaceToken],
+    [activeDraft.scopeId, surfaceToken],
   );
 
   const scriptListMetas = useMemo<ProListMetas<AssetWorkspaceItem>>(
@@ -571,12 +572,13 @@ const TeamAssetsPage: React.FC = () => {
             onClick={() =>
               history.push(
                 buildStudioScriptsWorkspaceRoute({
+                  scopeId: activeDraft.scopeId.trim(),
                   scriptId: record.assetId,
                 }),
               )
             }
           >
-            Open scripts workspace
+            Edit in Team Builder
           </Button>,
         ],
       },
@@ -662,12 +664,13 @@ const TeamAssetsPage: React.FC = () => {
         ),
       },
     }),
-    [surfaceToken],
+    [activeDraft.scopeId, surfaceToken],
   );
 
   return (
     <PageContainer
       className="aevatar-page-shell-document"
+      content="Team home now lives under /teams. Keep this page for older asset deep links, source inspection, and catalog detail while the team-first flow finishes taking over."
       extra={[
         <Button
           key="open-studio"
@@ -675,20 +678,22 @@ const TeamAssetsPage: React.FC = () => {
           onClick={() =>
             history.push(
               activeTab === "scripts"
-                ? buildStudioScriptsWorkspaceRoute()
-                : buildStudioWorkflowWorkspaceRoute(),
+                ? buildStudioScriptsWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  })
+                : buildStudioWorkflowWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  }),
             )
           }
         >
-          {activeTab === "scripts"
-            ? "Open scripts workspace"
-            : "Open workflow workspace"}
+          Open Team Builder
         </Button>,
         <Button
           key="open-overview"
           onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
         >
-          Open Team Workspace
+          Open Team Home
         </Button>,
         <Button
           key="open-gagents"
@@ -709,8 +714,8 @@ const TeamAssetsPage: React.FC = () => {
       onBack={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
       title={
         <AevatarTitleWithHelp
-          help="Browse the workflows and scripts owned by the current team from a single asset workspace. Capability state stays on stage, while source detail moves into the inspector."
-          title="Team Assets"
+          help="This is the legacy deep-link asset workspace. Use it for source inspection and catalog detail, but go back to team home for the main team narrative."
+          title="Legacy Team Assets"
         />
       }
     >
@@ -724,7 +729,7 @@ const TeamAssetsPage: React.FC = () => {
       >
         <ScopeQueryCard
           draft={draft}
-          loadLabel="Load team assets"
+          loadLabel="Load legacy assets"
           onChange={setDraft}
           onLoad={() => {
             const nextDraft = normalizeScopeDraft(draft);
@@ -764,15 +769,20 @@ const TeamAssetsPage: React.FC = () => {
         {!activeDraft.scopeId.trim() ? (
           <Alert
             showIcon
-            message="Select a team to inspect its workflow and script assets."
+            message="Select a team to inspect workflow and script assets in the legacy workspace."
             type="info"
           />
         ) : (
           <>
+            <Alert
+              description="Team home is now the primary surface. Use this legacy asset workspace when you need source inspection, catalog state, or older deep links."
+              showIcon
+              type="warning"
+            />
             <ProCard
               bodyStyle={{ padding: 18 }}
               style={buildAevatarPanelStyle(surfaceToken)}
-              title="Team asset summary"
+              title="Legacy asset summary"
             >
               <div
                 style={{
@@ -855,7 +865,7 @@ const TeamAssetsPage: React.FC = () => {
                     Capability inventory
                   </Typography.Text>
                   <Typography.Text style={{ color: surfaceToken.colorTextTertiary }}>
-                    One working surface for team-owned assets. Inspectors carry the heavy detail, not the list.
+                    Keep older asset deep links and detailed inspection here. Team home stays the primary narrative surface.
                   </Typography.Text>
                 </Space>
                 <StatusTag
@@ -1024,12 +1034,13 @@ const TeamAssetsPage: React.FC = () => {
                   onClick={() =>
                     history.push(
                       buildStudioWorkflowEditorRoute({
+                        scopeId: activeDraft.scopeId.trim(),
                         workflowId: selectedWorkflowId,
                       }),
                     )
                   }
                 >
-                  Open workflow editor
+                  Edit in Team Builder
                 </Button>
               </>
             ) : (
@@ -1106,12 +1117,13 @@ const TeamAssetsPage: React.FC = () => {
                 onClick={() =>
                   history.push(
                     buildStudioScriptsWorkspaceRoute({
+                      scopeId: activeDraft.scopeId.trim(),
                       scriptId: selectedScriptId,
                     }),
                   )
                 }
               >
-                Open scripts workspace
+                Edit in Team Builder
               </Button>
             </>
           ) : (

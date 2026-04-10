@@ -39,7 +39,9 @@ describe("console routes", () => {
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBe(true);
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/gagents").name).toBe("Member Runtime");
-    expect(findRoute(routes, "/scopes/overview").name).toBe("Team Overview");
+    expect(findRoute(routes, "/scopes/assets").name).toBe("Legacy Team Assets");
+    expect(findRoute(routes, "/scopes/invoke").name).toBe("Legacy Invoke Lab");
+    expect(findRoute(routes, "/scopes/overview").name).toBe("Legacy Team Workspace");
     expect(findRoute(routes, "/scopes").redirect).toBe("/teams");
     expect(hasRoute(routes, "/workflows")).toBe(false);
     expect(hasRoute(routes, "/primitives")).toBe(false);

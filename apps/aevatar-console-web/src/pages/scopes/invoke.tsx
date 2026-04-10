@@ -54,6 +54,7 @@ import {
   describeStudioScopeBindingRevisionTarget,
   getStudioScopeBindingCurrentRevision,
 } from '@/shared/studio/models';
+import { buildStudioWorkflowWorkspaceRoute } from '@/shared/studio/navigation';
 import {
   AevatarContextDrawer,
   AevatarHelpTooltip,
@@ -985,29 +986,25 @@ const ScopeInvokePage: React.FC = () => {
   };
 
   const recommendedNextStep = !scopeId
-    ? {
+      ? {
         action: () => history.push(buildTeamWorkspaceRoute('')),
-        actionLabel: 'Open Teams',
+        actionLabel: 'Open Team Home',
         description:
-          'Invoke Lab only becomes useful after you anchor the console to a team.',
+          'This legacy lab only becomes useful after you anchor the console to a team.',
         title: 'Load a team first',
       }
     : services.length === 0
       ? {
           action: () =>
             history.push(
-              buildRuntimeGAgentsHref({
+              buildStudioWorkflowWorkspaceRoute({
                 scopeId,
-                actorId:
-                  currentBindingRevision?.primaryActorId || undefined,
-                actorTypeName:
-                  currentBindingRevision?.staticActorTypeName || undefined,
               }),
             ),
-          actionLabel: 'Open Member Runtime',
+          actionLabel: 'Open Team Builder',
           description:
-            'No published team services were discovered. Manage the current binding before invoking.',
-          title: 'Publish or switch the default binding',
+            'No published team services were discovered. Switch the live team setup before you keep probing this legacy lab.',
+          title: 'Fix the live team setup',
         }
       : invokeResult.status === 'success'
         ? {
@@ -1045,7 +1042,7 @@ const ScopeInvokePage: React.FC = () => {
     (bindingQuery.data?.available ? 'ready' : 'missing');
 
   return (
-    <AevatarPageShell pageHeaderRender={false} title="Invoke Lab">
+    <AevatarPageShell pageHeaderRender={false} title="Legacy Invoke Lab">
       <div style={viewportShellStyle}>
         <style>
           {`
@@ -1069,7 +1066,7 @@ const ScopeInvokePage: React.FC = () => {
               onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
               type="text"
             >
-              Back
+              Team Home
             </Button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
@@ -1082,9 +1079,9 @@ const ScopeInvokePage: React.FC = () => {
                 }}
               >
                 <Typography.Text strong style={{ fontSize: 16 }}>
-                  Invoke Lab
+                  Legacy Invoke Lab
                 </Typography.Text>
-                <AevatarHelpTooltip content="IDE-style runtime playground with a fixed console and inspector." />
+                <AevatarHelpTooltip content="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows." />
               </div>
             </div>
           </Space>
@@ -1095,6 +1092,20 @@ const ScopeInvokePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
             ) : null}
+            <Button onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}>
+              Open Team Home
+            </Button>
+            <Button
+              onClick={() =>
+                history.push(
+                  buildStudioWorkflowWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  }),
+                )
+              }
+            >
+              Open Team Builder
+            </Button>
             <Button onClick={() => setContextSurface('service')}>
               Browse services
             </Button>
@@ -1109,6 +1120,13 @@ const ScopeInvokePage: React.FC = () => {
         <div style={workspaceViewportStyle}>
           <div style={workspaceGridStyle}>
             <div style={columnStyle}>
+              {scopeId ? (
+                <Alert
+                  description="Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links."
+                  showIcon
+                  type="warning"
+                />
+              ) : null}
               <ProCard
                 bodyStyle={viewportCardBodyStyle}
                 boxShadow={false}
@@ -1117,8 +1135,8 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<DeploymentUnitOutlined />}
-                    subtitle="Team selector and reset controls."
-                    title="Invocation Controls"
+                    subtitle="Team selector and reset controls for the legacy lab."
+                    title="Legacy Lab Controls"
                   />
                 }
               >
@@ -1140,7 +1158,7 @@ const ScopeInvokePage: React.FC = () => {
                     />
                     <Space size={[8, 8]} wrap>
                       <Button type="primary" onClick={handleLoad}>
-                        Load invoke lab
+                        Load legacy lab
                       </Button>
                       <Button onClick={handleReset}>Reset</Button>
                     </Space>
@@ -1313,7 +1331,7 @@ const ScopeInvokePage: React.FC = () => {
                             />
                           ) : chatMessages.length === 0 ? (
                             <EmptyChatState
-                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through Invoke Lab while keeping raw runtime observation close by.`}
+                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through the legacy lab while keeping raw runtime observation close by.`}
                               title={
                                 selectedService.displayName ||
                                 selectedService.serviceId

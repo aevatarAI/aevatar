@@ -42,6 +42,7 @@ import {
 import { resolveStudioScopeContext } from "./components/resolvedScope";
 import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
+  buildTeamWorkspaceRoute,
   buildScopeHref,
   buildScopeOverviewHref,
   normalizeScopeDraft,
@@ -251,8 +252,9 @@ const ScopeOverviewPage: React.FC = () => {
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="Team Overview"
-      titleHelp="Team Overview keeps binding posture, asset surface, and next-step actions on one deep-link board."
+      title="Legacy Team Workspace"
+      content="Team home now lives under /teams. Keep this page for binding, revision, and asset inspection while the team-first flow finishes taking over."
+      titleHelp="This is the legacy deep-link workspace for binding, revisions, and assets. It is no longer the primary team home."
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -296,8 +298,18 @@ const ScopeOverviewPage: React.FC = () => {
               />
             </AevatarPanel>
 
-            <AevatarPanel title="Team Lanes">
+            <AevatarPanel title="Legacy Workspace Actions">
               <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+                <Button
+                  onClick={() =>
+                    history.push(
+                      scopeId ? buildTeamWorkspaceRoute(scopeId) : "/teams",
+                    )
+                  }
+                  type="primary"
+                >
+                  Open Team Home
+                </Button>
                 <Button onClick={() => history.push(buildScopeHref("/scopes/assets", activeDraft))}>
                   Open team assets
                 </Button>
@@ -321,10 +333,14 @@ const ScopeOverviewPage: React.FC = () => {
                 </Button>
                 <Button
                   onClick={() =>
-                    history.push(buildStudioWorkflowWorkspaceRoute())
+                    history.push(
+                      buildStudioWorkflowWorkspaceRoute({
+                        scopeId,
+                      }),
+                    )
                   }
                 >
-                  Open Workflow Builder
+                  Open Team Builder
                 </Button>
                 <Button
                   onClick={() =>
@@ -345,9 +361,17 @@ const ScopeOverviewPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {!scopeId ? (
               <Alert
-                title="Select a team to inspect its current binding, active revisions, and owned assets."
+                title="Select a team to inspect its binding, revisions, and owned assets."
                 showIcon
                 type="info"
+              />
+            ) : null}
+
+            {scopeId ? (
+              <Alert
+                description="Team home is now the primary surface. Use this legacy workspace when you need binding rollout detail, asset inspection, or older deep links."
+                showIcon
+                type="warning"
               />
             ) : null}
 
@@ -652,13 +676,14 @@ const ScopeOverviewPage: React.FC = () => {
                                   onClick={() =>
                                     history.push(
                                       buildStudioScriptsWorkspaceRoute({
+                                        scopeId,
                                         scriptId: script.scriptId,
                                       }),
                                     )
                                   }
                                   type="link"
                                 >
-                                  Open scripts workspace
+                                  Open Team Builder
                                 </Button>
                               </>
                             }

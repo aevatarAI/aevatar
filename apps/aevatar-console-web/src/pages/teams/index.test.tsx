@@ -9,12 +9,19 @@ jest.mock("@/shared/studio/api", () => ({
   },
 }));
 
+jest.mock("@/shared/config/consoleFeatures", () => ({
+  isTeamFirstEnabled: jest.fn(() => true),
+}));
+
 jest.mock("./runtime/useTeamRuntimeLens", () => ({
   useTeamRuntimeLens: jest.fn(),
 }));
 
+import { isTeamFirstEnabled } from "@/shared/config/consoleFeatures";
 import { studioApi } from "@/shared/studio/api";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
+
+const mockedIsTeamFirstEnabled = isTeamFirstEnabled as jest.Mock;
 
 function createTeamLensResult(overrides?: Record<string, unknown>) {
   return {
@@ -45,6 +52,7 @@ function createTeamLensResult(overrides?: Record<string, unknown>) {
       currentBindingTarget: "Workflow support-triage",
       currentRun: {
         completionStatus: "waiting_approval",
+        lastUpdatedAt: "2026-04-09T09:05:00Z",
         runId: "run-current",
       },
       graph: {
@@ -57,16 +65,26 @@ function createTeamLensResult(overrides?: Record<string, unknown>) {
             toActorId: "actor-risk",
           },
         ],
+        stageSummary:
+          "This canvas shows the currently focused actor and the nearest visible collaboration paths around it.",
       },
       healthStatus: "blocked",
       healthSummary: "The team is waiting on human approval.",
       healthTone: "warning",
+      humanInterventionDetected: true,
+      members: [
+        { actorId: "actor-intake", actorType: "workflow", isFocused: true },
+        { actorId: "actor-risk", actorType: "workflow", isFocused: false },
+      ],
       partialSignals: [],
       playback: {
+        events: [],
         interactionLabel: "human_approval",
         prompt: "Approve escalation",
         summary: "Playback is centered on the current human gate.",
+        steps: [],
       },
+      recentRunCount: 4,
       subtitle: "Support escalations with human approval when risk spikes.",
       title: "Support Escalation Triage",
     },
@@ -93,11 +111,12 @@ function createTeamLensResult(overrides?: Record<string, unknown>) {
 describe("TeamsIndexPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockedIsTeamFirstEnabled.mockReturnValue(true);
     window.history.replaceState({}, "", "/teams");
     (useTeamRuntimeLens as jest.Mock).mockReturnValue(createTeamLensResult());
   });
 
-  it("renders the current team home instead of redirecting immediately", async () => {
+  it("renders the honest single-team roster when the feature is enabled", async () => {
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       enabled: true,
       scopeId: "scope-team",
@@ -107,14 +126,18 @@ describe("TeamsIndexPage", () => {
     renderWithQueryClient(React.createElement(TeamsIndexPage));
 
     expect(
-      await screen.findByRole("button", { name: "Handle current blockage" }),
+      await screen.findByRole("button", { name: "View details" }),
     ).toBeTruthy();
-    expect(screen.getByText("Current collaboration snapshot")).toBeTruthy();
+    expect(screen.getByText("Reference roster")).toBeTruthy();
+    expect(screen.getByText("Current session team only")).toBeTruthy();
+    expect(screen.getByText("Why now")).toBeTruthy();
     expect(screen.getByText("Support Escalation Triage")).toBeTruthy();
+    expect(screen.queryByText("Priority roster")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
     expect(window.location.pathname).toBe("/teams");
   });
 
-  it("opens the current team workspace from the dynamic primary CTA", async () => {
+  it("opens the current team workspace from the roster action", async () => {
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       enabled: true,
       scopeId: "scope-team",
@@ -124,13 +147,28 @@ describe("TeamsIndexPage", () => {
     renderWithQueryClient(React.createElement(TeamsIndexPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Handle current blockage" }),
+      await screen.findByRole("button", { name: "View details" }),
     );
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/teams/scope-team");
       expect(window.location.search).toBe("?scopeId=scope-team");
     });
+  });
+
+  it("can fall back to the legacy teams home when the flag is disabled", async () => {
+    mockedIsTeamFirstEnabled.mockReturnValue(false);
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
+      enabled: true,
+      scopeId: "scope-team",
+      scopeSource: "claim:scope_id",
+    });
+
+    renderWithQueryClient(React.createElement(TeamsIndexPage));
+
+    expect(await screen.findByText("Current collaboration snapshot")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Handle current blockage" })).toBeTruthy();
+    expect(screen.queryByText("Reference roster")).toBeNull();
   });
 
   it("shows Team Builder as the first action when no current team is available", async () => {

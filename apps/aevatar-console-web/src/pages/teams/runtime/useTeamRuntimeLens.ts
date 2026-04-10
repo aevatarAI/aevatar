@@ -11,8 +11,16 @@ import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens"
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 
-export function useTeamRuntimeLens(scopeId: string) {
+type UseTeamRuntimeLensOptions = {
+  includeCatalogSignals?: boolean;
+};
+
+export function useTeamRuntimeLens(
+  scopeId: string,
+  options?: UseTeamRuntimeLensOptions,
+) {
   const normalizedScopeId = scopeId.trim();
+  const includeCatalogSignals = options?.includeCatalogSignals ?? true;
 
   const bindingQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
@@ -21,13 +29,13 @@ export function useTeamRuntimeLens(scopeId: string) {
     retry: false,
   });
   const workflowsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
+    enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "workflows", normalizedScopeId],
     queryFn: () => scopesApi.listWorkflows(normalizedScopeId),
     retry: false,
   });
   const scriptsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
+    enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "scripts", normalizedScopeId],
     queryFn: () => scopesApi.listScripts(normalizedScopeId),
     retry: false,
@@ -51,7 +59,9 @@ export function useTeamRuntimeLens(scopeId: string) {
   });
 
   const serviceId =
-    bindingQuery.data?.serviceId ||
+    servicesQuery.data?.find(
+      (service) => service.serviceId === bindingQuery.data?.serviceId,
+    )?.serviceId ||
     servicesQuery.data?.[0]?.serviceId ||
     "";
   const runsQuery = useQuery({

@@ -312,7 +312,7 @@ describe('StudioEditorPage', () => {
     });
   });
 
-  it('guides published teams toward Invoke Lab', async () => {
+  it('guides published teams toward the legacy invoke lab', async () => {
     const onOpenProjectInvoke = jest.fn();
 
     render(
@@ -339,9 +339,9 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next step: Open Invoke Lab')).toBeInTheDocument();
+    expect(await screen.findByText('Next step: Open Legacy Invoke Lab')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Invoke Lab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Legacy Invoke Lab' }));
 
     expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
   });
