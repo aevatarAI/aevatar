@@ -33,7 +33,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     {
         var entry = new ChannelBotRegistrationEntry
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
             NyxUserToken = cmd.NyxUserToken,

@@ -262,6 +262,9 @@ public static class ChannelCallbackEndpoints
             webhookUrl = baseUrl + callbackPath;
         }
 
+        // Generate ID here so we can return it immediately without polling projection.
+        var registrationId = Guid.NewGuid().ToString("N");
+
         // Dispatch register command to actor
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotRegisterCommand
@@ -272,6 +275,7 @@ public static class ChannelCallbackEndpoints
             VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
+            RequestedId = registrationId,
         };
 
         var cmdEnvelope = new EventEnvelope
@@ -287,16 +291,13 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Command accepted — the projection pipeline will materialize the read model.
-        // Return accepted with the command details (eventual consistency).
-        // Note: registration ID is generated inside the actor; the response reflects
-        // accepted state. Clients should list registrations to get the full entry.
         return Results.Accepted(value: new
         {
-            status = "accepted",
+            status = "registered",
+            registration_id = registrationId,
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
-            callback_url_pattern = $"{callbackPath}/{{registration_id}}",
+            callback_url = $"{callbackPath}/{registrationId}",
         });
     }
 

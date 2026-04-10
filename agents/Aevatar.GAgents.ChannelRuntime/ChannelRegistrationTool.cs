@@ -139,7 +139,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
             ? webhookBaseUrl.TrimEnd('/') + callbackPath
             : string.Empty;
 
-        var existingIds = (await queryPort.QueryAllAsync(ct)).Select(e => e.Id).ToHashSet();
+        // Generate registration ID here — actor uses it directly.
+        // This avoids polling the projection pipeline (which requires scope agent
+        // activation that isn't bootstrapped yet).
+        var registrationId = Guid.NewGuid().ToString("N");
 
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
@@ -153,6 +156,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             VerificationToken = GetStr(args, "verification_token")?.Trim() ?? string.Empty,
             ScopeId = GetStr(args, "scope_id")?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl,
+            RequestedId = registrationId,
         };
 
         var envelope = new EventEnvelope
@@ -168,41 +172,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
-        // Poll for the NEW registration ID (not in the pre-dispatch snapshot).
-        // Retry up to 5 times with 500ms delay to bridge eventual consistency.
-        string? registrationId = null;
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            await Task.Delay(500, ct);
-            var all = await queryPort.QueryAllAsync(ct);
-            var newEntry = all.FirstOrDefault(e => !existingIds.Contains(e.Id));
-            if (newEntry != null)
-            {
-                registrationId = newEntry.Id;
-                break;
-            }
-        }
-
-        if (registrationId != null)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                status = "registered",
-                registration_id = registrationId,
-                platform = cmd.Platform,
-                nyx_provider_slug = cmd.NyxProviderSlug,
-                callback_url = $"{callbackPath}/{registrationId}",
-                webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
-            });
-        }
-
+        // ID was generated before dispatch — return immediately, no polling needed.
         return JsonSerializer.Serialize(new
         {
-            status = "accepted",
+            status = "registered",
+            registration_id = registrationId,
             platform = cmd.Platform,
             nyx_provider_slug = cmd.NyxProviderSlug,
-            callback_url_pattern = $"{callbackPath}/{{registration_id}}",
-            note = "Registration accepted but ID not yet available. Use 'list' action to retrieve it.",
+            callback_url = $"{callbackPath}/{registrationId}",
+            webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
         });
     }
 

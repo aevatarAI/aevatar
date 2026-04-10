@@ -114,6 +114,7 @@ message ChannelBotRegisterCommand {
   string verification_token = 4;
   string scope_id = 5;
   string webhook_url = 6;
+  string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
 }
 
 message ChannelBotUnregisterCommand {
