@@ -1,0 +1,144 @@
+syntax = "proto3";
+package aevatar.gagents.household;
+option csharp_namespace = "Aevatar.GAgents.Household";
+
+// ─── Sub-messages ───
+
+message EnvironmentSnapshot {
+  // Sensor data (updated by sensor-agent stream)
+  double temperature = 1;
+  double humidity = 2;
+  double light_level = 3;
+  bool motion_detected = 4;
+  int64 last_sensor_update_ts = 5;
+
+  // Visual description (updated by camera-agent stream)
+  string scene_description = 10;
+  int64 last_camera_update_ts = 11;
+
+  // Time context
+  string time_of_day = 20;   // "morning" | "afternoon" | "evening" | "night"
+  string day_of_week = 21;
+
+  // Device states (updated after actions)
+  map<string, string> device_states = 30;
+}
+
+message ActionRecord {
+  int64 timestamp = 1;
+  string agent = 2;       // "light-agent" | "music-agent" | ...
+  string action = 3;      // "turn_on_light" | "play_music" | ...
+  string detail = 4;      // parameters: "warm_white, 60%"
+  string reasoning = 5;   // why this decision was made
+}
+
+message MemoryEntry {
+  string key = 1;            // "owner_prefers_warm_light_evening"
+  string content = 2;        // human-readable description
+  int64 created_at = 3;
+  int32 reinforcement = 4;   // times validated/reinforced
+}
+
+message SafetyState {
+  bool kill_switch = 1;
+  int32 actions_this_minute = 2;
+  int64 minute_window_start_ts = 3;
+}
+
+// ─── Actor State ───
+
+message HouseholdEntityState {
+  EnvironmentSnapshot environment = 1;
+  repeated ActionRecord recent_actions = 2;
+  repeated MemoryEntry memories = 3;
+  SafetyState safety = 4;
+  string current_mode = 5;          // "active" | "quiet" | "sleeping" | "frozen"
+  int64 last_reasoning_ts = 6;
+  int32 reasoning_count_today = 7;
+
+  // AI config overrides (merged with class defaults)
+  string provider_name = 10;
+  string model = 11;
+  string system_prompt = 12;
+  optional double temperature = 13;
+  optional int32 max_tokens = 14;
+  optional int32 max_tool_rounds = 15;
+  optional int32 max_history_messages = 16;
+}
+
+// ─── Domain Events ───
+
+message HouseholdInitializedEvent {
+  string provider_name = 1;
+  string model = 2;
+  string system_prompt = 3;
+  optional double temperature = 4;
+  optional int32 max_tokens = 5;
+  optional int32 max_tool_rounds = 6;
+  optional int32 max_history_messages = 7;
+}
+
+// Sensor data arrived from proxy agent stream
+message SensorDataEvent {
+  double temperature = 1;
+  double humidity = 2;
+  double light_level = 3;
+  bool motion_detected = 4;
+}
+
+// Camera scene description arrived from camera-agent
+message CameraSceneEvent {
+  string scene_description = 1;
+}
+
+// Telegram/channel message arrived (always triggers reasoning)
+message HouseholdChatEvent {
+  string prompt = 1;
+  string session_id = 2;
+  map<string, string> metadata = 3;
+}
+
+// Periodic heartbeat (self-continuation, 10-minute interval)
+message HeartbeatEvent {}
+
+// Reasoning completed (persisted after LLM call)
+message ReasoningCompletedEvent {
+  string decision = 1;       // "NO_ACTION" or action description
+  string reasoning = 2;      // full LLM reasoning output
+  int64 timestamp = 3;
+}
+
+// Physical action executed via NyxID proxy
+message ActionExecutedEvent {
+  ActionRecord action = 1;
+}
+
+// Memory learned or reinforced
+message MemoryUpdatedEvent {
+  MemoryEntry entry = 1;
+}
+
+// Safety state changed (kill_switch toggled, etc.)
+message SafetyStateChangedEvent {
+  SafetyState safety = 1;
+}
+
+// Time-of-day period changed
+message TimePeriodChangedEvent {
+  string new_period = 1;    // "morning" | "afternoon" | "evening" | "night"
+}
+
+// ─── Device Inbound (from DeviceEventEndpoints via EventEnvelope) ───
+
+// Normalized device event from NyxID relay's CallbackPayload.
+// Defined in Household domain because it's the inbound contract for
+// HouseholdEntity; DeviceEventEndpoints (boundary layer) references
+// this project, keeping dependency direction correct (Host → Domain).
+message DeviceInbound {
+  string event_id = 1;       // NyxID event envelope's event_id
+  string source = 2;         // "camera-analyzer", "temperature-sensor", etc.
+  string event_type = 3;     // "person_detected", "temperature_change", "motion_detected"
+  string timestamp = 4;      // RFC 3339
+  string payload_json = 5;   // Raw device payload JSON (temporary — will evolve to typed sub-messages)
+  string device_id = 6;      // Device identifier (optional)
+}
