@@ -56,6 +56,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     {
         ct.ThrowIfCancellationRequested();
         await _callbackScheduler.PurgeActorAsync(id, ct);
+        using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
         var grain = _grainFactory.GetGrain<IRuntimeActorGrain>(id);
 
         var parentId = await grain.GetParentAsync();
@@ -113,6 +114,7 @@ public sealed class OrleansActorRuntime : IActorRuntime
     public async Task UnlinkAsync(string childId, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
+        using var reentrancyScope = RequestContext.AllowCallChainReentrancy();
         var child = _grainFactory.GetGrain<IRuntimeActorGrain>(childId);
         var parentId = await child.GetParentAsync();
         if (!string.IsNullOrWhiteSpace(parentId))

@@ -166,12 +166,12 @@ export default [
   },
   {
     path: "/scopes/workflows",
-    component: "./scopes/workflows",
+    redirect: "/runtime/workflows",
     hideInMenu: true,
   },
   {
     path: "/scopes/scripts",
-    component: "./scopes/scripts",
+    redirect: "/studio?tab=scripts",
     hideInMenu: true,
   },
   {

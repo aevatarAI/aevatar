@@ -41,6 +41,7 @@ internal sealed class WorkflowGenerateOrchestrator
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly string[] AuthoringSchemaRules =
     [
+        "Use canonical step types only. For a simple assistant/chat workflow, the step type must be llm_call (not llm, chat, or task).",
         "Use only these step-level fields: id, type, target_role (or role), parameters, next, branches, children, retry, on_error, timeout_ms.",
         "Do not put model, provider, temperature, max_tokens, max_history_messages, connectors, or system_prompt on steps. Those belong under roles[*].",
         "Do not use steps[*].messages.",

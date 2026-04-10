@@ -2233,6 +2233,7 @@ const StudioPage: React.FC = () => {
           route: workflowName,
           prompt,
           draftKey,
+          returnTo: currentStudioReturnTo || undefined,
         }),
       );
     } catch (error) {
@@ -2447,6 +2448,7 @@ const StudioPage: React.FC = () => {
               endpointId: launchEndpoint.endpointId,
               endpointKind: launchEndpointKind,
               prompt: input.prompt?.trim() || undefined,
+              returnTo: currentStudioReturnTo || undefined,
             }),
           );
         } else if (launchEndpoint) {
@@ -2468,6 +2470,7 @@ const StudioPage: React.FC = () => {
               endpointKind: launchEndpointKind,
               prompt: input.prompt?.trim() || undefined,
               draftKey,
+              returnTo: currentStudioReturnTo || undefined,
             }),
           );
         }
@@ -4171,6 +4174,12 @@ const StudioPage: React.FC = () => {
 
   const studioContextScopeLabel = initialState.scopeLabel || resolvedStudioScopeId;
   const studioContextMemberLabel = initialState.memberLabel;
+  const currentStudioReturnTo =
+    typeof window === 'undefined'
+      ? ''
+      : sanitizeReturnTo(
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        );
   const studioContextAlert =
     resolvedStudioScopeId || studioContextMemberLabel ? (
       <Alert
@@ -4284,10 +4293,8 @@ const StudioPage: React.FC = () => {
         data-testid="studio-workflows-viewport"
         style={{
           display: 'flex',
-          flex: 1,
           flexDirection: 'column',
-          minHeight: 0,
-          overflow: 'hidden',
+          minWidth: 0,
         }}
       >
         <StudioWorkflowsPage
@@ -4508,6 +4515,7 @@ const StudioPage: React.FC = () => {
                   route: workflowName || undefined,
                   prompt: runPrompt || undefined,
                   draftKey,
+                  returnTo: currentStudioReturnTo || undefined,
                 }),
               );
             } catch {
@@ -4516,6 +4524,7 @@ const StudioPage: React.FC = () => {
                   scopeId: scopeId || undefined,
                   route: workflowName || undefined,
                   prompt: runPrompt || undefined,
+                  returnTo: currentStudioReturnTo || undefined,
                 }),
               );
             }

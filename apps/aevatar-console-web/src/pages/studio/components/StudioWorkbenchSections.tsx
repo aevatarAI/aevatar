@@ -282,6 +282,12 @@ const workflowSidebarStackStyle: React.CSSProperties = {
   minHeight: 0,
 };
 
+const workflowColumnStretchStyle: React.CSSProperties = {
+  ...stretchColumnStyle,
+  flexDirection: 'column',
+  minHeight: 0,
+};
+
 const workflowSectionShellStyle: React.CSSProperties = {
   border: '1px solid #E6E3DE',
   borderRadius: 32,
@@ -1890,6 +1896,23 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     ].some((value) => value.toLowerCase().includes(keyword));
   });
   const workflowViewportMaxWidth = isScopeMode ? undefined : 1080;
+  const resolvedWorkspaceRowStyle: React.CSSProperties = isScopeMode
+    ? { width: '100%' }
+    : workflowWorkspaceRowStyle;
+  const resolvedWorkflowBrowserStyle: React.CSSProperties = isScopeMode
+    ? {
+        ...workflowBrowserStyle,
+        flex: '0 0 auto',
+        height: 'auto',
+      }
+    : workflowBrowserStyle;
+  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = isScopeMode
+    ? {
+        ...workflowResultsBodyStyle,
+        flex: '0 0 auto',
+        overflowY: 'visible',
+      }
+    : workflowResultsBodyStyle;
 
   const scopeSummaryDescription = workspaceSettings.isLoading
     ? 'Resolving the current scope.'
@@ -1900,9 +1923,9 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     activeWorkflowDescription || 'Open the selected workflow or start a blank draft.';
 
   return (
-    <Row gutter={[16, 16]} align="stretch" style={workflowWorkspaceRowStyle}>
+    <Row gutter={[16, 16]} align="stretch" style={resolvedWorkspaceRowStyle}>
       {!isScopeMode ? (
-        <Col xs={24} xl={8} xxl={7} style={stretchColumnStyle}>
+        <Col xs={24} xl={8} xxl={7} style={workflowColumnStretchStyle}>
           <div style={workflowSidebarStackStyle}>
             <section
               style={{
@@ -2095,9 +2118,9 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
         xs={24}
         xl={isScopeMode ? 24 : 16}
         xxl={isScopeMode ? 24 : 17}
-        style={stretchColumnStyle}
+        style={workflowColumnStretchStyle}
       >
-        <section style={workflowBrowserStyle}>
+        <section style={resolvedWorkflowBrowserStyle}>
           <input
             ref={workflowImportInputRef}
             hidden
@@ -2216,7 +2239,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
             </div>
           </div>
 
-          <div style={workflowResultsBodyStyle}>
+          <div style={resolvedWorkflowResultsBodyStyle}>
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
                 Loading workflows...

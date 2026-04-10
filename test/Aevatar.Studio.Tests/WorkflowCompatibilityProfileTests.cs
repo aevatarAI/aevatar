@@ -14,6 +14,9 @@ public sealed class WorkflowCompatibilityProfileTests
     }
 
     [Theory]
+    [InlineData("llm", "llm_call")]
+    [InlineData("chat", "llm_call")]
+    [InlineData("task", "llm_call")]
     [InlineData("loop", "while")]
     [InlineData("sub_workflow", "workflow_call")]
     [InlineData("foreach_llm", "foreach")]

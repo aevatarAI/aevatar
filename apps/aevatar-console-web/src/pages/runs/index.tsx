@@ -21,6 +21,7 @@ import {
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
+import { sanitizeReturnTo } from "@/shared/auth/session";
 import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {
   buildRuntimeExplorerHref,
@@ -224,6 +225,14 @@ const RunsPage: React.FC = () => {
     }
 
     return new URLSearchParams(window.location.search).get("draftKey") ?? "";
+  }, []);
+  const requestedReturnTo = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+    return returnTo ? sanitizeReturnTo(returnTo) : "";
   }, []);
   const draftRunPayload = useMemo(
     () => loadQueuedDraftRunPayload(draftRunKey),
@@ -697,6 +706,10 @@ const RunsPage: React.FC = () => {
   }, [activeScopeId]);
 
   const teamAdvancedHref = useMemo(() => {
+    if (requestedReturnTo) {
+      return requestedReturnTo;
+    }
+
     const scopeId = resolveRunScopeId();
     if (!scopeId) {
       return "";
@@ -707,7 +720,7 @@ const RunsPage: React.FC = () => {
       tab: "advanced",
       runId: session.runId || undefined,
     });
-  }, [resolveRunScopeId, session.runId]);
+  }, [requestedReturnTo, resolveRunScopeId, session.runId]);
 
   const resolveRunServiceOverrideId = useCallback(() => {
     return (

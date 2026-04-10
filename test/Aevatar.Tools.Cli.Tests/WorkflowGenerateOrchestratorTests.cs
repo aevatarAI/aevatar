@@ -125,6 +125,43 @@ public class WorkflowGenerateOrchestratorTests
     }
 
     [Theory]
+    [InlineData("task")]
+    [InlineData("llm")]
+    [InlineData("chat")]
+    public async Task GenerateAsync_ShouldNormalizeHallucinatedStepTypeAliases(string hallucinatedType)
+    {
+        var orchestrator = CreateOrchestrator();
+
+        var result = await orchestrator.GenerateAsync(
+            new WorkflowGenerateRequest(
+                "Create the simplest possible chat workflow",
+                null,
+                [],
+                null),
+            (prompt, metadata, ct) =>
+            {
+                _ = prompt;
+                _ = metadata;
+                _ = ct;
+                return Task.FromResult<string?>(
+                    $"""
+                    name: ai-draft
+                    steps:
+                      - id: chat
+                        type: {hallucinatedType}
+                        parameters:
+                          prompt_prefix: "Reply with a short joke."
+                    """);
+            },
+            null,
+            CancellationToken.None);
+
+        result.Attempts.Should().Be(1);
+        result.Yaml.Should().Contain("type: llm_call");
+        result.Yaml.Should().NotContain($"{Environment.NewLine}  type: {hallucinatedType}{Environment.NewLine}");
+    }
+
+    [Theory]
     [InlineData("```yaml\nname: sample\nsteps:\n  - id: a\n    type: llm_call\n```", "name: sample")]
     [InlineData("name: sample\nsteps:\n  - id: a\n    type: llm_call", "name: sample")]
     public void TryExtractYamlCandidate_ShouldSupportFencedAndRawYaml(string content, string expectedPrefix)

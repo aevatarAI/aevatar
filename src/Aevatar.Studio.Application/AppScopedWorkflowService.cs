@@ -64,10 +64,12 @@ public sealed class AppScopedWorkflowService
                 body: null,
                 ct) ?? [];
 
-        return workflows
+        var summaries = workflows
             .OrderByDescending(static item => item.UpdatedAt)
             .Select(workflow => ToWorkflowSummary(normalizedScopeId, workflow))
             .ToList();
+
+        return await MergeStoredWorkflowSummariesAsync(normalizedScopeId, summaries, ct);
     }
 
     public async Task<WorkflowFileResponse?> GetAsync(
@@ -81,59 +83,70 @@ public sealed class AppScopedWorkflowService
         if (_workflowQueryPort != null && _workflowActorBindingReader != null)
         {
             var workflow = await _workflowQueryPort.GetByWorkflowIdAsync(normalizedScopeId, normalizedWorkflowId, ct);
-            if (workflow == null)
-                return null;
-
-            var binding = string.IsNullOrWhiteSpace(workflow.ActorId)
-                ? null
-                : await _workflowActorBindingReader.GetAsync(workflow.ActorId, ct);
-
-            var yaml = binding?.WorkflowYaml ?? string.Empty;
-
-            // Fallback: if binding projection hasn't materialized the YAML yet,
-            // try the artifact store which is written synchronously during save.
-            if (string.IsNullOrWhiteSpace(yaml) &&
-                _artifactStore != null &&
-                !string.IsNullOrWhiteSpace(workflow.ServiceKey))
+            if (workflow != null)
             {
-                // Try with known revision ID.
-                if (!string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
-                {
-                    var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
-                    yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
-                }
+                var binding = string.IsNullOrWhiteSpace(workflow.ActorId)
+                    ? null
+                    : await _workflowActorBindingReader.GetAsync(workflow.ActorId, ct);
 
-                // If revision ID is empty (deployment snapshot not ready yet),
-                // scan for the latest revision via the service lifecycle query.
+                var yaml = binding?.WorkflowYaml ?? string.Empty;
+
+                // Fallback: if binding projection hasn't materialized the YAML yet,
+                // try the artifact store which is written synchronously during save.
                 if (string.IsNullOrWhiteSpace(yaml) &&
-                    _workflowQueryPort != null &&
-                    _serviceLifecycleQueryPort != null)
+                    _artifactStore != null &&
+                    !string.IsNullOrWhiteSpace(workflow.ServiceKey))
                 {
-                    var identity = new ServiceIdentity
+                    // Try with known revision ID.
+                    if (!string.IsNullOrWhiteSpace(workflow.ActiveRevisionId))
                     {
-                        TenantId = normalizedScopeId,
-                        AppId = "default",
-                        Namespace = "default",
-                        ServiceId = normalizedWorkflowId,
-                    };
-                    var svc = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
-                    var revId = svc?.ActiveServingRevisionId;
-                    if (string.IsNullOrWhiteSpace(revId))
-                        revId = svc?.DefaultServingRevisionId;
-                    if (!string.IsNullOrWhiteSpace(revId))
-                    {
-                        var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, revId, ct);
+                        var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, workflow.ActiveRevisionId, ct);
                         yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
                     }
+
+                    // If revision ID is empty (deployment snapshot not ready yet),
+                    // scan for the latest revision via the service lifecycle query.
+                    if (string.IsNullOrWhiteSpace(yaml) &&
+                        _workflowQueryPort != null &&
+                        _serviceLifecycleQueryPort != null)
+                    {
+                        var identity = new ServiceIdentity
+                        {
+                            TenantId = normalizedScopeId,
+                            AppId = "default",
+                            Namespace = "default",
+                            ServiceId = normalizedWorkflowId,
+                        };
+                        var svc = await _serviceLifecycleQueryPort.GetServiceAsync(identity, ct);
+                        var revId = svc?.ActiveServingRevisionId;
+                        if (string.IsNullOrWhiteSpace(revId))
+                            revId = svc?.DefaultServingRevisionId;
+                        if (!string.IsNullOrWhiteSpace(revId))
+                        {
+                            var artifact = await _artifactStore.GetAsync(workflow.ServiceKey, revId, ct);
+                            yaml = artifact?.DeploymentPlan?.WorkflowPlan?.WorkflowYaml ?? string.Empty;
+                        }
+                    }
                 }
+
+                return ToWorkflowFileResponse(
+                    normalizedScopeId,
+                    workflow,
+                    yaml,
+                    layout: TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
+                    findingsFallbackMessage: "Workflow YAML is not available yet.");
             }
 
-            return ToWorkflowFileResponse(
-                normalizedScopeId,
-                workflow,
-                yaml,
-                layout: TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId),
-                findingsFallbackMessage: "Workflow YAML is not available yet.");
+            var storedWorkflow = await TryGetStoredWorkflowAsync(normalizedWorkflowId, ct);
+            if (storedWorkflow != null)
+            {
+                return ToStoredWorkflowFileResponse(
+                    normalizedScopeId,
+                    storedWorkflow,
+                    TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
+            }
+
+            return null;
         }
 
         var detail = await SendAsync<ScopeWorkflowDetail>(
@@ -144,7 +157,15 @@ public sealed class AppScopedWorkflowService
             allowNotFound: true);
 
         if (detail == null || detail.Workflow == null)
-            return null;
+        {
+            var storedWorkflow = await TryGetStoredWorkflowAsync(normalizedWorkflowId, ct);
+            return storedWorkflow == null
+                ? null
+                : ToStoredWorkflowFileResponse(
+                    normalizedScopeId,
+                    storedWorkflow,
+                    TryReadPersistedLayout(normalizedScopeId, normalizedWorkflowId));
+        }
 
         return ToWorkflowFileResponse(
             normalizedScopeId,
@@ -322,6 +343,111 @@ public sealed class AppScopedWorkflowService
             return workflow.WorkflowName;
 
         return workflow.WorkflowId;
+    }
+
+    private async Task<IReadOnlyList<WorkflowSummary>> MergeStoredWorkflowSummariesAsync(
+        string scopeId,
+        IReadOnlyList<WorkflowSummary> runtimeSummaries,
+        CancellationToken ct)
+    {
+        if (_workflowStoragePort == null)
+            return runtimeSummaries;
+
+        IReadOnlyList<StoredWorkflowYaml> storedWorkflows;
+        try
+        {
+            storedWorkflows = await _workflowStoragePort.ListWorkflowYamlsAsync(ct);
+        }
+        catch
+        {
+            return runtimeSummaries;
+        }
+
+        if (storedWorkflows.Count == 0)
+            return runtimeSummaries;
+
+        var merged = runtimeSummaries.ToDictionary(summary => summary.WorkflowId, StringComparer.Ordinal);
+        foreach (var storedWorkflow in storedWorkflows)
+        {
+            if (merged.ContainsKey(storedWorkflow.WorkflowId))
+                continue;
+
+            merged[storedWorkflow.WorkflowId] = ToStoredWorkflowSummary(scopeId, storedWorkflow);
+        }
+
+        return merged.Values
+            .OrderByDescending(static item => item.UpdatedAtUtc)
+            .ToList();
+    }
+
+    private async Task<StoredWorkflowYaml?> TryGetStoredWorkflowAsync(string workflowId, CancellationToken ct)
+    {
+        if (_workflowStoragePort == null)
+            return null;
+
+        try
+        {
+            return await _workflowStoragePort.GetWorkflowYamlAsync(workflowId, ct);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private WorkflowSummary ToStoredWorkflowSummary(
+        string scopeId,
+        StoredWorkflowYaml storedWorkflow)
+    {
+        var parse = _yamlDocumentService.Parse(storedWorkflow.Yaml);
+        var scopeDirectory = CreateScopeDirectory(scopeId);
+        return new WorkflowSummary(
+            storedWorkflow.WorkflowId,
+            ResolveStoredWorkflowName(storedWorkflow, parse),
+            parse.Document?.Description ?? string.Empty,
+            $"{storedWorkflow.WorkflowId}.yaml",
+            $"{scopeDirectory.Path}/{storedWorkflow.WorkflowId}.yaml",
+            scopeDirectory.DirectoryId,
+            scopeDirectory.Label,
+            parse.Document?.Steps.Count ?? 0,
+            TryReadPersistedLayout(scopeId, storedWorkflow.WorkflowId) != null,
+            storedWorkflow.UpdatedAtUtc ?? DateTimeOffset.UtcNow);
+    }
+
+    private WorkflowFileResponse ToStoredWorkflowFileResponse(
+        string scopeId,
+        StoredWorkflowYaml storedWorkflow,
+        WorkflowLayoutDocument? layout)
+    {
+        var parse = _yamlDocumentService.Parse(storedWorkflow.Yaml);
+        var scopeDirectory = CreateScopeDirectory(scopeId);
+        return new WorkflowFileResponse(
+            storedWorkflow.WorkflowId,
+            ResolveStoredWorkflowName(storedWorkflow, parse),
+            $"{storedWorkflow.WorkflowId}.yaml",
+            $"{scopeDirectory.Path}/{storedWorkflow.WorkflowId}.yaml",
+            scopeDirectory.DirectoryId,
+            scopeDirectory.Label,
+            storedWorkflow.Yaml,
+            parse.Document,
+            layout,
+            parse.Findings,
+            storedWorkflow.UpdatedAtUtc);
+    }
+
+    private static string ResolveStoredWorkflowName(
+        StoredWorkflowYaml storedWorkflow,
+        WorkflowParseResult parseResult)
+    {
+        var parsedName = parseResult.Document?.Name?.Trim();
+        if (!string.IsNullOrWhiteSpace(parsedName))
+            return parsedName;
+
+        var storedName = storedWorkflow.WorkflowName?.Trim();
+        if (!string.IsNullOrWhiteSpace(storedName))
+            return storedName;
+
+        return storedWorkflow.WorkflowId;
     }
 
     private async Task<T?> SendAsync<T>(

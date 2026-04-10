@@ -175,6 +175,31 @@ describe("RunsPage", () => {
     );
   });
 
+  it("returns to the originating studio route when a return target is provided", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&returnTo=%2Fstudio%3FscopeId%3Dscope-1%26tab%3Dstudio%26template%3Dhello-chat"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "返回团队高级编辑" })
+    );
+
+    expect(window.location.pathname).toBe("/studio");
+    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
+      "scope-1"
+    );
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
+      "studio"
+    );
+    expect(new URLSearchParams(window.location.search).get("template")).toBe(
+      "hello-chat"
+    );
+  });
+
   it("keeps the trace workspace viewport stretchable so the inner console can scroll", async () => {
     const { container } = renderWithQueryClient(React.createElement(RunsPage));
 
