@@ -77,6 +77,7 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
       <Tabs
         activeKey={consoleView}
         className={runsTraceTabsClassName}
+        destroyOnHidden
         style={workbenchTraceTabsStyle}
         items={[
           {

@@ -48,8 +48,8 @@ function buildPrimitiveSummary(primitive: WorkflowPrimitiveDescriptor): string {
   }
 
   return primitive.aliases.length > 0
-    ? `Aliases: ${primitive.aliases.join(", ")}`
-    : "Ready to inspect parameter contracts and example workflow coverage.";
+    ? `别名：${primitive.aliases.join(", ")}`
+    : "已就绪，可继续查看参数契约和示例行为定义。";
 }
 
 const PrimitiveSummaryMetric: React.FC<{
@@ -72,7 +72,7 @@ const PrimitiveCatalogCard: React.FC<{
 
   return (
     <div
-      aria-label={`Inspect primitive ${primitive.name}`}
+      aria-label={`查看连接器 ${primitive.name}`}
       onClick={onInspect}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -138,30 +138,30 @@ const PrimitiveCatalogCard: React.FC<{
           width: "100%",
         }}
       >
-        <PrimitiveSummaryMetric label="Category" value={primitive.category} />
+        <PrimitiveSummaryMetric label="分类" value={primitive.category} />
         <PrimitiveSummaryMetric
-          label="Parameters"
-          value={`${primitive.parameters.length} defined`}
+          label="参数"
+          value={`${primitive.parameters.length} 个`}
         />
         <PrimitiveSummaryMetric
-          label="Examples"
-          value={`${primitive.exampleWorkflows.length} linked`}
+          label="示例"
+          value={`${primitive.exampleWorkflows.length} 个`}
         />
       </div>
 
       <div style={cardListActionStyle}>
         <Button
-          aria-label="Inspect"
+          aria-label="查看"
           icon={<EyeOutlined />}
           onClick={(event) => {
             event.stopPropagation();
             onInspect();
           }}
         >
-          Inspect
+          查看
         </Button>
         <Button
-          aria-label="Example workflow"
+          aria-label="示例行为定义"
           disabled={!hasExampleWorkflow}
           icon={<BuildOutlined />}
           onClick={(event) => {
@@ -172,7 +172,7 @@ const PrimitiveCatalogCard: React.FC<{
           }}
           type="primary"
         >
-          Example workflow
+          示例行为定义
         </Button>
       </div>
     </div>
@@ -237,8 +237,8 @@ const PrimitivesPage: React.FC = () => {
   return (
     <AevatarPageShell
       layoutMode="document"
-      title="Primitive Library"
-      titleHelp="Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector."
+      title="连接器目录"
+      titleHelp="这里继续复用 runtime primitive 数据，但对外展示成团队可复用的连接器能力目录。"
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -246,8 +246,8 @@ const PrimitivesPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <AevatarPanel
               layoutMode="document"
-              title="Filter Library"
-              titleHelp="Filter by category or keyword without leaving the viewport."
+              title="筛选连接器"
+              titleHelp="按分类或关键字过滤连接器能力，不离开当前视口。"
             >
               <div
                 style={{
@@ -259,7 +259,7 @@ const PrimitivesPage: React.FC = () => {
               >
                 <Input
                   onChange={(event) => setKeyword(event.target.value)}
-                  placeholder="Search primitive, category, or alias"
+                  placeholder="搜索连接器、分类或别名"
                   style={{ width: "100%" }}
                   value={keyword}
                 />
@@ -267,7 +267,7 @@ const PrimitivesPage: React.FC = () => {
                   mode="multiple"
                   onChange={setSelectedCategories}
                   options={categoryOptions}
-                  placeholder="Filter categories"
+                  placeholder="筛选分类"
                   style={{ width: "100%" }}
                   value={selectedCategories}
                 />
@@ -278,23 +278,23 @@ const PrimitivesPage: React.FC = () => {
                     setSelectedPrimitiveName("");
                   }}
                 >
-                  Reset filters
+                  重置筛选
                 </Button>
               </div>
             </AevatarPanel>
 
-            <AevatarPanel layoutMode="document" title="Library Digest">
+            <AevatarPanel layoutMode="document" title="目录摘要">
               <Space direction="vertical" size={6}>
                 <Typography.Text strong>
-                  {filteredRows.length} primitives in view
+                  {filteredRows.length} 个连接器能力
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  {categoryOptions.length} categories ·{" "}
+                  {categoryOptions.length} 个分类 ·{" "}
                   {filteredRows.reduce(
                     (count, primitive) => count + primitive.parameters.length,
                     0,
                   )}{" "}
-                  parameters surfaced
+                  个已暴露参数
                 </Typography.Text>
               </Space>
             </AevatarPanel>
@@ -303,8 +303,8 @@ const PrimitivesPage: React.FC = () => {
         stage={
           <AevatarPanel
             layoutMode="document"
-            title="Runtime Primitives"
-            titleHelp="A card-flow library lets you scan categories and examples without collapsing into parameter tables."
+            title="可用连接器"
+            titleHelp="卡片流目录帮助你快速浏览能力分类、参数契约和示例行为定义。"
           >
             <ProList<WorkflowPrimitiveDescriptor>
               dataSource={filteredRows}
@@ -312,7 +312,7 @@ const PrimitivesPage: React.FC = () => {
               locale={{
                 emptyText: (
                   <Empty
-                    description="No primitives matched the current filter."
+                    description="当前筛选条件下没有匹配的连接器。"
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 ),
@@ -343,16 +343,16 @@ const PrimitivesPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setSelectedPrimitiveName("")}
         open={Boolean(selectedPrimitiveName)}
-        subtitle="Primitive contract"
-        title={selectedPrimitive?.name || selectedPrimitiveName || "Primitive"}
+        subtitle="连接器契约"
+        title={selectedPrimitive?.name || selectedPrimitiveName || "连接器"}
       >
         {!selectedPrimitive ? (
-          <AevatarInspectorEmpty description="Choose a primitive to inspect its parameter contract and example workflow coverage." />
+          <AevatarInspectorEmpty description="选择一个连接器以查看它的参数契约和示例行为定义。" />
         ) : (
           <>
             <AevatarPanel
-              title="Definition"
-              titleHelp="Primitive description and aliases remain concise so the drawer stays decision-oriented."
+              title="定义"
+              titleHelp="连接器描述和别名保持精简，方便快速决策。"
             >
               <Space direction="vertical" size={8}>
                 <Space wrap size={[8, 8]}>
@@ -362,20 +362,20 @@ const PrimitivesPage: React.FC = () => {
                   </Typography.Text>
                 </Space>
                 <Typography.Text>
-                  {selectedPrimitive.description || "No primitive description."}
+                  {selectedPrimitive.description || "当前连接器还没有描述。"}
                 </Typography.Text>
                 <Typography.Text type="secondary">
-                  Aliases:{" "}
+                  别名：
                   {selectedPrimitive.aliases.length > 0
                     ? selectedPrimitive.aliases.join(", ")
-                    : "None"}
+                    : "无"}
                 </Typography.Text>
               </Space>
             </AevatarPanel>
 
             <AevatarPanel
-              title="Parameters"
-              titleHelp="Parameter contracts move here so the library stage can stay lightweight."
+              title="参数"
+              titleHelp="参数契约收进右侧抽屉，保持主目录轻量。"
             >
               {selectedPrimitive.parameters.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -395,7 +395,7 @@ const PrimitivesPage: React.FC = () => {
                         <Typography.Text strong>{parameter.name}</Typography.Text>
                         <AevatarStatusTag
                           domain="governance"
-                          label={parameter.required ? "Required" : "Optional"}
+                          label={parameter.required ? "必填" : "可选"}
                           status={parameter.required ? "ready" : "draft"}
                         />
                         <Typography.Text type="secondary">
@@ -403,25 +403,25 @@ const PrimitivesPage: React.FC = () => {
                         </Typography.Text>
                       </Space>
                       <Typography.Text type="secondary">
-                        {parameter.description || "No parameter description."}
+                        {parameter.description || "当前参数还没有描述。"}
                       </Typography.Text>
                       <Typography.Text type="secondary">
-                        Default: {parameter.default || "n/a"}
+                        默认值：{parameter.default || "n/a"}
                       </Typography.Text>
                     </div>
                   ))}
                 </div>
               ) : (
                 <Empty
-                  description="This primitive does not declare parameters."
+                  description="当前连接器没有声明参数。"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}
             </AevatarPanel>
 
             <AevatarPanel
-              title="Example Coverage"
-              titleHelp="Examples form the bridge from primitive library to workflow design."
+              title="示例覆盖"
+              titleHelp="示例行为定义会把连接器目录和行为设计串起来。"
             >
               {selectedPrimitive.exampleWorkflows.length > 0 ? (
                 <Space direction="vertical" size={8} style={{ width: "100%" }}>
@@ -447,14 +447,14 @@ const PrimitivesPage: React.FC = () => {
                           )
                         }
                       >
-                        Open workflow
+                        打开行为定义
                       </Button>
                     </div>
                   ))}
                 </Space>
               ) : (
                 <Empty
-                  description="No example workflows were attached."
+                  description="当前还没有关联示例行为定义。"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}

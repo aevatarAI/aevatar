@@ -173,30 +173,30 @@ describe('ScopeOverviewPage', () => {
   it('renders the scope status board and asset summaries', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Team Status Board')).toBeTruthy();
+    expect(await screen.findByText('团队状态')).toBeTruthy();
     expect(
       screen.queryByText(
-        'Team Overview keeps binding posture, asset surface, and next-step actions on one deep-link board.',
+        'Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage.',
       ),
     ).toBeNull();
     expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
-    expect(await screen.findByText('Current Team Binding')).toBeTruthy();
-    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
-    expect(screen.getByText('Revision Rollout')).toBeTruthy();
+    expect(await screen.findByText('当前默认成员')).toBeTruthy();
+    expect(await screen.findByText('版本发布')).toBeTruthy();
+    expect(screen.getByText('版本发布')).toBeTruthy();
     expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
     expect(await screen.findByText('script-alpha')).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Open Workflow Builder' })
+      screen.getByRole('button', { name: '打开行为定义' })
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open team assets' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open Invoke Lab' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '打开团队资产' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '打开测试入口' }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
   });
 
   it('activates a historical revision from the overview page', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
+    expect(await screen.findByText('版本发布')).toBeTruthy();
     const activateButtons = await screen.findAllByRole('button', {
       name: 'Activate',
     });
@@ -213,7 +213,7 @@ describe('ScopeOverviewPage', () => {
   it('retires a historical revision from the overview page', async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
+    expect(await screen.findByText('版本发布')).toBeTruthy();
     const retireButtons = await screen.findAllByRole('button', {
       name: 'Retire',
     });
