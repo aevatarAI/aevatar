@@ -16,8 +16,9 @@ public class DeviceEventEndpointsTests
     // ─── Parse Callback Payload Tests ───
 
     [Fact]
-    public void ParseCallbackPayload_valid_json_returns_device_inbound()
+    public void ParseCallbackPayload_nyxid_format_returns_device_inbound()
     {
+        // NyxID's actual CallbackPayload format (sender.platform_id, nested conversation)
         var innerEvent = JsonSerializer.Serialize(new
         {
             event_id = "evt-001",
@@ -28,10 +29,13 @@ public class DeviceEventEndpointsTests
 
         var payload = JsonSerializer.Serialize(new
         {
-            content = new { text = innerEvent },
-            sender = new { id = "device-42", name = "sensor-hub" },
-            conversation_id = "conv-99",
-            message_id = "msg-55",
+            message_id = "nxmsg-55",
+            platform = "device",
+            agent = new { api_key_id = "key-1", name = "home-agent" },
+            conversation = new { id = "conv-99", platform_id = "conv-p-99", conversation_type = "direct" },
+            sender = new { platform_id = "device-42", display_name = "sensor-hub" },
+            content = new { content_type = "text", text = innerEvent, attachments = Array.Empty<object>() },
+            timestamp = "2026-04-09T10:00:00Z",
         });
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
@@ -44,6 +48,24 @@ public class DeviceEventEndpointsTests
         inbound.Timestamp.Should().Be("2026-04-09T10:00:00Z");
         inbound.DeviceId.Should().Be("device-42");
         inbound.PayloadJson.Should().Be(innerEvent);
+    }
+
+    [Fact]
+    public void ParseCallbackPayload_legacy_sender_id_also_works()
+    {
+        // Backward compat: if sender uses "id" instead of "platform_id"
+        var innerEvent = JsonSerializer.Serialize(new { event_id = "evt-002" });
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            content = new { text = innerEvent },
+            sender = new { id = "legacy-device-1" },
+        });
+
+        var bodyBytes = Encoding.UTF8.GetBytes(payload);
+        var inbound = DeviceEventEndpoints.ParseCallbackPayload(bodyBytes);
+
+        inbound.DeviceId.Should().Be("legacy-device-1");
     }
 
     [Fact]
@@ -61,7 +83,7 @@ public class DeviceEventEndpointsTests
     {
         var payload = JsonSerializer.Serialize(new
         {
-            sender = new { id = "device-1" },
+            sender = new { platform_id = "device-1" },
         });
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);
@@ -77,7 +99,7 @@ public class DeviceEventEndpointsTests
         var payload = JsonSerializer.Serialize(new
         {
             content = new { text = "" },
-            sender = new { id = "device-1" },
+            sender = new { platform_id = "device-1" },
         });
 
         var bodyBytes = Encoding.UTF8.GetBytes(payload);

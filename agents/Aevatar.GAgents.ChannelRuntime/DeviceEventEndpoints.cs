@@ -152,13 +152,15 @@ public static class DeviceEventEndpoints
 
     /// <summary>
     /// Parse NyxID CallbackPayload JSON into DeviceInbound.
-    /// Expected structure:
+    /// NyxID's actual CallbackPayload structure (from channel_relay_service.rs):
     /// {
+    ///   "message_id": "nxmsg-uuid",
     ///   "platform": "device",
-    ///   "content": { "text": "&lt;raw device event JSON&gt;" },
-    ///   "sender": { "id": "device-id", "name": "sensor-name" },
-    ///   "conversation_id": "conv-id",
-    ///   "message_id": "msg-id"
+    ///   "agent": { "api_key_id": "...", "name": "..." },
+    ///   "conversation": { "id": "conv-uuid", "platform_id": "...", "conversation_type": "..." },
+    ///   "sender": { "platform_id": "device-id", "display_name": "sensor-name" },
+    ///   "content": { "content_type": "text", "text": "&lt;raw device event JSON&gt;", "attachments": [] },
+    ///   "timestamp": "2026-04-10T12:00:00Z"
     /// }
     /// </summary>
     internal static DeviceInbound ParseCallbackPayload(byte[] bodyBytes)
@@ -166,10 +168,18 @@ public static class DeviceEventEndpoints
         using var doc = JsonDocument.Parse(bodyBytes);
         var root = doc.RootElement;
 
+        // content.text contains the raw device event JSON (same in both old and new format)
         var contentText = root.GetProperty("content").GetProperty("text").GetString()
                           ?? throw new JsonException("content.text is required");
 
-        var senderId = root.GetProperty("sender").GetProperty("id").GetString() ?? string.Empty;
+        // NyxID sends sender.platform_id (not sender.id)
+        var senderId = string.Empty;
+        if (root.TryGetProperty("sender", out var sender))
+        {
+            senderId = sender.TryGetProperty("platform_id", out var pid) ? pid.GetString() ?? string.Empty
+                     : sender.TryGetProperty("id", out var sid) ? sid.GetString() ?? string.Empty
+                     : string.Empty;
+        }
 
         // Parse the inner device event JSON from content.text
         using var innerDoc = JsonDocument.Parse(contentText);
