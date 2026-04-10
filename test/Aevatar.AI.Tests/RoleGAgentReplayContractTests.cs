@@ -319,7 +319,7 @@ public class RoleGAgentReplayContractTests
         {
             Prompt = "hello",
             SessionId = "session-timeout-failure",
-            TimeoutMs = 1,
+            TimeoutMs = 1000,
         });
 
         publisher.Published
