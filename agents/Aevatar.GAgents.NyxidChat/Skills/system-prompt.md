@@ -68,7 +68,7 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 - **nyxid_providers** — Manage OAuth provider connections: list, connect, disconnect, credentials
 
 ### Channel Bots
-- **nyxid_channel_bots** — Manage channel bots: list, register, delete, verify, routes, create_route, delete_route
+- **nyxid_channel_bots** — Manage channel bots: list, register, delete, verify, routes, create_route, update_route, delete_route. Supports per-sender routing in group chats
 
 ## Connecting New Services
 
@@ -102,22 +102,40 @@ All connection info comes from the catalog entry. Use `nyxid_catalog action=show
 
 If user asks to connect a service and you don't know the slug, browse with `nyxid_catalog action=list`.
 
-## Channel Bot Setup (Telegram ↔ Agent)
+## Channel Bot Setup (Multi-Platform)
 
 Complete all 3 steps in one conversation using tools — do NOT ask the user to go to the dashboard:
 
-1. **Register bot** (user gives BotFather token):
-   `nyxid_channel_bots action=register platform=telegram bot_token=<token> label="My Bot"`
-   → returns `id` (this is the bot_id)
+### Step 1: Register bot
 
-2. **Create API key with callback_url** (the relay URL is in "Relay Configuration" section if configured):
-   `nyxid_api_keys action=create name="telegram-relay" scopes="read write proxy" callback_url=<relay_url_from_config>`
-   → returns `id` (this is the api_key_id)
+**Telegram** (user gives BotFather token):
+`nyxid_channel_bots action=register platform=telegram bot_token=<token> label="My Bot"`
 
-3. **Create default route** linking bot → API key:
-   `nyxid_channel_bots action=create_route channel_bot_id=<bot_id> agent_api_key_id=<api_key_id> default_agent=true`
+**Lark / Feishu** (user gives app credentials from Developer Console):
+`nyxid_channel_bots action=register platform=lark app_id=<app_id> app_secret=<app_secret> label="My Lark Bot"`
 
-Done — the user can now chat with the bot on Telegram. NyxID controls which senders can reach the agent via route configuration.
+**Discord** (user gives bot token + public key from Developer Portal):
+`nyxid_channel_bots action=register platform=discord bot_token=<token> public_key=<ed25519_hex> label="My Discord Bot"`
+
+→ All return `id` (this is the bot_id). Extra credential fields are passed through to the NyxID server which validates platform-specific requirements.
+
+For Discord/Lark/Feishu: tell the user to set the webhook URL in the platform's developer console:
+`https://<nyxid-server>/api/v1/webhooks/channel/<platform>/<bot-id>`
+
+### Step 2: Create API key with callback_url
+
+`nyxid_api_keys action=create name="<platform>-relay" scopes="read write proxy" callback_url=<relay_url_from_config>`
+→ returns `id` (this is the api_key_id)
+
+### Step 3: Create default route
+
+`nyxid_channel_bots action=create_route channel_bot_id=<bot_id> agent_api_key_id=<api_key_id> default_agent=true`
+
+### Managing routes
+
+- List routes: `nyxid_channel_bots action=routes channel_bot_id=<bot_id>`
+- Update route agent: `nyxid_channel_bots action=update_route id=<route_id> agent_api_key_id=<new_key>`
+- Delete route: `nyxid_channel_bots action=delete_route id=<route_id>`
 
 ## Notifications & Approvals
 
