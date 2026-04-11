@@ -361,7 +361,7 @@ public static class ChannelCallbackEndpoints
         TestReplyRequest? request;
         try
         {
-            request = await http.Request.ReadFromJsonAsync<TestReplyRequest>(ct);
+            request = await http.Request.ReadFromJsonAsync<TestReplyRequest>(RegistrationJsonOptions, ct);
         }
         catch
         {
