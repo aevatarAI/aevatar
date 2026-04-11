@@ -29,9 +29,6 @@ public static class ChannelCallbackEndpoints
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
 
-        // Diagnostic: view recent chat/reply diagnostics (recorded by ChannelUserGAgent)
-        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
-
         return app;
     }
 
@@ -65,21 +62,17 @@ public static class ChannelCallbackEndpoints
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
-        var cache = http.RequestServices.GetService<IMemoryCache>();
 
         // Resolve registration from projection read model
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
         {
             logger.LogWarning("Channel callback for unknown registration: {RegistrationId}", registrationId);
-            RecordDiagnostic(cache, "Callback:error", platform, registrationId, "registration_not_found");
             return Results.NotFound(new { error = "Registration not found" });
         }
 
         if (!string.Equals(registration.Platform, platform, StringComparison.OrdinalIgnoreCase))
         {
-            RecordDiagnostic(cache, "Callback:error", platform, registrationId,
-                $"platform_mismatch registered={registration.Platform}");
             return Results.BadRequest(new { error = "Platform mismatch" });
         }
 
@@ -89,7 +82,6 @@ public static class ChannelCallbackEndpoints
         if (adapter is null)
         {
             logger.LogWarning("No adapter for platform: {Platform}", platform);
-            RecordDiagnostic(cache, "Callback:error", platform, registrationId, "adapter_not_found");
             return Results.BadRequest(new { error = $"Unsupported platform: {platform}" });
         }
 
@@ -104,7 +96,6 @@ public static class ChannelCallbackEndpoints
         if (inbound is null)
         {
             // Not a processable message (e.g. unsupported event type) — acknowledge silently
-            RecordDiagnostic(cache, "Callback:ignored", platform, registration.Id, "adapter_returned_null");
             return Results.Ok(new { status = "ignored" });
         }
 
@@ -113,6 +104,7 @@ public static class ChannelCallbackEndpoints
         // then extend to 5 minutes after successful dispatch. If dispatch fails, the
         // short TTL expires naturally so Lark's next retry (~30s later) gets processed.
         // Note: volatile — dedup state lost on restart. Phase 2 migrates to durable dedup.
+        var cache = http.RequestServices.GetService<IMemoryCache>();
         string? dedupeKey = null;
         if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
         {
@@ -120,7 +112,6 @@ public static class ChannelCallbackEndpoints
             if (cache.TryGetValue(dedupeKey, out _))
             {
                 logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
-                RecordDiagnostic(cache, "Callback:deduplicated", inbound.Platform, registration.Id, dedupeKey);
                 return Results.Ok(new { status = "deduplicated" });
             }
 
@@ -142,8 +133,6 @@ public static class ChannelCallbackEndpoints
         {
             logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
                 inbound.Platform, registration.Id);
-            RecordDiagnostic(cache, "Callback:error", inbound.Platform, registration.Id,
-                $"{ex.GetType().Name}: {ex.Message}");
             return Results.Ok(new { status = "dispatch_error", error = ex.Message });
         }
     }
@@ -442,52 +431,6 @@ public static class ChannelCallbackEndpoints
         }
     }
 
-    /// <summary>
-    /// Returns recent diagnostic entries from memory cache (chat stages, timings, errors).
-    /// Populated by ChannelUserGAgent.RecordDiagnostic during chat and reply phases.
-    /// </summary>
-    private static Task<IResult> HandleGetDiagnosticErrorsAsync(
-        [FromServices] IMemoryCache? cache)
-    {
-        if (cache == null)
-            return Task.FromResult(Results.Ok(new { errors = Array.Empty<object>() }));
-
-        var errors = cache.Get<List<object>>(ChannelDiagnosticKeys.RecentErrors)
-                    ?? new List<object>();
-        return Task.FromResult(Results.Ok(new { count = errors.Count, errors }));
-    }
-
-    private static void RecordDiagnostic(
-        IMemoryCache? cache,
-        string stage,
-        string platform,
-        string registrationId,
-        string? detail = null)
-    {
-        if (cache == null)
-            return;
-
-        var entries = cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
-            return new List<object>();
-        })!;
-
-        lock (entries)
-        {
-            entries.Add(new
-            {
-                timestamp = DateTimeOffset.UtcNow.ToString("O"),
-                stage,
-                platform,
-                registrationId,
-                detail,
-            });
-            while (entries.Count > 50)
-                entries.RemoveAt(0);
-        }
-    }
-
     private sealed record RegistrationRequest(
         string? Platform,
         string? NyxProviderSlug,
@@ -497,10 +440,4 @@ public static class ChannelCallbackEndpoints
         string? WebhookBaseUrl);
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
-}
-
-/// <summary>Shared keys for diagnostic error cache.</summary>
-public static class ChannelDiagnosticKeys
-{
-    public const string RecentErrors = "channel-diag:errors";
 }
