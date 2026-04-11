@@ -233,6 +233,34 @@ public class ChannelUserGAgentContinuationTests
         agent.State.PendingSessions.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task HandleInbound_ShouldResumePendingSession_WhenPreviousDispatchFailed()
+    {
+        var runtime = new RecordingActorRuntime
+        {
+            FailChatRequestsRemaining = 1,
+        };
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+
+        await agent.ActivateAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => agent.HandleInbound(inbound));
+
+        runtime.ChatRequests.Should().BeEmpty();
+        agent.State.PendingSessions.Should().ContainSingle();
+
+        await agent.HandleInbound(inbound);
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().ContainSingle();
+        agent.State.PendingSessions.Should().ContainSingle();
+    }
+
     private static ChannelInboundEvent BuildInboundEvent() => new()
     {
         Text = "hello from lark",
@@ -337,12 +365,13 @@ public class ChannelUserGAgentContinuationTests
         private readonly Dictionary<string, RecordingActor> _actors = new(StringComparer.Ordinal);
 
         public List<ChatRequestEvent> ChatRequests { get; } = [];
+        public int FailChatRequestsRemaining { get; set; }
 
         public Task<IActor> CreateAsync<TAgent>(string? id = null, CancellationToken ct = default)
             where TAgent : IAgent =>
             CreateAsync(typeof(TAgent), id, ct);
 
-        public Task<IActor> CreateAsync(Type agentType, string? id = null, CancellationToken ct = default)
+        public Task<IActor> CreateAsync(global::System.Type agentType, string? id = null, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
             var actorId = id ?? Guid.NewGuid().ToString("N");
@@ -398,7 +427,15 @@ public class ChannelUserGAgentContinuationTests
             {
                 ct.ThrowIfCancellationRequested();
                 if (envelope.Payload?.Is(ChatRequestEvent.Descriptor) == true)
+                {
+                    if (owner.FailChatRequestsRemaining > 0)
+                    {
+                        owner.FailChatRequestsRemaining--;
+                        throw new InvalidOperationException("simulated chat dispatch failure");
+                    }
+
                     owner.ChatRequests.Add(envelope.Payload.Unpack<ChatRequestEvent>());
+                }
                 return Task.CompletedTask;
             }
 

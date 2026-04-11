@@ -67,7 +67,19 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         foreach (var session in State.PendingSessions.Values)
         {
-            await RecoverPendingSessionAsync(session, ct);
+            try
+            {
+                await RecoverPendingSessionAsync(session, ct);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex,
+                    "Failed to recover pending chat session {SessionId} for actor {ActorId}",
+                    session.SessionId,
+                    Id);
+                RecordDiagnostic("Chat:recover:error", session.Platform, session.RegistrationId,
+                    $"{session.SessionId}: {ex.GetType().Name}: {ex.Message}");
+            }
         }
     }
 
@@ -76,113 +88,119 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     [EventHandler]
     public async Task HandleInbound(ChannelInboundEvent evt)
     {
-        // 0. Dedup: skip if we've already successfully dispatched this Lark messageId.
-        if (!string.IsNullOrEmpty(evt.MessageId) && _processedMessageIds.Contains(evt.MessageId))
+        try
         {
-            RecordDiagnostic("Chat:dedup", evt.Platform, evt.RegistrationId,
-                $"duplicate messageId={evt.MessageId}");
-            return;
-        }
-
-        // Also check pending sessions — catches duplicates that arrive while
-        // a previous session for the same message is still in-flight.
-        if (!string.IsNullOrEmpty(evt.MessageId) &&
-            State.PendingSessions.Values.Any(s => s.MessageId == evt.MessageId))
-        {
-            RecordDiagnostic("Chat:dedup-pending", evt.Platform, evt.RegistrationId,
-                $"pending messageId={evt.MessageId}");
-            return;
-        }
-
-        // 1. Track sender identity
-        await PersistDomainEventAsync(new ChannelUserTrackedEvent
-        {
-            Platform = evt.Platform,
-            PlatformUserId = evt.SenderId,
-            DisplayName = evt.SenderName,
-        });
-
-        // 2. Resolve tokens
-        var orgToken = evt.RegistrationToken;
-        var effectiveToken = !string.IsNullOrEmpty(State.NyxidAccessToken)
-            ? State.NyxidAccessToken
-            : orgToken;
-
-        // 3. Create/get chat actor
-        var chatActorId = $"channel-{evt.Platform}-{evt.RegistrationId}-{evt.SenderId}";
-        var actorRuntime = Services.GetRequiredService<IActorRuntime>();
-        var chatActor = await actorRuntime.GetAsync(chatActorId)
-                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(chatActorId);
-
-        // 4. Set up stream forwarding: chat actor → self
-        // Events published with TopologyAudience.Parent (no parent → own stream)
-        // are forwarded to this actor's stream, arriving as separate grain turns.
-        var streams = Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
-        await streams.GetStream(chatActorId).UpsertRelayAsync(BuildChatRelayBinding(chatActorId));
-
-        // 5. Schedule timeout BEFORE persisting the session. If this fails,
-        // nothing has been persisted — no session to strand, no cleanup needed.
-        // The exception propagates, the turn fails, and Orleans stream redelivery
-        // can retry the whole flow (endpoint-level dedup doesn't apply to stream
-        // retries). HandleChatTimeout tolerates a missing session (no-op).
-        //
-        // SessionId is deterministic when messageId is available: retries of the
-        // same inbound event produce the same sessionId → same timeout key, so the
-        // scheduler upserts instead of accumulating orphan durable timeouts.
-        var sessionId = !string.IsNullOrEmpty(evt.MessageId)
-            ? DeriveSessionId(evt.MessageId)
-            : Guid.NewGuid().ToString("N");
-        var timeoutAt = DateTimeOffset.UtcNow.Add(ChatTimeout);
-        var lease = await ScheduleSelfDurableTimeoutAsync(
-            $"chat-timeout-{sessionId}",
-            ChatTimeout,
-            new ChannelChatTimeoutEvent { SessionId = sessionId });
-        _timeoutLeases[sessionId] = lease;
-
-        var pendingSession = new ChannelPendingChatSession
-        {
-            SessionId = sessionId,
-            ChatActorId = chatActorId,
-            OrgToken = orgToken,
-            Platform = evt.Platform,
-            ConversationId = evt.ConversationId,
-            SenderId = evt.SenderId,
-            SenderName = evt.SenderName,
-            MessageId = evt.MessageId,
-            ChatType = evt.ChatType,
-            RegistrationId = evt.RegistrationId,
-            NyxProviderSlug = evt.NyxProviderSlug,
-            RegistrationScopeId = evt.RegistrationScopeId,
-            Prompt = evt.Text,
-            TimeoutAt = Timestamp.FromDateTimeOffset(timeoutAt),
-        };
-
-        // 6. Persist chat request with full replay context (durable — survives restart).
-        // State.PendingSessions is populated by ApplyRequested via event sourcing.
-        await PersistDomainEventAsync(new ChannelChatRequestedEvent
-        {
-            Session = pendingSession,
-        });
-
-        RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
-
-        // 7. Build and dispatch ChatRequestEvent to chat actor
-        await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, CancellationToken.None);
-
-        // 8. Record successful dispatch in dedup set.
-        if (!string.IsNullOrEmpty(evt.MessageId))
-        {
-            _processedMessageIds.Add(evt.MessageId);
-            _processedMessageIdsOrder.AddLast(evt.MessageId);
-            while (_processedMessageIdsOrder.Count > MaxProcessedMessageIds)
+            // 0. Dedup: skip if we've already successfully dispatched this Lark messageId.
+            if (!string.IsNullOrEmpty(evt.MessageId) && _processedMessageIds.Contains(evt.MessageId))
             {
-                var oldest = _processedMessageIdsOrder.First!.Value;
-                _processedMessageIdsOrder.RemoveFirst();
-                _processedMessageIds.Remove(oldest);
+                RecordDiagnostic("Chat:dedup", evt.Platform, evt.RegistrationId,
+                    $"duplicate messageId={evt.MessageId}");
+                return;
             }
-        }
 
-        // RETURN — end turn. Continuation happens in HandleChatContent/HandleChatEnd.
+            // A pending session without a processed messageId marker means a prior turn
+            // persisted the session but did not finish dispatching ChatRequestEvent.
+            // Re-enter recovery instead of dropping the retry on the floor.
+            var existingPendingSession = FindPendingSessionByMessageId(evt.MessageId);
+            if (existingPendingSession != null)
+            {
+                RecordDiagnostic("Chat:resume-pending", evt.Platform, evt.RegistrationId,
+                    $"pending messageId={evt.MessageId} sessionId={existingPendingSession.SessionId}");
+                await RecoverPendingSessionAsync(existingPendingSession, CancellationToken.None);
+                return;
+            }
+
+            // 1. Track sender identity
+            await PersistDomainEventAsync(new ChannelUserTrackedEvent
+            {
+                Platform = evt.Platform,
+                PlatformUserId = evt.SenderId,
+                DisplayName = evt.SenderName,
+            });
+
+            // 2. Resolve tokens
+            var orgToken = evt.RegistrationToken;
+            var effectiveToken = !string.IsNullOrEmpty(State.NyxidAccessToken)
+                ? State.NyxidAccessToken
+                : orgToken;
+
+            // 3. Create/get chat actor
+            var chatActorId = $"channel-{evt.Platform}-{evt.RegistrationId}-{evt.SenderId}";
+            var actorRuntime = Services.GetRequiredService<IActorRuntime>();
+            var chatActor = await actorRuntime.GetAsync(chatActorId)
+                            ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(chatActorId);
+
+            // 4. Set up stream forwarding: chat actor → self
+            // Events published with TopologyAudience.Parent (no parent → own stream)
+            // are forwarded to this actor's stream, arriving as separate grain turns.
+            var streams = Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
+            await streams.GetStream(chatActorId).UpsertRelayAsync(BuildChatRelayBinding(chatActorId));
+
+            // 5. Schedule timeout BEFORE persisting the session. If this fails,
+            // nothing has been persisted — no session to strand, no cleanup needed.
+            // The exception propagates, the turn fails, and Orleans stream redelivery
+            // can retry the whole flow (endpoint-level dedup doesn't apply to stream
+            // retries). HandleChatTimeout tolerates a missing session (no-op).
+            //
+            // SessionId is deterministic when messageId is available: retries of the
+            // same inbound event produce the same sessionId → same timeout key, so the
+            // scheduler upserts instead of accumulating orphan durable timeouts.
+            var sessionId = !string.IsNullOrEmpty(evt.MessageId)
+                ? DeriveSessionId(evt.MessageId)
+                : Guid.NewGuid().ToString("N");
+            var timeoutAt = DateTimeOffset.UtcNow.Add(ChatTimeout);
+            var lease = await ScheduleSelfDurableTimeoutAsync(
+                $"chat-timeout-{sessionId}",
+                ChatTimeout,
+                new ChannelChatTimeoutEvent { SessionId = sessionId });
+            _timeoutLeases[sessionId] = lease;
+
+            var pendingSession = new ChannelPendingChatSession
+            {
+                SessionId = sessionId,
+                ChatActorId = chatActorId,
+                OrgToken = orgToken,
+                Platform = evt.Platform,
+                ConversationId = evt.ConversationId,
+                SenderId = evt.SenderId,
+                SenderName = evt.SenderName,
+                MessageId = evt.MessageId,
+                ChatType = evt.ChatType,
+                RegistrationId = evt.RegistrationId,
+                NyxProviderSlug = evt.NyxProviderSlug,
+                RegistrationScopeId = evt.RegistrationScopeId,
+                Prompt = evt.Text,
+                TimeoutAt = Timestamp.FromDateTimeOffset(timeoutAt),
+            };
+
+            // 6. Persist chat request with full replay context (durable — survives restart).
+            // State.PendingSessions is populated by ApplyRequested via event sourcing.
+            await PersistDomainEventAsync(new ChannelChatRequestedEvent
+            {
+                Session = pendingSession,
+            });
+
+            RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
+
+            // 7. Build and dispatch ChatRequestEvent to chat actor
+            await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, CancellationToken.None);
+
+            // 8. Record successful dispatch in dedup set.
+            TrackProcessedMessageId(evt.MessageId);
+
+            // RETURN — end turn. Continuation happens in HandleChatContent/HandleChatEnd.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex,
+                "HandleInbound failed: platform={Platform}, registrationId={RegistrationId}, messageId={MessageId}",
+                evt.Platform,
+                evt.RegistrationId,
+                evt.MessageId);
+            RecordDiagnostic("Chat:error", evt.Platform, evt.RegistrationId,
+                $"{ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
     }
 
     // ─── Turn 2+: Accumulate streaming text deltas ───
@@ -374,6 +392,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ? State.NyxidAccessToken
             : session.OrgToken;
         await DispatchChatRequestAsync(session, effectiveToken, chatActor, ct);
+        TrackProcessedMessageId(session.MessageId);
 
         RecordDiagnostic("Chat:recover:redispatch", session.Platform, session.RegistrationId,
             $"sessionId={session.SessionId}");
@@ -455,6 +474,29 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         shouldRedispatch = false;
         return RecoveryTimeoutDelay;
+    }
+
+    private ChannelPendingChatSession? FindPendingSessionByMessageId(string? messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+            return null;
+
+        return State.PendingSessions.Values.FirstOrDefault(session =>
+            string.Equals(session.MessageId, messageId, StringComparison.Ordinal));
+    }
+
+    private void TrackProcessedMessageId(string? messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId) || !_processedMessageIds.Add(messageId))
+            return;
+
+        _processedMessageIdsOrder.AddLast(messageId);
+        while (_processedMessageIdsOrder.Count > MaxProcessedMessageIds)
+        {
+            var oldest = _processedMessageIdsOrder.First!.Value;
+            _processedMessageIdsOrder.RemoveFirst();
+            _processedMessageIds.Remove(oldest);
+        }
     }
 
     /// <summary>
