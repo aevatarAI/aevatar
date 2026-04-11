@@ -158,6 +158,11 @@ message ChannelBotRegistrationDocument {
 
 // Domain event: chat session requested — carries full replay context
 // so ApplyRequested can restore pending_sessions from event store.
+//
+// Wire safety: field 1 was never persisted under a prior schema — this
+// message type is new in the continuation-pattern PR (feature/bot,
+// 2026-04-11). ApplyRequested guards evt.Session == null as defense
+// against any hypothetical wire mismatch.
 message ChannelChatRequestedEvent {
   ChannelPendingChatSession session = 1;
 }
