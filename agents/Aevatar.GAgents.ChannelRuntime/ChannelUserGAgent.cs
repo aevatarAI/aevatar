@@ -268,22 +268,25 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (string.IsNullOrWhiteSpace(replyText))
             replyText = "Sorry, I wasn't able to generate a response. Please try again.";
 
-        // Send reply via platform adapter
-        PlatformReplyDeliveryResult delivery;
+        // Send reply via platform adapter.
+        // Always proceed to persist completion regardless of reply outcome —
+        // returning early on failure strands the session in PendingSessions
+        // with no cleanup path, blocking all future messages for this messageId.
         try
         {
-            delivery = await SendPlatformReplyAsync(session, replyText);
-            if (!delivery.Succeeded)
+            var delivery = await SendPlatformReplyAsync(session, replyText);
+            if (delivery.Succeeded)
+            {
+                RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
+            }
+            else
             {
                 Logger.LogWarning("SendReply rejected: platform={Platform}, session={SessionId}, detail={Detail}",
                     session.Platform,
                     session.SessionId,
                     delivery.Detail);
                 RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, delivery.Detail);
-                return;
             }
-
-            RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
         }
         catch (Exception ex)
         {
@@ -291,7 +294,6 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 session.Platform, session.SessionId);
             RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId,
                 $"{ex.GetType().Name}: {ex.Message}");
-            return;
         }
 
         // Persist completion (removes from pending_sessions via state transition)
