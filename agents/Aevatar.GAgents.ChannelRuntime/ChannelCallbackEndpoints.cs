@@ -103,20 +103,23 @@ public static class ChannelCallbackEndpoints
         }
 
         // Dedup: Lark retries up to 5x for unacknowledged webhooks.
-        // Use a long TTL (5 minutes) immediately to cover all retry windows.
-        // The actor also has its own messageId dedup as a second layer of defense.
+        // Two-phase TTL: set short TTL (10s) immediately to block concurrent duplicates,
+        // then extend to 5 minutes after successful dispatch. If dispatch fails, the
+        // short TTL expires naturally so Lark's next retry (~30s later) gets processed.
         // Note: volatile — dedup state lost on restart. Phase 2 migrates to durable dedup.
         var cache = http.RequestServices.GetService<IMemoryCache>();
+        string? dedupeKey = null;
         if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
         {
-            var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
+            dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
             if (cache.TryGetValue(dedupeKey, out _))
             {
                 logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
                 return Results.Ok(new { status = "deduplicated" });
             }
 
-            cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
+            // Short TTL blocks concurrent duplicates; extended after successful dispatch.
+            cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
         }
 
         // Dispatch to ChannelUserGAgent. HandleEventAsync enqueues the event into the
@@ -125,7 +128,7 @@ public static class ChannelCallbackEndpoints
         // response collection → reply. Each stage is a separate grain turn — no deadlock.
         try
         {
-            await DispatchToUserActorAsync(inbound, registration, actorRuntime);
+            await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache);
             // Lark requires exactly HTTP 200 — any other status is treated as failure.
             return Results.Ok(new { status = "accepted" });
         }
@@ -146,7 +149,8 @@ public static class ChannelCallbackEndpoints
     private static async Task DispatchToUserActorAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IActorRuntime actorRuntime)
+        IActorRuntime actorRuntime,
+        IMemoryCache? cache)
     {
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
@@ -179,6 +183,13 @@ public static class ChannelCallbackEndpoints
         };
 
         await userActor.HandleEventAsync(envelope);
+
+        // Extend dedup TTL after successful dispatch.
+        if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
+        {
+            var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
+            cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
+        }
     }
 
     // ─── Registration CRUD ───
