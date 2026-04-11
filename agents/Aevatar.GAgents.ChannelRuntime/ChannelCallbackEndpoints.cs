@@ -127,45 +127,39 @@ public static class ChannelCallbackEndpoints
             cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
         }
 
-        // Dispatch to user actor. HandleEventAsync enqueues the event into the actor's
-        // inbox. The user actor processes inbound → chat → LLM → reply asynchronously.
+        // Two-phase dispatch:
+        // Phase 1 (sync): identity tracking + dedup — fast, must complete before returning 200.
+        // Phase 2 (fire-and-forget): chat + LLM + reply — slow (up to 120s), runs in background.
+        // Lark requires 200 within 3 seconds, so Phase 2 MUST NOT block the response.
         try
         {
-            await DispatchToUserActorAsync(inbound, registration, http.RequestServices);
-            // Lark requires exactly HTTP 200 — any other status (including 202) is treated as failure.
+            var services = http.RequestServices;
+            await DispatchIdentityTrackingAsync(inbound, registration, services);
+
+            // Fire-and-forget: chat + reply runs on ThreadPool, not inside any grain.
+            _ = DispatchChatAndReplyInBackgroundAsync(inbound, registration, services);
+
             return Results.Ok(new { status = "accepted" });
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
                 inbound.Platform, registration.Id);
-            // Return 200 even on error — Lark treats non-200 as failure and retries.
-            // The error is logged server-side; the dispatch will retry via Lark's retry mechanism.
             return Results.Ok(new { status = "dispatch_error", error = ex.Message });
         }
     }
 
     /// <summary>
-    /// Dispatches the inbound message through the full processing pipeline:
-    /// 1. Identity tracking → ChannelUserGAgent (stateful grain)
-    /// 2. Chat dispatch + response collection → NyxIdChatGAgent (stateless coordination)
-    /// 3. Reply → platform adapter via NyxID proxy
-    ///
-    /// Chat coordination runs in the HTTP/ThreadPool context (not inside a grain)
-    /// to avoid Orleans grain scheduler deadlock when subscribing to another
-    /// actor's stream. This matches the pattern used by NyxIdChatEndpoints.
+    /// Phase 1 (sync): Identity tracking + dedup. Fast — enqueues to actor stream and returns.
     /// </summary>
-    private static async Task DispatchToUserActorAsync(
+    private static async Task DispatchIdentityTrackingAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         IServiceProvider services)
     {
-        var loggerFactory = services.GetRequiredService<ILoggerFactory>();
-        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
         var actorRuntime = services.GetRequiredService<IActorRuntime>();
         var cache = services.GetService<IMemoryCache>();
 
-        // 1. Identity tracking — dispatch to ChannelUserGAgent (stateful grain)
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
                         ?? await actorRuntime.CreateAsync<ChannelUserGAgent>(userActorId);
@@ -185,7 +179,7 @@ public static class ChannelCallbackEndpoints
             NyxProviderSlug = registration.NyxProviderSlug,
         };
 
-        var identityEnvelope = new EventEnvelope
+        var envelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -196,16 +190,28 @@ public static class ChannelCallbackEndpoints
             },
         };
 
-        await userActor.HandleEventAsync(identityEnvelope);
+        await userActor.HandleEventAsync(envelope);
 
         if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
         {
             var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
             cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
         }
+    }
 
-        // 2. Chat dispatch + reply — runs in HTTP/ThreadPool context, NOT inside a grain.
-        // Uses the same subscribe+wait pattern as NyxIdChatEndpoints.
+    /// <summary>
+    /// Phase 2 (fire-and-forget): Chat dispatch + LLM response collection + platform reply.
+    /// Runs on ThreadPool — not inside any grain, not blocking the HTTP response.
+    /// Uses the same subscribe+wait pattern as NyxIdChatEndpoints.
+    /// </summary>
+    private static async Task DispatchChatAndReplyInBackgroundAsync(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        IServiceProvider services)
+    {
+        var logger = services.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("Aevatar.ChannelRuntime.Chat");
+
         try
         {
             RecordDiagnostic(services, "Chat:start", inbound.Platform, registration.Id);
