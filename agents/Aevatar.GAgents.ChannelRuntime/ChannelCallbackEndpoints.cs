@@ -1,6 +1,11 @@
+using System.Text;
 using System.Text.Json;
+using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.GAgents.NyxidChat;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -126,7 +131,7 @@ public static class ChannelCallbackEndpoints
         // inbox. The user actor processes inbound → chat → LLM → reply asynchronously.
         try
         {
-            await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache, loggerFactory);
+            await DispatchToUserActorAsync(inbound, registration, http.RequestServices);
             // Lark requires exactly HTTP 200 — any other status (including 202) is treated as failure.
             return Results.Ok(new { status = "accepted" });
         }
@@ -141,19 +146,26 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
-    /// Background task: dispatch inbound message to ChannelUserGAgent.
-    /// The user actor handles the full flow: identity tracking -> chat -> reply.
+    /// Dispatches the inbound message through the full processing pipeline:
+    /// 1. Identity tracking → ChannelUserGAgent (stateful grain)
+    /// 2. Chat dispatch + response collection → NyxIdChatGAgent (stateless coordination)
+    /// 3. Reply → platform adapter via NyxID proxy
+    ///
+    /// Chat coordination runs in the HTTP/ThreadPool context (not inside a grain)
+    /// to avoid Orleans grain scheduler deadlock when subscribing to another
+    /// actor's stream. This matches the pattern used by NyxIdChatEndpoints.
     /// </summary>
     private static async Task DispatchToUserActorAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IActorRuntime actorRuntime,
-        IMemoryCache? cache,
-        ILoggerFactory loggerFactory)
+        IServiceProvider services)
     {
+        var loggerFactory = services.GetRequiredService<ILoggerFactory>();
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
+        var actorRuntime = services.GetRequiredService<IActorRuntime>();
+        var cache = services.GetService<IMemoryCache>();
 
-        // Per-sender user actor — owns identity state and orchestrates chat + reply
+        // 1. Identity tracking — dispatch to ChannelUserGAgent (stateful grain)
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
                         ?? await actorRuntime.CreateAsync<ChannelUserGAgent>(userActorId);
@@ -173,7 +185,7 @@ public static class ChannelCallbackEndpoints
             NyxProviderSlug = registration.NyxProviderSlug,
         };
 
-        var envelope = new EventEnvelope
+        var identityEnvelope = new EventEnvelope
         {
             Id = Guid.NewGuid().ToString("N"),
             Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
@@ -184,19 +196,147 @@ public static class ChannelCallbackEndpoints
             },
         };
 
-        await userActor.HandleEventAsync(envelope);
+        await userActor.HandleEventAsync(identityEnvelope);
 
-        // Set dedup AFTER successful dispatch — if dispatch threw, no entry is set,
-        // so Lark retries will be processed instead of silently dropped.
         if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
         {
             var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
             cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
         }
 
-        logger.LogInformation(
-            "Channel inbound dispatched: platform={Platform}, sender={SenderId}",
-            inbound.Platform, inbound.SenderId);
+        // 2. Chat dispatch + reply — runs in HTTP/ThreadPool context, NOT inside a grain.
+        // Uses the same subscribe+wait pattern as NyxIdChatEndpoints.
+        try
+        {
+            var replyText = await DispatchChatAndCollectAsync(inbound, registration, services);
+            await SendPlatformReplyAsync(replyText, inbound, registration, services);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Channel chat+reply failed: platform={Platform}", inbound.Platform);
+            try
+            {
+                await SendPlatformReplyAsync(
+                    $"[Error] {ex.GetType().Name}: {ex.Message}", inbound, registration, services);
+            }
+            catch (Exception replyEx)
+            {
+                logger.LogError(replyEx,
+                    "Error reply also failed: platform={Platform}, originalError={OriginalError}",
+                    inbound.Platform, ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates/gets the NyxIdChatGAgent, subscribes to its stream, dispatches
+    /// the ChatRequestEvent, and waits for the response. Runs entirely in
+    /// HTTP/ThreadPool context — no grain scheduler involvement.
+    /// </summary>
+    private static async Task<string> DispatchChatAndCollectAsync(
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        IServiceProvider services)
+    {
+        var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Aevatar.ChannelRuntime.Chat");
+        var actorRuntime = services.GetRequiredService<IActorRuntime>();
+        var subscriptionProvider = services.GetRequiredService<IActorEventSubscriptionProvider>();
+        var effectiveToken = registration.NyxUserToken;
+
+        var chatActorId = $"channel-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
+        var chatActor = await actorRuntime.GetAsync(chatActorId)
+                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(chatActorId);
+
+        var sessionId = Guid.NewGuid().ToString("N");
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = inbound.Text,
+            SessionId = sessionId,
+            ScopeId = registration.ScopeId,
+        };
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken;
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = registration.NyxUserToken;
+        chatRequest.Metadata["scope_id"] = registration.ScopeId;
+        chatRequest.Metadata[ChannelMetadataKeys.Platform] = inbound.Platform;
+        chatRequest.Metadata[ChannelMetadataKeys.SenderId] = inbound.SenderId;
+        chatRequest.Metadata[ChannelMetadataKeys.SenderName] = inbound.SenderName;
+        chatRequest.Metadata[ChannelMetadataKeys.MessageId] = inbound.MessageId ?? string.Empty;
+        chatRequest.Metadata[ChannelMetadataKeys.ChatType] = inbound.ChatType ?? string.Empty;
+
+        var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var responseBuilder = new StringBuilder();
+
+        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+            chatActor.Id,
+            envelope =>
+            {
+                var payload = envelope.Payload;
+                if (payload is null) return Task.CompletedTask;
+
+                if (payload.Is(TextMessageContentEvent.Descriptor))
+                {
+                    var contentEvt = payload.Unpack<TextMessageContentEvent>();
+                    if (contentEvt.SessionId == sessionId && !string.IsNullOrEmpty(contentEvt.Delta))
+                        responseBuilder.Append(contentEvt.Delta);
+                }
+                else if (payload.Is(TextMessageEndEvent.Descriptor))
+                {
+                    var endEvt = payload.Unpack<TextMessageEndEvent>();
+                    if (endEvt.SessionId == sessionId)
+                        responseTcs.TrySetResult(responseBuilder.ToString());
+                }
+
+                return Task.CompletedTask;
+            });
+
+        var chatEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(chatRequest),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = chatActor.Id },
+            },
+        };
+
+        await chatActor.HandleEventAsync(chatEnvelope);
+
+        var timeoutTask = Task.Delay(120_000);
+        var completed = await Task.WhenAny(responseTcs.Task, timeoutTask);
+
+        if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
+        {
+            var text = responseTcs.Task.Result;
+            logger.LogInformation("Channel response ready: length={Length}", text.Length);
+            return text;
+        }
+
+        var partial = responseBuilder.ToString();
+        logger.LogWarning("Channel response timed out");
+        return partial.Length > 0
+            ? partial
+            : "Sorry, it's taking too long to respond. Please try again.";
+    }
+
+    private static async Task SendPlatformReplyAsync(
+        string replyText,
+        InboundMessage inbound,
+        ChannelBotRegistrationEntry registration,
+        IServiceProvider services)
+    {
+        if (string.IsNullOrWhiteSpace(replyText))
+            replyText = "Sorry, I wasn't able to generate a response. Please try again.";
+
+        var adapters = services.GetRequiredService<IEnumerable<IPlatformAdapter>>();
+        var adapter = adapters.FirstOrDefault(a =>
+            string.Equals(a.Platform, inbound.Platform, StringComparison.OrdinalIgnoreCase));
+
+        if (adapter is null) return;
+
+        var nyxClient = services.GetRequiredService<NyxIdApiClient>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
     }
 
     // ─── Registration CRUD ───
