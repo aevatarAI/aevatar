@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using Aevatar.AI.Abstractions;
 using Aevatar.AI.Abstractions.LLMProviders;
@@ -35,12 +34,12 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 {
-    // Non-persisted accumulator for streaming text deltas. Rebuilt on replay
-    // (HandleChatContent events are replayed from event store on activation).
-    private readonly ConcurrentDictionary<string, StringBuilder> _responseBuilders = new();
+    // Non-persisted accumulator for streaming text deltas.
+    // Actor is single-threaded — plain Dictionary is correct (no locks).
+    private readonly Dictionary<string, StringBuilder> _responseBuilders = new();
 
     // Timeout leases keyed by sessionId — needed to cancel on completion.
-    private readonly ConcurrentDictionary<string, RuntimeCallbackLease> _timeoutLeases = new();
+    private readonly Dictionary<string, RuntimeCallbackLease> _timeoutLeases = new();
 
     protected override ChannelUserState TransitionState(ChannelUserState current, IMessage evt) =>
         StateTransitionMatcher
@@ -93,30 +92,27 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             },
         });
 
-        // 5. Persist chat request (durable — survives restart)
+        // 5. Persist chat request with full replay context (durable — survives restart).
+        // State.PendingSessions is populated by ApplyRequested via event sourcing.
         var sessionId = Guid.NewGuid().ToString("N");
         await PersistDomainEventAsync(new ChannelChatRequestedEvent
         {
-            SessionId = sessionId,
-            ChatActorId = chatActorId,
+            Session = new ChannelPendingChatSession
+            {
+                SessionId = sessionId,
+                ChatActorId = chatActorId,
+                OrgToken = orgToken,
+                Platform = evt.Platform,
+                ConversationId = evt.ConversationId,
+                SenderId = evt.SenderId,
+                SenderName = evt.SenderName,
+                MessageId = evt.MessageId,
+                ChatType = evt.ChatType,
+                RegistrationId = evt.RegistrationId,
+                NyxProviderSlug = evt.NyxProviderSlug,
+                RegistrationScopeId = evt.RegistrationScopeId,
+            },
         });
-
-        // Also persist the replay context in state
-        State.PendingSessions[sessionId] = new ChannelPendingChatSession
-        {
-            SessionId = sessionId,
-            ChatActorId = chatActorId,
-            OrgToken = orgToken,
-            Platform = evt.Platform,
-            ConversationId = evt.ConversationId,
-            SenderId = evt.SenderId,
-            SenderName = evt.SenderName,
-            MessageId = evt.MessageId,
-            ChatType = evt.ChatType,
-            RegistrationId = evt.RegistrationId,
-            NyxProviderSlug = evt.NyxProviderSlug,
-            RegistrationScopeId = evt.RegistrationScopeId,
-        };
 
         RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
 
@@ -166,7 +162,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (string.IsNullOrEmpty(evt.SessionId) || !State.PendingSessions.ContainsKey(evt.SessionId))
             return Task.CompletedTask;
 
-        var builder = _responseBuilders.GetOrAdd(evt.SessionId, _ => new StringBuilder());
+        if (!_responseBuilders.TryGetValue(evt.SessionId, out var builder))
+        {
+            builder = new StringBuilder();
+            _responseBuilders[evt.SessionId] = builder;
+        }
         if (!string.IsNullOrEmpty(evt.Delta))
             builder.Append(evt.Delta);
 
@@ -181,7 +181,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (string.IsNullOrEmpty(evt.SessionId) || !State.PendingSessions.TryGetValue(evt.SessionId, out var session))
             return;
 
-        var replyText = _responseBuilders.TryRemove(evt.SessionId, out var builder)
+        var replyText = _responseBuilders.Remove(evt.SessionId, out var builder)
             ? builder.ToString()
             : evt.Content;
 
@@ -199,7 +199,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (!State.PendingSessions.TryGetValue(evt.SessionId, out var session))
             return; // Already completed
 
-        var partial = _responseBuilders.TryRemove(evt.SessionId, out var builder)
+        var partial = _responseBuilders.Remove(evt.SessionId, out var builder)
             ? builder.ToString()
             : string.Empty;
 
@@ -247,7 +247,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = session.SessionId });
 
         // Cancel timeout if still pending
-        if (_timeoutLeases.TryRemove(session.SessionId, out var lease))
+        if (_timeoutLeases.Remove(session.SessionId, out var lease))
         {
             try
             {
@@ -337,9 +337,12 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
     private static ChannelUserState ApplyRequested(ChannelUserState current, ChannelChatRequestedEvent evt)
     {
-        // Session details are set directly in HandleInbound after PersistDomainEventAsync.
-        // This transition is a no-op — the state is already updated.
-        return current;
+        if (evt.Session == null || string.IsNullOrEmpty(evt.Session.SessionId))
+            return current;
+
+        var next = current.Clone();
+        next.PendingSessions[evt.Session.SessionId] = evt.Session;
+        return next;
     }
 
     private static ChannelUserState ApplyCompleted(ChannelUserState current, ChannelChatCompletedEvent evt)

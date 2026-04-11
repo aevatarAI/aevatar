@@ -156,10 +156,10 @@ message ChannelBotRegistrationDocument {
 
 // ─── Channel Chat Lifecycle (continuation pattern) ───
 
-// Domain event: chat session requested (persisted for durability)
+/// Domain event: chat session requested — carries full replay context
+// so ApplyRequested can restore pending_sessions from event store.
 message ChannelChatRequestedEvent {
-  string session_id = 1;
-  string chat_actor_id = 2;
+  ChannelPendingChatSession session = 1;
 }
 
 // Domain event: chat session completed (reply sent or timed out)
