@@ -122,72 +122,91 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         RecordDiagnostic("SendReply:done", evt, "reply sent");
     }
 
-    private async Task<string> CollectChatResponseAsync(
+    /// <summary>
+    /// Subscribes to the chat actor's stream and waits for the LLM response.
+    ///
+    /// Runs on a ThreadPool thread to avoid Orleans grain scheduler deadlock:
+    /// Orleans delivers stream callbacks as turns on the subscribing grain,
+    /// but the grain is already blocked awaiting this Task. By running on
+    /// ThreadPool, the subscription observer is not tied to any grain's
+    /// scheduler, so callbacks fire independently.
+    /// </summary>
+    private Task<string> CollectChatResponseAsync(
         IActor chatActor, ChatRequestEvent chatRequest, string sessionId)
     {
         var subscriptionProvider = Services.GetRequiredService<IActorEventSubscriptionProvider>();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        var logger = Logger;
 
-        var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var responseBuilder = new StringBuilder();
-        using var ctr = cts.Token.Register(() => responseTcs.TrySetCanceled());
-
-        await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
-            chatActor.Id,
-            envelope =>
-            {
-                var payload = envelope.Payload;
-                if (payload is null) return Task.CompletedTask;
-
-                if (payload.Is(TextMessageContentEvent.Descriptor))
-                {
-                    var contentEvt = payload.Unpack<TextMessageContentEvent>();
-                    if (contentEvt.SessionId == sessionId && !string.IsNullOrEmpty(contentEvt.Delta))
-                        responseBuilder.Append(contentEvt.Delta);
-                }
-                else if (payload.Is(TextMessageEndEvent.Descriptor))
-                {
-                    var endEvt = payload.Unpack<TextMessageEndEvent>();
-                    if (endEvt.SessionId == sessionId)
-                        responseTcs.TrySetResult(responseBuilder.ToString());
-                }
-
-                return Task.CompletedTask;
-            },
-            cts.Token);
-
-        var chatEnvelope = new EventEnvelope
+        return Task.Run(async () =>
         {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Any.Pack(chatRequest),
-            Route = new EnvelopeRoute
+            var responseTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var responseBuilder = new StringBuilder();
+
+            await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
+                chatActor.Id,
+                envelope =>
+                {
+                    var payload = envelope.Payload;
+                    if (payload is null) return Task.CompletedTask;
+
+                    if (payload.Is(TextMessageContentEvent.Descriptor))
+                    {
+                        var contentEvt = payload.Unpack<TextMessageContentEvent>();
+                        if (contentEvt.SessionId == sessionId && !string.IsNullOrEmpty(contentEvt.Delta))
+                            responseBuilder.Append(contentEvt.Delta);
+                    }
+                    else if (payload.Is(TextMessageEndEvent.Descriptor))
+                    {
+                        var endEvt = payload.Unpack<TextMessageEndEvent>();
+                        if (endEvt.SessionId == sessionId)
+                            responseTcs.TrySetResult(responseBuilder.ToString());
+                    }
+
+                    return Task.CompletedTask;
+                });
+
+            var chatEnvelope = new EventEnvelope
             {
-                Direct = new DirectRoute { TargetActorId = chatActor.Id },
-            },
-        };
+                Id = Guid.NewGuid().ToString("N"),
+                Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                Payload = Any.Pack(chatRequest),
+                Route = new EnvelopeRoute
+                {
+                    Direct = new DirectRoute { TargetActorId = chatActor.Id },
+                },
+            };
 
-        await chatActor.HandleEventAsync(chatEnvelope, cts.Token);
+            await chatActor.HandleEventAsync(chatEnvelope);
 
-        // Wait for response
-        var completed = await Task.WhenAny(responseTcs.Task, Task.Delay(120_000, cts.Token));
+            var timeoutTask = Task.Delay(120_000);
+            var completed = await Task.WhenAny(responseTcs.Task, timeoutTask);
 
-        if (completed == responseTcs.Task && responseTcs.Task.IsCompletedSuccessfully)
-        {
-            var text = responseTcs.Task.Result;
-            Logger.LogInformation(
-                "Channel response ready: platform={Platform}, length={Length}",
-                chatRequest.Metadata["channel.platform"], text.Length);
-            return text;
-        }
+            if (completed == responseTcs.Task)
+            {
+                try
+                {
+                    var text = await responseTcs.Task;
+                    logger.LogInformation(
+                        "Channel response ready: platform={Platform}, length={Length}",
+                        chatRequest.Metadata["channel.platform"], text.Length);
+                    return text;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Channel response failed: platform={Platform}",
+                        chatRequest.Metadata["channel.platform"]);
+                    return $"Sorry, an error occurred: {ex.Message}";
+                }
+            }
 
-        var partial = responseBuilder.ToString();
-        Logger.LogWarning(
-            "Channel response timed out: platform={Platform}",
-            chatRequest.Metadata["channel.platform"]);
-        return partial.Length > 0
-            ? partial
-            : "Sorry, it's taking too long to respond. Please try again.";
+            var partial = responseBuilder.ToString();
+            logger.LogWarning(
+                "Channel response timed out: platform={Platform}",
+                chatRequest.Metadata["channel.platform"]);
+            return partial.Length > 0
+                ? partial
+                : "Sorry, it's taking too long to respond. Please try again.";
+        });
     }
 
     private async Task SendReplyAsync(
