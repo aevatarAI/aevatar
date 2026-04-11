@@ -141,7 +141,17 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
 
-        // 6. Build and dispatch ChatRequestEvent to chat actor
+        // 6. Schedule timeout BEFORE dispatch — guarantees the session always has
+        // a cleanup path. If dispatch fails, the timeout fires after 120s and
+        // cleans up the stranded session. If dispatch succeeds, the timeout is
+        // the normal safety net for slow LLM responses.
+        var lease = await ScheduleSelfDurableTimeoutAsync(
+            $"chat-timeout-{sessionId}",
+            TimeSpan.FromSeconds(120),
+            new ChannelChatTimeoutEvent { SessionId = sessionId });
+        _timeoutLeases[sessionId] = lease;
+
+        // 7. Build and dispatch ChatRequestEvent to chat actor
         var chatRequest = new ChatRequestEvent
         {
             Prompt = evt.Text,
@@ -168,14 +178,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             },
         };
         await chatActor.HandleEventAsync(chatEnvelope);
-        // HandleEventAsync is non-blocking (stream publish). If it throws,
-        // the exception propagates and the turn fails — but the session stays
-        // in PendingSessions so the timeout (step 8) will clean it up.
-        // Do NOT persist ChannelChatCompletedEvent here: under InMemory runtime,
-        // partial delivery is possible (event reached subscriber before throw),
-        // so premature cleanup would cause HandleChatEnd to drop the real reply.
 
-        // 7. Record successful dispatch in dedup set.
+        // 8. Record successful dispatch in dedup set.
         if (!string.IsNullOrEmpty(evt.MessageId))
         {
             _processedMessageIds.Add(evt.MessageId);
@@ -186,22 +190,6 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 _processedMessageIdsOrder.RemoveFirst();
                 _processedMessageIds.Remove(oldest);
             }
-        }
-
-        // 8. Schedule timeout (120s) — fires ChannelChatTimeoutEvent as self-message
-        try
-        {
-            var lease = await ScheduleSelfDurableTimeoutAsync(
-                $"chat-timeout-{sessionId}",
-                TimeSpan.FromSeconds(120),
-                new ChannelChatTimeoutEvent { SessionId = sessionId });
-            _timeoutLeases[sessionId] = lease;
-        }
-        catch (Exception ex)
-        {
-            // Chat was already dispatched — response will still arrive via
-            // HandleChatEnd. We just lose the timeout safety net for this session.
-            Logger.LogWarning(ex, "Failed to schedule timeout for session {SessionId}", sessionId);
         }
 
         // RETURN — end turn. Continuation happens in HandleChatContent/HandleChatEnd.
