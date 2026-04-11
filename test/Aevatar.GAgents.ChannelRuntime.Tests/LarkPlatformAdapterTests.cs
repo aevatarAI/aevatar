@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Json;
+using System.Net;
+using System.Net.Http;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.AI.ToolProviders.NyxId;
 using FluentAssertions;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.AspNetCore.Http;
@@ -278,5 +281,72 @@ public class LarkPlatformAdapterTests
         var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
 
         inbound.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_returns_success_detail_when_lark_accepts_message()
+    {
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """
+            {"code":0,"msg":"success","data":{"message_id":"om_success_123"}}
+            """);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_123",
+            SenderId = "ou_sender_1",
+            SenderName = "sender-1",
+            Text = "hello",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Detail.Should().Be("message_id=om_success_123");
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_returns_failed_result_when_lark_rejects_message()
+    {
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """
+            {"code":230001,"msg":"invalid receive id"}
+            """);
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark",
+            ConversationId = "oc_chat_123",
+            SenderId = "ou_sender_1",
+            SenderName = "sender-1",
+            Text = "hello",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Be("lark_code=230001 msg=invalid receive id");
+    }
+
+    private static HttpClient CreateHttpClient(HttpStatusCode statusCode, string body)
+    {
+        return new HttpClient(new StaticResponseHandler(statusCode, body))
+        {
+            BaseAddress = new Uri("https://nyx.example.com"),
+        };
+    }
+
+    private sealed class StaticResponseHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
+        }
     }
 }
