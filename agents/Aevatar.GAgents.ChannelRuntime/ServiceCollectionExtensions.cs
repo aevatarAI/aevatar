@@ -2,10 +2,12 @@ using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.CQRS.Projection.Core.Abstractions;
 using Aevatar.CQRS.Projection.Core.DependencyInjection;
 using Aevatar.CQRS.Projection.Core.Orchestration;
+using Aevatar.CQRS.Projection.Providers.Elasticsearch.DependencyInjection;
 using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -13,14 +15,23 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddChannelRuntime(this IServiceCollection services)
+    /// <summary>
+    /// Registers channel runtime services. Pass IConfiguration so the document
+    /// projection store matches the host environment (Elasticsearch in prod,
+    /// InMemory for local dev / tests).
+    /// </summary>
+    public static IServiceCollection AddChannelRuntime(
+        this IServiceCollection services, IConfiguration? configuration = null)
     {
-        // Memory cache for webhook dedup (volatile — Phase 2 migrates to durable)
+        // Memory cache for webhook dedup
         services.AddMemoryCache();
 
         // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();
         services.TryAddSingleton<IProjectionClock, SystemProjectionClock>();
+
+        // Detect projection store provider from configuration
+        var useElasticsearch = ResolveElasticsearchEnabled(configuration);
 
         // ─── Device Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -39,8 +50,20 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>,
             DeviceRegistrationDocumentMetadataProvider>();
         services.TryAddSingleton<IDeviceRegistrationQueryPort, DeviceRegistrationQueryPort>();
-        services.AddInMemoryDocumentProjectionStore<DeviceRegistrationDocument, string>(
-            static doc => doc.Id, static key => key);
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<DeviceRegistrationDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<DeviceRegistrationDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<DeviceRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
 
         // ─── Channel Bot Registration projection pipeline ───
         services.AddProjectionMaterializationRuntimeCore<
@@ -61,19 +84,51 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IChannelBotRegistrationQueryPort, ChannelBotRegistrationQueryPort>();
         services.TryAddSingleton<ChannelBotRegistrationProjectionPort>();
         services.AddHostedService<ChannelBotRegistrationStartupService>();
-        services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
-            static doc => doc.Id, static key => key);
 
-        // Register platform adapters (add more as platforms are onboarded)
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<ChannelBotRegistrationDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<ChannelBotRegistrationDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
+
+        // Register platform adapters
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, TelegramPlatformAdapter>());
 
-        // channel_registrations tool — the tool itself lazy-resolves IActorRuntime and
-        // IChannelBotRegistrationQueryPort at ExecuteAsync time, not construction time.
-        // This avoids DI failures during Orleans grain activation.
+        // channel_registrations tool
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, ChannelRegistrationToolSource>());
 
         return services;
+    }
+
+    private static bool ResolveElasticsearchEnabled(IConfiguration? configuration)
+    {
+        if (configuration == null) return false;
+
+        var section = configuration.GetSection("Projection:Document:Providers:Elasticsearch");
+        var explicitEnabled = section["Enabled"];
+        if (!string.IsNullOrWhiteSpace(explicitEnabled))
+            return string.Equals(explicitEnabled.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+
+        // Auto-detect: if endpoints are configured, ES is enabled
+        return section.GetSection("Endpoints").GetChildren()
+            .Any(x => !string.IsNullOrWhiteSpace(x.Value));
+    }
+
+    private static Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration.ElasticsearchProjectionDocumentStoreOptions
+        BuildElasticsearchOptions(IConfiguration configuration)
+    {
+        var options = new Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration.ElasticsearchProjectionDocumentStoreOptions();
+        configuration.GetSection("Projection:Document:Providers:Elasticsearch").Bind(options);
+        return options;
     }
 }
