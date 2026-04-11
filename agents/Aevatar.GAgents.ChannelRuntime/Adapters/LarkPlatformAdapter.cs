@@ -168,7 +168,7 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
         };
     }
 
-    public async Task SendReplyAsync(
+    public async Task<PlatformReplyDeliveryResult> SendReplyAsync(
         string replyText,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -203,8 +203,75 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             throw new InvalidOperationException($"Lark API error: {result}");
         }
 
+        if (TryBuildLarkErrorDetail(result, out var larkErrorDetail))
+        {
+            _logger.LogWarning(
+                "Lark outbound reply rejected by platform: chat={ChatId}, slug={Slug}, detail={Detail}",
+                inbound.ConversationId, registration.NyxProviderSlug, larkErrorDetail);
+            return new PlatformReplyDeliveryResult(false, larkErrorDetail);
+        }
+
+        var successDetail = BuildLarkSuccessDetail(result);
         _logger.LogInformation(
-            "Lark outbound reply sent: slug={Slug}, result_length={Length}",
-            registration.NyxProviderSlug, result?.Length ?? 0);
+            "Lark outbound reply sent: chat={ChatId}, slug={Slug}, detail={Detail}",
+            inbound.ConversationId, registration.NyxProviderSlug, successDetail);
+        return new PlatformReplyDeliveryResult(true, successDetail);
+    }
+
+    private static bool TryBuildLarkErrorDetail(string? result, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(result))
+        {
+            detail = "empty_lark_response";
+            return true;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("code", out var codeProp))
+                return false;
+
+            var code = codeProp.ValueKind == JsonValueKind.Number
+                ? codeProp.GetInt32()
+                : 0;
+            if (code == 0)
+                return false;
+
+            var msg = root.TryGetProperty("msg", out var msgProp) ? msgProp.GetString() : null;
+            detail = $"lark_code={code}" +
+                     (string.IsNullOrWhiteSpace(msg) ? string.Empty : $" msg={msg}");
+            return true;
+        }
+        catch (JsonException)
+        {
+            detail = "invalid_lark_response_json";
+            return true;
+        }
+    }
+
+    private static string BuildLarkSuccessDetail(string? result)
+    {
+        if (string.IsNullOrWhiteSpace(result))
+            return "result_length=0";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var messageId = root.TryGetProperty("data", out var dataProp) &&
+                            dataProp.TryGetProperty("message_id", out var messageIdProp)
+                ? messageIdProp.GetString()
+                : null;
+            return string.IsNullOrWhiteSpace(messageId)
+                ? $"result_length={result.Length}"
+                : $"message_id={messageId}";
+        }
+        catch
+        {
+            return $"result_length={result.Length}";
+        }
     }
 }

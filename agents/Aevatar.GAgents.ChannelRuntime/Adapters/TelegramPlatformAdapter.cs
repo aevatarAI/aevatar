@@ -123,7 +123,7 @@ public sealed class TelegramPlatformAdapter : IPlatformAdapter
     /// Send a reply via NyxID proxy → Telegram Bot API sendMessage.
     /// NyxID injects the bot token into the API path.
     /// </summary>
-    public async Task SendReplyAsync(
+    public async Task<PlatformReplyDeliveryResult> SendReplyAsync(
         string replyText,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -151,8 +151,82 @@ public sealed class TelegramPlatformAdapter : IPlatformAdapter
             extraHeaders: null,
             ct);
 
+        if (TryBuildTelegramErrorDetail(result, out var errorDetail))
+        {
+            _logger.LogWarning(
+                "Telegram outbound reply failed: chat={ChatId}, slug={Slug}, detail={Detail}",
+                inbound.ConversationId, registration.NyxProviderSlug, errorDetail);
+            return new PlatformReplyDeliveryResult(false, errorDetail);
+        }
+
+        var successDetail = BuildTelegramSuccessDetail(result);
         _logger.LogInformation(
-            "Telegram outbound reply sent: chat={ChatId}, slug={Slug}, result_length={Length}",
-            inbound.ConversationId, registration.NyxProviderSlug, result?.Length ?? 0);
+            "Telegram outbound reply sent: chat={ChatId}, slug={Slug}, detail={Detail}",
+            inbound.ConversationId, registration.NyxProviderSlug, successDetail);
+        return new PlatformReplyDeliveryResult(true, successDetail);
+    }
+
+    private static bool TryBuildTelegramErrorDetail(string? result, out string detail)
+    {
+        detail = string.Empty;
+        if (string.IsNullOrWhiteSpace(result))
+        {
+            detail = "empty_telegram_response";
+            return true;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("error", out var errorProp) && errorProp.ValueKind == JsonValueKind.True)
+            {
+                var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetRawText() : "unknown";
+                var body = root.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
+                detail = $"nyx_error status={status}" +
+                         (string.IsNullOrWhiteSpace(body) ? string.Empty : $" body={body}");
+                return true;
+            }
+
+            if (root.TryGetProperty("ok", out var okProp) &&
+                okProp.ValueKind is JsonValueKind.False)
+            {
+                var description = root.TryGetProperty("description", out var descProp) ? descProp.GetString() : null;
+                detail = "telegram_ok=false" +
+                         (string.IsNullOrWhiteSpace(description) ? string.Empty : $" description={description}");
+                return true;
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            detail = "invalid_telegram_response_json";
+            return true;
+        }
+    }
+
+    private static string BuildTelegramSuccessDetail(string? result)
+    {
+        if (string.IsNullOrWhiteSpace(result))
+            return "result_length=0";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(result);
+            var root = doc.RootElement;
+            var messageId = root.TryGetProperty("result", out var resultProp) &&
+                            resultProp.TryGetProperty("message_id", out var messageIdProp)
+                ? messageIdProp.GetRawText()
+                : null;
+            return string.IsNullOrWhiteSpace(messageId)
+                ? $"result_length={result.Length}"
+                : $"message_id={messageId}";
+        }
+        catch
+        {
+            return $"result_length={result.Length}";
+        }
     }
 }

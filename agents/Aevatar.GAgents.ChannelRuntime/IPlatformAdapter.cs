@@ -29,10 +29,14 @@ public interface IPlatformAdapter
     /// <summary>
     /// Send a reply message to the platform via the Nyx provider proxy.
     /// </summary>
-    Task SendReplyAsync(
+    Task<PlatformReplyDeliveryResult> SendReplyAsync(
         string replyText,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         NyxIdApiClient nyxClient,
         CancellationToken ct);
 }
+
+public readonly record struct PlatformReplyDeliveryResult(
+    bool Succeeded,
+    string? Detail = null);

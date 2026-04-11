@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
@@ -218,8 +219,24 @@ public static class ChannelCallbackEndpoints
             var replyText = await DispatchChatAndCollectAsync(inbound, registration, deps);
             deps.RecordDiagnostic("Chat:done", inbound.Platform, registration.Id,
                 $"reply_length={replyText?.Length}");
-            await SendPlatformReplyAsync(replyText, inbound, registration, deps);
-            deps.RecordDiagnostic("Reply:done", inbound.Platform, registration.Id);
+            deps.RecordDiagnostic("Reply:start", inbound.Platform, registration.Id,
+                $"reply_length={replyText?.Length}");
+            var sendStopwatch = Stopwatch.StartNew();
+            var delivery = await SendPlatformReplyAsync(replyText, inbound, registration, deps);
+            sendStopwatch.Stop();
+
+            if (delivery.Succeeded)
+            {
+                deps.RecordDiagnostic("Reply:done", inbound.Platform, registration.Id,
+                    $"duration_ms={sendStopwatch.ElapsedMilliseconds}" +
+                    (string.IsNullOrWhiteSpace(delivery.Detail) ? string.Empty : $" {delivery.Detail}"));
+            }
+            else
+            {
+                deps.RecordDiagnostic("Reply:error", inbound.Platform, registration.Id,
+                    $"duration_ms={sendStopwatch.ElapsedMilliseconds}" +
+                    (string.IsNullOrWhiteSpace(delivery.Detail) ? string.Empty : $" {delivery.Detail}"));
+            }
         }
         catch (Exception ex)
         {
@@ -331,7 +348,7 @@ public static class ChannelCallbackEndpoints
             : "Sorry, it's taking too long to respond. Please try again.";
     }
 
-    private static async Task SendPlatformReplyAsync(
+    private static async Task<PlatformReplyDeliveryResult> SendPlatformReplyAsync(
         string? replyText,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
@@ -343,10 +360,11 @@ public static class ChannelCallbackEndpoints
         var adapter = deps.Adapters.FirstOrDefault(a =>
             string.Equals(a.Platform, inbound.Platform, StringComparison.OrdinalIgnoreCase));
 
-        if (adapter is null) return;
+        if (adapter is null)
+            return new PlatformReplyDeliveryResult(false, $"No adapter for platform: {inbound.Platform}");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await adapter.SendReplyAsync(replyText, inbound, registration, deps.NyxClient, cts.Token);
+        return await adapter.SendReplyAsync(replyText, inbound, registration, deps.NyxClient, cts.Token);
     }
 
     // ─── Registration CRUD ───
@@ -564,8 +582,19 @@ public static class ChannelCallbackEndpoints
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
-            return Results.Ok(new { status = "sent", diagnostics, message });
+            var delivery = await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
+            if (!delivery.Succeeded)
+            {
+                return Results.Json(new
+                {
+                    status = "error",
+                    error = delivery.Detail ?? "Reply delivery failed.",
+                    diagnostics,
+                    message,
+                }, statusCode: 500);
+            }
+
+            return Results.Ok(new { status = "sent", diagnostics, message, detail = delivery.Detail });
         }
         catch (Exception ex)
         {
