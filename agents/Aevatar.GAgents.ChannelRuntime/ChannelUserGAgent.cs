@@ -167,7 +167,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
 
         // 7. Build and dispatch ChatRequestEvent to chat actor
-        await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, ct);
+        await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, CancellationToken.None);
 
         // 8. Record successful dispatch in dedup set.
         if (!string.IsNullOrEmpty(evt.MessageId))
