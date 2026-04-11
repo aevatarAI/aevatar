@@ -50,11 +50,19 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ? State.NyxidAccessToken
             : null;
         var orgToken = evt.RegistrationToken;
-        // Primary token for LLM/tool calls: user's own if bound, otherwise org's
         var effectiveToken = userToken ?? orgToken;
 
         // 3. Dispatch to chat actor and send reply
-        await DispatchChatAndReplyAsync(evt, effectiveToken, orgToken);
+        try
+        {
+            await DispatchChatAndReplyAsync(evt, effectiveToken, orgToken);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "HandleInbound failed: platform={Platform}, sender={SenderId}", evt.Platform, evt.SenderId);
+            // Send error back to user via bot so we can see what broke
+            await SendReplyAsync(evt, $"[Error] {ex.GetType().Name}: {ex.Message}", orgToken);
+        }
     }
 
     // ─── Chat dispatch + reply ───
