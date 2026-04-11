@@ -38,6 +38,9 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     [EventHandler]
     public async Task HandleInbound(ChannelInboundEvent evt)
     {
+        RecordDiagnostic("HandleInbound:enter", evt,
+            $"text_length={evt.Text?.Length}, registration={evt.RegistrationId}, token_present={!string.IsNullOrEmpty(evt.RegistrationToken)}");
+
         // 1. Track sender identity
         await PersistDomainEventAsync(new ChannelUserTrackedEvent
         {
@@ -57,11 +60,12 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         try
         {
             await DispatchChatAndReplyAsync(evt, effectiveToken, orgToken);
+            RecordDiagnostic("HandleInbound:success", evt, "completed without error");
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "HandleInbound failed: platform={Platform}, sender={SenderId}", evt.Platform, evt.SenderId);
-            RecordDiagnosticError(evt, "HandleInbound", ex);
+            RecordDiagnostic("HandleInbound:error", evt, $"{ex.GetType().Name}: {ex.Message}");
 
             // Send error back to user via bot so we can see what broke
             try
@@ -73,7 +77,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 Logger.LogError(replyEx,
                     "SendReplyAsync also failed while reporting error: platform={Platform}, sender={SenderId}, originalError={OriginalError}",
                     evt.Platform, evt.SenderId, ex.Message);
-                RecordDiagnosticError(evt, "SendReplyAsync", replyEx, ex.Message);
+                RecordDiagnostic("SendReplyAsync:error", evt,
+                    $"{replyEx.GetType().Name}: {replyEx.Message} | original: {ex.Message}");
             }
         }
     }
@@ -108,10 +113,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         chatRequest.Metadata[ChannelMetadataKeys.UserActorId] = Id;
 
         // Subscribe to response stream and wait
+        RecordDiagnostic("CollectChat:start", evt, $"chatActorId={chatActorId}, sessionId={sessionId}");
         var replyText = await CollectChatResponseAsync(chatActor, chatRequest, sessionId);
+        RecordDiagnostic("CollectChat:done", evt, $"reply_length={replyText?.Length}, preview={Truncate(replyText, 100)}");
 
         // Send reply via platform adapter — always uses org token for bot API
         await SendReplyAsync(evt, replyText, orgToken);
+        RecordDiagnostic("SendReply:done", evt, $"sent to {evt.ConversationId}");
     }
 
     private async Task<string> CollectChatResponseAsync(
@@ -253,41 +261,33 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         return next;
     }
 
-    /// <summary>
-    /// Stores error details in IMemoryCache so they can be retrieved via the
-    /// diagnostic endpoint without needing server log access.
-    /// </summary>
-    private void RecordDiagnosticError(
-        ChannelInboundEvent evt, string stage, Exception ex, string? originalError = null)
+    private void RecordDiagnostic(string stage, ChannelInboundEvent evt, string detail)
     {
         var cache = Services.GetService<IMemoryCache>();
         if (cache == null) return;
 
-        var errors = cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
+        var entries = cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
             return new List<object>();
         })!;
 
-        var errorEntry = new
+        lock (entries)
         {
-            timestamp = DateTimeOffset.UtcNow.ToString("O"),
-            stage,
-            platform = evt.Platform,
-            senderId = evt.SenderId,
-            registrationId = evt.RegistrationId,
-            error = ex.Message,
-            errorType = ex.GetType().FullName,
-            stackTrace = ex.StackTrace?.Split('\n').Take(5).ToArray(),
-            originalError,
-        };
-
-        // Keep last 20 errors
-        lock (errors)
-        {
-            errors.Add(errorEntry);
-            while (errors.Count > 20)
-                errors.RemoveAt(0);
+            entries.Add(new
+            {
+                timestamp = DateTimeOffset.UtcNow.ToString("O"),
+                stage,
+                platform = evt.Platform,
+                senderId = evt.SenderId,
+                registrationId = evt.RegistrationId,
+                detail,
+            });
+            while (entries.Count > 50)
+                entries.RemoveAt(0);
         }
     }
+
+    private static string? Truncate(string? s, int maxLen) =>
+        s is null ? null : s.Length <= maxLen ? s : s[..maxLen] + "...";
 }
