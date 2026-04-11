@@ -61,6 +61,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
+        Logger.LogWarning(
+            "[ChannelBot] OnActivateAsync: actor={ActorId}, pending_sessions={PendingCount}",
+            Id, State.PendingSessions.Count);
+
         if (State.PendingSessions.Count == 0)
             return;
 
@@ -89,6 +93,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     {
         try
         {
+            Logger.LogWarning(
+                "[ChannelBot] HandleInbound entered: actor={ActorId}, platform={Platform}, reg={RegistrationId}, messageId={MessageId}, text_length={TextLength}",
+                Id, evt.Platform, evt.RegistrationId, evt.MessageId, evt.Text?.Length ?? 0);
+
             // 0. Dedup: skip if we've already successfully dispatched this Lark messageId.
             if (!string.IsNullOrEmpty(evt.MessageId) && _processedMessageIds.Contains(evt.MessageId))
             {
@@ -181,8 +189,16 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
             RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
 
+            Logger.LogWarning(
+                "[ChannelBot] Dispatching ChatRequest: actor={ActorId}, sessionId={SessionId}, chatActorId={ChatActorId}, prompt_length={PromptLength}",
+                Id, sessionId, chatActorId, evt.Text?.Length ?? 0);
+
             // 7. Build and dispatch ChatRequestEvent to chat actor
             await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, CancellationToken.None);
+
+            Logger.LogWarning(
+                "[ChannelBot] ChatRequest dispatched OK: actor={ActorId}, sessionId={SessionId}",
+                Id, sessionId);
 
             // 8. Record successful dispatch in dedup set.
             TrackProcessedMessageId(evt.MessageId);
@@ -207,6 +223,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     [EventHandler]
     public Task HandleChatContent(TextMessageContentEvent evt)
     {
+        Logger.LogWarning(
+            "[ChannelBot] HandleChatContent: actor={ActorId}, sessionId={SessionId}, delta_length={DeltaLength}",
+            Id, evt.SessionId, evt.Delta?.Length ?? 0);
+
         if (string.IsNullOrEmpty(evt.SessionId) || !State.PendingSessions.ContainsKey(evt.SessionId))
             return Task.CompletedTask;
 
@@ -226,8 +246,17 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     [EventHandler]
     public async Task HandleChatEnd(TextMessageEndEvent evt)
     {
+        Logger.LogWarning(
+            "[ChannelBot] HandleChatEnd: actor={ActorId}, sessionId={SessionId}, content_length={ContentLength}, pending_count={PendingCount}",
+            Id, evt.SessionId, evt.Content?.Length ?? 0, State.PendingSessions.Count);
+
         if (string.IsNullOrEmpty(evt.SessionId) || !State.PendingSessions.TryGetValue(evt.SessionId, out var session))
+        {
+            Logger.LogWarning(
+                "[ChannelBot] HandleChatEnd: session not found, skipping. actor={ActorId}, sessionId={SessionId}",
+                Id, evt.SessionId);
             return;
+        }
 
         var replyText = _responseBuilders.TryGetValue(evt.SessionId, out var builder)
             ? builder.ToString()
@@ -244,8 +273,17 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleChatTimeout(ChannelChatTimeoutEvent evt)
     {
+        Logger.LogWarning(
+            "[ChannelBot] HandleChatTimeout: actor={ActorId}, sessionId={SessionId}, pending_count={PendingCount}",
+            Id, evt.SessionId, State.PendingSessions.Count);
+
         if (!State.PendingSessions.TryGetValue(evt.SessionId, out var session))
+        {
+            Logger.LogWarning(
+                "[ChannelBot] HandleChatTimeout: session not found (already completed). actor={ActorId}, sessionId={SessionId}",
+                Id, evt.SessionId);
             return; // Already completed
+        }
 
         var partial = _responseBuilders.TryGetValue(evt.SessionId, out var builder)
             ? builder.ToString()
@@ -274,6 +312,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     {
         if (string.IsNullOrWhiteSpace(replyText))
             replyText = "Sorry, I wasn't able to generate a response. Please try again.";
+
+        Logger.LogWarning(
+            "[ChannelBot] SendReplyAndComplete: actor={ActorId}, sessionId={SessionId}, platform={Platform}, reply_length={ReplyLength}, forceComplete={ForceComplete}",
+            Id, session.SessionId, session.Platform, replyText.Length, forceComplete);
 
         // Send reply via platform adapter.
         var replySucceeded = false;
@@ -310,6 +352,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // Persist completion (removes from pending_sessions via state transition)
         await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = session.SessionId });
         _responseBuilders.Remove(session.SessionId);
+
+        Logger.LogWarning(
+            "[ChannelBot] Session completed: actor={ActorId}, sessionId={SessionId}, reply_succeeded={ReplySucceeded}",
+            Id, session.SessionId, replySucceeded);
 
         // Cancel timeout if still pending
         if (_timeoutLeases.Remove(session.SessionId, out var lease))
