@@ -167,7 +167,20 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 Direct = new DirectRoute { TargetActorId = chatActor.Id },
             },
         };
-        await chatActor.HandleEventAsync(chatEnvelope);
+        try
+        {
+            await chatActor.HandleEventAsync(chatEnvelope);
+        }
+        catch (Exception ex)
+        {
+            // Dispatch failed — clean up the persisted session so Lark retries
+            // aren't blocked by the PendingSessions dedup check.
+            Logger.LogError(ex, "Chat dispatch failed for session {SessionId}, cleaning up", sessionId);
+            RecordDiagnostic("Chat:dispatch-error", evt.Platform, evt.RegistrationId,
+                $"sessionId={sessionId} error={ex.GetType().Name}");
+            await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = sessionId });
+            return;
+        }
 
         // 7. Record successful dispatch in dedup set.
         if (!string.IsNullOrEmpty(evt.MessageId))
@@ -183,11 +196,20 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         }
 
         // 8. Schedule timeout (120s) — fires ChannelChatTimeoutEvent as self-message
-        var lease = await ScheduleSelfDurableTimeoutAsync(
-            $"chat-timeout-{sessionId}",
-            TimeSpan.FromSeconds(120),
-            new ChannelChatTimeoutEvent { SessionId = sessionId });
-        _timeoutLeases[sessionId] = lease;
+        try
+        {
+            var lease = await ScheduleSelfDurableTimeoutAsync(
+                $"chat-timeout-{sessionId}",
+                TimeSpan.FromSeconds(120),
+                new ChannelChatTimeoutEvent { SessionId = sessionId });
+            _timeoutLeases[sessionId] = lease;
+        }
+        catch (Exception ex)
+        {
+            // Chat was already dispatched — response will still arrive via
+            // HandleChatEnd. We just lose the timeout safety net for this session.
+            Logger.LogWarning(ex, "Failed to schedule timeout for session {SessionId}", sessionId);
+        }
 
         // RETURN — end turn. Continuation happens in HandleChatContent/HandleChatEnd.
     }
