@@ -127,7 +127,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // same inbound event produce the same sessionId → same timeout key, so the
         // scheduler upserts instead of accumulating orphan durable timeouts.
         var sessionId = !string.IsNullOrEmpty(evt.MessageId)
-            ? evt.MessageId
+            ? DeriveSessionId(evt.MessageId)
             : Guid.NewGuid().ToString("N");
         var lease = await ScheduleSelfDurableTimeoutAsync(
             $"chat-timeout-{sessionId}",
@@ -354,6 +354,21 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
+    }
+
+    // ─── Helpers ───
+
+    /// <summary>
+    /// Derives a deterministic GUID-format sessionId from a messageId.
+    /// Same messageId always produces the same sessionId, so Orleans stream
+    /// retries reuse the same timeout key (scheduler upserts, no orphans).
+    /// Output is 32 hex chars — same format as Guid.NewGuid().ToString("N").
+    /// </summary>
+    private static string DeriveSessionId(string messageId)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes(messageId));
+        return new Guid(hash[..16]).ToString("N");
     }
 
     // ─── State transitions ───
