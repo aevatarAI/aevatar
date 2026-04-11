@@ -208,12 +208,18 @@ public static class ChannelCallbackEndpoints
         // Uses the same subscribe+wait pattern as NyxIdChatEndpoints.
         try
         {
+            RecordDiagnostic(services, "Chat:start", inbound.Platform, registration.Id);
             var replyText = await DispatchChatAndCollectAsync(inbound, registration, services);
+            RecordDiagnostic(services, "Chat:done", inbound.Platform, registration.Id,
+                $"reply_length={replyText?.Length}");
             await SendPlatformReplyAsync(replyText, inbound, registration, services);
+            RecordDiagnostic(services, "Reply:done", inbound.Platform, registration.Id);
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Channel chat+reply failed: platform={Platform}", inbound.Platform);
+            RecordDiagnostic(services, "Chat:error", inbound.Platform, registration.Id,
+                $"{ex.GetType().Name}: {ex.Message}");
             try
             {
                 await SendPlatformReplyAsync(
@@ -225,6 +231,34 @@ public static class ChannelCallbackEndpoints
                     "Error reply also failed: platform={Platform}, originalError={OriginalError}",
                     inbound.Platform, ex.Message);
             }
+        }
+    }
+
+    private static void RecordDiagnostic(
+        IServiceProvider services, string stage, string platform, string registrationId,
+        string? detail = null)
+    {
+        var cache = services.GetService<IMemoryCache>();
+        if (cache == null) return;
+
+        var entries = cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
+            return new List<object>();
+        })!;
+
+        lock (entries)
+        {
+            entries.Add(new
+            {
+                timestamp = DateTimeOffset.UtcNow.ToString("O"),
+                stage,
+                platform,
+                registrationId,
+                detail,
+            });
+            while (entries.Count > 50)
+                entries.RemoveAt(0);
         }
     }
 

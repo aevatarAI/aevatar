@@ -192,7 +192,19 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
             extraHeaders: null,
             ct);
 
-        _logger.LogInformation("Lark outbound reply sent: chat={ChatId}, slug={Slug}, result_length={Length}",
-            inbound.ConversationId, registration.NyxProviderSlug, result?.Length ?? 0);
+        // Check for proxy/API errors — ProxyRequestAsync returns error JSON
+        // ({"error": true, ...}) instead of throwing on 4xx/5xx responses.
+        if (result != null && result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "Lark outbound reply may have failed: chat={ChatId}, slug={Slug}, result={Result}",
+                inbound.ConversationId, registration.NyxProviderSlug, result);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Lark outbound reply sent: chat={ChatId}, slug={Slug}, result_length={Length}",
+                inbound.ConversationId, registration.NyxProviderSlug, result?.Length ?? 0);
+        }
     }
 }
