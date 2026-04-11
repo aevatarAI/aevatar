@@ -34,6 +34,9 @@ namespace Aevatar.GAgents.ChannelRuntime;
 /// </summary>
 public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 {
+    private static readonly TimeSpan ChatTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan RecoveryTimeoutDelay = TimeSpan.FromMilliseconds(1);
+
     // Non-persisted accumulator for streaming text deltas.
     // Actor is single-threaded — plain Dictionary is correct (no locks).
     private readonly Dictionary<string, StringBuilder> _responseBuilders = new();
@@ -56,6 +59,17 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             .On<ChannelChatRequestedEvent>(ApplyRequested)
             .On<ChannelChatCompletedEvent>(ApplyCompleted)
             .OrCurrent();
+
+    protected override async Task OnActivateAsync(CancellationToken ct)
+    {
+        if (State.PendingSessions.Count == 0)
+            return;
+
+        foreach (var session in State.PendingSessions.Values)
+        {
+            await RecoverPendingSessionAsync(session, ct);
+        }
+    }
 
     // ─── Turn 1: Inbound message → dispatch chat request ───
 
@@ -104,18 +118,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // Events published with TopologyAudience.Parent (no parent → own stream)
         // are forwarded to this actor's stream, arriving as separate grain turns.
         var streams = Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
-        await streams.GetStream(chatActorId).UpsertRelayAsync(new StreamForwardingBinding
-        {
-            SourceStreamId = chatActorId,
-            TargetStreamId = Id,
-            ForwardingMode = StreamForwardingMode.HandleThenForward,
-            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Parent },
-            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal)
-            {
-                Google.Protobuf.WellKnownTypes.Any.Pack(new TextMessageContentEvent()).TypeUrl,
-                Google.Protobuf.WellKnownTypes.Any.Pack(new TextMessageEndEvent()).TypeUrl,
-            },
-        });
+        await streams.GetStream(chatActorId).UpsertRelayAsync(BuildChatRelayBinding(chatActorId));
 
         // 5. Schedule timeout BEFORE persisting the session. If this fails,
         // nothing has been persisted — no session to strand, no cleanup needed.
@@ -129,62 +132,42 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         var sessionId = !string.IsNullOrEmpty(evt.MessageId)
             ? DeriveSessionId(evt.MessageId)
             : Guid.NewGuid().ToString("N");
+        var timeoutAt = DateTimeOffset.UtcNow.Add(ChatTimeout);
         var lease = await ScheduleSelfDurableTimeoutAsync(
             $"chat-timeout-{sessionId}",
-            TimeSpan.FromSeconds(120),
+            ChatTimeout,
             new ChannelChatTimeoutEvent { SessionId = sessionId });
         _timeoutLeases[sessionId] = lease;
+
+        var pendingSession = new ChannelPendingChatSession
+        {
+            SessionId = sessionId,
+            ChatActorId = chatActorId,
+            OrgToken = orgToken,
+            Platform = evt.Platform,
+            ConversationId = evt.ConversationId,
+            SenderId = evt.SenderId,
+            SenderName = evt.SenderName,
+            MessageId = evt.MessageId,
+            ChatType = evt.ChatType,
+            RegistrationId = evt.RegistrationId,
+            NyxProviderSlug = evt.NyxProviderSlug,
+            RegistrationScopeId = evt.RegistrationScopeId,
+            Prompt = evt.Text,
+            TimeoutAt = Timestamp.FromDateTimeOffset(timeoutAt),
+        };
 
         // 6. Persist chat request with full replay context (durable — survives restart).
         // State.PendingSessions is populated by ApplyRequested via event sourcing.
         await PersistDomainEventAsync(new ChannelChatRequestedEvent
         {
-            Session = new ChannelPendingChatSession
-            {
-                SessionId = sessionId,
-                ChatActorId = chatActorId,
-                OrgToken = orgToken,
-                Platform = evt.Platform,
-                ConversationId = evt.ConversationId,
-                SenderId = evt.SenderId,
-                SenderName = evt.SenderName,
-                MessageId = evt.MessageId,
-                ChatType = evt.ChatType,
-                RegistrationId = evt.RegistrationId,
-                NyxProviderSlug = evt.NyxProviderSlug,
-                RegistrationScopeId = evt.RegistrationScopeId,
-            },
+            Session = pendingSession,
         });
 
         RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
 
         // 7. Build and dispatch ChatRequestEvent to chat actor
-        var chatRequest = new ChatRequestEvent
-        {
-            Prompt = evt.Text,
-            SessionId = sessionId,
-            ScopeId = evt.RegistrationScopeId,
-        };
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken;
-        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = orgToken;
-        chatRequest.Metadata["scope_id"] = evt.RegistrationScopeId;
-        chatRequest.Metadata[ChannelMetadataKeys.Platform] = evt.Platform;
-        chatRequest.Metadata[ChannelMetadataKeys.SenderId] = evt.SenderId;
-        chatRequest.Metadata[ChannelMetadataKeys.SenderName] = evt.SenderName;
-        chatRequest.Metadata[ChannelMetadataKeys.MessageId] = evt.MessageId;
-        chatRequest.Metadata[ChannelMetadataKeys.ChatType] = evt.ChatType;
-
-        var chatEnvelope = new EventEnvelope
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(chatRequest),
-            Route = new EnvelopeRoute
-            {
-                Direct = new DirectRoute { TargetActorId = chatActor.Id },
-            },
-        };
-        await chatActor.HandleEventAsync(chatEnvelope);
+        await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, ct);
 
         // 8. Record successful dispatch in dedup set.
         if (!string.IsNullOrEmpty(evt.MessageId))
@@ -241,7 +224,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
     // ─── Turn T: Timeout → send partial/timeout reply ───
 
-    [EventHandler(OnlySelfHandling = true)]
+    [EventHandler(AllowSelfHandling = true, OnlySelfHandling = true)]
     public async Task HandleChatTimeout(ChannelChatTimeoutEvent evt)
     {
         if (!State.PendingSessions.TryGetValue(evt.SessionId, out var session))
@@ -356,7 +339,123 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         return await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
     }
 
+    private async Task RecoverPendingSessionAsync(
+        ChannelPendingChatSession session,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(session.SessionId) || string.IsNullOrWhiteSpace(session.ChatActorId))
+            return;
+
+        var timeoutDelay = ComputeRecoveryTimeoutDelay(session, DateTimeOffset.UtcNow, out var shouldRedispatch);
+        var lease = await ScheduleSelfDurableTimeoutAsync(
+            $"chat-timeout-{session.SessionId}",
+            timeoutDelay,
+            new ChannelChatTimeoutEvent { SessionId = session.SessionId },
+            ct: ct);
+        _timeoutLeases[session.SessionId] = lease;
+
+        if (!shouldRedispatch)
+        {
+            RecordDiagnostic("Chat:recover:timeout", session.Platform, session.RegistrationId,
+                $"sessionId={session.SessionId}");
+            return;
+        }
+
+        var actorRuntime = Services.GetRequiredService<IActorRuntime>();
+        var streams = Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
+        var chatActor = await actorRuntime.GetAsync(session.ChatActorId)
+                        ?? await actorRuntime.CreateAsync<NyxIdChatGAgent>(session.ChatActorId, ct);
+
+        await streams.GetStream(session.ChatActorId).UpsertRelayAsync(
+            BuildChatRelayBinding(session.ChatActorId),
+            ct);
+
+        var effectiveToken = !string.IsNullOrEmpty(State.NyxidAccessToken)
+            ? State.NyxidAccessToken
+            : session.OrgToken;
+        await DispatchChatRequestAsync(session, effectiveToken, chatActor, ct);
+
+        RecordDiagnostic("Chat:recover:redispatch", session.Platform, session.RegistrationId,
+            $"sessionId={session.SessionId}");
+    }
+
+    private async Task DispatchChatRequestAsync(
+        ChannelPendingChatSession session,
+        string effectiveToken,
+        IActor chatActor,
+        CancellationToken ct)
+    {
+        var chatRequest = new ChatRequestEvent
+        {
+            Prompt = session.Prompt,
+            SessionId = session.SessionId,
+            ScopeId = session.RegistrationScopeId,
+        };
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdAccessToken] = effectiveToken;
+        chatRequest.Metadata[LLMRequestMetadataKeys.NyxIdOrgToken] = session.OrgToken;
+        chatRequest.Metadata["scope_id"] = session.RegistrationScopeId;
+        chatRequest.Metadata[ChannelMetadataKeys.Platform] = session.Platform;
+        chatRequest.Metadata[ChannelMetadataKeys.SenderId] = session.SenderId;
+        chatRequest.Metadata[ChannelMetadataKeys.SenderName] = session.SenderName;
+        chatRequest.Metadata[ChannelMetadataKeys.MessageId] = session.MessageId;
+        chatRequest.Metadata[ChannelMetadataKeys.ChatType] = session.ChatType;
+
+        var chatEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(chatRequest),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = chatActor.Id },
+            },
+        };
+        await chatActor.HandleEventAsync(chatEnvelope, ct);
+    }
+
     // ─── Helpers ───
+
+    private StreamForwardingBinding BuildChatRelayBinding(string chatActorId) =>
+        new()
+        {
+            SourceStreamId = chatActorId,
+            TargetStreamId = Id,
+            ForwardingMode = StreamForwardingMode.HandleThenForward,
+            DirectionFilter = new HashSet<TopologyAudience> { TopologyAudience.Parent },
+            EventTypeFilter = new HashSet<string>(StringComparer.Ordinal)
+            {
+                Google.Protobuf.WellKnownTypes.Any.Pack(new TextMessageContentEvent()).TypeUrl,
+                Google.Protobuf.WellKnownTypes.Any.Pack(new TextMessageEndEvent()).TypeUrl,
+            },
+        };
+
+    private static TimeSpan ComputeRecoveryTimeoutDelay(
+        ChannelPendingChatSession session,
+        DateTimeOffset now,
+        out bool shouldRedispatch)
+    {
+        if (string.IsNullOrWhiteSpace(session.Prompt))
+        {
+            shouldRedispatch = false;
+            return RecoveryTimeoutDelay;
+        }
+
+        if (session.TimeoutAt == null)
+        {
+            shouldRedispatch = true;
+            return ChatTimeout;
+        }
+
+        var remaining = session.TimeoutAt.ToDateTimeOffset() - now;
+        if (remaining > TimeSpan.Zero)
+        {
+            shouldRedispatch = true;
+            return remaining;
+        }
+
+        shouldRedispatch = false;
+        return RecoveryTimeoutDelay;
+    }
 
     /// <summary>
     /// Derives a deterministic GUID-format sessionId from a messageId.

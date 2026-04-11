@@ -49,6 +49,8 @@ message ChannelPendingChatSession {
   string registration_id = 10;
   string nyx_provider_slug = 11;
   string registration_scope_id = 12;
+  string prompt = 13;
+  google.protobuf.Timestamp timeout_at = 14;
 }
 
 // Domain event: track sender identity on each inbound message
