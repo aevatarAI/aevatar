@@ -113,13 +113,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         chatRequest.Metadata[ChannelMetadataKeys.UserActorId] = Id;
 
         // Subscribe to response stream and wait
-        RecordDiagnostic("CollectChat:start", evt, $"chatActorId={chatActorId}, sessionId={sessionId}");
+        RecordDiagnostic("CollectChat:start", evt, $"sessionId={sessionId}");
         var replyText = await CollectChatResponseAsync(chatActor, chatRequest, sessionId);
         RecordDiagnostic("CollectChat:done", evt, $"reply_length={replyText?.Length}");
 
         // Send reply via platform adapter — always uses org token for bot API
         await SendReplyAsync(evt, replyText, orgToken);
-        RecordDiagnostic("SendReply:done", evt, $"sent to {evt.ConversationId}");
+        RecordDiagnostic("SendReply:done", evt, "reply sent");
     }
 
     private async Task<string> CollectChatResponseAsync(
