@@ -131,13 +131,16 @@ public static class ChannelCallbackEndpoints
         // Phase 1 (sync): identity tracking + dedup — fast, must complete before returning 200.
         // Phase 2 (fire-and-forget): chat + LLM + reply — slow (up to 120s), runs in background.
         // Lark requires 200 within 3 seconds, so Phase 2 MUST NOT block the response.
+        //
+        // IMPORTANT: resolve all singleton services NOW, while http.RequestServices is alive.
+        // After returning 200, the request scope is disposed and services.GetService() throws.
         try
         {
-            var services = http.RequestServices;
-            await DispatchIdentityTrackingAsync(inbound, registration, services);
+            var deps = ChannelChatDeps.FromServices(http.RequestServices);
+            await DispatchIdentityTrackingAsync(inbound, registration, deps);
 
             // Fire-and-forget: chat + reply runs on ThreadPool, not inside any grain.
-            _ = DispatchChatAndReplyInBackgroundAsync(inbound, registration, services);
+            _ = DispatchChatAndReplyInBackgroundAsync(inbound, registration, deps);
 
             return Results.Ok(new { status = "accepted" });
         }
@@ -155,10 +158,10 @@ public static class ChannelCallbackEndpoints
     private static async Task DispatchIdentityTrackingAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IServiceProvider services)
+        ChannelChatDeps deps)
     {
-        var actorRuntime = services.GetRequiredService<IActorRuntime>();
-        var cache = services.GetService<IMemoryCache>();
+        var actorRuntime = deps.ActorRuntime;
+        var cache = deps.Cache;
 
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
@@ -207,64 +210,33 @@ public static class ChannelCallbackEndpoints
     private static async Task DispatchChatAndReplyInBackgroundAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IServiceProvider services)
+        ChannelChatDeps deps)
     {
-        var logger = services.GetRequiredService<ILoggerFactory>()
-            .CreateLogger("Aevatar.ChannelRuntime.Chat");
-
         try
         {
-            RecordDiagnostic(services, "Chat:start", inbound.Platform, registration.Id);
-            var replyText = await DispatchChatAndCollectAsync(inbound, registration, services);
-            RecordDiagnostic(services, "Chat:done", inbound.Platform, registration.Id,
+            deps.RecordDiagnostic("Chat:start", inbound.Platform, registration.Id);
+            var replyText = await DispatchChatAndCollectAsync(inbound, registration, deps);
+            deps.RecordDiagnostic("Chat:done", inbound.Platform, registration.Id,
                 $"reply_length={replyText?.Length}");
-            await SendPlatformReplyAsync(replyText, inbound, registration, services);
-            RecordDiagnostic(services, "Reply:done", inbound.Platform, registration.Id);
+            await SendPlatformReplyAsync(replyText, inbound, registration, deps);
+            deps.RecordDiagnostic("Reply:done", inbound.Platform, registration.Id);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Channel chat+reply failed: platform={Platform}", inbound.Platform);
-            RecordDiagnostic(services, "Chat:error", inbound.Platform, registration.Id,
+            deps.Logger.LogError(ex, "Channel chat+reply failed: platform={Platform}", inbound.Platform);
+            deps.RecordDiagnostic("Chat:error", inbound.Platform, registration.Id,
                 $"{ex.GetType().Name}: {ex.Message}");
             try
             {
                 await SendPlatformReplyAsync(
-                    $"[Error] {ex.GetType().Name}: {ex.Message}", inbound, registration, services);
+                    $"[Error] {ex.GetType().Name}: {ex.Message}", inbound, registration, deps);
             }
             catch (Exception replyEx)
             {
-                logger.LogError(replyEx,
+                deps.Logger.LogError(replyEx,
                     "Error reply also failed: platform={Platform}, originalError={OriginalError}",
                     inbound.Platform, ex.Message);
             }
-        }
-    }
-
-    private static void RecordDiagnostic(
-        IServiceProvider services, string stage, string platform, string registrationId,
-        string? detail = null)
-    {
-        var cache = services.GetService<IMemoryCache>();
-        if (cache == null) return;
-
-        var entries = cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
-        {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
-            return new List<object>();
-        })!;
-
-        lock (entries)
-        {
-            entries.Add(new
-            {
-                timestamp = DateTimeOffset.UtcNow.ToString("O"),
-                stage,
-                platform,
-                registrationId,
-                detail,
-            });
-            while (entries.Count > 50)
-                entries.RemoveAt(0);
         }
     }
 
@@ -276,11 +248,11 @@ public static class ChannelCallbackEndpoints
     private static async Task<string> DispatchChatAndCollectAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IServiceProvider services)
+        ChannelChatDeps deps)
     {
-        var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Aevatar.ChannelRuntime.Chat");
-        var actorRuntime = services.GetRequiredService<IActorRuntime>();
-        var subscriptionProvider = services.GetRequiredService<IActorEventSubscriptionProvider>();
+        var logger = deps.Logger;
+        var actorRuntime = deps.ActorRuntime;
+        var subscriptionProvider = deps.SubscriptionProvider;
         var effectiveToken = registration.NyxUserToken;
 
         var chatActorId = $"channel-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
@@ -360,23 +332,21 @@ public static class ChannelCallbackEndpoints
     }
 
     private static async Task SendPlatformReplyAsync(
-        string replyText,
+        string? replyText,
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
-        IServiceProvider services)
+        ChannelChatDeps deps)
     {
         if (string.IsNullOrWhiteSpace(replyText))
             replyText = "Sorry, I wasn't able to generate a response. Please try again.";
 
-        var adapters = services.GetRequiredService<IEnumerable<IPlatformAdapter>>();
-        var adapter = adapters.FirstOrDefault(a =>
+        var adapter = deps.Adapters.FirstOrDefault(a =>
             string.Equals(a.Platform, inbound.Platform, StringComparison.OrdinalIgnoreCase));
 
         if (adapter is null) return;
 
-        var nyxClient = services.GetRequiredService<NyxIdApiClient>();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await adapter.SendReplyAsync(replyText, inbound, registration, nyxClient, cts.Token);
+        await adapter.SendReplyAsync(replyText, inbound, registration, deps.NyxClient, cts.Token);
     }
 
     // ─── Registration CRUD ───
@@ -640,4 +610,54 @@ public static class ChannelCallbackEndpoints
 public static class ChannelDiagnosticKeys
 {
     public const string RecentErrors = "channel-diag:errors";
+}
+
+/// <summary>
+/// Pre-resolved singleton dependencies for the channel chat pipeline.
+/// Resolved from IServiceProvider while the HTTP request scope is still alive,
+/// then passed by value to the fire-and-forget background task.
+/// </summary>
+internal sealed class ChannelChatDeps
+{
+    public required IActorRuntime ActorRuntime { get; init; }
+    public required IActorEventSubscriptionProvider SubscriptionProvider { get; init; }
+    public required IPlatformAdapter[] Adapters { get; init; }
+    public required NyxIdApiClient NyxClient { get; init; }
+    public required ILogger Logger { get; init; }
+    public required IMemoryCache? Cache { get; init; }
+
+    public static ChannelChatDeps FromServices(IServiceProvider services) => new()
+    {
+        ActorRuntime = services.GetRequiredService<IActorRuntime>(),
+        SubscriptionProvider = services.GetRequiredService<IActorEventSubscriptionProvider>(),
+        Adapters = services.GetServices<IPlatformAdapter>().ToArray(),
+        NyxClient = services.GetRequiredService<NyxIdApiClient>(),
+        Logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("Aevatar.ChannelRuntime.Chat"),
+        Cache = services.GetService<IMemoryCache>(),
+    };
+
+    public void RecordDiagnostic(string stage, string platform, string registrationId, string? detail = null)
+    {
+        if (Cache == null) return;
+
+        var entries = Cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
+            return new List<object>();
+        })!;
+
+        lock (entries)
+        {
+            entries.Add(new
+            {
+                timestamp = DateTimeOffset.UtcNow.ToString("O"),
+                stage,
+                platform,
+                registrationId,
+                detail,
+            });
+            while (entries.Count > 50)
+                entries.RemoveAt(0);
+        }
+    }
 }
