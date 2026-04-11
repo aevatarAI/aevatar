@@ -28,6 +28,7 @@ public static class ChannelCallbackEndpoints
 
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
     }
@@ -62,17 +63,20 @@ public static class ChannelCallbackEndpoints
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
+        var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
 
         // Resolve registration from projection read model
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
         {
             logger.LogWarning("Channel callback for unknown registration: {RegistrationId}", registrationId);
+            RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "registration_not_found");
             return Results.NotFound(new { error = "Registration not found" });
         }
 
         if (!string.Equals(registration.Platform, platform, StringComparison.OrdinalIgnoreCase))
         {
+            RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "platform_mismatch");
             return Results.BadRequest(new { error = "Platform mismatch" });
         }
 
@@ -82,6 +86,7 @@ public static class ChannelCallbackEndpoints
         if (adapter is null)
         {
             logger.LogWarning("No adapter for platform: {Platform}", platform);
+            RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "adapter_not_found");
             return Results.BadRequest(new { error = $"Unsupported platform: {platform}" });
         }
 
@@ -96,6 +101,7 @@ public static class ChannelCallbackEndpoints
         if (inbound is null)
         {
             // Not a processable message (e.g. unsupported event type) — acknowledge silently
+            RecordDiagnostic(diagnostics, "Callback:ignored", platform, registration.Id, "adapter_returned_null");
             return Results.Ok(new { status = "ignored" });
         }
 
@@ -112,6 +118,7 @@ public static class ChannelCallbackEndpoints
             if (cache.TryGetValue(dedupeKey, out _))
             {
                 logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
+                RecordDiagnostic(diagnostics, "Callback:deduplicated", inbound.Platform, registration.Id, "webhook_duplicate");
                 return Results.Ok(new { status = "deduplicated" });
             }
 
@@ -126,6 +133,7 @@ public static class ChannelCallbackEndpoints
         try
         {
             await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache);
+            RecordDiagnostic(diagnostics, "Callback:accepted", inbound.Platform, registration.Id, "dispatch_enqueued");
             // Lark requires exactly HTTP 200 — any other status is treated as failure.
             return Results.Ok(new { status = "accepted" });
         }
@@ -133,6 +141,8 @@ public static class ChannelCallbackEndpoints
         {
             logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
                 inbound.Platform, registration.Id);
+            RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id,
+                $"{ex.GetType().Name}: {ex.Message}");
             return Results.Ok(new { status = "dispatch_error", error = ex.Message });
         }
     }
@@ -429,6 +439,36 @@ public static class ChannelCallbackEndpoints
                 diagnostics,
             }, statusCode: 500);
         }
+    }
+
+    private static Task<IResult> HandleGetDiagnosticErrorsAsync(
+        [FromServices] IChannelRuntimeDiagnostics? diagnostics)
+    {
+        var errors = diagnostics?.GetRecent()
+                     ?? Array.Empty<ChannelRuntimeDiagnosticEntry>();
+
+        return Task.FromResult<IResult>(Results.Ok(new
+        {
+            count = errors.Count,
+            errors = errors.Select(entry => new
+            {
+                timestamp = entry.Timestamp.ToString("O"),
+                stage = entry.Stage,
+                platform = entry.Platform,
+                registrationId = entry.RegistrationId,
+                detail = entry.Detail,
+            }),
+        }));
+    }
+
+    private static void RecordDiagnostic(
+        IChannelRuntimeDiagnostics? diagnostics,
+        string stage,
+        string platform,
+        string registrationId,
+        string? detail = null)
+    {
+        diagnostics?.Record(stage, platform, registrationId, detail);
     }
 
     private sealed record RegistrationRequest(

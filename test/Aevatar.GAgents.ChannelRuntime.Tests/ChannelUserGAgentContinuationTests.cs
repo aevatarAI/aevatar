@@ -261,6 +261,60 @@ public class ChannelUserGAgentContinuationTests
         agent.State.PendingSessions.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task HandleChatEnd_ShouldKeepPendingSession_AndExposeDiagnostics_WhenReplyDeliveryIsRejected()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark")
+        {
+            FailRepliesRemaining = 1,
+            FailureDetail = "lark_code=230002 msg=Bot not in chat",
+        };
+        var diagnostics = new InMemoryChannelRuntimeDiagnostics();
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore(), diagnostics);
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        var request = runtime.SingleChatRequest();
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageContentEvent
+            {
+                SessionId = request.SessionId,
+                Delta = "hello world",
+            }));
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-lark-reg-1-ou_123",
+            TopologyAudience.Parent,
+            new TextMessageEndEvent
+            {
+                SessionId = request.SessionId,
+                Content = "hello world",
+            }));
+
+        adapter.Replies.Should().ContainSingle();
+        agent.State.PendingSessions.Should().ContainSingle();
+        diagnostics.GetRecent().Select(entry => entry.Stage).Should().Contain("Reply:error");
+
+        await agent.HandleEventAsync(BuildTopologyEnvelope(
+            "channel-user-lark-reg-1-ou_123",
+            TopologyAudience.Self,
+            new ChannelChatTimeoutEvent
+            {
+                SessionId = request.SessionId,
+            }));
+
+        adapter.Replies.Should().HaveCount(2);
+        adapter.Replies[1].ReplyText.Should().Be("hello world");
+        agent.State.PendingSessions.Should().BeEmpty();
+        diagnostics.GetRecent().Select(entry => entry.Stage).Should().Contain("Reply:done");
+    }
+
     private static ChannelInboundEvent BuildInboundEvent() => new()
     {
         Text = "hello from lark",
@@ -329,7 +383,8 @@ public class ChannelUserGAgentContinuationTests
         RecordingStreamProvider streams,
         RecordingCallbackScheduler scheduler,
         RecordingPlatformAdapter adapter,
-        IEventStore eventStore)
+        IEventStore eventStore,
+        IChannelRuntimeDiagnostics? diagnostics = null)
     {
         return new ServiceCollection()
             .AddSingleton(eventStore)
@@ -339,6 +394,7 @@ public class ChannelUserGAgentContinuationTests
             .AddSingleton<IStreamProvider>(streams)
             .AddSingleton<IActorRuntimeCallbackScheduler>(scheduler)
             .AddSingleton<IMemoryCache, MemoryCache>(_ => new MemoryCache(new MemoryCacheOptions()))
+            .AddSingleton<IChannelRuntimeDiagnostics>(diagnostics ?? new InMemoryChannelRuntimeDiagnostics())
             .AddSingleton(new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://example.com" }))
             .AddSingleton<IPlatformAdapter>(adapter)
             .BuildServiceProvider();
@@ -543,6 +599,8 @@ public class ChannelUserGAgentContinuationTests
     {
         public string Platform { get; } = platform;
         public List<ReplyRecord> Replies { get; } = [];
+        public int FailRepliesRemaining { get; set; }
+        public string FailureDetail { get; set; } = "reply_rejected";
 
         public Task<IResult?> TryHandleVerificationAsync(HttpContext http, ChannelBotRegistrationEntry registration) =>
             Task.FromResult<IResult?>(null);
@@ -559,6 +617,12 @@ public class ChannelUserGAgentContinuationTests
         {
             ct.ThrowIfCancellationRequested();
             Replies.Add(new ReplyRecord(replyText, inbound, registration));
+            if (FailRepliesRemaining > 0)
+            {
+                FailRepliesRemaining--;
+                return Task.FromResult(new PlatformReplyDeliveryResult(false, FailureDetail));
+            }
+
             return Task.FromResult(new PlatformReplyDeliveryResult(true, "ok"));
         }
     }

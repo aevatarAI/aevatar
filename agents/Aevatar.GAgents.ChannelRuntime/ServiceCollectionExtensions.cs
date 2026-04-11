@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
     {
         // Memory cache for webhook dedup
         services.AddMemoryCache();
+        services.TryAddSingleton<IChannelRuntimeDiagnostics, InMemoryChannelRuntimeDiagnostics>();
 
         // Projection pipeline shared infrastructure
         services.AddProjectionReadModelRuntime();

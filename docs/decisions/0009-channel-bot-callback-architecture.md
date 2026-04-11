@@ -60,7 +60,7 @@ Multiple architectural issues were discovered during implementation (2026-04-11)
 
 **Problem:** Fire-and-forget tasks swallow exceptions. Without log access, failures were invisible.
 
-**Solution:** `ChannelDiagnosticKeys.RecentErrors` — record stage transitions (Chat:start → Chat:done → Reply:done or Reply:error) in `IMemoryCache`, queryable via `GET /api/channels/diagnostics/errors`. Keeps last 50 entries for 1 hour. No PII (no message content, sender IDs, or conversation IDs).
+**Solution:** expose a debug-only in-memory diagnostic sink behind `GET /api/channels/diagnostics/errors`. It records stage transitions (for example `Callback:accepted`, `Chat:start`, `Reply:error`) with bounded retention (last 50 entries / 1 hour). This sink is explicitly non-authoritative and exists only for operational debugging; no business flow depends on it and no PII is recorded.
 
 ## Known Limitations
 

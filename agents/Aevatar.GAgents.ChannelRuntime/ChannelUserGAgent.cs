@@ -76,6 +76,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                     "Failed to recover pending chat session {SessionId} for actor {ActorId}",
                     session.SessionId,
                     Id);
+                RecordDiagnostic("Chat:recover:error", session.Platform, session.RegistrationId,
+                    $"{session.SessionId}: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }
@@ -89,7 +91,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         {
             // 0. Dedup: skip if we've already successfully dispatched this Lark messageId.
             if (!string.IsNullOrEmpty(evt.MessageId) && _processedMessageIds.Contains(evt.MessageId))
+            {
+                RecordDiagnostic("Chat:dedup", evt.Platform, evt.RegistrationId,
+                    $"duplicate messageId={evt.MessageId}");
                 return;
+            }
 
             // A pending session without a processed messageId marker means a prior turn
             // persisted the session but did not finish dispatching ChatRequestEvent.
@@ -97,6 +103,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             var existingPendingSession = FindPendingSessionByMessageId(evt.MessageId);
             if (existingPendingSession != null)
             {
+                RecordDiagnostic("Chat:resume-pending", evt.Platform, evt.RegistrationId,
+                    $"pending messageId={evt.MessageId} sessionId={existingPendingSession.SessionId}");
                 await RecoverPendingSessionAsync(existingPendingSession, CancellationToken.None);
                 return;
             }
@@ -171,6 +179,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 Session = pendingSession,
             });
 
+            RecordDiagnostic("Chat:start", evt.Platform, evt.RegistrationId, $"sessionId={sessionId}");
+
             // 7. Build and dispatch ChatRequestEvent to chat actor
             await DispatchChatRequestAsync(pendingSession, effectiveToken, chatActor, CancellationToken.None);
 
@@ -186,6 +196,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 evt.Platform,
                 evt.RegistrationId,
                 evt.MessageId);
+            RecordDiagnostic("Chat:error", evt.Platform, evt.RegistrationId,
+                $"{ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }
@@ -217,9 +229,12 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (string.IsNullOrEmpty(evt.SessionId) || !State.PendingSessions.TryGetValue(evt.SessionId, out var session))
             return;
 
-        var replyText = _responseBuilders.Remove(evt.SessionId, out var builder)
+        var replyText = _responseBuilders.TryGetValue(evt.SessionId, out var builder)
             ? builder.ToString()
             : evt.Content;
+
+        RecordDiagnostic("Chat:done", session.Platform, session.RegistrationId,
+            $"reply_length={replyText?.Length}");
 
         await SendReplyAndCompleteAsync(session, replyText);
     }
@@ -232,13 +247,16 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         if (!State.PendingSessions.TryGetValue(evt.SessionId, out var session))
             return; // Already completed
 
-        var partial = _responseBuilders.Remove(evt.SessionId, out var builder)
+        var partial = _responseBuilders.TryGetValue(evt.SessionId, out var builder)
             ? builder.ToString()
             : string.Empty;
 
         var replyText = partial.Length > 0
             ? partial
             : "Sorry, it's taking too long to respond. Please try again.";
+
+        RecordDiagnostic("Chat:timeout", session.Platform, session.RegistrationId,
+            $"partial_length={partial.Length}");
 
         await SendReplyAndCompleteAsync(session, replyText);
     }
@@ -251,18 +269,34 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             replyText = "Sorry, I wasn't able to generate a response. Please try again.";
 
         // Send reply via platform adapter
+        PlatformReplyDeliveryResult delivery;
         try
         {
-            await SendPlatformReplyAsync(session, replyText);
+            delivery = await SendPlatformReplyAsync(session, replyText);
+            if (!delivery.Succeeded)
+            {
+                Logger.LogWarning("SendReply rejected: platform={Platform}, session={SessionId}, detail={Detail}",
+                    session.Platform,
+                    session.SessionId,
+                    delivery.Detail);
+                RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId, delivery.Detail);
+                return;
+            }
+
+            RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "SendReply failed: platform={Platform}, session={SessionId}",
                 session.Platform, session.SessionId);
+            RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId,
+                $"{ex.GetType().Name}: {ex.Message}");
+            return;
         }
 
         // Persist completion (removes from pending_sessions via state transition)
         await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = session.SessionId });
+        _responseBuilders.Remove(session.SessionId);
 
         // Cancel timeout if still pending
         if (_timeoutLeases.Remove(session.SessionId, out var lease))
@@ -342,7 +376,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         _timeoutLeases[session.SessionId] = lease;
 
         if (!shouldRedispatch)
+        {
+            RecordDiagnostic("Chat:recover:timeout", session.Platform, session.RegistrationId,
+                $"sessionId={session.SessionId}");
             return;
+        }
 
         var actorRuntime = Services.GetRequiredService<IActorRuntime>();
         var streams = Services.GetRequiredService<Aevatar.Foundation.Abstractions.IStreamProvider>();
@@ -358,6 +396,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             : session.OrgToken;
         await DispatchChatRequestAsync(session, effectiveToken, chatActor, ct);
         TrackProcessedMessageId(session.MessageId);
+        RecordDiagnostic("Chat:recover:redispatch", session.Platform, session.RegistrationId,
+            $"sessionId={session.SessionId}");
     }
 
     private async Task DispatchChatRequestAsync(
@@ -516,5 +556,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         var next = current.Clone();
         next.PendingSessions.Remove(evt.SessionId);
         return next;
+    }
+
+    private void RecordDiagnostic(string stage, string platform, string registrationId, string? detail = null)
+    {
+        Services.GetService<IChannelRuntimeDiagnostics>()?.Record(stage, platform, registrationId, detail);
     }
 }
