@@ -35,7 +35,7 @@ public static class ChannelCallbackEndpoints
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
 
-        // Diagnostic: view recent actor errors (stored in IMemoryCache by ChannelUserGAgent)
+        // Diagnostic: view recent chat/reply diagnostics (recorded by ChannelChatDeps.RecordDiagnostic)
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
 
         return app;
@@ -614,8 +614,8 @@ public static class ChannelCallbackEndpoints
     }
 
     /// <summary>
-    /// Returns recent actor errors from memory cache.
-    /// ChannelUserGAgent stores errors under "channel-diag:errors" key.
+    /// Returns recent diagnostic entries from memory cache (chat stages, timings, errors).
+    /// Populated by ChannelChatDeps.RecordDiagnostic during chat and reply phases.
     /// </summary>
     private static Task<IResult> HandleGetDiagnosticErrorsAsync(
         [FromServices] IMemoryCache? cache)
