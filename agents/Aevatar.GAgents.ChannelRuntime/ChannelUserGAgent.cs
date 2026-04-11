@@ -39,7 +39,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     public async Task HandleInbound(ChannelInboundEvent evt)
     {
         RecordDiagnostic("HandleInbound:enter", evt,
-            $"text_length={evt.Text?.Length}, registration={evt.RegistrationId}, token_present={!string.IsNullOrEmpty(evt.RegistrationToken)}");
+            $"registration={evt.RegistrationId}, token_present={!string.IsNullOrEmpty(evt.RegistrationToken)}");
 
         // 1. Track sender identity
         await PersistDomainEventAsync(new ChannelUserTrackedEvent
@@ -115,7 +115,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // Subscribe to response stream and wait
         RecordDiagnostic("CollectChat:start", evt, $"chatActorId={chatActorId}, sessionId={sessionId}");
         var replyText = await CollectChatResponseAsync(chatActor, chatRequest, sessionId);
-        RecordDiagnostic("CollectChat:done", evt, $"reply_length={replyText?.Length}, preview={Truncate(replyText, 100)}");
+        RecordDiagnostic("CollectChat:done", evt, $"reply_length={replyText?.Length}");
 
         // Send reply via platform adapter — always uses org token for bot API
         await SendReplyAsync(evt, replyText, orgToken);
@@ -279,7 +279,6 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 timestamp = DateTimeOffset.UtcNow.ToString("O"),
                 stage,
                 platform = evt.Platform,
-                senderId = evt.SenderId,
                 registrationId = evt.RegistrationId,
                 detail,
             });
@@ -288,6 +287,4 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         }
     }
 
-    private static string? Truncate(string? s, int maxLen) =>
-        s is null ? null : s.Length <= maxLen ? s : s[..maxLen] + "...";
 }
