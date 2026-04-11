@@ -112,7 +112,7 @@ public static class ChannelCallbackEndpoints
             if (cache.TryGetValue(dedupeKey, out _))
             {
                 logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
-                return Results.Accepted(value: new { status = "deduplicated" });
+                return Results.Ok(new { status = "deduplicated" });
             }
 
             // Short TTL blocks concurrent duplicates; extended after successful dispatch.
@@ -124,14 +124,16 @@ public static class ChannelCallbackEndpoints
         try
         {
             await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache, loggerFactory);
-            return Results.Accepted(value: new { status = "accepted" });
+            // Lark requires exactly HTTP 200 — any other status (including 202) is treated as failure.
+            return Results.Ok(new { status = "accepted" });
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
                 inbound.Platform, registration.Id);
-            // Return error detail so curl-based debugging can see what broke
-            return Results.Json(new { status = "dispatch_error", error = ex.Message }, statusCode: 202);
+            // Return 200 even on error — Lark treats non-200 as failure and retries.
+            // The error is logged server-side; the dispatch will retry via Lark's retry mechanism.
+            return Results.Ok(new { status = "dispatch_error", error = ex.Message });
         }
     }
 
