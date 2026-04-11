@@ -145,10 +145,24 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // a cleanup path. If dispatch fails, the timeout fires after 120s and
         // cleans up the stranded session. If dispatch succeeds, the timeout is
         // the normal safety net for slow LLM responses.
-        var lease = await ScheduleSelfDurableTimeoutAsync(
-            $"chat-timeout-{sessionId}",
-            TimeSpan.FromSeconds(120),
-            new ChannelChatTimeoutEvent { SessionId = sessionId });
+        // If scheduling itself fails, clean up the session immediately — no event
+        // has been dispatched yet, so there's no partial-delivery risk.
+        RuntimeCallbackLease lease;
+        try
+        {
+            lease = await ScheduleSelfDurableTimeoutAsync(
+                $"chat-timeout-{sessionId}",
+                TimeSpan.FromSeconds(120),
+                new ChannelChatTimeoutEvent { SessionId = sessionId });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Timeout scheduling failed for session {SessionId}, aborting", sessionId);
+            RecordDiagnostic("Chat:timeout-schedule-error", evt.Platform, evt.RegistrationId,
+                $"sessionId={sessionId} error={ex.GetType().Name}");
+            await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = sessionId });
+            return;
+        }
         _timeoutLeases[sessionId] = lease;
 
         // 7. Build and dispatch ChatRequestEvent to chat actor
