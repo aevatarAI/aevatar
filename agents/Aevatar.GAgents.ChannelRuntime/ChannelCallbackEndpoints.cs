@@ -116,35 +116,20 @@ public static class ChannelCallbackEndpoints
             cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
         }
 
-        // Return 202 Accepted immediately — process async in background.
-        // Platforms like Lark have ~5s webhook timeout; we can't wait for LLM response.
-        // Note: Task.Run is a Phase 1 pragmatic compromise. Phase 2 refactors to actor
-        // self-message dispatch to comply with CLAUDE.md actor execution model.
-        _ = Task.Run(async () =>
+        // Dispatch to user actor. HandleEventAsync enqueues the event into the actor's
+        // inbox. The user actor processes inbound → chat → LLM → reply asynchronously.
+        try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-            try
-            {
-                await DispatchToUserActorAsync(
-                    inbound, registration, actorRuntime, cache, loggerFactory, cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                var bgLogger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
-                bgLogger.LogWarning(
-                    "Channel inbound dispatch timed out: platform={Platform}, registrationId={RegistrationId}",
-                    inbound.Platform, registration.Id);
-            }
-            catch (Exception ex)
-            {
-                var bgLogger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
-                bgLogger.LogError(ex,
-                    "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
-                    inbound.Platform, registration.Id);
-            }
-        });
-
-        return Results.Accepted(value: new { status = "accepted" });
+            await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache, loggerFactory);
+            return Results.Accepted(value: new { status = "accepted" });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
+                inbound.Platform, registration.Id);
+            // Return error detail so curl-based debugging can see what broke
+            return Results.Json(new { status = "dispatch_error", error = ex.Message }, statusCode: 202);
+        }
     }
 
     /// <summary>
@@ -156,8 +141,7 @@ public static class ChannelCallbackEndpoints
         ChannelBotRegistrationEntry registration,
         IActorRuntime actorRuntime,
         IMemoryCache? cache,
-        ILoggerFactory loggerFactory,
-        CancellationToken ct = default)
+        ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
 
