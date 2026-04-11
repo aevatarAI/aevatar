@@ -167,20 +167,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
                 Direct = new DirectRoute { TargetActorId = chatActor.Id },
             },
         };
-        try
-        {
-            await chatActor.HandleEventAsync(chatEnvelope);
-        }
-        catch (Exception ex)
-        {
-            // Dispatch failed — clean up the persisted session so Lark retries
-            // aren't blocked by the PendingSessions dedup check.
-            Logger.LogError(ex, "Chat dispatch failed for session {SessionId}, cleaning up", sessionId);
-            RecordDiagnostic("Chat:dispatch-error", evt.Platform, evt.RegistrationId,
-                $"sessionId={sessionId} error={ex.GetType().Name}");
-            await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = sessionId });
-            return;
-        }
+        await chatActor.HandleEventAsync(chatEnvelope);
+        // HandleEventAsync is non-blocking (stream publish). If it throws,
+        // the exception propagates and the turn fails — but the session stays
+        // in PendingSessions so the timeout (step 8) will clean it up.
+        // Do NOT persist ChannelChatCompletedEvent here: under InMemory runtime,
+        // partial delivery is possible (event reached subscriber before throw),
+        // so premature cleanup would cause HandleChatEnd to drop the real reply.
 
         // 7. Record successful dispatch in dedup set.
         if (!string.IsNullOrEmpty(evt.MessageId))
