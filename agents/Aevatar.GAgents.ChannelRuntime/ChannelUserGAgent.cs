@@ -41,6 +41,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     // Timeout leases keyed by sessionId — needed to cancel on completion.
     private readonly Dictionary<string, RuntimeCallbackLease> _timeoutLeases = new();
 
+    // In-memory dedup: prevents duplicate HandleInbound for the same Lark messageId.
+    // Covers Lark webhook retries and any stream-level redelivery within the same
+    // grain activation. Bounded to prevent unbounded growth.
+    private const int MaxProcessedMessageIds = 200;
+    private readonly LinkedList<string> _processedMessageIdsOrder = new();
+    private readonly HashSet<string> _processedMessageIds = new(StringComparer.Ordinal);
+
     protected override ChannelUserState TransitionState(ChannelUserState current, IMessage evt) =>
         StateTransitionMatcher
             .Match(current, evt)
@@ -55,6 +62,24 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
     [EventHandler]
     public async Task HandleInbound(ChannelInboundEvent evt)
     {
+        // 0. Dedup: skip if we've already successfully dispatched this Lark messageId.
+        if (!string.IsNullOrEmpty(evt.MessageId) && _processedMessageIds.Contains(evt.MessageId))
+        {
+            RecordDiagnostic("Chat:dedup", evt.Platform, evt.RegistrationId,
+                $"duplicate messageId={evt.MessageId}");
+            return;
+        }
+
+        // Also check pending sessions — catches duplicates that arrive while
+        // a previous session for the same message is still in-flight.
+        if (!string.IsNullOrEmpty(evt.MessageId) &&
+            State.PendingSessions.Values.Any(s => s.MessageId == evt.MessageId))
+        {
+            RecordDiagnostic("Chat:dedup-pending", evt.Platform, evt.RegistrationId,
+                $"pending messageId={evt.MessageId}");
+            return;
+        }
+
         // 1. Track sender identity
         await PersistDomainEventAsync(new ChannelUserTrackedEvent
         {
@@ -144,7 +169,20 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         };
         await chatActor.HandleEventAsync(chatEnvelope);
 
-        // 7. Schedule timeout (120s) — fires ChannelChatTimeoutEvent as self-message
+        // 7. Record successful dispatch in dedup set.
+        if (!string.IsNullOrEmpty(evt.MessageId))
+        {
+            _processedMessageIds.Add(evt.MessageId);
+            _processedMessageIdsOrder.AddLast(evt.MessageId);
+            while (_processedMessageIdsOrder.Count > MaxProcessedMessageIds)
+            {
+                var oldest = _processedMessageIdsOrder.First!.Value;
+                _processedMessageIdsOrder.RemoveFirst();
+                _processedMessageIds.Remove(oldest);
+            }
+        }
+
+        // 8. Schedule timeout (120s) — fires ChannelChatTimeoutEvent as self-message
         var lease = await ScheduleSelfDurableTimeoutAsync(
             $"chat-timeout-{sessionId}",
             TimeSpan.FromSeconds(120),
