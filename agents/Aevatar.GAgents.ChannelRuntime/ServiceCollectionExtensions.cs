@@ -110,6 +110,14 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    /// <summary>
+    /// Detects whether Elasticsearch is the projection store.
+    /// Reuses the same detection logic as Scripting projections:
+    /// explicit Enabled=true, or auto-detect from Endpoints presence.
+    /// When configuration is null (unit tests), falls back to InMemory.
+    /// When configuration is present but ES is not configured, logs a warning
+    /// because production should always use ES.
+    /// </summary>
     private static bool ResolveElasticsearchEnabled(IConfiguration? configuration)
     {
         if (configuration == null) return false;
@@ -120,8 +128,19 @@ public static class ServiceCollectionExtensions
             return string.Equals(explicitEnabled.Trim(), "true", StringComparison.OrdinalIgnoreCase);
 
         // Auto-detect: if endpoints are configured, ES is enabled
-        return section.GetSection("Endpoints").GetChildren()
+        var hasEndpoints = section.GetSection("Endpoints").GetChildren()
             .Any(x => !string.IsNullOrWhiteSpace(x.Value));
+
+        if (!hasEndpoints)
+        {
+            // Not a test (configuration is present) but no ES configured.
+            // This is expected for local dev, but a misconfiguration in prod.
+            Console.Error.WriteLine(
+                "[WARN] ChannelRuntime: Elasticsearch not configured — using volatile InMemory projection store. " +
+                "Registration data will be lost on restart. Set Projection:Document:Providers:Elasticsearch:Enabled=true for production.");
+        }
+
+        return hasEndpoints;
     }
 
     private static Aevatar.CQRS.Projection.Providers.Elasticsearch.Configuration.ElasticsearchProjectionDocumentStoreOptions
