@@ -26,6 +26,9 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
+        // Diagnostic: test reply path without going through full LLM chat
+        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+
         return app;
     }
 
@@ -334,6 +337,94 @@ public static class ChannelCallbackEndpoints
         return Results.Ok(new { status = "deleted" });
     }
 
+    /// <summary>
+    /// Diagnostic: sends a test reply directly through the platform adapter,
+    /// bypassing the full LLM chat flow. Isolates whether the reply path
+    /// (NyxID proxy → platform API) is working.
+    /// </summary>
+    private static async Task<IResult> HandleTestReplyAsync(
+        HttpContext http,
+        string registrationId,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IEnumerable<IPlatformAdapter> adapters,
+        [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Diagnostic");
+
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        // Read optional test parameters from body
+        TestReplyRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<TestReplyRequest>(ct);
+        }
+        catch
+        {
+            request = null;
+        }
+
+        var chatId = request?.ChatId;
+        var message = request?.Message ?? "[Aevatar Test] Reply path is working.";
+
+        if (string.IsNullOrWhiteSpace(chatId))
+            return Results.BadRequest(new
+            {
+                error = "chat_id is required",
+                hint = "Send { \"chat_id\": \"oc_xxx\", \"message\": \"hello\" }. " +
+                       "Get chat_id from Lark webhook payload event.message.chat_id.",
+            });
+
+        // Diagnostic: show what we're about to send
+        var diagnostics = new
+        {
+            registration_id = registration.Id,
+            platform = registration.Platform,
+            nyx_provider_slug = registration.NyxProviderSlug,
+            nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.NyxUserToken),
+            nyx_user_token_length = registration.NyxUserToken?.Length ?? 0,
+            scope_id = registration.ScopeId,
+            target_chat_id = chatId,
+        };
+
+        var adapter = adapters.FirstOrDefault(a =>
+            string.Equals(a.Platform, registration.Platform, StringComparison.OrdinalIgnoreCase));
+        if (adapter is null)
+            return Results.BadRequest(new { error = $"No adapter for platform: {registration.Platform}", diagnostics });
+
+        var inbound = new InboundMessage
+        {
+            Platform = registration.Platform,
+            ConversationId = chatId,
+            SenderId = "test-diagnostic",
+            SenderName = "test-diagnostic",
+            Text = "test",
+            ChatType = "p2p",
+        };
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
+            return Results.Ok(new { status = "sent", diagnostics, message });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Test reply failed for registration {RegistrationId}", registrationId);
+            return Results.Json(new
+            {
+                status = "error",
+                error = ex.Message,
+                error_type = ex.GetType().Name,
+                diagnostics,
+            }, statusCode: 500);
+        }
+    }
+
     private sealed record RegistrationRequest(
         string? Platform,
         string? NyxProviderSlug,
@@ -341,4 +432,6 @@ public static class ChannelCallbackEndpoints
         string? VerificationToken,
         string? ScopeId,
         string? WebhookBaseUrl);
+
+    private sealed record TestReplyRequest(string? ChatId, string? Message);
 }

@@ -61,7 +61,18 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         {
             Logger.LogError(ex, "HandleInbound failed: platform={Platform}, sender={SenderId}", evt.Platform, evt.SenderId);
             // Send error back to user via bot so we can see what broke
-            await SendReplyAsync(evt, $"[Error] {ex.GetType().Name}: {ex.Message}", orgToken);
+            try
+            {
+                await SendReplyAsync(evt, $"[Error] {ex.GetType().Name}: {ex.Message}", orgToken);
+            }
+            catch (Exception replyEx)
+            {
+                // If sending the error reply also fails, log both errors
+                // so the failure is never completely silent.
+                Logger.LogError(replyEx,
+                    "SendReplyAsync also failed while reporting error: platform={Platform}, sender={SenderId}, originalError={OriginalError}",
+                    evt.Platform, evt.SenderId, ex.Message);
+            }
         }
     }
 
