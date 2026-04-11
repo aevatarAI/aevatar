@@ -141,6 +141,10 @@ public static class ChannelCallbackEndpoints
             await DispatchIdentityTrackingAsync(inbound, registration, deps);
 
             // Fire-and-forget: chat + reply runs on ThreadPool, not inside any grain.
+            // KNOWN LIMITATION: at-most-once delivery — if the process crashes after
+            // returning 200 but before the task completes, the message is lost (Lark
+            // won't retry a 200'd webhook). Durable fix: persist inbound event to
+            // grain event store before returning 200, process via continuation/replay.
             _ = DispatchChatAndReplyInBackgroundAsync(inbound, registration, deps);
 
             return Results.Ok(new { status = "accepted" });
