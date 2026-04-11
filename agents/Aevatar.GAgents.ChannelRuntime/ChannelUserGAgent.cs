@@ -236,7 +236,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         RecordDiagnostic("Chat:done", session.Platform, session.RegistrationId,
             $"reply_length={replyText?.Length}");
 
-        await SendReplyAndCompleteAsync(session, replyText);
+        await SendReplyAndCompleteAsync(session, replyText, forceComplete: false);
     }
 
     // ─── Turn T: Timeout → send partial/timeout reply ───
@@ -258,25 +258,31 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         RecordDiagnostic("Chat:timeout", session.Platform, session.RegistrationId,
             $"partial_length={partial.Length}");
 
-        await SendReplyAndCompleteAsync(session, replyText);
+        // Timeout is the last chance — always complete to prevent permanent stranding.
+        await SendReplyAndCompleteAsync(session, replyText, forceComplete: true);
     }
 
     // ─── Shared: send reply + persist completion + cleanup ───
 
-    private async Task SendReplyAndCompleteAsync(ChannelPendingChatSession session, string? replyText)
+    /// <param name="forceComplete">
+    /// When false (HandleChatEnd): reply failure skips completion so the timeout
+    /// can retry later. When true (HandleChatTimeout): always completes to prevent
+    /// permanent session stranding — no further retry exists.
+    /// </param>
+    private async Task SendReplyAndCompleteAsync(
+        ChannelPendingChatSession session, string? replyText, bool forceComplete)
     {
         if (string.IsNullOrWhiteSpace(replyText))
             replyText = "Sorry, I wasn't able to generate a response. Please try again.";
 
         // Send reply via platform adapter.
-        // Always proceed to persist completion regardless of reply outcome —
-        // returning early on failure strands the session in PendingSessions
-        // with no cleanup path, blocking all future messages for this messageId.
+        var replySucceeded = false;
         try
         {
             var delivery = await SendPlatformReplyAsync(session, replyText);
             if (delivery.Succeeded)
             {
+                replySucceeded = true;
                 RecordDiagnostic("Reply:done", session.Platform, session.RegistrationId, delivery.Detail);
             }
             else
@@ -295,6 +301,11 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             RecordDiagnostic("Reply:error", session.Platform, session.RegistrationId,
                 $"{ex.GetType().Name}: {ex.Message}");
         }
+
+        // On reply failure from HandleChatEnd, keep the session open so the
+        // timeout can retry. On timeout (forceComplete), always complete.
+        if (!replySucceeded && !forceComplete)
+            return;
 
         // Persist completion (removes from pending_sessions via state transition)
         await PersistDomainEventAsync(new ChannelChatCompletedEvent { SessionId = session.SessionId });
