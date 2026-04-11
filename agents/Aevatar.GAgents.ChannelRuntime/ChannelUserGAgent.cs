@@ -122,7 +122,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         // The exception propagates, the turn fails, and Orleans stream redelivery
         // can retry the whole flow (endpoint-level dedup doesn't apply to stream
         // retries). HandleChatTimeout tolerates a missing session (no-op).
-        var sessionId = Guid.NewGuid().ToString("N");
+        //
+        // SessionId is deterministic when messageId is available: retries of the
+        // same inbound event produce the same sessionId → same timeout key, so the
+        // scheduler upserts instead of accumulating orphan durable timeouts.
+        var sessionId = !string.IsNullOrEmpty(evt.MessageId)
+            ? evt.MessageId
+            : Guid.NewGuid().ToString("N");
         var lease = await ScheduleSelfDurableTimeoutAsync(
             $"chat-timeout-{sessionId}",
             TimeSpan.FromSeconds(120),
