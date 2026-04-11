@@ -10,6 +10,7 @@ using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.GAgents.NyxidChat;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -60,6 +61,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         catch (Exception ex)
         {
             Logger.LogError(ex, "HandleInbound failed: platform={Platform}, sender={SenderId}", evt.Platform, evt.SenderId);
+            RecordDiagnosticError(evt, "HandleInbound", ex);
+
             // Send error back to user via bot so we can see what broke
             try
             {
@@ -67,11 +70,10 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             }
             catch (Exception replyEx)
             {
-                // If sending the error reply also fails, log both errors
-                // so the failure is never completely silent.
                 Logger.LogError(replyEx,
                     "SendReplyAsync also failed while reporting error: platform={Platform}, sender={SenderId}, originalError={OriginalError}",
                     evt.Platform, evt.SenderId, ex.Message);
+                RecordDiagnosticError(evt, "SendReplyAsync", replyEx, ex.Message);
             }
         }
     }
@@ -249,5 +251,43 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         next.NyxidUserId = evt.NyxidUserId;
         next.NyxidAccessToken = evt.NyxidAccessToken;
         return next;
+    }
+
+    /// <summary>
+    /// Stores error details in IMemoryCache so they can be retrieved via the
+    /// diagnostic endpoint without needing server log access.
+    /// </summary>
+    private void RecordDiagnosticError(
+        ChannelInboundEvent evt, string stage, Exception ex, string? originalError = null)
+    {
+        var cache = Services.GetService<IMemoryCache>();
+        if (cache == null) return;
+
+        var errors = cache.GetOrCreate(ChannelDiagnosticKeys.RecentErrors, entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1);
+            return new List<object>();
+        })!;
+
+        var errorEntry = new
+        {
+            timestamp = DateTimeOffset.UtcNow.ToString("O"),
+            stage,
+            platform = evt.Platform,
+            senderId = evt.SenderId,
+            registrationId = evt.RegistrationId,
+            error = ex.Message,
+            errorType = ex.GetType().FullName,
+            stackTrace = ex.StackTrace?.Split('\n').Take(5).ToArray(),
+            originalError,
+        };
+
+        // Keep last 20 errors
+        lock (errors)
+        {
+            errors.Add(errorEntry);
+            while (errors.Count > 20)
+                errors.RemoveAt(0);
+        }
     }
 }

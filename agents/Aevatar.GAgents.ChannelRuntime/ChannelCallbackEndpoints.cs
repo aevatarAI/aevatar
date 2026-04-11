@@ -29,6 +29,9 @@ public static class ChannelCallbackEndpoints
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
 
+        // Diagnostic: view recent actor errors (stored in IMemoryCache by ChannelUserGAgent)
+        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
+
         return app;
     }
 
@@ -427,6 +430,21 @@ public static class ChannelCallbackEndpoints
         }
     }
 
+    /// <summary>
+    /// Returns recent actor errors from memory cache.
+    /// ChannelUserGAgent stores errors under "channel-diag:errors" key.
+    /// </summary>
+    private static Task<IResult> HandleGetDiagnosticErrorsAsync(
+        [FromServices] IMemoryCache? cache)
+    {
+        if (cache == null)
+            return Task.FromResult(Results.Ok(new { errors = Array.Empty<object>() }));
+
+        var errors = cache.Get<List<object>>(ChannelDiagnosticKeys.RecentErrors)
+                    ?? new List<object>();
+        return Task.FromResult(Results.Ok(new { count = errors.Count, errors }));
+    }
+
     private sealed record RegistrationRequest(
         string? Platform,
         string? NyxProviderSlug,
@@ -436,4 +454,10 @@ public static class ChannelCallbackEndpoints
         string? WebhookBaseUrl);
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
+}
+
+/// <summary>Shared keys for diagnostic error cache.</summary>
+public static class ChannelDiagnosticKeys
+{
+    public const string RecentErrors = "channel-diag:errors";
 }
