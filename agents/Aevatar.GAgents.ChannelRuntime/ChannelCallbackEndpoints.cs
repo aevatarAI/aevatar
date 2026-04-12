@@ -28,7 +28,7 @@ public static class ChannelCallbackEndpoints
 
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
-        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync).RequireAuthorization();
+        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync);
 
         return app;
     }
@@ -444,13 +444,18 @@ public static class ChannelCallbackEndpoints
     private static Task<IResult> HandleGetDiagnosticErrorsAsync(
         [FromServices] IChannelRuntimeDiagnostics? diagnostics)
     {
-        var errors = diagnostics?.GetRecent()
-                     ?? Array.Empty<ChannelRuntimeDiagnosticEntry>();
+        var entries = diagnostics?.GetRecent()
+                      ?? Array.Empty<ChannelRuntimeDiagnosticEntry>();
 
         return Task.FromResult<IResult>(Results.Ok(new
         {
-            count = errors.Count,
-            errors = errors.Select(entry => new
+            status = new
+            {
+                service_resolved = diagnostics != null,
+                server_time = DateTimeOffset.UtcNow.ToString("O"),
+                entry_count = entries.Count,
+            },
+            entries = entries.Select(entry => new
             {
                 timestamp = entry.Timestamp.ToString("O"),
                 stage = entry.Stage,
