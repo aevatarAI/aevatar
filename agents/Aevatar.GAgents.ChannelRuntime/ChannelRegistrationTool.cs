@@ -216,6 +216,18 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         var oldToken = before.NyxUserToken;
 
+        // If the token is already the desired value, skip the dispatch — goal state already holds.
+        if (string.Equals(oldToken, token, StringComparison.Ordinal))
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "token_updated",
+                registration_id = registrationId,
+                platform = before.Platform,
+                note = "Token is already current — no update needed.",
+            });
+        }
+
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);

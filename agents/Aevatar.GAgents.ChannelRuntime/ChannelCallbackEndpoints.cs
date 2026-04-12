@@ -379,6 +379,12 @@ public static class ChannelCallbackEndpoints
         if (request is null || string.IsNullOrWhiteSpace(request.NyxUserToken))
             return Results.BadRequest(new { error = "nyx_user_token is required" });
 
+        var newToken = request.NyxUserToken.Trim();
+
+        // If the token is already the desired value, skip — goal state already holds.
+        if (string.Equals(oldToken, newToken, StringComparison.Ordinal))
+            return Results.Ok(new { status = "token_updated", registration_id = registrationId, note = "Token is already current." });
+
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotUpdateTokenCommand
         {
