@@ -379,9 +379,11 @@ public static class ChannelCallbackEndpoints
 
         var newToken = request.NyxUserToken.Trim();
 
+        // Snapshot projection version. Orphaned documents retain a stale version
+        // that never advances — this lets us detect the actor dropping the command.
+        var versionBefore = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+
         // Always dispatch to the actor — it is the authority on current state.
-        // The read-model is eventually consistent and may be stale, so we never
-        // short-circuit based on its token value.
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotUpdateTokenCommand
         {
@@ -402,11 +404,14 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Poll projection to confirm the desired token is now visible.
+        // Poll: require BOTH version advance AND desired token visible.
         var confirmed = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             await Task.Delay(500, ct);
+            var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
             var after = await queryPort.GetAsync(registrationId, ct);
             if (after is not null && string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal))
             {

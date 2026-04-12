@@ -214,9 +214,12 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (exists is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
 
+        // Snapshot the projection version before dispatch. An orphaned projection
+        // document (from a deleted registration) retains a stale version that never
+        // advances because the projector only re-upserts entries still in actor state.
+        var versionBefore = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+
         // Always dispatch to the actor — it is the authority on current state.
-        // The read-model is eventually consistent and may be stale, so we never
-        // short-circuit based on its token value.
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);
@@ -240,15 +243,15 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
-        // Poll projection to confirm the desired token is now visible.
-        // Check projected token == desired token (not != old), because the
-        // read-model may have been stale before dispatch.
-        // The actor silently drops the command if the registration is not in its
-        // state, so we cannot trust HandleEventAsync returning without error.
+        // Poll projection: require BOTH version advance (proves the actor persisted
+        // an event — not an orphaned document) AND desired token visible.
         var confirmed = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             await Task.Delay(500, ct);
+            var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
             var after = await queryPort.GetAsync(registrationId, ct);
             if (after is not null && string.Equals(after.NyxUserToken, token, StringComparison.Ordinal))
             {
