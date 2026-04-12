@@ -210,24 +210,13 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (string.IsNullOrWhiteSpace(registrationId))
             return """{"error":"'registration_id' is required for update_token"}""";
 
-        var before = await queryPort.GetAsync(registrationId, ct);
-        if (before is null)
+        var exists = await queryPort.GetAsync(registrationId, ct);
+        if (exists is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
 
-        var oldToken = before.NyxUserToken;
-
-        // If the token is already the desired value, skip the dispatch — goal state already holds.
-        if (string.Equals(oldToken, token, StringComparison.Ordinal))
-        {
-            return JsonSerializer.Serialize(new
-            {
-                status = "token_updated",
-                registration_id = registrationId,
-                platform = before.Platform,
-                note = "Token is already current — no update needed.",
-            });
-        }
-
+        // Always dispatch to the actor — it is the authority on current state.
+        // The read-model is eventually consistent and may be stale, so we never
+        // short-circuit based on its token value.
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
                         ChannelBotRegistrationGAgent.WellKnownId);
@@ -251,7 +240,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
         await actor.HandleEventAsync(envelope);
 
-        // Poll projection to confirm the token was actually committed.
+        // Poll projection to confirm the desired token is now visible.
+        // Check projected token == desired token (not != old), because the
+        // read-model may have been stale before dispatch.
         // The actor silently drops the command if the registration is not in its
         // state, so we cannot trust HandleEventAsync returning without error.
         var confirmed = false;
@@ -259,7 +250,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             await Task.Delay(500, ct);
             var after = await queryPort.GetAsync(registrationId, ct);
-            if (after is not null && after.NyxUserToken != oldToken)
+            if (after is not null && string.Equals(after.NyxUserToken, token, StringComparison.Ordinal))
             {
                 confirmed = true;
                 break;
@@ -281,7 +272,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
         {
             status = "token_updated",
             registration_id = registrationId,
-            platform = before.Platform,
+            platform = exists.Platform,
             note = "NyxID access token has been refreshed. Bot replies should work again.",
         });
     }

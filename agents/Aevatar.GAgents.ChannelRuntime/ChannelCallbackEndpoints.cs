@@ -359,11 +359,9 @@ public static class ChannelCallbackEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
 
-        var before = await queryPort.GetAsync(registrationId, ct);
-        if (before is null)
+        var exists = await queryPort.GetAsync(registrationId, ct);
+        if (exists is null)
             return Results.NotFound(new { error = "Registration not found" });
-
-        var oldToken = before.NyxUserToken;
 
         UpdateTokenRequest? request;
         try
@@ -381,15 +379,14 @@ public static class ChannelCallbackEndpoints
 
         var newToken = request.NyxUserToken.Trim();
 
-        // If the token is already the desired value, skip — goal state already holds.
-        if (string.Equals(oldToken, newToken, StringComparison.Ordinal))
-            return Results.Ok(new { status = "token_updated", registration_id = registrationId, note = "Token is already current." });
-
+        // Always dispatch to the actor — it is the authority on current state.
+        // The read-model is eventually consistent and may be stale, so we never
+        // short-circuit based on its token value.
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotUpdateTokenCommand
         {
             RegistrationId = registrationId,
-            NyxUserToken = request.NyxUserToken.Trim(),
+            NyxUserToken = newToken,
         };
 
         var cmdEnvelope = new EventEnvelope
@@ -405,13 +402,13 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Poll projection to confirm the token was committed.
+        // Poll projection to confirm the desired token is now visible.
         var confirmed = false;
         for (var attempt = 0; attempt < 10; attempt++)
         {
             await Task.Delay(500, ct);
             var after = await queryPort.GetAsync(registrationId, ct);
-            if (after is not null && after.NyxUserToken != oldToken)
+            if (after is not null && string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal))
             {
                 confirmed = true;
                 break;
