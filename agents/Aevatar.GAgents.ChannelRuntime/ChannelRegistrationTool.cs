@@ -31,8 +31,9 @@ public sealed class ChannelRegistrationTool : IAgentTool
 
     public string Description =>
         "Manage Aevatar channel bot registrations (Lark, Telegram, Discord). " +
-        "Actions: list, register, delete. " +
-        "Use this to set up platform bot callbacks so users can chat with agents via messaging apps.";
+        "Actions: list, register, delete, update_token. " +
+        "Use this to set up platform bot callbacks so users can chat with agents via messaging apps. " +
+        "Use update_token to refresh the NyxID access token on an existing registration when the old token expires.";
 
     public string ParametersSchema => """
         {
@@ -40,8 +41,8 @@ public sealed class ChannelRegistrationTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list", "register", "delete"],
-              "description": "Action to perform (default: list)"
+              "enum": ["list", "register", "delete", "update_token"],
+              "description": "Action to perform (default: list). Use update_token to refresh the NyxID token on an existing registration."
             },
             "platform": {
               "type": "string",
@@ -66,7 +67,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             },
             "registration_id": {
               "type": "string",
-              "description": "Registration ID (for delete)"
+              "description": "Registration ID (for delete, update_token)"
             },
             "confirm": {
               "type": "boolean",
@@ -97,6 +98,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             "list" => await ListAsync(queryPort, ct),
             "register" => await RegisterAsync(queryPort, actorRuntime, token, root, ct),
             "delete" => await DeleteAsync(queryPort, actorRuntime, root, ct),
+            "update_token" => await UpdateTokenAsync(queryPort, actorRuntime, token, root, ct),
             _ => await ListAsync(queryPort, ct),
         };
     }
@@ -197,6 +199,49 @@ public sealed class ChannelRegistrationTool : IAgentTool
             callback_url = $"{callbackPath}/{registrationId}",
             webhook_url = !string.IsNullOrWhiteSpace(webhookUrl) ? $"{webhookUrl}/{registrationId}" : "",
             note = confirmedId == null ? "Registration submitted but projection not yet confirmed. Try 'list' after a few seconds." : "",
+        });
+    }
+
+    private async Task<string> UpdateTokenAsync(
+        IChannelBotRegistrationQueryPort queryPort, IActorRuntime actorRuntime,
+        string token, JsonElement args, CancellationToken ct)
+    {
+        var registrationId = GetStr(args, "registration_id") ?? GetStr(args, "id");
+        if (string.IsNullOrWhiteSpace(registrationId))
+            return """{"error":"'registration_id' is required for update_token"}""";
+
+        var exists = await queryPort.GetAsync(registrationId, ct);
+        if (exists is null)
+            return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
+
+        var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
+                    ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
+                        ChannelBotRegistrationGAgent.WellKnownId);
+
+        var cmd = new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = registrationId,
+            NyxUserToken = token,
+        };
+
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Any.Pack(cmd),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        await actor.HandleEventAsync(envelope);
+        return JsonSerializer.Serialize(new
+        {
+            status = "token_updated",
+            registration_id = registrationId,
+            platform = exists.Platform,
+            note = "NyxID access token has been refreshed. Bot replies should work again.",
         });
     }
 

@@ -109,6 +109,12 @@ NyxID only stores bot credentials and proxies outbound API calls (api-lark-bot, 
 
 **IMPORTANT:** Do NOT use `nyxid_channel_bots` — that is deprecated. Use `channel_registrations` instead.
 
+### Token Lifecycle Warning
+
+Registration stores the current NyxID session token for outbound API calls. **Session tokens expire** — when the token expires, the bot will receive messages but **fail silently on replies** (HTTP 401 token_expired from NyxID proxy). If the user reports "bot stopped replying", the most likely cause is an expired token.
+
+**To fix:** refresh the token with `channel_registrations action=update_token registration_id=<id>` — this captures your current session token and updates the registration. No need to delete and re-register.
+
 ### Step 1: Ensure NyxID has the bot's outbound service
 
 The user needs an `api-lark-bot` (or `api-telegram-bot`) service in NyxID for outbound replies:
@@ -127,6 +133,8 @@ For **Telegram**:
 
 → Returns the registration ID and the callback URL.
 
+**After registration, inform the user:** The bot's outbound replies depend on your NyxID session token, which will eventually expire. When the bot stops replying, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
+
 ### Step 3: Configure platform webhook
 
 Tell the user to set the webhook URL in their platform's developer console:
@@ -142,6 +150,7 @@ Also add event: `im.message.receive_v1`
 ### Managing registrations
 
 - List: `channel_registrations action=list`
+- Refresh token: `channel_registrations action=update_token registration_id=<id>`
 - Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
 
 ## Notifications & Approvals

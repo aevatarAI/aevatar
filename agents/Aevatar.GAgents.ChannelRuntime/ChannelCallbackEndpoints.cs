@@ -26,6 +26,9 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
+        // Token refresh — update the NyxID access token on an existing registration
+        group.MapPatch("/registrations/{registrationId}/token", HandleUpdateTokenAsync).RequireAuthorization();
+
         // Diagnostic: test reply path without going through full LLM chat
         group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
         group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync);
@@ -346,6 +349,56 @@ public static class ChannelCallbackEndpoints
         return Results.Ok(new { status = "deleted" });
     }
 
+    private static async Task<IResult> HandleUpdateTokenAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
+
+        var exists = await queryPort.GetAsync(registrationId, ct);
+        if (exists is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        UpdateTokenRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<UpdateTokenRequest>(RegistrationJsonOptions, ct);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid update-token request payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        if (request is null || string.IsNullOrWhiteSpace(request.NyxUserToken))
+            return Results.BadRequest(new { error = "nyx_user_token is required" });
+
+        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
+        var cmd = new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = registrationId,
+            NyxUserToken = request.NyxUserToken.Trim(),
+        };
+
+        var cmdEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(cmd),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        await actor.HandleEventAsync(cmdEnvelope);
+        return Results.Ok(new { status = "token_updated", registration_id = registrationId });
+    }
+
     /// <summary>
     /// Diagnostic: sends a test reply directly through the platform adapter,
     /// bypassing the full LLM chat flow. Isolates whether the reply path
@@ -489,4 +542,6 @@ public static class ChannelCallbackEndpoints
         string? WebhookBaseUrl);
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
+
+    private sealed record UpdateTokenRequest(string? NyxUserToken);
 }

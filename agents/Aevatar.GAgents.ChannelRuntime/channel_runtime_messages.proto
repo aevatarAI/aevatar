@@ -141,6 +141,17 @@ message ChannelBotUnregisterCommand {
   string registration_id = 1;
 }
 
+message ChannelBotUpdateTokenCommand {
+  string registration_id = 1;
+  string nyx_user_token = 2;
+}
+
+// Domain event: token updated on an existing registration
+message ChannelBotTokenUpdatedEvent {
+  string registration_id = 1;
+  string nyx_user_token = 2;
+}
+
 // Projection read model for channel bot registrations
 message ChannelBotRegistrationDocument {
   string id = 1;                            // Registration ID (= document key)
