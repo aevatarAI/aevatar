@@ -3,6 +3,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Aevatar.Foundation.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Xunit;
@@ -408,10 +409,15 @@ public class ChannelRegistrationToolTests
             await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-3"}""");
 
             // Actor must have received exactly one HandleEventAsync call
+            // with a ChannelBotUpdateTokenCommand carrying the correct payload.
             await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
                 e.Route != null &&
                 e.Route.Direct != null &&
-                e.Route.Direct.TargetActorId == "channel-bot-registration-store"));
+                e.Route.Direct.TargetActorId == "channel-bot-registration-store" &&
+                e.Payload != null &&
+                e.Payload.Is(ChannelBotUpdateTokenCommand.Descriptor) &&
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().RegistrationId == "bot-3" &&
+                e.Payload.Unpack<ChannelBotUpdateTokenCommand>().NyxUserToken == "fresh"));
         }
         finally
         {
