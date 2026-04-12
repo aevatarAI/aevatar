@@ -143,7 +143,11 @@ public static class ChannelCallbackEndpoints
                 inbound.Platform, registration.Id);
             RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id,
                 $"{ex.GetType().Name}: {ex.Message}");
-            return Results.Ok(new { status = "dispatch_error", error = ex.Message });
+            // Return 500 so webhook providers (Lark/Telegram) retry the delivery
+            // instead of treating the message as successfully processed.
+            return Results.Json(
+                new { status = "dispatch_error", error = ex.Message },
+                statusCode: 500);
         }
     }
 
