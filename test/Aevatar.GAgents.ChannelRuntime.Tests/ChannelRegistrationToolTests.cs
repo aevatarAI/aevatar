@@ -322,6 +322,103 @@ public class ChannelRegistrationToolTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Fails_When_Version_Advances_But_Token_Wrong()
+    {
+        // Isolates the token check: version advances (actor persisted something)
+        // but the projected token doesn't match the desired value.
+        // Without the token check, this would falsely report success.
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("bot-2", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "bot-2", Platform = "lark", NyxUserToken = "wrong-token" }));
+
+        queryPort.GetStateVersionAsync("bot-2", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<long?>(5),   // before dispatch
+                Task.FromResult<long?>(6));   // after dispatch — version advanced
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-bot-registration-store");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("channel-bot-registration-store")
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "desired-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-2"}""");
+            var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("error");
+            result.Should().Contain("not confirmed");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Dispatches_Command_To_Actor()
+    {
+        // Verifies the tool actually sends the command envelope to the actor.
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "bot-3", Platform = "lark", NyxUserToken = "old" }));
+
+        // Version advances and token matches — success path
+        queryPort.GetStateVersionAsync("bot-3", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<long?>(1),
+                Task.FromResult<long?>(2));
+        // Return updated token on poll
+        queryPort.GetAsync("bot-3", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                    { Id = "bot-3", Platform = "lark", NyxUserToken = "old" }),
+                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                    { Id = "bot-3", Platform = "lark", NyxUserToken = "fresh" }));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-bot-registration-store");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("channel-bot-registration-store")
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "fresh" };
+        try
+        {
+            await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-3"}""");
+
+            // Actor must have received exactly one HandleEventAsync call
+            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
+                e.Route != null &&
+                e.Route.Direct != null &&
+                e.Route.Direct.TargetActorId == "channel-bot-registration-store"));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
     // ─── ChannelRegistrationToolSource ───
 
     [Fact]
