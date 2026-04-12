@@ -210,9 +210,11 @@ public sealed class ChannelRegistrationTool : IAgentTool
         if (string.IsNullOrWhiteSpace(registrationId))
             return """{"error":"'registration_id' is required for update_token"}""";
 
-        var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
+        var before = await queryPort.GetAsync(registrationId, ct);
+        if (before is null)
             return JsonSerializer.Serialize(new { error = $"Registration '{registrationId}' not found" });
+
+        var oldToken = before.NyxUserToken;
 
         var actor = await actorRuntime.GetAsync(ChannelBotRegistrationGAgent.WellKnownId)
                     ?? await actorRuntime.CreateAsync<ChannelBotRegistrationGAgent>(
@@ -236,11 +238,38 @@ public sealed class ChannelRegistrationTool : IAgentTool
         };
 
         await actor.HandleEventAsync(envelope);
+
+        // Poll projection to confirm the token was actually committed.
+        // The actor silently drops the command if the registration is not in its
+        // state, so we cannot trust HandleEventAsync returning without error.
+        var confirmed = false;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            await Task.Delay(500, ct);
+            var after = await queryPort.GetAsync(registrationId, ct);
+            if (after is not null && after.NyxUserToken != oldToken)
+            {
+                confirmed = true;
+                break;
+            }
+        }
+
+        if (!confirmed)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                status = "error",
+                registration_id = registrationId,
+                error = "Token update was dispatched but not confirmed — the projection did not reflect the change. " +
+                        "The registration may not exist in the actor's state. Try delete + re-register.",
+            });
+        }
+
         return JsonSerializer.Serialize(new
         {
             status = "token_updated",
             registration_id = registrationId,
-            platform = exists.Platform,
+            platform = before.Platform,
             note = "NyxID access token has been refreshed. Bot replies should work again.",
         });
     }

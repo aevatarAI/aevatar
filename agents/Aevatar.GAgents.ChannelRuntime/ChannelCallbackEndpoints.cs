@@ -359,9 +359,11 @@ public static class ChannelCallbackEndpoints
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
 
-        var exists = await queryPort.GetAsync(registrationId, ct);
-        if (exists is null)
+        var before = await queryPort.GetAsync(registrationId, ct);
+        if (before is null)
             return Results.NotFound(new { error = "Registration not found" });
+
+        var oldToken = before.NyxUserToken;
 
         UpdateTokenRequest? request;
         try
@@ -396,6 +398,31 @@ public static class ChannelCallbackEndpoints
         };
 
         await actor.HandleEventAsync(cmdEnvelope);
+
+        // Poll projection to confirm the token was committed.
+        var confirmed = false;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            await Task.Delay(500, ct);
+            var after = await queryPort.GetAsync(registrationId, ct);
+            if (after is not null && after.NyxUserToken != oldToken)
+            {
+                confirmed = true;
+                break;
+            }
+        }
+
+        if (!confirmed)
+        {
+            logger.LogWarning("Token update for {RegistrationId} dispatched but not confirmed by projection", registrationId);
+            return Results.Json(new
+            {
+                status = "error",
+                error = "Token update dispatched but not confirmed. The registration may not exist in the actor's state.",
+                registration_id = registrationId,
+            }, statusCode: 500);
+        }
+
         return Results.Ok(new { status = "token_updated", registration_id = registrationId });
     }
 
