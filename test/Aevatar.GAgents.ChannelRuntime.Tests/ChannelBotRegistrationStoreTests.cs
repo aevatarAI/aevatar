@@ -164,6 +164,94 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         _agent.State.Registrations.Should().HaveCount(1);
     }
 
+    // ─── UpdateToken ───
+
+    [Fact]
+    public async Task HandleUpdateToken_UpdatesTokenInState()
+    {
+        var registerCmd = new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "old-token",
+        };
+        await _agent.HandleRegister(registerCmd);
+
+        var registrationId = _agent.State.Registrations[0].Id;
+
+        await _agent.HandleUpdateToken(new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = registrationId,
+            NyxUserToken = "new-token",
+        });
+
+        _agent.State.Registrations.Should().HaveCount(1);
+        _agent.State.Registrations[0].NyxUserToken.Should().Be("new-token");
+    }
+
+    [Fact]
+    public async Task HandleUpdateToken_SameToken_StillPersistsEvent()
+    {
+        var registerCmd = new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "same-token",
+        };
+        await _agent.HandleRegister(registerCmd);
+
+        var registrationId = _agent.State.Registrations[0].Id;
+
+        // Update with same token — actor should still persist (idempotent)
+        await _agent.HandleUpdateToken(new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = registrationId,
+            NyxUserToken = "same-token",
+        });
+
+        _agent.State.Registrations[0].NyxUserToken.Should().Be("same-token");
+    }
+
+    [Fact]
+    public async Task HandleUpdateToken_NonExistent_NoStateChange()
+    {
+        var registerCmd = new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "slug",
+            NyxUserToken = "token",
+        };
+        await _agent.HandleRegister(registerCmd);
+
+        // Update a non-existent ID — should not throw and should not change state
+        var act = () => _agent.HandleUpdateToken(
+            new ChannelBotUpdateTokenCommand { RegistrationId = "does-not-exist", NyxUserToken = "new" });
+
+        await act.Should().NotThrowAsync();
+        _agent.State.Registrations.Should().HaveCount(1);
+        _agent.State.Registrations[0].NyxUserToken.Should().Be("token");
+    }
+
+    [Fact]
+    public async Task HandleUpdateToken_DoesNotAffectOtherRegistrations()
+    {
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+            { Platform = "lark", NyxProviderSlug = "slug-1", NyxUserToken = "token-a" });
+        await _agent.HandleRegister(new ChannelBotRegisterCommand
+            { Platform = "telegram", NyxProviderSlug = "slug-2", NyxUserToken = "token-b" });
+
+        var firstId = _agent.State.Registrations[0].Id;
+
+        await _agent.HandleUpdateToken(new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = firstId,
+            NyxUserToken = "token-a-updated",
+        });
+
+        _agent.State.Registrations[0].NyxUserToken.Should().Be("token-a-updated");
+        _agent.State.Registrations[1].NyxUserToken.Should().Be("token-b");
+    }
+
     // ─── Test double ───
 
     private sealed class InMemoryEventStore : IEventStore

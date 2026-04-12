@@ -178,6 +178,150 @@ public class ChannelRegistrationToolTests
         }
     }
 
+    // ─── update_token ───
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Requires_RegistrationId()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"update_token"}""");
+            result.Should().Contain("registration_id");
+            result.Should().Contain("required");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Returns_Error_When_Registration_Not_Found()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync("nonexistent", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(null));
+        var actorRuntime = Substitute.For<IActorRuntime>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"nonexistent"}""");
+            result.Should().Contain("error");
+            result.Should().Contain("not found");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Confirms_Via_Version_And_Token()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        // Pre-dispatch: registration exists with old token at version 5
+        queryPort.GetAsync("bot-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                    { Id = "bot-1", Platform = "lark", NyxUserToken = "old-token" }),
+                // Post-dispatch polls: return updated entry
+                Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                    { Id = "bot-1", Platform = "lark", NyxUserToken = "new-token" }));
+
+        queryPort.GetStateVersionAsync("bot-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<long?>(5),   // before dispatch
+                Task.FromResult<long?>(6));   // after dispatch (advanced)
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-bot-registration-store");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("channel-bot-registration-store")
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "new-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"bot-1"}""");
+            var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("token_updated");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_UpdateToken_Fails_When_Version_Does_Not_Advance()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        // Registration appears in projection (could be orphaned)
+        queryPort.GetAsync("orphan-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "orphan-1", Platform = "lark", NyxUserToken = "stale-token" }));
+
+        // Version never advances — actor dropped the command
+        queryPort.GetStateVersionAsync("orphan-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(5));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-bot-registration-store");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("channel-bot-registration-store")
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "stale-token" };
+        try
+        {
+            var result = await tool.ExecuteAsync("""{"action":"update_token","registration_id":"orphan-1"}""");
+            var doc = JsonDocument.Parse(result);
+            doc.RootElement.GetProperty("status").GetString().Should().Be("error");
+            result.Should().Contain("not confirmed");
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
     // ─── ChannelRegistrationToolSource ───
 
     [Fact]
