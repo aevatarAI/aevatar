@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package aevatar.voice;
+
+option csharp_namespace = "Aevatar.Foundation.VoicePresence.Abstractions";
+
+message VoiceProviderConfig {
+  string provider_name = 1;
+  string endpoint = 2;
+  string api_key = 3;
+  string model = 4;
+}
+
+message VoiceSessionConfig {
+  string voice = 1;
+  string instructions = 2;
+  int32 sample_rate_hz = 3;
+  repeated string tool_names = 4;
+}
+
+message VoiceAudioReceived {
+  bytes pcm16 = 1;
+  int32 sample_rate_hz = 2;
+}
+
+message VoiceResponseStarted {
+  int32 response_id = 1;
+}
+
+message VoiceResponseDone {
+  int32 response_id = 1;
+}
+
+message VoiceResponseCancelled {
+  int32 response_id = 1;
+}
+
+message VoiceFunctionCallRequested {
+  string call_id = 1;
+  string tool_name = 2;
+  string arguments_json = 3;
+  int32 response_id = 4;
+}
+
+message VoiceSpeechStarted {}
+
+message VoiceSpeechStopped {}
+
+message VoiceProviderError {
+  string error_code = 1;
+  string error_message = 2;
+}
+
+message VoiceProviderDisconnected {
+  string reason = 1;
+}
+
+message VoiceProviderEvent {
+  oneof event {
+    VoiceAudioReceived audio_received = 1;
+    VoiceResponseStarted response_started = 2;
+    VoiceResponseDone response_done = 3;
+    VoiceResponseCancelled response_cancelled = 4;
+    VoiceFunctionCallRequested function_call = 5;
+    VoiceSpeechStarted speech_started = 6;
+    VoiceSpeechStopped speech_stopped = 7;
+    VoiceProviderError error = 8;
+    VoiceProviderDisconnected disconnected = 9;
+  }
+}
+
+message VoiceDrainAcknowledged {
+  int32 response_id = 1;
+  int64 playout_sequence = 2;
+}
+
+message VoiceControlFrame {
+  oneof frame {
+    VoiceDrainAcknowledged drain_acknowledged = 1;
+  }
+}
