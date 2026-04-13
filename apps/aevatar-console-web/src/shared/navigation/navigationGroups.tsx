@@ -14,9 +14,8 @@ export type NavigationGroup = {
 
 const TEAM_FIRST_NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
   {
-    flattenSingleItem: true,
     icon: <TeamOutlined />,
-    key: "home",
+    key: "teams",
     label: "Teams",
   },
   {

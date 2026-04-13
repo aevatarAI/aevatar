@@ -1,4 +1,3 @@
-import { Grid } from "antd";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
@@ -476,92 +475,56 @@ jest.mock("@/shared/studio/api", () => ({
 }));
 
 describe("TeamDetailPage", () => {
-  let useBreakpointSpy: jest.SpyInstance | null = null;
-
   beforeEach(() => {
     window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
-    useBreakpointSpy = jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
-      xs: false,
-      sm: true,
-      md: true,
-      lg: true,
-      xl: true,
-      xxl: true,
-    } as any);
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockReset();
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
       async () => mockCreateRunsCatalog(),
     );
+    (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockReset();
     (scopeRuntimeApi.getServiceRunAudit as jest.Mock).mockImplementation(
       async (scopeId: string, _serviceId: string, runId: string) =>
         mockCreateRunAudit(scopeId, runId),
     );
   });
 
-  afterEach(() => {
-    useBreakpointSpy?.mockRestore();
-    useBreakpointSpy = null;
-  });
-
-  it("renders the Team-first shell with health, compare, and governance modules", async () => {
+  it("renders the chinese team-first overview shell", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Team Health")).toBeTruthy();
-    expect(await screen.findByText("What Changed")).toBeTruthy();
-    expect(await screen.findByText("Human Handoff")).toBeTruthy();
-    expect(await screen.findByText("Connected Systems")).toBeTruthy();
-    expect(await screen.findByText("Trust Summary")).toBeTruthy();
-    expect(await screen.findByText("Collaboration Canvas")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Open Team Builder" }).length).toBeGreaterThan(0);
-    await waitFor(() => {
-      expect(screen.getAllByText("Blocked").length).toBeGreaterThan(0);
-      expect(screen.getByText("Human intervention is visible in the current run.")).toBeTruthy();
-      expect(screen.getByText("Step deltas")).toBeTruthy();
-      expect(screen.getByText("Approve escalation")).toBeTruthy();
-      expect(screen.getByText("Recent runtime events")).toBeTruthy();
-      expect(screen.getByText("From focus")).toBeTruthy();
-      expect(screen.getByText("web-search")).toBeTruthy();
-      expect(
-        screen.getByText("2 team-scoped connector references across 1 workflow roles"),
-      ).toBeTruthy();
-      expect(
-        screen.getByText("Used by current team roles triage_operator"),
-      ).toBeTruthy();
-      expect(screen.getByText("Referenced but undefined")).toBeTruthy();
-      expect(screen.getByText("crm-sync")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Open current run replay" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Inspect root actor" })).toBeTruthy();
-      expect(screen.getAllByText("Delayed").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("Live").length).toBeGreaterThan(0);
-    });
+    expect(await screen.findByText("Aevatar / Teams")).toBeTruthy();
+    expect(await screen.findByText("团队详情 / 概览")).toBeTruthy();
+    expect(screen.getByText("Support Escalation Triage")).toBeTruthy();
+    expect(screen.getByText("团队构成")).toBeTruthy();
+    expect(screen.getByText("运行摘要")).toBeTruthy();
+    expect(screen.getByText("当前态势")).toBeTruthy();
+    expect(screen.getByText("团队在做什么")).toBeTruthy();
+    expect(screen.getByText("当前版本状态")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "测试对话" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看服务映射" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "高级编辑" }).length).toBeGreaterThan(0);
   });
 
-  it("keeps the collaboration canvas ahead of the auxiliary segmented panel on narrow screens", async () => {
-    useBreakpointSpy?.mockRestore();
-    useBreakpointSpy = jest.spyOn(Grid, "useBreakpoint").mockReturnValue({
-      xs: true,
-      sm: true,
-      md: false,
-      lg: false,
-      xl: false,
-      xxl: false,
-    } as any);
-
+  it("switches tabs inside the detail page", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    const collaborationHeading = await screen.findByText("Collaboration Canvas");
-    const segmentedActivity = await screen.findByText("Activity · Delayed");
+    await screen.findByText("运行摘要");
+    fireEvent.click(screen.getByRole("button", { name: "连接器" }));
 
-    expect(
-      collaborationHeading.compareDocumentPosition(segmentedActivity) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(screen.getByText("Recent Activity")).toBeTruthy();
-    expect(screen.queryByText("Team Health")).toBeNull();
+    expect(await screen.findByText("服务与连接器")).toBeTruthy();
+    expect(screen.getByText("可用连接器")).toBeTruthy();
+    expect(screen.getByText("web-search")).toBeTruthy();
+    expect(window.location.search).toContain("tab=connectors");
+  });
 
-    fireEvent.click(screen.getByText("Details · Delayed"));
+  it("shows a readable team members view", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Team Health")).toBeTruthy();
-    expect(screen.queryByText("Recent Activity")).toBeNull();
+    await screen.findByText("运行摘要");
+    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+
+    expect(await screen.findByText("这支团队里有哪些角色")).toBeTruthy();
+    expect(screen.getByText("当前参与运行")).toBeTruthy();
+    expect(screen.getByText("当前焦点")).toBeTruthy();
   });
 
   it("surfaces team signal failures without leaking raw runtime errors", async () => {
@@ -571,16 +534,9 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(
-      await screen.findByText("Some team signals are currently unavailable"),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("Recent team activity could not be loaded."),
-    ).toBeTruthy();
-    expect(screen.getByText("Activity unavailable")).toBeTruthy();
-    expect(
-      screen.getByText("Recent team activity could not be loaded for this team."),
-    ).toBeTruthy();
+    expect(await screen.findByText("运行摘要")).toBeTruthy();
+    expect(screen.queryByText("部分团队信号暂不可用")).toBeNull();
+    expect(screen.queryByText("最近团队运行信号暂时无法加载。")).toBeNull();
     expect(
       screen.queryByText("No stub for /api/scopes/scope-1/services/default/runs"),
     ).toBeNull();
@@ -589,8 +545,10 @@ describe("TeamDetailPage", () => {
   it("opens a playback run replay with observed session context", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("Approve escalation");
-    fireEvent.click(screen.getByRole("button", { name: "Open current run replay" }));
+    await screen.findByText("运行摘要");
+    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
+    await screen.findByText("risk_review");
+    fireEvent.click(screen.getAllByRole("button", { name: "测试对话" })[0]);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/runs");
@@ -608,11 +566,13 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("opens runtime explorer from the playback root actor action", async () => {
+  it("opens runtime explorer from the service mapping action", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("Approve escalation");
-    fireEvent.click(screen.getByRole("button", { name: "Inspect root actor" }));
+    await screen.findByText("运行摘要");
+    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
+    await screen.findByText("可见关系");
+    fireEvent.click(screen.getAllByRole("button", { name: "查看服务映射" })[0]);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/explorer");
@@ -624,11 +584,11 @@ describe("TeamDetailPage", () => {
     expect(params.get("serviceId")).toBe("default");
   });
 
-  it("opens Team Builder in the current team context from the team detail actions", async () => {
+  it("opens Team Builder in the current team context from the top actions", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("Trust Summary");
-    fireEvent.click(screen.getAllByRole("button", { name: "Open Team Builder" })[0]);
+    await screen.findByText("运行摘要");
+    fireEvent.click(screen.getAllByRole("button", { name: "高级编辑" })[0]);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");
@@ -643,23 +603,29 @@ describe("TeamDetailPage", () => {
     }
   });
 
-  it("lets member selection drive the inspector and explorer focus", async () => {
+  it("drops stale service and run hints in favor of the requested workflow truth", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?workflowId=workflow-1&serviceId=stale-service&runId=stale-run",
+    );
+
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("Member Focus");
-    await screen.findByText("actor-risk");
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Focus member RiskReviewAgent actor-risk",
-      }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Open Topology" }));
+    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+    expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
+  });
 
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/explorer");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-risk");
-    expect(params.get("scopeId")).toBe("scope-1");
+  it("falls back gracefully when the requested workflow is no longer visible", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/teams/scope-1?workflowId=workflow-missing",
+    );
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+    expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
   });
 });

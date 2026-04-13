@@ -10,20 +10,20 @@ const TeamCreatePage: React.FC = () => {
   return (
     <AevatarPageShell
       extra={
-        <Button onClick={() => history.push(buildTeamsHref())}>返回我的团队</Button>
+        <Button onClick={() => history.push(buildTeamsHref())}>Back to My Teams</Button>
       }
       layoutMode="document"
       onBack={() => history.push(buildTeamsHref())}
-      title="组建团队"
-      titleHelp="当前版本先复用已有 Studio 能力作为团队构建器入口，后续再承接模板化的组建流程。"
+      title="Create Team"
+      titleHelp="The current version reuses Studio as the team builder entry point before we introduce a templated team creation flow."
     >
       <AevatarPanel
-        title="开始构建"
-        titleHelp="Scope = Team，因此这里直接进入团队构建器创建行为定义、脚本行为、Agent 角色和集成。"
+        title="Start Building"
+        titleHelp="Scope = Team, so this flow goes straight into the team builder to create behaviors, scripts, agent roles, and integrations."
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
-            这一步不会引入新的后端流程，先复用现有 Studio 工作台完成团队搭建，再从团队详情页观察事件拓扑和事件流。
+            This step does not introduce a new backend flow. It reuses the existing Studio workbench to assemble the team first, then moves into Team Details to inspect topology and the event stream.
           </Typography.Paragraph>
           <Space wrap size={[8, 8]}>
             <Button
@@ -38,7 +38,7 @@ const TeamCreatePage: React.FC = () => {
               }
               type="primary"
             >
-              打开团队构建器
+              Open Team Builder
             </Button>
             <Button
               icon={<RocketOutlined />}
@@ -50,7 +50,7 @@ const TeamCreatePage: React.FC = () => {
                 )
               }
             >
-              查看行为定义
+              View Behaviors
             </Button>
           </Space>
         </div>

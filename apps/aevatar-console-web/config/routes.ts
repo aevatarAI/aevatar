@@ -28,20 +28,20 @@ export default [
   },
   {
     path: "/teams",
-    name: "我的团队",
+    name: "My Teams",
     component: "./scopes/overview",
     menuGroupKey: "teams",
     hideInMenu: false,
   },
   {
     path: "/teams/new",
-    name: "组建团队",
+    name: "Create Team",
     component: "./teams/new",
     menuGroupKey: "teams",
   },
   {
     path: "/teams/:scopeId",
-    name: "团队详情",
+    name: "Team Details",
     component: "./teams",
     hideInMenu: true,
     parentKeys: ["/teams"],
@@ -63,7 +63,7 @@ export default [
   },
   {
     path: "/runtime/primitives",
-    name: "连接器",
+    name: "Connectors",
     component: "./primitives",
     hideInMenu: true,
   },
@@ -79,7 +79,7 @@ export default [
   },
   {
     path: "/runtime/runs",
-    name: "事件流",
+    name: "Event Stream",
     component: "./runs",
     hideInMenu: true,
   },
@@ -97,7 +97,7 @@ export default [
   },
   {
     path: "/runtime/gagents",
-    name: "成员",
+    name: "Members",
     component: "./gagents",
     hideInMenu: true,
   },
@@ -156,7 +156,7 @@ export default [
   },
   {
     path: "/settings",
-    name: "设置",
+    name: "Settings",
     component: "./settings/account",
     menuGroupKey: "settings",
   },
