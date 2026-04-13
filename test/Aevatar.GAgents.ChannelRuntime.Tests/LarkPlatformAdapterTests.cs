@@ -376,6 +376,21 @@ public class LarkPlatformAdapterTests
     }
 
     [Fact]
+    public async Task ParseInbound_rejects_missing_signature_header_when_encrypt_key_configured()
+    {
+        var encryptKey = "test-encrypt-key-123";
+        var reg = MakeRegistrationWithEncryptKey(encryptKey);
+
+        // Valid payload but NO X-Lark-Signature header → must be rejected
+        var payload = BuildLarkV2Payload("im.message.receive_v1", "1234567890", "test-nonce");
+        var bodyString = JsonSerializer.Serialize(payload);
+        var http = CreateHttpContext(payload); // no signature header
+        var inbound = await _adapter.ParseInboundAsync(http, reg);
+
+        inbound.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ParseInbound_skips_signature_when_no_encrypt_key()
     {
         // No encrypt_key → falls back to token verification
@@ -482,8 +497,13 @@ public class LarkPlatformAdapterTests
         });
 
         var encrypted = EncryptLarkPayload(innerPayload, encryptKey);
-        var outerPayload = new { encrypt = encrypted };
-        var http = CreateHttpContext(outerPayload);
+        var outerPayloadJson = JsonSerializer.Serialize(new { encrypt = encrypted });
+
+        // Signature is computed on the ORIGINAL (encrypted) body
+        var signature = LarkPlatformAdapter.ComputeLarkSignature(
+            "1234567890", "test-nonce", encryptKey, outerPayloadJson);
+
+        var http = CreateHttpContextWithSignature(outerPayloadJson, signature);
         var inbound = await _adapter.ParseInboundAsync(http, reg);
 
         inbound.Should().NotBeNull();

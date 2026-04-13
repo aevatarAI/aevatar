@@ -141,26 +141,32 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
 
             // Signature verification: SHA256(timestamp + nonce + encrypt_key + body)
             // Only when encrypt_key is configured. Uses the ORIGINAL (pre-decryption) body.
+            // SECURITY: When encrypt_key is configured, signature is REQUIRED — missing
+            // header means forged request. Without this, an attacker can omit the header
+            // and bypass verification entirely.
             if (!string.IsNullOrEmpty(registration.EncryptKey))
             {
+                if (!http.Request.Headers.TryGetValue("X-Lark-Signature", out var sigHeader) ||
+                    string.IsNullOrWhiteSpace(sigHeader))
+                {
+                    _logger.LogWarning("Lark event callback missing required X-Lark-Signature header");
+                    return null;
+                }
+
                 var timestamp = header.TryGetProperty("create_time", out var ts) ? ts.GetString() ?? "" : "";
                 var nonce = header.TryGetProperty("nonce", out var n) ? n.GetString() ?? "" : "";
                 var expectedSignature = ComputeLarkSignature(timestamp, nonce, registration.EncryptKey,
                     Encoding.UTF8.GetString(bodyBytes)); // always use original body for signature
 
-                if (http.Request.Headers.TryGetValue("X-Lark-Signature", out var sigHeader) &&
-                    !string.IsNullOrWhiteSpace(sigHeader))
+                if (!CryptographicOperations.FixedTimeEquals(
+                        Encoding.UTF8.GetBytes(expectedSignature),
+                        Encoding.UTF8.GetBytes(sigHeader.ToString())))
                 {
-                    if (!CryptographicOperations.FixedTimeEquals(
-                            Encoding.UTF8.GetBytes(expectedSignature),
-                            Encoding.UTF8.GetBytes(sigHeader.ToString())))
-                    {
-                        _logger.LogWarning("Lark event callback signature verification failed");
-                        return null;
-                    }
-
-                    _logger.LogDebug("Lark event callback signature verified");
+                    _logger.LogWarning("Lark event callback signature verification failed");
+                    return null;
                 }
+
+                _logger.LogDebug("Lark event callback signature verified");
             }
 
             // Verify token on v2 event callbacks (header.token) — fallback when no encrypt_key.
