@@ -26,6 +26,13 @@ public static class ChannelCallbackEndpoints
         group.MapGet("/registrations", HandleListRegistrationsAsync).RequireAuthorization();
         group.MapDelete("/registrations/{registrationId}", HandleDeleteRegistrationAsync).RequireAuthorization();
 
+        // Token refresh — update the NyxID access token on an existing registration
+        group.MapPatch("/registrations/{registrationId}/token", HandleUpdateTokenAsync).RequireAuthorization();
+
+        // Diagnostic: test reply path without going through full LLM chat
+        group.MapPost("/registrations/{registrationId}/test-reply", HandleTestReplyAsync).RequireAuthorization();
+        group.MapGet("/diagnostics/errors", HandleGetDiagnosticErrorsAsync);
+
         return app;
     }
 
@@ -59,17 +66,20 @@ public static class ChannelCallbackEndpoints
         CancellationToken ct)
     {
         var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
+        var diagnostics = http.RequestServices.GetService<IChannelRuntimeDiagnostics>();
 
         // Resolve registration from projection read model
         var registration = await queryPort.GetAsync(registrationId, ct);
         if (registration is null)
         {
             logger.LogWarning("Channel callback for unknown registration: {RegistrationId}", registrationId);
+            RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "registration_not_found");
             return Results.NotFound(new { error = "Registration not found" });
         }
 
         if (!string.Equals(registration.Platform, platform, StringComparison.OrdinalIgnoreCase))
         {
+            RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "platform_mismatch");
             return Results.BadRequest(new { error = "Platform mismatch" });
         }
 
@@ -79,6 +89,7 @@ public static class ChannelCallbackEndpoints
         if (adapter is null)
         {
             logger.LogWarning("No adapter for platform: {Platform}", platform);
+            RecordDiagnostic(diagnostics, "Callback:error", platform, registrationId, "adapter_not_found");
             return Results.BadRequest(new { error = $"Unsupported platform: {platform}" });
         }
 
@@ -93,6 +104,7 @@ public static class ChannelCallbackEndpoints
         if (inbound is null)
         {
             // Not a processable message (e.g. unsupported event type) — acknowledge silently
+            RecordDiagnostic(diagnostics, "Callback:ignored", platform, registration.Id, "adapter_returned_null");
             return Results.Ok(new { status = "ignored" });
         }
 
@@ -109,59 +121,51 @@ public static class ChannelCallbackEndpoints
             if (cache.TryGetValue(dedupeKey, out _))
             {
                 logger.LogInformation("Duplicate webhook ignored: {DedupeKey}", dedupeKey);
-                return Results.Accepted(value: new { status = "deduplicated" });
+                RecordDiagnostic(diagnostics, "Callback:deduplicated", inbound.Platform, registration.Id, "webhook_duplicate");
+                return Results.Ok(new { status = "deduplicated" });
             }
 
             // Short TTL blocks concurrent duplicates; extended after successful dispatch.
             cache.Set(dedupeKey, true, TimeSpan.FromSeconds(10));
         }
 
-        // Return 202 Accepted immediately — process async in background.
-        // Platforms like Lark have ~5s webhook timeout; we can't wait for LLM response.
-        // Note: Task.Run is a Phase 1 pragmatic compromise. Phase 2 refactors to actor
-        // self-message dispatch to comply with CLAUDE.md actor execution model.
-        _ = Task.Run(async () =>
+        // Dispatch to ChannelUserGAgent. HandleEventAsync enqueues the event into the
+        // actor's inbox (stream publish) and returns immediately. The actor handles the
+        // full continuation flow: identity tracking → chat dispatch → stream forwarding →
+        // response collection → reply. Each stage is a separate grain turn — no deadlock.
+        try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-            try
-            {
-                await DispatchToUserActorAsync(
-                    inbound, registration, actorRuntime, cache, loggerFactory, cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                var bgLogger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
-                bgLogger.LogWarning(
-                    "Channel inbound dispatch timed out: platform={Platform}, registrationId={RegistrationId}",
-                    inbound.Platform, registration.Id);
-            }
-            catch (Exception ex)
-            {
-                var bgLogger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
-                bgLogger.LogError(ex,
-                    "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
-                    inbound.Platform, registration.Id);
-            }
-        });
-
-        return Results.Accepted(value: new { status = "accepted" });
+            await DispatchToUserActorAsync(inbound, registration, actorRuntime, cache);
+            RecordDiagnostic(diagnostics, "Callback:accepted", inbound.Platform, registration.Id, "dispatch_enqueued");
+            // Lark requires exactly HTTP 200 — any other status is treated as failure.
+            return Results.Ok(new { status = "accepted" });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Channel inbound dispatch failed: platform={Platform}, registrationId={RegistrationId}",
+                inbound.Platform, registration.Id);
+            RecordDiagnostic(diagnostics, "Callback:error", inbound.Platform, registration.Id,
+                $"{ex.GetType().Name}: {ex.Message}");
+            // Return 500 so webhook providers (Lark/Telegram) retry the delivery
+            // instead of treating the message as successfully processed.
+            return Results.Json(
+                new { status = "dispatch_error", error = ex.Message },
+                statusCode: 500);
+        }
     }
 
     /// <summary>
-    /// Background task: dispatch inbound message to ChannelUserGAgent.
-    /// The user actor handles the full flow: identity tracking -> chat -> reply.
+    /// Dispatches inbound message to ChannelUserGAgent via stream publish.
+    /// Returns immediately — the actor handles the full continuation flow
+    /// (identity tracking → chat dispatch → response collection → reply)
+    /// across multiple grain turns.
     /// </summary>
     private static async Task DispatchToUserActorAsync(
         InboundMessage inbound,
         ChannelBotRegistrationEntry registration,
         IActorRuntime actorRuntime,
-        IMemoryCache? cache,
-        ILoggerFactory loggerFactory,
-        CancellationToken ct = default)
+        IMemoryCache? cache)
     {
-        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Callback");
-
-        // Per-sender user actor — owns identity state and orchestrates chat + reply
         var userActorId = $"channel-user-{inbound.Platform}-{registration.Id}-{inbound.SenderId}";
         var userActor = await actorRuntime.GetAsync(userActorId)
                         ?? await actorRuntime.CreateAsync<ChannelUserGAgent>(userActorId);
@@ -194,17 +198,12 @@ public static class ChannelCallbackEndpoints
 
         await userActor.HandleEventAsync(envelope);
 
-        // Set dedup AFTER successful dispatch — if dispatch threw, no entry is set,
-        // so Lark retries will be processed instead of silently dropped.
+        // Extend dedup TTL after successful dispatch.
         if (cache != null && !string.IsNullOrEmpty(inbound.MessageId))
         {
             var dedupeKey = $"channel-dedup:{inbound.Platform}:{registration.Id}:{inbound.MessageId}";
             cache.Set(dedupeKey, true, TimeSpan.FromMinutes(5));
         }
-
-        logger.LogInformation(
-            "Channel inbound dispatched: platform={Platform}, sender={SenderId}",
-            inbound.Platform, inbound.SenderId);
     }
 
     // ─── Registration CRUD ───
@@ -262,6 +261,14 @@ public static class ChannelCallbackEndpoints
             webhookUrl = baseUrl + callbackPath;
         }
 
+        // Ensure projection scope is activated BEFORE dispatch — without this,
+        // the scope agent never subscribes and the projector never runs.
+        var projectionPort = http.RequestServices.GetService<ChannelBotRegistrationProjectionPort>();
+        if (projectionPort != null)
+            await projectionPort.EnsureProjectionForActorAsync(ChannelBotRegistrationGAgent.WellKnownId, ct);
+
+        var registrationId = Guid.NewGuid().ToString("N");
+
         // Dispatch register command to actor
         var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
         var cmd = new ChannelBotRegisterCommand
@@ -272,6 +279,7 @@ public static class ChannelCallbackEndpoints
             VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
+            RequestedId = registrationId,
         };
 
         var cmdEnvelope = new EventEnvelope
@@ -287,16 +295,13 @@ public static class ChannelCallbackEndpoints
 
         await actor.HandleEventAsync(cmdEnvelope);
 
-        // Command accepted — the projection pipeline will materialize the read model.
-        // Return accepted with the command details (eventual consistency).
-        // Note: registration ID is generated inside the actor; the response reflects
-        // accepted state. Clients should list registrations to get the full entry.
         return Results.Accepted(value: new
         {
-            status = "accepted",
+            status = "registered",
+            registration_id = registrationId,
             platform = platformNormalized,
             nyx_provider_slug = request.NyxProviderSlug.Trim(),
-            callback_url_pattern = $"{callbackPath}/{{registration_id}}",
+            callback_url = $"{callbackPath}/{registrationId}",
         });
     }
 
@@ -344,6 +349,225 @@ public static class ChannelCallbackEndpoints
         return Results.Ok(new { status = "deleted" });
     }
 
+    private static async Task<IResult> HandleUpdateTokenAsync(
+        string registrationId,
+        HttpContext http,
+        [FromServices] IActorRuntime actorRuntime,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Registration");
+
+        var exists = await queryPort.GetAsync(registrationId, ct);
+        if (exists is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        UpdateTokenRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<UpdateTokenRequest>(RegistrationJsonOptions, ct);
+        }
+        catch (JsonException ex)
+        {
+            logger.LogWarning(ex, "Invalid update-token request payload");
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        if (request is null || string.IsNullOrWhiteSpace(request.NyxUserToken))
+            return Results.BadRequest(new { error = "nyx_user_token is required" });
+
+        var newToken = request.NyxUserToken.Trim();
+
+        // Snapshot projection version. Orphaned documents retain a stale version
+        // that never advances — this lets us detect the actor dropping the command.
+        var versionBefore = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+
+        // Always dispatch to the actor — it is the authority on current state.
+        var actor = await GetOrCreateRegistrationActorAsync(actorRuntime);
+        var cmd = new ChannelBotUpdateTokenCommand
+        {
+            RegistrationId = registrationId,
+            NyxUserToken = newToken,
+        };
+
+        var cmdEnvelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Payload = Google.Protobuf.WellKnownTypes.Any.Pack(cmd),
+            Route = new EnvelopeRoute
+            {
+                Direct = new DirectRoute { TargetActorId = actor.Id },
+            },
+        };
+
+        await actor.HandleEventAsync(cmdEnvelope);
+
+        // Poll: require BOTH version advance AND desired token visible.
+        var confirmed = false;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            await Task.Delay(500, ct);
+            var versionAfter = await queryPort.GetStateVersionAsync(registrationId, ct) ?? -1;
+            if (versionAfter <= versionBefore)
+                continue;
+            var after = await queryPort.GetAsync(registrationId, ct);
+            if (after is not null && string.Equals(after.NyxUserToken, newToken, StringComparison.Ordinal))
+            {
+                confirmed = true;
+                break;
+            }
+        }
+
+        if (!confirmed)
+        {
+            logger.LogWarning("Token update for {RegistrationId} dispatched but not confirmed by projection", registrationId);
+            return Results.Json(new
+            {
+                status = "error",
+                error = "Token update dispatched but not confirmed. The registration may not exist in the actor's state.",
+                registration_id = registrationId,
+            }, statusCode: 500);
+        }
+
+        return Results.Ok(new { status = "token_updated", registration_id = registrationId });
+    }
+
+    /// <summary>
+    /// Diagnostic: sends a test reply directly through the platform adapter,
+    /// bypassing the full LLM chat flow. Isolates whether the reply path
+    /// (NyxID proxy → platform API) is working.
+    /// </summary>
+    private static async Task<IResult> HandleTestReplyAsync(
+        HttpContext http,
+        string registrationId,
+        [FromServices] IChannelBotRegistrationQueryPort queryPort,
+        [FromServices] IEnumerable<IPlatformAdapter> adapters,
+        [FromServices] NyxIdApiClient nyxClient,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken ct)
+    {
+        var logger = loggerFactory.CreateLogger("Aevatar.ChannelRuntime.Diagnostic");
+
+        var registration = await queryPort.GetAsync(registrationId, ct);
+        if (registration is null)
+            return Results.NotFound(new { error = "Registration not found" });
+
+        // Read optional test parameters from body
+        TestReplyRequest? request;
+        try
+        {
+            request = await http.Request.ReadFromJsonAsync<TestReplyRequest>(RegistrationJsonOptions, ct);
+        }
+        catch
+        {
+            request = null;
+        }
+
+        var chatId = request?.ChatId;
+        var message = request?.Message ?? "[Aevatar Test] Reply path is working.";
+
+        if (string.IsNullOrWhiteSpace(chatId))
+            return Results.BadRequest(new
+            {
+                error = "chat_id is required",
+                hint = "Send { \"chat_id\": \"oc_xxx\", \"message\": \"hello\" }. " +
+                       "Get chat_id from Lark webhook payload event.message.chat_id.",
+            });
+
+        // Diagnostic: show what we're about to send
+        var diagnostics = new
+        {
+            registration_id = registration.Id,
+            platform = registration.Platform,
+            nyx_provider_slug = registration.NyxProviderSlug,
+            nyx_user_token_present = !string.IsNullOrWhiteSpace(registration.NyxUserToken),
+            nyx_user_token_length = registration.NyxUserToken?.Length ?? 0,
+            scope_id = registration.ScopeId,
+            target_chat_id = chatId,
+        };
+
+        var adapter = adapters.FirstOrDefault(a =>
+            string.Equals(a.Platform, registration.Platform, StringComparison.OrdinalIgnoreCase));
+        if (adapter is null)
+            return Results.BadRequest(new { error = $"No adapter for platform: {registration.Platform}", diagnostics });
+
+        var inbound = new InboundMessage
+        {
+            Platform = registration.Platform,
+            ConversationId = chatId,
+            SenderId = "test-diagnostic",
+            SenderName = "test-diagnostic",
+            Text = "test",
+            ChatType = "p2p",
+        };
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var delivery = await adapter.SendReplyAsync(message, inbound, registration, nyxClient, cts.Token);
+            if (!delivery.Succeeded)
+            {
+                return Results.Json(new
+                {
+                    status = "error",
+                    error = delivery.Detail ?? "Reply delivery failed.",
+                    diagnostics,
+                    message,
+                }, statusCode: 500);
+            }
+
+            return Results.Ok(new { status = "sent", diagnostics, message, detail = delivery.Detail });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Test reply failed for registration {RegistrationId}", registrationId);
+            return Results.Json(new
+            {
+                status = "error",
+                error = ex.Message,
+                error_type = ex.GetType().Name,
+                diagnostics,
+            }, statusCode: 500);
+        }
+    }
+
+    private static Task<IResult> HandleGetDiagnosticErrorsAsync(
+        [FromServices] IChannelRuntimeDiagnostics? diagnostics)
+    {
+        var entries = diagnostics?.GetRecent()
+                      ?? Array.Empty<ChannelRuntimeDiagnosticEntry>();
+
+        return Task.FromResult<IResult>(Results.Ok(new
+        {
+            status = new
+            {
+                service_resolved = diagnostics != null,
+                server_time = DateTimeOffset.UtcNow.ToString("O"),
+                entry_count = entries.Count,
+            },
+            entries = entries.Select(entry => new
+            {
+                timestamp = entry.Timestamp.ToString("O"),
+                stage = entry.Stage,
+                platform = entry.Platform,
+                registrationId = entry.RegistrationId,
+                detail = entry.Detail,
+            }),
+        }));
+    }
+
+    private static void RecordDiagnostic(
+        IChannelRuntimeDiagnostics? diagnostics,
+        string stage,
+        string platform,
+        string registrationId,
+        string? detail = null)
+    {
+        diagnostics?.Record(stage, platform, registrationId, detail);
+    }
+
     private sealed record RegistrationRequest(
         string? Platform,
         string? NyxProviderSlug,
@@ -351,4 +575,8 @@ public static class ChannelCallbackEndpoints
         string? VerificationToken,
         string? ScopeId,
         string? WebhookBaseUrl);
+
+    private sealed record TestReplyRequest(string? ChatId, string? Message);
+
+    private sealed record UpdateTokenRequest(string? NyxUserToken);
 }

@@ -24,6 +24,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
             .Match(current, evt)
             .On<ChannelBotRegisteredEvent>(ApplyRegistered)
             .On<ChannelBotUnregisteredEvent>(ApplyUnregistered)
+            .On<ChannelBotTokenUpdatedEvent>(ApplyTokenUpdated)
             .OrCurrent();
 
     // ─── Commands ───
@@ -33,7 +34,7 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
     {
         var entry = new ChannelBotRegistrationEntry
         {
-            Id = Guid.NewGuid().ToString("N"),
+            Id = !string.IsNullOrWhiteSpace(cmd.RequestedId) ? cmd.RequestedId : Guid.NewGuid().ToString("N"),
             Platform = cmd.Platform,
             NyxProviderSlug = cmd.NyxProviderSlug,
             NyxUserToken = cmd.NyxUserToken,
@@ -62,6 +63,24 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         Logger.LogInformation("Unregistered channel bot: id={Id}", cmd.RegistrationId);
     }
 
+    [EventHandler]
+    public async Task HandleUpdateToken(ChannelBotUpdateTokenCommand cmd)
+    {
+        var exists = State.Registrations.Any(r => r.Id == cmd.RegistrationId);
+        if (!exists)
+        {
+            Logger.LogWarning("Cannot update token: channel bot registration not found: {Id}", cmd.RegistrationId);
+            return;
+        }
+
+        await PersistDomainEventAsync(new ChannelBotTokenUpdatedEvent
+        {
+            RegistrationId = cmd.RegistrationId,
+            NyxUserToken = cmd.NyxUserToken,
+        });
+        Logger.LogInformation("Updated token for channel bot: id={Id}", cmd.RegistrationId);
+    }
+
     // ─── State transitions ───
 
     private static ChannelBotRegistrationStoreState ApplyRegistered(ChannelBotRegistrationStoreState current, ChannelBotRegisteredEvent evt)
@@ -77,6 +96,15 @@ public sealed class ChannelBotRegistrationGAgent : GAgentBase<ChannelBotRegistra
         var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
         if (entry is not null)
             next.Registrations.Remove(entry);
+        return next;
+    }
+
+    private static ChannelBotRegistrationStoreState ApplyTokenUpdated(ChannelBotRegistrationStoreState current, ChannelBotTokenUpdatedEvent evt)
+    {
+        var next = current.Clone();
+        var entry = next.Registrations.FirstOrDefault(r => r.Id == evt.RegistrationId);
+        if (entry is not null)
+            entry.NyxUserToken = evt.NyxUserToken;
         return next;
     }
 }

@@ -198,6 +198,48 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotQueryPort_GetStateVersionAsync_ReturnsVersion_WhenDocumentExists()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
+            {
+                Id = "bot-1",
+                StateVersion = 42,
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetStateVersionAsync("bot-1");
+
+        result.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task BotQueryPort_GetStateVersionAsync_ReturnsNull_WhenDocumentNotFound()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("nonexistent", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(null));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetStateVersionAsync("nonexistent");
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BotQueryPort_GetStateVersionAsync_ReturnsNull_ForBlankId()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+
+        var result = await queryPort.GetStateVersionAsync("");
+
+        result.Should().BeNull();
+        await reader.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task BotQueryPort_QueryAllAsync_ReturnsEmpty_WhenNoDocuments()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();

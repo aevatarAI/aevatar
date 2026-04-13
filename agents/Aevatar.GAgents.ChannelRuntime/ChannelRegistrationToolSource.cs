@@ -1,29 +1,26 @@
 using Aevatar.AI.Abstractions.ToolProviders;
-using Aevatar.Foundation.Abstractions;
 
 namespace Aevatar.GAgents.ChannelRuntime;
 
 /// <summary>
 /// Tool source that exposes channel_registrations tool to NyxIdChatGAgent.
-/// Allows the agent to register, list, and delete channel bot registrations
-/// so users don't need to call the REST API manually.
+/// Only depends on IServiceProvider — the tool itself lazy-resolves its
+/// dependencies (IActorRuntime, IChannelBotRegistrationQueryPort) at call
+/// time in ExecuteAsync, not at construction time. This avoids DI failures
+/// during Orleans grain activation when services may not yet be available.
 /// </summary>
 public sealed class ChannelRegistrationToolSource : IAgentToolSource
 {
-    private readonly IChannelBotRegistrationQueryPort _queryPort;
-    private readonly IActorRuntime _actorRuntime;
+    private readonly IServiceProvider _serviceProvider;
 
-    public ChannelRegistrationToolSource(
-        IChannelBotRegistrationQueryPort queryPort,
-        IActorRuntime actorRuntime)
+    public ChannelRegistrationToolSource(IServiceProvider serviceProvider)
     {
-        _queryPort = queryPort;
-        _actorRuntime = actorRuntime;
+        _serviceProvider = serviceProvider;
     }
 
     public Task<IReadOnlyList<IAgentTool>> DiscoverToolsAsync(CancellationToken ct = default)
     {
-        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(_queryPort, _actorRuntime)];
+        IReadOnlyList<IAgentTool> tools = [new ChannelRegistrationTool(_serviceProvider)];
         return Task.FromResult(tools);
     }
 }
