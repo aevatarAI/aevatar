@@ -1086,13 +1086,18 @@ public sealed class WorkflowRunGAgent
     private void PropagateRequestMetadataToExecutionItems(
         IReadOnlyDictionary<string, string>? metadata)
     {
-        if (metadata == null || metadata.Count == 0)
-            return;
-
         foreach (var key in PropagatedMetadataKeys)
         {
-            if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
+            if (metadata != null &&
+                metadata.TryGetValue(key, out var value) &&
+                !string.IsNullOrWhiteSpace(value))
+            {
                 _executionItems[key] = value.Trim();
+            }
+            else
+            {
+                _executionItems.Remove(key);
+            }
         }
     }
 

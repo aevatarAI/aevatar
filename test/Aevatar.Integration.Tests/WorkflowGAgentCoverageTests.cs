@@ -1080,6 +1080,44 @@ public class WorkflowGAgentCoverageTests
     }
 
     [Fact]
+    public async Task WorkflowRunGAgent_HandleStartSubWorkflowRun_ShouldClearMissingPropagatedMetadataFromPreviousInvocation()
+    {
+        var agent = CreateRunAgent();
+        SetAgentId(agent, "workflow-run-sub-start-clear");
+
+        await agent.BindWorkflowRunDefinitionAsync(
+            "definition-1",
+            BuildValidWorkflowYaml("role_a", "RoleA"),
+            "wf_valid",
+            runId: "run-parent");
+
+        await agent.HandleStartSubWorkflowRun(new StartSubWorkflowRunEvent
+        {
+            Input = "child-input-1",
+            RunId = "child-run-1",
+            RequestItems =
+            {
+                [LLMRequestMetadataKeys.NyxIdAccessToken] = "nyx-token",
+                [LLMRequestMetadataKeys.ModelOverride] = "gpt-test",
+            },
+        });
+
+        agent.TryGetExecutionItem(LLMRequestMetadataKeys.NyxIdAccessToken, out var firstToken).Should().BeTrue();
+        firstToken.Should().Be("nyx-token");
+        agent.TryGetExecutionItem(LLMRequestMetadataKeys.ModelOverride, out var firstModel).Should().BeTrue();
+        firstModel.Should().Be("gpt-test");
+
+        await agent.HandleStartSubWorkflowRun(new StartSubWorkflowRunEvent
+        {
+            Input = "child-input-2",
+            RunId = "child-run-1",
+        });
+
+        agent.TryGetExecutionItem(LLMRequestMetadataKeys.NyxIdAccessToken, out _).Should().BeFalse();
+        agent.TryGetExecutionItem(LLMRequestMetadataKeys.ModelOverride, out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task WorkflowRunGAgent_BindWorkflowRunDefinition_ShouldTrimInlineWorkflowNames_AndIgnoreInvalidEntries()
     {
         var agent = CreateRunAgent();
