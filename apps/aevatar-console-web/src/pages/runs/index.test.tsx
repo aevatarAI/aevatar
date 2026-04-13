@@ -86,7 +86,22 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
 jest.mock("./components/RunsLaunchRail", () => {
   const React = require("react");
 
-  const normalizeValues = (value: Record<string, unknown> = {}) => ({
+  type MockRunFormValues = {
+    actorId?: string;
+    endpointId?: string;
+    endpointKind?: "chat" | "command";
+    payloadBase64?: string;
+    payloadTypeUrl?: string;
+    prompt: string;
+    routeName?: string;
+    scopeId?: string;
+    serviceOverrideId?: string;
+    transport: "sse" | "ws";
+  };
+
+  const normalizeValues = (
+    value: Record<string, unknown> = {}
+  ): MockRunFormValues => ({
     actorId:
       typeof value.actorId === "string" ? value.actorId : undefined,
     endpointId:
@@ -108,15 +123,56 @@ jest.mock("./components/RunsLaunchRail", () => {
     transport: value.transport === "ws" ? "ws" : "sse",
   });
 
-  const normalizePatch = (value: Record<string, unknown> = {}) => {
-    const nextValue: Record<string, unknown> = {};
-
-    for (const key of Object.keys(value)) {
-      nextValue[key] = normalizeValues({ [key]: value[key] })[key];
-    }
-
-    return nextValue;
-  };
+  const normalizePatch = (
+    value: Record<string, unknown> = {}
+  ): Partial<MockRunFormValues> => ({
+    ...(Object.prototype.hasOwnProperty.call(value, "actorId")
+      ? { actorId: normalizeValues({ actorId: value.actorId }).actorId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "endpointId")
+      ? { endpointId: normalizeValues({ endpointId: value.endpointId }).endpointId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "endpointKind")
+      ? {
+          endpointKind: normalizeValues({
+            endpointKind: value.endpointKind,
+          }).endpointKind,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "payloadBase64")
+      ? {
+          payloadBase64: normalizeValues({
+            payloadBase64: value.payloadBase64,
+          }).payloadBase64,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "payloadTypeUrl")
+      ? {
+          payloadTypeUrl: normalizeValues({
+            payloadTypeUrl: value.payloadTypeUrl,
+          }).payloadTypeUrl,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "prompt")
+      ? { prompt: normalizeValues({ prompt: value.prompt }).prompt }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "routeName")
+      ? { routeName: normalizeValues({ routeName: value.routeName }).routeName }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "scopeId")
+      ? { scopeId: normalizeValues({ scopeId: value.scopeId }).scopeId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "serviceOverrideId")
+      ? {
+          serviceOverrideId: normalizeValues({
+            serviceOverrideId: value.serviceOverrideId,
+          }).serviceOverrideId,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "transport")
+      ? { transport: normalizeValues({ transport: value.transport }).transport }
+      : {}),
+  });
 
   const RunsLaunchRail = (props: any) => {
     const [values, setValues] = React.useState(() =>
@@ -136,7 +192,7 @@ jest.mock("./components/RunsLaunchRail", () => {
       }
 
       props.composerFormRef.current = {
-        getFieldValue: (name: string) => values[name],
+        getFieldValue: (name: string) => (values as Record<string, unknown>)[name],
         getFieldsValue: () => values,
         resetFields: () => setValues(normalizeValues(props.initialFormValues)),
         setFieldValue: (name: string, value: unknown) =>
