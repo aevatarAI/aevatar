@@ -61,6 +61,13 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
+        // Restore durable dedup set from persisted state.
+        foreach (var id in State.ProcessedMessageIds)
+        {
+            if (_processedMessageIds.Add(id))
+                _processedMessageIdsOrder.AddLast(id);
+        }
+
         if (State.PendingSessions.Count == 0)
             return;
 
@@ -597,6 +604,17 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         var next = current.Clone();
         next.PendingSessions[evt.Session.SessionId] = evt.Session;
+
+        // Durable dedup: persist the messageId so it survives actor deactivation.
+        // Bounded to MaxProcessedMessageIds (200) to prevent unbounded state growth.
+        if (!string.IsNullOrEmpty(evt.Session.MessageId) &&
+            !next.ProcessedMessageIds.Contains(evt.Session.MessageId))
+        {
+            next.ProcessedMessageIds.Add(evt.Session.MessageId);
+            while (next.ProcessedMessageIds.Count > MaxProcessedMessageIds)
+                next.ProcessedMessageIds.RemoveAt(0);
+        }
+
         return next;
     }
 

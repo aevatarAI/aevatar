@@ -125,6 +125,24 @@ public class ChannelBotRegistrationGAgentTests : IAsyncLifetime
         entry.VerificationToken.Should().BeEmpty();
         entry.ScopeId.Should().BeEmpty();
         entry.WebhookUrl.Should().BeEmpty();
+        entry.EncryptKey.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task HandleRegister_PersistsEncryptKey()
+    {
+        var cmd = new ChannelBotRegisterCommand
+        {
+            Platform = "lark",
+            NyxProviderSlug = "api-lark-bot",
+            NyxUserToken = "token-abc",
+            EncryptKey = "my-encrypt-key-123",
+        };
+
+        await _agent.HandleRegister(cmd);
+
+        var entry = _agent.State.Registrations[0];
+        entry.EncryptKey.Should().Be("my-encrypt-key-123");
     }
 
     [Fact]

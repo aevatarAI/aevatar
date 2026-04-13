@@ -15,6 +15,7 @@ message ChannelBotRegistrationEntry {
   string scope_id = 6;
   google.protobuf.Timestamp created_at = 7;
   string webhook_url = 8;  // Full callback URL configured via setWebhook
+  string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
 }
 
 message ChannelBotRegistrationStoreState {
@@ -32,6 +33,7 @@ message ChannelUserState {
   google.protobuf.Timestamp first_seen = 6;
   google.protobuf.Timestamp last_seen = 7;
   map<string, ChannelPendingChatSession> pending_sessions = 8;  // session_id → pending session
+  repeated string processed_message_ids = 9;                    // durable dedup — bounded to last 200
 }
 
 // Tracks an in-flight chat request (persisted in actor state for durability).
@@ -135,6 +137,7 @@ message ChannelBotRegisterCommand {
   string scope_id = 5;
   string webhook_url = 6;
   string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
+  string encrypt_key = 8;   // Lark Encrypt Key for signature verification + event decryption
 }
 
 message ChannelBotUnregisterCommand {
@@ -165,6 +168,7 @@ message ChannelBotRegistrationDocument {
   google.protobuf.Timestamp updated_at_utc = 9;
   string actor_id = 10;                     // Source actor ID
   string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
+  string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
 }
 
 // ─── Channel Chat Lifecycle (continuation pattern) ───
