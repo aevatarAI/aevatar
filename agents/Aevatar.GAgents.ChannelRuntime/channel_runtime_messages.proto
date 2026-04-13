@@ -184,6 +184,14 @@ message ChannelChatRequestedEvent {
   ChannelPendingChatSession session = 1;
 }
 
+// Domain event: inbound message dispatch succeeded.
+// Persisted only after chat dispatch succeeds so durable dedup never marks
+// a message as processed before the chat actor has accepted it.
+message ChannelInboundDispatchedEvent {
+  string session_id = 1;
+  string message_id = 2;
+}
+
 // Domain event: chat session completed (reply sent or timed out)
 message ChannelChatCompletedEvent {
   string session_id = 1;

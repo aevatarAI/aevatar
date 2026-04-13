@@ -240,6 +240,85 @@ public sealed class RegistrationQueryPortTests
     }
 
     [Fact]
+    public async Task BotQueryPort_GetAsync_PropagatesEncryptKey()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-enc", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
+            {
+                Id = "bot-enc",
+                Platform = "lark",
+                NyxProviderSlug = "lark-provider",
+                NyxUserToken = "token-abc",
+                VerificationToken = "verify-123",
+                ScopeId = "scope-x",
+                WebhookUrl = "https://example.com/callback",
+                EncryptKey = "my-secret-encrypt-key",
+                StateVersion = 5,
+                LastEventId = "evt-enc",
+                ActorId = "actor-bot",
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetAsync("bot-enc");
+
+        result.Should().NotBeNull();
+        result!.EncryptKey.Should().Be("my-secret-encrypt-key");
+    }
+
+    [Fact]
+    public async Task BotQueryPort_GetAsync_DefaultsEncryptKeyToEmpty_WhenNull()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.GetAsync("bot-no-enc", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationDocument?>(new ChannelBotRegistrationDocument
+            {
+                Id = "bot-no-enc",
+                Platform = "lark",
+                StateVersion = 1,
+                LastEventId = "evt-1",
+                ActorId = "actor-bot",
+                // EncryptKey not set — proto default is empty string
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.GetAsync("bot-no-enc");
+
+        result.Should().NotBeNull();
+        result!.EncryptKey.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task BotQueryPort_QueryAllAsync_PropagatesEncryptKey()
+    {
+        var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();
+        reader.QueryAsync(Arg.Any<ProjectionDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ProjectionDocumentQueryResult<ChannelBotRegistrationDocument>
+            {
+                Items =
+                [
+                    new ChannelBotRegistrationDocument
+                    {
+                        Id = "bot-a", Platform = "lark", EncryptKey = "key-a",
+                        ActorId = "a1", StateVersion = 1, LastEventId = "e1",
+                    },
+                    new ChannelBotRegistrationDocument
+                    {
+                        Id = "bot-b", Platform = "lark", EncryptKey = "key-b",
+                        ActorId = "a1", StateVersion = 2, LastEventId = "e2",
+                    },
+                ],
+            }));
+
+        var queryPort = new ChannelBotRegistrationQueryPort(reader);
+        var result = await queryPort.QueryAllAsync();
+
+        result.Should().HaveCount(2);
+        result[0].EncryptKey.Should().Be("key-a");
+        result[1].EncryptKey.Should().Be("key-b");
+    }
+
+    [Fact]
     public async Task BotQueryPort_QueryAllAsync_ReturnsEmpty_WhenNoDocuments()
     {
         var reader = Substitute.For<IProjectionDocumentReader<ChannelBotRegistrationDocument, string>>();

@@ -153,8 +153,10 @@ public sealed class LarkPlatformAdapter : IPlatformAdapter
                     return null;
                 }
 
-                var timestamp = header.TryGetProperty("create_time", out var ts) ? ts.GetString() ?? "" : "";
-                var nonce = header.TryGetProperty("nonce", out var n) ? n.GetString() ?? "" : "";
+                var timestamp = http.Request.Headers.TryGetValue("X-Lark-Request-Timestamp", out var tsHeader)
+                    ? tsHeader.ToString() : "";
+                var nonce = http.Request.Headers.TryGetValue("X-Lark-Request-Nonce", out var nonceHeader)
+                    ? nonceHeader.ToString() : "";
                 var expectedSignature = ComputeLarkSignature(timestamp, nonce, registration.EncryptKey,
                     Encoding.UTF8.GetString(bodyBytes)); // always use original body for signature
 

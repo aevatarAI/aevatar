@@ -56,6 +56,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             .On<ChannelUserTrackedEvent>(ApplyTracked)
             .On<ChannelUserBoundEvent>(ApplyBound)
             .On<ChannelChatRequestedEvent>(ApplyRequested)
+            .On<ChannelInboundDispatchedEvent>(ApplyInboundDispatched)
             .On<ChannelChatCompletedEvent>(ApplyCompleted)
             .OrCurrent();
 
@@ -203,8 +204,8 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             RecordDiagnostic("Chat:dispatched", evt.Platform, evt.RegistrationId,
                 $"sessionId={sessionId}");
 
-            // 8. Record successful dispatch in dedup set.
-            TrackProcessedMessageId(evt.MessageId);
+            // 8. Record successful dispatch in durable dedup state.
+            await PersistProcessedMessageIdAsync(pendingSession, CancellationToken.None);
 
             // RETURN — end turn. Continuation happens in HandleChatContent/HandleChatEnd.
         }
@@ -451,7 +452,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
             ? State.NyxidAccessToken
             : session.OrgToken;
         await DispatchChatRequestAsync(session, effectiveToken, chatActor, ct);
-        TrackProcessedMessageId(session.MessageId);
+        await PersistProcessedMessageIdAsync(session, ct);
         RecordDiagnostic("Chat:recover:redispatch", session.Platform, session.RegistrationId,
             $"sessionId={session.SessionId}");
     }
@@ -557,6 +558,25 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         }
     }
 
+    private async Task PersistProcessedMessageIdAsync(
+        ChannelPendingChatSession session,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(session.MessageId) ||
+            _processedMessageIds.Contains(session.MessageId))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(new ChannelInboundDispatchedEvent
+        {
+            SessionId = session.SessionId,
+            MessageId = session.MessageId,
+        }, ct);
+
+        TrackProcessedMessageId(session.MessageId);
+    }
+
     /// <summary>
     /// Derives a deterministic GUID-format sessionId from a messageId.
     /// Same messageId always produces the same sessionId, so Orleans stream
@@ -604,13 +624,18 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
 
         var next = current.Clone();
         next.PendingSessions[evt.Session.SessionId] = evt.Session;
+        return next;
+    }
 
-        // Durable dedup: persist the messageId so it survives actor deactivation.
-        // Bounded to MaxProcessedMessageIds (200) to prevent unbounded state growth.
-        if (!string.IsNullOrEmpty(evt.Session.MessageId) &&
-            !next.ProcessedMessageIds.Contains(evt.Session.MessageId))
+    private static ChannelUserState ApplyInboundDispatched(ChannelUserState current, ChannelInboundDispatchedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.MessageId))
+            return current;
+
+        var next = current.Clone();
+        if (!next.ProcessedMessageIds.Contains(evt.MessageId))
         {
-            next.ProcessedMessageIds.Add(evt.Session.MessageId);
+            next.ProcessedMessageIds.Add(evt.MessageId);
             while (next.ProcessedMessageIds.Count > MaxProcessedMessageIds)
                 next.ProcessedMessageIds.RemoveAt(0);
         }

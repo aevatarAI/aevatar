@@ -104,6 +104,78 @@ public class ChannelUserStateTests
     }
 
     [Fact]
+    public void NewState_ProcessedMessageIds_IsEmpty()
+    {
+        var state = new ChannelUserState();
+        state.ProcessedMessageIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ProcessedMessageIds_CanAddAndRetain()
+    {
+        var state = new ChannelUserState();
+        state.ProcessedMessageIds.Add("msg-1");
+        state.ProcessedMessageIds.Add("msg-2");
+
+        state.ProcessedMessageIds.Should().HaveCount(2);
+        state.ProcessedMessageIds.Should().Contain("msg-1");
+        state.ProcessedMessageIds.Should().Contain("msg-2");
+    }
+
+    [Fact]
+    public void ProcessedMessageIds_SurvivesClone()
+    {
+        var original = new ChannelUserState();
+        original.ProcessedMessageIds.Add("msg-a");
+        original.ProcessedMessageIds.Add("msg-b");
+
+        var clone = original.Clone();
+
+        clone.ProcessedMessageIds.Should().HaveCount(2);
+        clone.ProcessedMessageIds.Should().Contain("msg-a");
+        clone.ProcessedMessageIds.Should().Contain("msg-b");
+
+        // Mutation isolation
+        clone.ProcessedMessageIds.Add("msg-c");
+        original.ProcessedMessageIds.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void ProcessedMessageIds_RemoveAt_Removes_Oldest()
+    {
+        var state = new ChannelUserState();
+        state.ProcessedMessageIds.Add("first");
+        state.ProcessedMessageIds.Add("second");
+        state.ProcessedMessageIds.Add("third");
+
+        state.ProcessedMessageIds.RemoveAt(0);
+
+        state.ProcessedMessageIds.Should().HaveCount(2);
+        state.ProcessedMessageIds[0].Should().Be("second");
+        state.ProcessedMessageIds[1].Should().Be("third");
+    }
+
+    [Fact]
+    public void ChannelBotRegistrationEntry_EncryptKey_DefaultsToEmpty()
+    {
+        var entry = new ChannelBotRegistrationEntry();
+        entry.EncryptKey.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ChannelBotRegistrationEntry_EncryptKey_RoundTrips()
+    {
+        var entry = new ChannelBotRegistrationEntry
+        {
+            Id = "test",
+            EncryptKey = "my-secret-key",
+        };
+
+        var clone = entry.Clone();
+        clone.EncryptKey.Should().Be("my-secret-key");
+    }
+
+    [Fact]
     public void InboundEvent_EmptyOptionalFields_DefaultToEmpty()
     {
         var evt = new ChannelInboundEvent

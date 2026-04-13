@@ -347,13 +347,15 @@ public class LarkPlatformAdapterTests
     {
         var encryptKey = "test-encrypt-key-123";
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
+        const string timestamp = "1234567890";
+        const string nonce = "test-nonce";
 
-        var payload = BuildLarkV2Payload("im.message.receive_v1", "1234567890", "test-nonce");
+        var payload = BuildLarkV2Payload("im.message.receive_v1", timestamp, nonce);
         var bodyString = JsonSerializer.Serialize(payload);
         var expectedSignature = LarkPlatformAdapter.ComputeLarkSignature(
-            "1234567890", "test-nonce", encryptKey, bodyString);
+            timestamp, nonce, encryptKey, bodyString);
 
-        var http = CreateHttpContextWithSignature(bodyString, expectedSignature);
+        var http = CreateHttpContextWithSignature(bodyString, expectedSignature, timestamp, nonce);
         var inbound = await _adapter.ParseInboundAsync(http, reg);
 
         inbound.Should().NotBeNull();
@@ -365,14 +367,38 @@ public class LarkPlatformAdapterTests
     {
         var encryptKey = "test-encrypt-key-123";
         var reg = MakeRegistrationWithEncryptKey(encryptKey);
+        const string timestamp = "1234567890";
+        const string nonce = "test-nonce";
 
-        var payload = BuildLarkV2Payload("im.message.receive_v1", "1234567890", "test-nonce");
+        var payload = BuildLarkV2Payload("im.message.receive_v1", timestamp, nonce);
         var bodyString = JsonSerializer.Serialize(payload);
 
-        var http = CreateHttpContextWithSignature(bodyString, "invalid-signature-value");
+        var http = CreateHttpContextWithSignature(bodyString, "invalid-signature-value", timestamp, nonce);
         var inbound = await _adapter.ParseInboundAsync(http, reg);
 
         inbound.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ParseInbound_signature_uses_request_headers_not_json_header_fields()
+    {
+        var encryptKey = "test-encrypt-key-123";
+        var reg = MakeRegistrationWithEncryptKey(encryptKey);
+        const string jsonTimestamp = "json-ts";
+        const string jsonNonce = "json-nonce";
+        const string requestTimestamp = "request-ts";
+        const string requestNonce = "request-nonce";
+
+        var payload = BuildLarkV2Payload("im.message.receive_v1", jsonTimestamp, jsonNonce);
+        var bodyString = JsonSerializer.Serialize(payload);
+        var expectedSignature = LarkPlatformAdapter.ComputeLarkSignature(
+            requestTimestamp, requestNonce, encryptKey, bodyString);
+
+        var http = CreateHttpContextWithSignature(bodyString, expectedSignature, requestTimestamp, requestNonce);
+        var inbound = await _adapter.ParseInboundAsync(http, reg);
+
+        inbound.Should().NotBeNull();
+        inbound!.Text.Should().Be("Hello from Lark!");
     }
 
     [Fact]
@@ -500,10 +526,12 @@ public class LarkPlatformAdapterTests
         var outerPayloadJson = JsonSerializer.Serialize(new { encrypt = encrypted });
 
         // Signature is computed on the ORIGINAL (encrypted) body
+        const string timestamp = "1234567890";
+        const string nonce = "test-nonce";
         var signature = LarkPlatformAdapter.ComputeLarkSignature(
-            "1234567890", "test-nonce", encryptKey, outerPayloadJson);
+            timestamp, nonce, encryptKey, outerPayloadJson);
 
-        var http = CreateHttpContextWithSignature(outerPayloadJson, signature);
+        var http = CreateHttpContextWithSignature(outerPayloadJson, signature, timestamp, nonce);
         var inbound = await _adapter.ParseInboundAsync(http, reg);
 
         inbound.Should().NotBeNull();
@@ -525,6 +553,316 @@ public class LarkPlatformAdapterTests
         // Should return Unauthorized due to decryption failure
         result.Should().NotBeNull();
         result.Should().BeOfType(typeof(Microsoft.AspNetCore.Http.HttpResults.UnauthorizedHttpResult));
+    }
+
+    // ─── Signature Edge Cases ───
+
+    [Fact]
+    public void ComputeLarkSignature_different_inputs_produce_different_hashes()
+    {
+        var sig1 = LarkPlatformAdapter.ComputeLarkSignature("ts1", "nonce1", "key1", "body1");
+        var sig2 = LarkPlatformAdapter.ComputeLarkSignature("ts2", "nonce1", "key1", "body1");
+        var sig3 = LarkPlatformAdapter.ComputeLarkSignature("ts1", "nonce2", "key1", "body1");
+        var sig4 = LarkPlatformAdapter.ComputeLarkSignature("ts1", "nonce1", "key2", "body1");
+        var sig5 = LarkPlatformAdapter.ComputeLarkSignature("ts1", "nonce1", "key1", "body2");
+
+        new[] { sig1, sig2, sig3, sig4, sig5 }.Distinct().Should().HaveCount(5);
+    }
+
+    [Fact]
+    public void ComputeLarkSignature_empty_inputs_still_produces_valid_hex()
+    {
+        var result = LarkPlatformAdapter.ComputeLarkSignature("", "", "", "");
+        result.Should().NotBeNullOrEmpty();
+        result.Should().MatchRegex("^[0-9a-f]{64}$"); // SHA256 = 64 hex chars
+    }
+
+    [Fact]
+    public async Task ParseInbound_signature_uses_original_encrypted_body_not_decrypted()
+    {
+        // Verify that signature is computed on the OUTER encrypted payload, not the inner decrypted content.
+        // If the adapter used decrypted body for signature, this test would fail.
+        var encryptKey = "sig-body-test-key";
+        var reg = MakeRegistrationWithEncryptKey(encryptKey);
+
+        var innerPayload = JsonSerializer.Serialize(new
+        {
+            schema = "2.0",
+            header = new
+            {
+                event_type = "im.message.receive_v1",
+                token = "verify-token",
+                create_time = "9999999999",
+                nonce = "unique-nonce-42",
+            },
+            @event = new
+            {
+                sender = new { sender_id = new { open_id = "ou_sig_test" }, sender_type = "user" },
+                message = new
+                {
+                    chat_id = "oc_sig_chat",
+                    message_id = "om_sig_msg",
+                    message_type = "text",
+                    content = JsonSerializer.Serialize(new { text = "signature body test" }),
+                },
+            },
+        });
+
+        var encrypted = EncryptLarkPayload(innerPayload, encryptKey);
+        var outerPayloadJson = JsonSerializer.Serialize(new { encrypt = encrypted });
+        const string timestamp = "9999999999";
+        const string nonce = "unique-nonce-42";
+
+        // Correct: signature on outer (encrypted) body
+        var correctSignature = LarkPlatformAdapter.ComputeLarkSignature(
+            timestamp, nonce, encryptKey, outerPayloadJson);
+        // Wrong: signature on inner (decrypted) body
+        var wrongSignature = LarkPlatformAdapter.ComputeLarkSignature(
+            timestamp, nonce, encryptKey, innerPayload);
+
+        // Correct signature should work
+        var httpGood = CreateHttpContextWithSignature(outerPayloadJson, correctSignature, timestamp, nonce);
+        var resultGood = await _adapter.ParseInboundAsync(httpGood, reg);
+        resultGood.Should().NotBeNull();
+
+        // Wrong signature (computed on decrypted body) should be rejected
+        var httpBad = CreateHttpContextWithSignature(outerPayloadJson, wrongSignature, timestamp, nonce);
+        var resultBad = await _adapter.ParseInboundAsync(httpBad, reg);
+        resultBad.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ParseInbound_rejects_empty_signature_header_when_encrypt_key_configured()
+    {
+        var encryptKey = "test-key";
+        var reg = MakeRegistrationWithEncryptKey(encryptKey);
+
+        var payload = BuildLarkV2Payload("im.message.receive_v1", "123", "nonce");
+        var bodyString = JsonSerializer.Serialize(payload);
+
+        // Set header to empty string instead of omitting it
+        var context = new DefaultHttpContext();
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(bodyString));
+        context.Request.ContentType = "application/json";
+        context.Request.EnableBuffering();
+        context.Request.Headers["X-Lark-Signature"] = "";
+
+        var inbound = await _adapter.ParseInboundAsync(context, reg);
+        inbound.Should().BeNull();
+    }
+
+    // ─── Decryption Edge Cases ───
+
+    [Fact]
+    public void DecryptLarkPayload_throws_on_truncated_ciphertext()
+    {
+        // Ciphertext shorter than 16 bytes (IV length) should throw
+        var shortCiphertext = Convert.ToBase64String(new byte[10]);
+
+        var act = () => LarkPlatformAdapter.DecryptLarkPayload(shortCiphertext, "any-key");
+        act.Should().Throw<System.Security.Cryptography.CryptographicException>()
+            .WithMessage("*too short*");
+    }
+
+    [Fact]
+    public void DecryptLarkPayload_throws_on_wrong_key()
+    {
+        var plaintext = """{"type":"test"}""";
+        var encrypted = EncryptLarkPayload(plaintext, "correct-key");
+
+        // Decrypting with wrong key should throw (PKCS7 padding error)
+        var act = () => LarkPlatformAdapter.DecryptLarkPayload(encrypted, "wrong-key");
+        act.Should().Throw<System.Security.Cryptography.CryptographicException>();
+    }
+
+    [Fact]
+    public void DecryptLarkPayload_handles_large_payload()
+    {
+        var largePlaintext = new string('x', 10_000);
+        var encrypted = EncryptLarkPayload(largePlaintext, "large-key");
+
+        var decrypted = LarkPlatformAdapter.DecryptLarkPayload(encrypted, "large-key");
+        decrypted.Should().Be(largePlaintext);
+    }
+
+    [Fact]
+    public void DecryptLarkPayload_handles_unicode_content()
+    {
+        var unicodePayload = """{"text":"你好世界 🎉 مرحبا"}""";
+        var encrypted = EncryptLarkPayload(unicodePayload, "unicode-key");
+
+        var decrypted = LarkPlatformAdapter.DecryptLarkPayload(encrypted, "unicode-key");
+        decrypted.Should().Be(unicodePayload);
+    }
+
+    [Fact]
+    public async Task ParseInbound_encrypted_payload_returns_null_when_decrypt_fails()
+    {
+        var reg = MakeRegistrationWithEncryptKey("my-key");
+
+        // Encrypted with a different key
+        var innerPayload = JsonSerializer.Serialize(new
+        {
+            schema = "2.0",
+            header = new { event_type = "im.message.receive_v1", create_time = "1", nonce = "n" },
+            @event = new
+            {
+                sender = new { sender_id = new { open_id = "ou_x" }, sender_type = "user" },
+                message = new
+                {
+                    chat_id = "oc_1", message_type = "text",
+                    content = JsonSerializer.Serialize(new { text = "secret" }),
+                },
+            },
+        });
+        var encrypted = EncryptLarkPayload(innerPayload, "different-key");
+        var outerPayloadJson = JsonSerializer.Serialize(new { encrypt = encrypted });
+
+        var http = CreateHttpContext(new { encrypt = encrypted });
+        var inbound = await _adapter.ParseInboundAsync(http, reg);
+
+        inbound.Should().BeNull();
+    }
+
+    // ─── Encrypted URL Verification Edge Cases ───
+
+    [Fact]
+    public async Task TryHandleVerification_encrypted_non_verification_payload_returns_null()
+    {
+        var encryptKey = "test-key";
+        var reg = MakeRegistrationWithEncryptKey(encryptKey);
+
+        // Encrypt a non-verification payload
+        var innerPayload = """{"schema":"2.0","header":{"event_type":"im.message.receive_v1"}}""";
+        var encrypted = EncryptLarkPayload(innerPayload, encryptKey);
+
+        var http = CreateHttpContext(new { encrypt = encrypted });
+        var result = await _adapter.TryHandleVerificationAsync(http, reg);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TryHandleVerification_ignores_encrypt_field_when_no_encrypt_key()
+    {
+        // Registration without encrypt_key — should not attempt decryption
+        var reg = MakeRegistration();
+        var http = CreateHttpContext(new { encrypt = "some-encrypted-data" });
+        var result = await _adapter.TryHandleVerificationAsync(http, reg);
+
+        // Should return null (not a verification, and no decrypt attempted)
+        result.Should().BeNull();
+    }
+
+    // ─── SendReply Edge Cases ───
+
+    [Fact]
+    public async Task SendReplyAsync_returns_failed_for_empty_response()
+    {
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, "");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.Detail.Should().Contain("empty");
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_throws_when_response_contains_error_field()
+    {
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"error":true,"message":"forbidden"}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var act = () => _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Lark API error*");
+    }
+
+    [Fact]
+    public async Task SendReplyAsync_returns_result_length_when_no_message_id_in_response()
+    {
+        var httpClient = CreateHttpClient(HttpStatusCode.OK, """{"code":0,"msg":"success","data":{}}""");
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            httpClient);
+        var inbound = new InboundMessage
+        {
+            Platform = "lark", ConversationId = "oc_1",
+            SenderId = "ou_1", SenderName = "s", Text = "hi",
+        };
+
+        var result = await _adapter.SendReplyAsync("reply", inbound, MakeRegistration(), nyxClient, CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue();
+        result.Detail.Should().StartWith("result_length=");
+    }
+
+    [Fact]
+    public async Task ParseInbound_returns_null_when_chat_id_missing()
+    {
+        var payload = new
+        {
+            schema = "2.0",
+            header = new { event_type = "im.message.receive_v1", token = "verify-token" },
+            @event = new
+            {
+                sender = new { sender_id = new { open_id = "ou_abc" }, sender_type = "user" },
+                message = new
+                {
+                    message_type = "text",
+                    content = JsonSerializer.Serialize(new { text = "no chat_id" }),
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
+
+        inbound.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ParseInbound_group_chat_type_is_extracted()
+    {
+        var payload = new
+        {
+            schema = "2.0",
+            header = new { event_type = "im.message.receive_v1", token = "verify-token" },
+            @event = new
+            {
+                sender = new { sender_id = new { open_id = "ou_grp" }, sender_type = "user" },
+                message = new
+                {
+                    chat_id = "oc_group_123",
+                    message_id = "om_grp_1",
+                    message_type = "text",
+                    chat_type = "group",
+                    content = JsonSerializer.Serialize(new { text = "group msg" }),
+                },
+            },
+        };
+
+        var http = CreateHttpContext(payload);
+        var inbound = await _adapter.ParseInboundAsync(http, MakeRegistration());
+
+        inbound.Should().NotBeNull();
+        inbound!.ChatType.Should().Be("group");
     }
 
     // ─── Test Helpers ───
@@ -565,13 +903,21 @@ public class LarkPlatformAdapterTests
         },
     };
 
-    private static HttpContext CreateHttpContextWithSignature(string bodyJson, string signature)
+    private static HttpContext CreateHttpContextWithSignature(
+        string bodyJson,
+        string signature,
+        string timestamp = "",
+        string nonce = "")
     {
         var context = new DefaultHttpContext();
         context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(bodyJson));
         context.Request.ContentType = "application/json";
         context.Request.EnableBuffering();
         context.Request.Headers["X-Lark-Signature"] = signature;
+        if (!string.IsNullOrEmpty(timestamp))
+            context.Request.Headers["X-Lark-Request-Timestamp"] = timestamp;
+        if (!string.IsNullOrEmpty(nonce))
+            context.Request.Headers["X-Lark-Request-Nonce"] = nonce;
         return context;
     }
 
