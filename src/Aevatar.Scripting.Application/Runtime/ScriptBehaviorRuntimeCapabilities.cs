@@ -26,7 +26,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
+    private readonly IScriptAuthorityReadModelActivationPort? _authorityReadModelActivationPort;
     private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
         new(StringComparer.Ordinal);
     private readonly string _scopeId;
@@ -49,7 +49,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
+        IScriptAuthorityReadModelActivationPort? authorityReadModelActivationPort = null)
         : this(
             scopeId: string.Empty,
             runId,
@@ -88,7 +88,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
         IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
+        IScriptAuthorityReadModelActivationPort? authorityReadModelActivationPort = null)
     {
         _scopeId = scopeId?.Trim() ?? string.Empty;
         _runId = runId ?? string.Empty;
@@ -106,7 +106,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
+        _authorityReadModelActivationPort = authorityReadModelActivationPort;
     }
 
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
@@ -323,6 +323,9 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string actorId,
         CancellationToken ct)
     {
+        if (_authorityReadModelActivationPort == null)
+            return;
+
         if (agentType.IsAssignableTo(typeof(ScriptDefinitionGAgent)) ||
             agentType.IsAssignableTo(typeof(ScriptCatalogGAgent)))
         {

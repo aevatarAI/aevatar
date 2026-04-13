@@ -1551,7 +1551,8 @@ public class ScriptEvolutionSessionGAgentTests
                     "type.googleapis.com/example.State",
                     "type.googleapis.com/example.ReadModel",
                     "1",
-                    "schema-hash-1")));
+                    "schema-hash-1"),
+                new ScriptingCommandAcceptedReceipt(DefinitionActorId, "definition-command-1", "definition-correlation-1")));
         }
     }
 
@@ -1580,7 +1581,7 @@ public class ScriptEvolutionSessionGAgentTests
         public List<(string ScriptId, string Revision, string DefinitionActorId)> PromoteCalls { get; } = [];
         public List<(string ScriptId, string TargetRevision)> RollbackCalls { get; } = [];
 
-        public virtual Task PromoteCatalogRevisionAsync(
+        public virtual Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
@@ -1596,10 +1597,13 @@ public class ScriptEvolutionSessionGAgentTests
             _ = proposalId;
             ct.ThrowIfCancellationRequested();
             PromoteCalls.Add((scriptId, revision, definitionActorId));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-1",
+                "catalog-command-1",
+                proposalId));
         }
 
-        public Task RollbackCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string targetRevision,
@@ -1614,13 +1618,16 @@ public class ScriptEvolutionSessionGAgentTests
             _ = expectedCurrentRevision;
             ct.ThrowIfCancellationRequested();
             RollbackCalls.Add((scriptId, targetRevision));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-1",
+                "catalog-rollback-command-1",
+                proposalId));
         }
     }
 
     private sealed class ThrowingCatalogCommandPort(string message) : RecordingCatalogCommandPort
     {
-        public override Task PromoteCatalogRevisionAsync(
+        public override Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,

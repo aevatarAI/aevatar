@@ -52,11 +52,6 @@ public sealed record ScriptingCommandStartError(
         };
 }
 
-public sealed record ScriptingCommandAcceptedReceipt(
-    string ActorId,
-    string CommandId,
-    string CorrelationId);
-
 public sealed record UpsertScriptDefinitionCommand(
     string ScriptId,
     string ScriptRevision,

@@ -19,6 +19,7 @@ jest.mock('@/shared/studio/scriptsApi', () => ({
     getRuntimeReadModel: jest.fn(),
     getEvolutionDecision: jest.fn(),
     saveScript: jest.fn(),
+    observeSaveScript: jest.fn(),
     runDraftScript: jest.fn(),
     proposeEvolution: jest.fn(),
     generateScript: jest.fn(),
@@ -46,6 +47,7 @@ const mockedScriptsApi = scriptsApi as unknown as {
   getRuntimeReadModel: jest.Mock;
   getEvolutionDecision: jest.Mock;
   saveScript: jest.Mock;
+  observeSaveScript: jest.Mock;
   runDraftScript: jest.Mock;
   proposeEvolution: jest.Mock;
   generateScript: jest.Mock;
@@ -86,23 +88,27 @@ const validationResult = {
   diagnostics: [],
 };
 
-const savedScopeDetail = {
-  available: true,
-  scopeId: 'scope-1',
-  script: {
+const acceptedSaveResponse = {
+  acceptedScript: {
     scopeId: 'scope-1',
     scriptId: 'script-1',
     catalogActorId: 'catalog-1',
     definitionActorId: 'definition-1',
-    activeRevision: 'rev-1',
-    activeSourceHash: 'hash-1',
-    updatedAt: '2026-03-24T00:00:00Z',
-  },
-  source: {
-    sourceText: 'using System;',
-    definitionActorId: 'definition-1',
-    revision: 'rev-1',
+    revisionId: 'rev-1',
     sourceHash: 'hash-1',
+    acceptedAt: '2026-03-24T00:00:00Z',
+    proposalId: 'scope-1:script-1:rev-1',
+    expectedBaseRevision: 'rev-0',
+  },
+  definitionCommand: {
+    actorId: 'definition-1',
+    commandId: 'definition-command-1',
+    correlationId: 'definition-correlation-1',
+  },
+  catalogCommand: {
+    actorId: 'catalog-1',
+    commandId: 'catalog-command-1',
+    correlationId: 'catalog-correlation-1',
   },
 };
 
@@ -163,7 +169,42 @@ describe('ScriptsWorkbenchPage', () => {
         diagnostics: [],
       },
     });
-    mockedScriptsApi.saveScript.mockResolvedValue(savedScopeDetail);
+    mockedScriptsApi.saveScript.mockResolvedValue(acceptedSaveResponse);
+    mockedScriptsApi.observeSaveScript.mockResolvedValue({
+      scopeId: 'scope-1',
+      scriptId: 'script-1',
+      status: 'applied',
+      message: 'Revision active.',
+      currentScript: {
+        scopeId: 'scope-1',
+        scriptId: 'script-1',
+        catalogActorId: 'catalog-1',
+        definitionActorId: 'definition-1',
+        activeRevision: 'rev-1',
+        activeSourceHash: 'hash-1',
+        updatedAt: '2026-03-24T00:00:00Z',
+      },
+      isTerminal: true,
+    });
+    mockedScriptsApi.getScript.mockResolvedValue({
+      available: true,
+      scopeId: 'scope-1',
+      script: {
+        scopeId: 'scope-1',
+        scriptId: 'script-1',
+        catalogActorId: 'catalog-1',
+        definitionActorId: 'definition-1',
+        activeRevision: 'rev-1',
+        activeSourceHash: 'hash-1',
+        updatedAt: '2026-03-24T00:00:00Z',
+      },
+      source: {
+        sourceText: 'public sealed class DemoScript {}',
+        definitionActorId: 'definition-1',
+        revision: 'rev-1',
+        sourceHash: 'hash-1',
+      },
+    });
     mockedScriptsApi.runDraftScript.mockResolvedValue({
       accepted: true,
       scopeId: 'scope-1',
@@ -502,6 +543,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
         'Review the active binding, revision rollout, and saved script assets from the scope views.',
       ),
     ).toBeTruthy();
+    expect(screen.getByText('rev-1')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Scope Scripts' }));
 
