@@ -21,6 +21,15 @@ public sealed class ChannelBotRegistrationQueryPort : IChannelBotRegistrationQue
         return document == null ? null : ToEntry(document);
     }
 
+    public async Task<long?> GetStateVersionAsync(string registrationId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(registrationId))
+            return null;
+
+        var document = await _documentReader.GetAsync(registrationId, ct);
+        return document?.StateVersion;
+    }
+
     public async Task<IReadOnlyList<ChannelBotRegistrationEntry>> QueryAllAsync(CancellationToken ct = default)
     {
         var result = await _documentReader.QueryAsync(
