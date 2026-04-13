@@ -38,9 +38,9 @@ describe("console routes", () => {
     expect(findRoute(routes, "/chat").hideInMenu).toBe(true);
     expect(findRoute(routes, "/runtime/runs").hideInMenu).toBe(true);
     expect(findRoute(routes, "/scopes/overview").hideInMenu).toBe(true);
-    expect(findRoute(routes, "/teams").name).toBe("我的团队");
-    expect(findRoute(routes, "/teams/new").name).toBe("组建团队");
-    expect(findRoute(routes, "/runtime/gagents").name).toBe("成员");
+    expect(findRoute(routes, "/teams").name).toBe("My Teams");
+    expect(findRoute(routes, "/teams/new").name).toBe("Create Team");
+    expect(findRoute(routes, "/runtime/gagents").name).toBe("Members");
     expect(findRoute(routes, "/scopes/assets").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/invoke").name).toBeUndefined();
     expect(findRoute(routes, "/scopes/overview").redirect).toBe("/teams");
@@ -61,6 +61,6 @@ describe("console routes", () => {
     expect(findRoute(routes, "/services").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/deployments").menuGroupKey).toBe("platform");
     expect(findRoute(routes, "/governance").menuGroupKey).toBe("platform");
-    expect(findRoute(routes, "/settings").name).toBe("设置");
+    expect(findRoute(routes, "/settings").name).toBe("Settings");
   });
 });

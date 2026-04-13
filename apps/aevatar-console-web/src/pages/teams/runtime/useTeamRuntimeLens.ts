@@ -13,6 +13,8 @@ const scopeServiceNamespace = "default";
 
 type UseTeamRuntimeLensOptions = {
   includeCatalogSignals?: boolean;
+  preferredRunId?: string;
+  preferredServiceId?: string;
 };
 
 export function useTeamRuntimeLens(
@@ -21,6 +23,8 @@ export function useTeamRuntimeLens(
 ) {
   const normalizedScopeId = scopeId.trim();
   const includeCatalogSignals = options?.includeCatalogSignals ?? true;
+  const preferredServiceId = options?.preferredServiceId?.trim() ?? "";
+  const preferredRunId = options?.preferredRunId?.trim() ?? "";
 
   const bindingQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
@@ -59,6 +63,8 @@ export function useTeamRuntimeLens(
   });
 
   const serviceId =
+    servicesQuery.data?.find((service) => service.serviceId === preferredServiceId)
+      ?.serviceId ||
     servicesQuery.data?.find(
       (service) => service.serviceId === bindingQuery.data?.serviceId,
     )?.serviceId ||
@@ -75,8 +81,11 @@ export function useTeamRuntimeLens(
   });
 
   const compareRuns = useMemo(
-    () => selectTeamCompareRuns(runsQuery.data?.runs ?? []),
-    [runsQuery.data?.runs],
+    () =>
+      selectTeamCompareRuns(runsQuery.data?.runs ?? [], {
+        preferredRunId,
+      }),
+    [preferredRunId, runsQuery.data?.runs],
   );
   const currentRunId = compareRuns.currentRun?.runId?.trim() || "";
   const baselineRunId = compareRuns.baselineRun?.runId?.trim() || "";

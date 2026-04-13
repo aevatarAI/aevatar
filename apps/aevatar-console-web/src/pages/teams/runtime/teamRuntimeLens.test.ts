@@ -23,6 +23,32 @@ describe("teamRuntimeLens", () => {
     });
   });
 
+  it("honors a preferred current run when one is explicitly requested", () => {
+    const runs = [
+      {
+        runId: "run-2",
+        lastUpdatedAt: "2026-04-09T09:05:00Z",
+        completionStatus: "failed",
+        lastSuccess: false,
+      },
+      {
+        runId: "run-1",
+        lastUpdatedAt: "2026-04-09T09:00:00Z",
+        completionStatus: "completed",
+        lastSuccess: true,
+      },
+    ] as any;
+
+    expect(
+      selectTeamCompareRuns(runs, {
+        preferredRunId: "run-1",
+      }),
+    ).toEqual({
+      currentRun: runs[1],
+      baselineRun: runs[0],
+    });
+  });
+
   it("derives a blocked health state and compare summary from runtime facts", () => {
     const lens = deriveTeamRuntimeLens({
       scopeId: "scope-team",

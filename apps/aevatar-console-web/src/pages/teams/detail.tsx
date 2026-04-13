@@ -4,57 +4,37 @@ import {
   CustomEventName,
 } from "@aevatar-react-sdk/types";
 import {
-  ApartmentOutlined,
   BranchesOutlined,
-  ClockCircleOutlined,
   DeploymentUnitOutlined,
   EyeOutlined,
-  MessageOutlined,
-  PauseCircleOutlined,
-  SafetyCertificateOutlined,
-  SwapOutlined,
 } from "@ant-design/icons";
-import {
-  Alert,
-  Button,
-  Empty,
-  Grid,
-  Segmented,
-  Space,
-  Tag,
-  Typography,
-  theme,
-} from "antd";
+import { Alert, Button, Space, Tooltip, Typography, theme } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { scopesApi } from "@/shared/api/scopesApi";
-import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
+import {
+  buildTeamDetailHref,
+  readTeamDetailRouteState,
+  type TeamDetailTab,
+} from "@/shared/navigation/teamRoutes";
 import {
   buildRuntimeExplorerHref,
   buildRuntimeRunsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import { saveObservedRunSessionPayload } from "@/shared/runs/draftRunSession";
-import { readScopeQueryDraft } from "@/shared/navigation/scopeRoutes";
 import { studioApi } from "@/shared/studio/api";
+import {
+  buildStudioWorkflowEditorRoute,
+  buildStudioWorkflowWorkspaceRoute,
+} from "@/shared/studio/navigation";
 import type { StudioWorkflowDocument } from "@/shared/studio/models";
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarPanel,
-  AevatarStatusTag,
-  AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
-import {
-  buildAevatarMetricCardStyle,
-  resolveAevatarMetricVisual,
-  type AevatarSemanticTone,
-  type AevatarThemeSurfaceToken,
-} from "@/shared/ui/aevatarWorkbench";
-import {
-  buildStudioWorkflowEditorRoute,
-  buildStudioWorkflowWorkspaceRoute,
-} from "@/shared/studio/navigation";
+import { resolveWorkflowOperationalUnit } from "./workflowOperationalUnits";
 import {
   deriveTeamIntegrationsSummary,
   deriveTeamWorkflowRoleBindings,
@@ -62,90 +42,36 @@ import {
 import type { TeamPlaybackSummary } from "./runtime/teamRuntimeLens";
 import { useTeamRuntimeLens } from "./runtime/useTeamRuntimeLens";
 
-type ObservationStatus = "live" | "delayed" | "partial" | "unavailable" | "seeded";
+type ObservationStatus = "live" | "delayed" | "partial" | "unavailable";
 
 type ObservationBadge = {
   label: string;
   status: ObservationStatus;
 };
 
-type SignalCardProps = {
-  caption?: React.ReactNode;
-  icon?: React.ReactNode;
-  label: React.ReactNode;
-  tone?: AevatarSemanticTone;
-  value: React.ReactNode;
+type TeamCompositionRow = {
+  key: string;
+  name: string;
+  summary: string;
+  kind: string;
 };
 
-function renderHealthLabel(status: string): string {
-  switch (status) {
-    case "human-overridden":
-      return "Human Override";
-    case "blocked":
-      return "Blocked";
-    case "degraded":
-      return "Degraded";
-    case "healthy":
-      return "Healthy";
-    default:
-      return "Attention";
-  }
+type TeamTabOption = {
+  label: string;
+  value: TeamDetailTab;
+};
+
+type MemberLike = {
+  actorId: string;
+  actorType: string;
+};
+
+function trimText(value: string | null | undefined): string {
+  return value?.trim() ?? "";
 }
 
-function renderPlaybackLabel(status: string): string {
-  switch (status) {
-    case "waiting":
-      return "Waiting";
-    case "failed":
-      return "Failed";
-    case "completed":
-      return "Completed";
-    default:
-      return "Active";
-  }
-}
-
-function renderPlaybackTagColor(status: string): string {
-  switch (status) {
-    case "waiting":
-      return "warning";
-    case "failed":
-      return "error";
-    case "completed":
-      return "success";
-    default:
-      return "processing";
-  }
-}
-
-function renderDirectionLabel(direction: string): string {
-  switch (direction) {
-    case "inbound":
-      return "Into focus";
-    case "outbound":
-      return "From focus";
-    default:
-      return "Peer";
-  }
-}
-
-function renderObservationLabel(status: ObservationStatus): string {
-  switch (status) {
-    case "live":
-      return "Live";
-    case "delayed":
-      return "Delayed";
-    case "partial":
-      return "Partial";
-    case "seeded":
-      return "Seeded";
-    default:
-      return "Unavailable";
-  }
-}
-
-function compactId(value: string): string {
-  const normalized = value.trim();
+function compactId(value: string | null | undefined): string {
+  const normalized = trimText(value);
   if (!normalized) {
     return "n/a";
   }
@@ -154,8 +80,411 @@ function compactId(value: string): string {
   return segment.split(":").pop() || segment;
 }
 
-function trimText(value: string | null | undefined): string {
-  return value?.trim() ?? "";
+function formatTeamTabLabel(tab: TeamDetailTab): string {
+  switch (tab) {
+    case "topology":
+      return "事件拓扑";
+    case "events":
+      return "事件流";
+    case "members":
+      return "团队成员";
+    case "connectors":
+      return "连接器";
+    case "advanced":
+      return "高级编辑";
+    default:
+      return "概览";
+  }
+}
+
+function normalizeStatus(value: string | null | undefined): string {
+  return trimText(value).toLowerCase();
+}
+
+function formatFriendlyStatus(value: string | null | undefined): string {
+  const normalized = normalizeStatus(value);
+  if (!normalized) {
+    return "--";
+  }
+
+  switch (normalized) {
+    case "active":
+    case "running":
+    case "processing":
+      return "运行中";
+    case "published":
+      return "已发布";
+    case "default":
+      return "默认版本";
+    case "completed":
+    case "finished":
+    case "succeeded":
+    case "success":
+      return "已完成";
+    case "draft":
+      return "草稿";
+    case "retired":
+      return "已停用";
+    case "failed":
+    case "error":
+    case "cancelled":
+    case "degraded":
+      return "运行异常";
+    case "waiting":
+    case "waiting_signal":
+    case "waiting_approval":
+    case "human_input":
+    case "human_approval":
+    case "suspended":
+    case "blocked":
+      return "等待处理";
+    default:
+      return trimText(value) || "--";
+  }
+}
+
+function formatCompositionKind(kind: string): string {
+  switch (normalizeStatus(kind)) {
+    case "workflow role":
+      return "角色";
+    case "workflow":
+      return "流程";
+    case "service":
+      return "服务";
+    case "actor":
+      return "Actor";
+    case "runtime":
+      return "运行";
+    case "script":
+      return "脚本";
+    case "gagent":
+      return "Agent";
+    default:
+      return kind || "--";
+  }
+}
+
+function formatConnectorTypeLabel(kind: string): string {
+  switch (normalizeStatus(kind)) {
+    case "http":
+      return "HTTP API";
+    case "cli":
+      return "CLI";
+    case "mcp":
+      return "MCP";
+    default:
+      return kind || "--";
+  }
+}
+
+function formatConnectorEnabledLabel(enabled: boolean): string {
+  return enabled ? "可用" : "停用";
+}
+
+function formatObservationLabel(status: ObservationStatus): string {
+  switch (status) {
+    case "live":
+      return "实时";
+    case "delayed":
+      return "稍有延迟";
+    case "partial":
+      return "部分可见";
+    default:
+      return "暂不可用";
+  }
+}
+
+function formatEdgeTypeLabel(value: string | null | undefined): string {
+  const normalized = normalizeStatus(value);
+  switch (normalized) {
+    case "handoff":
+      return "交接";
+    case "depends_on":
+      return "依赖";
+    case "invokes":
+      return "调用";
+    default:
+      return trimText(value) || "--";
+  }
+}
+
+function formatStepTypeLabel(value: string | null | undefined): string {
+  const normalized = normalizeStatus(value);
+  switch (normalized) {
+    case "human_approval":
+      return "人工确认";
+    case "human_input":
+      return "人工输入";
+    case "llm_call":
+      return "LLM 调用";
+    case "tool_call":
+      return "工具调用";
+    case "branch":
+      return "条件分支";
+    default:
+      return trimText(value) || "--";
+  }
+}
+
+type PillTone = "danger" | "info" | "neutral" | "success" | "warning";
+
+function resolveTonePillStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  tone: PillTone,
+): React.CSSProperties {
+  switch (tone) {
+    case "success":
+      return {
+        background: "rgba(82, 196, 26, 0.12)",
+        color: token.colorSuccess,
+      };
+    case "info":
+      return {
+        background: "rgba(24, 144, 255, 0.08)",
+        color: token.colorInfo,
+      };
+    case "warning":
+      return {
+        background: "rgba(250, 173, 20, 0.12)",
+        color: token.colorWarning,
+      };
+    case "danger":
+      return {
+        background: "rgba(255, 77, 79, 0.12)",
+        color: token.colorError,
+      };
+    default:
+      return {
+        background: token.colorFillQuaternary,
+        color: token.colorTextSecondary,
+      };
+  }
+}
+
+function resolveObservationPillStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  status: ObservationStatus,
+): React.CSSProperties {
+  switch (status) {
+    case "live":
+      return resolveTonePillStyle(token, "success");
+    case "delayed":
+      return resolveTonePillStyle(token, "warning");
+    case "partial":
+      return resolveTonePillStyle(token, "info");
+    default:
+      return resolveTonePillStyle(token, "neutral");
+  }
+}
+
+function resolveCompositionKindPillStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  kind: string,
+): React.CSSProperties {
+  switch (normalizeStatus(kind)) {
+    case "workflow role":
+      return resolveTonePillStyle(token, "info");
+    case "workflow":
+      return resolveTonePillStyle(token, "success");
+    case "service":
+      return resolveTonePillStyle(token, "warning");
+    case "actor":
+    case "runtime":
+      return resolveTonePillStyle(token, "neutral");
+    default:
+      return resolveTonePillStyle(token, "neutral");
+  }
+}
+
+function resolveStatusPillStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  value: string | null | undefined,
+): React.CSSProperties {
+  const normalized = normalizeStatus(value);
+
+  if (
+    [
+      "active",
+      "running",
+      "processing",
+      "completed",
+      "finished",
+      "succeeded",
+      "success",
+      "published",
+      "default",
+    ].includes(normalized)
+  ) {
+    return {
+      background: "rgba(24, 144, 255, 0.08)",
+      color: token.colorInfo,
+    };
+  }
+
+  if (
+    [
+      "draft",
+      "waiting",
+      "waiting_signal",
+      "waiting_approval",
+      "human_input",
+      "human_approval",
+      "suspended",
+      "blocked",
+    ].includes(normalized)
+  ) {
+    return {
+      background: "rgba(250, 173, 20, 0.12)",
+      color: token.colorWarning,
+    };
+  }
+
+  if (
+    ["failed", "error", "cancelled", "degraded", "retired"].includes(normalized)
+  ) {
+    return {
+      background: "rgba(255, 77, 79, 0.12)",
+      color: token.colorError,
+    };
+  }
+
+  return {
+    background: token.colorFillQuaternary,
+    color: token.colorTextSecondary,
+  };
+}
+
+function formatCompactTimestamp(value: string | null | undefined): string {
+  const normalized = trimText(value);
+  if (!normalized) {
+    return "暂无";
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return "暂无";
+  }
+
+  return parsed.toLocaleString("zh-CN", {
+    day: "2-digit",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+  });
+}
+
+function formatDetailedTimestamp(value: string | null | undefined): string {
+  const normalized = trimText(value);
+  if (!normalized) {
+    return "--";
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return "--";
+  }
+
+  return parsed.toLocaleString("zh-CN", {
+    day: "2-digit",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    second: "2-digit",
+    year: "numeric",
+  });
+}
+
+function readWorkflowRoleName(role: Record<string, unknown>, index: number): string {
+  return (
+    trimText(typeof role.name === "string" ? role.name : "") ||
+    trimText(typeof role.id === "string" ? role.id : "") ||
+    `role-${index + 1}`
+  );
+}
+
+function readWorkflowRoleConnectors(role: Record<string, unknown>): string[] {
+  const connectors = Array.isArray(role.connectors) ? role.connectors : [];
+  return connectors
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return trimText(entry);
+      }
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return "";
+      }
+      const record = entry as Record<string, unknown>;
+      return trimText(
+        typeof record.name === "string"
+          ? record.name
+          : typeof record.id === "string"
+            ? record.id
+            : "",
+      );
+    })
+    .filter(Boolean);
+}
+
+function deriveTeamCompositionRows(input: {
+  documents: readonly StudioWorkflowDocument[];
+  fallbackMembers: readonly MemberLike[];
+  implementationKind: string | null | undefined;
+}): TeamCompositionRow[] {
+  const rows: TeamCompositionRow[] = [];
+  const seen = new Set<string>();
+
+  input.documents.forEach((document) => {
+    const roles = Array.isArray(document.roles) ? document.roles : [];
+    roles.forEach((role, index) => {
+      if (!role || typeof role !== "object" || Array.isArray(role)) {
+        return;
+      }
+
+      const record = role as Record<string, unknown>;
+      const name = readWorkflowRoleName(record, index);
+      const dedupeKey = name.toLowerCase();
+      if (seen.has(dedupeKey)) {
+        return;
+      }
+      seen.add(dedupeKey);
+
+      const connectors = readWorkflowRoleConnectors(record);
+      const provider = trimText(
+        typeof record.provider === "string" ? record.provider : "",
+      );
+      const model = trimText(typeof record.model === "string" ? record.model : "");
+      const summaryParts: string[] = [];
+
+      if (connectors.length > 0) {
+        summaryParts.push(connectors.slice(0, 3).join("、"));
+      }
+      if (provider || model) {
+        summaryParts.push([provider, model].filter(Boolean).join(" / "));
+      }
+      if (summaryParts.length === 0) {
+        summaryParts.push("--");
+      }
+
+      rows.push({
+        key: `role:${name}`,
+        kind: "workflow role",
+        name,
+        summary: summaryParts.join("，"),
+      });
+    });
+  });
+
+  if (rows.length > 0) {
+    return rows;
+  }
+
+  return input.fallbackMembers.map((member) => ({
+    key: `member:${member.actorId}`,
+    kind: trimText(input.implementationKind) || "runtime",
+    name: trimText(member.actorType) || compactId(member.actorId),
+    summary: trimText(member.actorId) || "--",
+  }));
 }
 
 function createObservedPlaybackEvents(
@@ -190,67 +519,55 @@ function createObservedPlaybackEvents(
   return events;
 }
 
-const SignalCard: React.FC<SignalCardProps> = ({
-  caption,
-  icon,
-  label,
-  tone = "default",
-  value,
-}) => {
+const SignalCard: React.FC<{
+  caption?: React.ReactNode;
+  captionMonospace?: boolean;
+  icon?: React.ReactNode;
+  label: React.ReactNode;
+  value: React.ReactNode;
+}> = ({ caption, captionMonospace = false, icon, label, value }) => {
   const { token } = theme.useToken();
-  const visual = resolveAevatarMetricVisual(
-    token as AevatarThemeSurfaceToken,
-    tone,
-  );
 
   return (
     <div
       style={{
-        ...buildAevatarMetricCardStyle(token as AevatarThemeSurfaceToken, tone),
+        background: token.colorFillAlter,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 22,
+        boxShadow: token.boxShadowSecondary,
         display: "flex",
         flexDirection: "column",
         gap: 10,
         minHeight: 120,
-        padding: 16,
+        padding: 18,
       }}
     >
       <Space align="center" size={10}>
-        {icon ? (
-          <span
-            style={{
-              alignItems: "center",
-              color: visual.iconColor,
-              display: "inline-flex",
-              fontSize: 18,
-              justifyContent: "center",
-            }}
-          >
-            {icon}
-          </span>
-        ) : null}
-        <Typography.Text
-          style={{
-            color: visual.labelColor,
-          }}
-        >
+        {icon ? <span style={{ color: token.colorPrimary }}>{icon}</span> : null}
+        <Typography.Text style={{ fontSize: 13 }} type="secondary">
           {label}
         </Typography.Text>
       </Space>
-      <Typography.Title
-        level={4}
-        style={{
-          color: visual.valueColor,
-          margin: 0,
-        }}
-      >
+      <Typography.Title level={4} style={{ margin: 0 }}>
         {value}
       </Typography.Title>
-      {caption ? (
-        <Typography.Text
-          style={{
-            color: visual.secondaryColor,
-          }}
-        >
+      {typeof caption === "string" ? (
+        <Tooltip placement="topLeft" title={caption}>
+          <Typography.Text
+            ellipsis
+            style={{
+              display: "block",
+              fontFamily: captionMonospace ? factValueFontFamily : undefined,
+              fontSize: 13,
+              maxWidth: "100%",
+            }}
+            type="secondary"
+          >
+            {caption}
+          </Typography.Text>
+        </Tooltip>
+      ) : caption ? (
+        <Typography.Text style={{ fontSize: 13 }} type="secondary">
           {caption}
         </Typography.Text>
       ) : null}
@@ -258,15 +575,106 @@ const SignalCard: React.FC<SignalCardProps> = ({
   );
 };
 
-const TeamDetailPage: React.FC = () => {
-  const requestedScope = readScopeQueryDraft();
-  const scopeId = requestedScope.scopeId.trim();
-  const screens = Grid.useBreakpoint();
-  const isCompactTeamLayout = !screens.lg;
+const OverviewMetricCard: React.FC<{
+  accent?: boolean;
+  label: string;
+  value: React.ReactNode;
+}> = ({ accent = false, label, value }) => {
   const { token } = theme.useToken();
-  const [compactPanel, setCompactPanel] = React.useState<"activity" | "details">(
-    "activity",
+
+  return (
+    <div
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 24,
+        boxShadow: token.boxShadowSecondary,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        minHeight: 132,
+        padding: 24,
+      }}
+    >
+      <Typography.Title
+        level={2}
+        style={{
+          color: accent ? token.colorPrimary : token.colorText,
+          margin: 0,
+        }}
+      >
+        {value}
+      </Typography.Title>
+      <Typography.Text style={{ fontSize: 13 }} type="secondary">
+        {label}
+      </Typography.Text>
+    </div>
   );
+};
+
+const DetailPill: React.FC<{
+  compact?: boolean;
+  style?: React.CSSProperties;
+  text: string;
+}> = ({ compact = false, style, text }) => (
+  <span
+    style={{
+      borderRadius: 999,
+      display: "inline-flex",
+      fontSize: compact ? 12 : 13,
+      fontWeight: 600,
+      lineHeight: 1,
+      padding: compact ? "7px 10px" : "10px 14px",
+      whiteSpace: "nowrap",
+      ...style,
+    }}
+  >
+    {text}
+  </span>
+);
+
+const factValueFontFamily =
+  '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+const FactLine: React.FC<{
+  rows?: number;
+  secondary?: boolean;
+  text: string;
+}> = ({ rows = 1, secondary = false, text }) => {
+  const normalized = text || "--";
+
+  return (
+    <Tooltip placement="topLeft" title={normalized}>
+      <Typography.Text
+        strong={!secondary}
+        style={{
+          display: "-webkit-box",
+          fontFamily: factValueFontFamily,
+          overflow: "hidden",
+          overflowWrap: "anywhere",
+          textOverflow: "ellipsis",
+          WebkitBoxOrient: "vertical",
+          WebkitLineClamp: rows,
+          wordBreak: "break-word",
+        }}
+        type={secondary ? "secondary" : undefined}
+      >
+        {normalized}
+      </Typography.Text>
+    </Tooltip>
+  );
+};
+
+const TeamDetailPage: React.FC = () => {
+  const routeState = React.useMemo(() => readTeamDetailRouteState(), []);
+  const scopeId = routeState.scopeId.trim();
+  const [preferredServiceId, setPreferredServiceId] = React.useState(
+    routeState.serviceId,
+  );
+  const [activeTab, setActiveTab] = React.useState<TeamDetailTab>(routeState.tab);
+  const [selectedActorId, setSelectedActorId] = React.useState("");
+  const { token } = theme.useToken();
+
   const {
     actorGraphQuery,
     actorsQuery,
@@ -278,20 +686,26 @@ const TeamDetailPage: React.FC = () => {
     scriptsQuery,
     servicesQuery,
     workflowsQuery,
-  } = useTeamRuntimeLens(scopeId);
+  } = useTeamRuntimeLens(scopeId, {
+    preferredRunId: routeState.runId,
+    preferredServiceId,
+  });
+
   const workspaceSettingsQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["teams", "workspace-settings"],
     queryFn: () => studioApi.getWorkspaceSettings(),
+    queryKey: ["teams", "workspace-settings"],
     retry: false,
   });
+
   const connectorCatalogQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["teams", "connector-catalog"],
     queryFn: () => studioApi.getConnectorCatalog(),
+    queryKey: ["teams", "connector-catalog"],
     retry: false,
   });
-  const activeWorkflowSummary = React.useMemo(() => {
+
+  const fallbackWorkflowSummary = React.useMemo(() => {
     if (lens.activeRevision?.implementationKind !== "workflow") {
       return null;
     }
@@ -304,27 +718,95 @@ const TeamDetailPage: React.FC = () => {
       trimText(lens.currentRunAudit?.summary.workflowName),
       trimText(lens.playback.workflowName),
     ].filter(Boolean);
-    if (workflowNameHints.length > 0) {
-      for (const workflowNameHint of workflowNameHints) {
-        const matchedWorkflow =
-          workflows.find(
-            (workflow) =>
-              trimText(workflow.workflowName) === workflowNameHint ||
-              trimText(workflow.displayName) === workflowNameHint,
-          ) ?? null;
-        if (matchedWorkflow) {
-          return matchedWorkflow;
-        }
+
+    for (const workflowNameHint of workflowNameHints) {
+      const matched =
+        workflows.find(
+          (workflow) =>
+            trimText(workflow.workflowName) === workflowNameHint ||
+            trimText(workflow.displayName) === workflowNameHint,
+        ) ?? null;
+      if (matched) {
+        return matched;
       }
     }
 
     return workflows.length === 1 ? workflows[0] : null;
-  }, [lens.activeRevision, lens.currentRun, lens.currentRunAudit, lens.playback.workflowName, workflowsQuery.data]);
+  }, [
+    lens.activeRevision,
+    lens.currentRun,
+    lens.currentRunAudit,
+    lens.playback.workflowName,
+    workflowsQuery.data,
+  ]);
+
+  const activeWorkflowSummary = React.useMemo(() => {
+    if (trimText(routeState.workflowId)) {
+      return (
+        workflowsQuery.data?.find(
+          (workflow) => trimText(workflow.workflowId) === trimText(routeState.workflowId),
+        ) ?? null
+      );
+    }
+
+    return fallbackWorkflowSummary;
+  }, [fallbackWorkflowSummary, routeState.workflowId, workflowsQuery.data]);
+
+  const focusedOperationalUnit = React.useMemo(() => {
+    if (!activeWorkflowSummary) {
+      return null;
+    }
+
+    const loadedServiceId =
+      trimText(lens.currentService?.serviceId) || trimText(preferredServiceId);
+    return resolveWorkflowOperationalUnit({
+      binding: bindingQuery.data ?? null,
+      preferredRunId: routeState.runId,
+      preferredServiceId,
+      runs: runsQuery.data?.runs ?? [],
+      services: servicesQuery.data ?? [],
+      signals: {
+        runtimeAvailableByServiceId:
+          runsQuery.isSuccess && loadedServiceId
+            ? new Set([loadedServiceId])
+            : new Set<string>(),
+        servicesAvailable: servicesQuery.isSuccess,
+      },
+      workflow: activeWorkflowSummary,
+    });
+  }, [
+    activeWorkflowSummary,
+    bindingQuery.data,
+    lens.currentService?.serviceId,
+    preferredServiceId,
+    routeState.runId,
+    runsQuery.data?.runs,
+    runsQuery.isSuccess,
+    servicesQuery.data,
+    servicesQuery.isSuccess,
+  ]);
+
+  React.useEffect(() => {
+    const nextServiceId = trimText(focusedOperationalUnit?.matchedService?.serviceId);
+    if (!trimText(routeState.workflowId) || !nextServiceId) {
+      return;
+    }
+    if (nextServiceId !== trimText(preferredServiceId)) {
+      setPreferredServiceId(nextServiceId);
+    }
+  }, [
+    focusedOperationalUnit?.matchedService?.serviceId,
+    preferredServiceId,
+    routeState.workflowId,
+  ]);
+
   const teamWorkflowDetailQuery = useQuery({
     enabled:
       scopeId.length > 0 &&
       lens.activeRevision?.implementationKind === "workflow" &&
       trimText(activeWorkflowSummary?.workflowId).length > 0,
+    queryFn: () =>
+      scopesApi.getWorkflowDetail(scopeId, activeWorkflowSummary?.workflowId ?? ""),
     queryKey: [
       "teams",
       "workflow-detail",
@@ -332,22 +814,14 @@ const TeamDetailPage: React.FC = () => {
       activeWorkflowSummary?.workflowId ?? "",
       lens.activeRevision?.revisionId ?? "",
     ],
-    queryFn: () =>
-      scopesApi.getWorkflowDetail(scopeId, activeWorkflowSummary?.workflowId ?? ""),
     retry: false,
   });
+
   const teamWorkflowDocumentsQuery = useQuery({
     enabled:
       lens.activeRevision?.implementationKind === "workflow" &&
       Boolean(teamWorkflowDetailQuery.data?.available) &&
       trimText(teamWorkflowDetailQuery.data?.source?.workflowYaml).length > 0,
-    queryKey: [
-      "teams",
-      "workflow-documents",
-      scopeId,
-      activeWorkflowSummary?.workflowId ?? "",
-      lens.activeRevision?.revisionId ?? "",
-    ],
     queryFn: async (): Promise<StudioWorkflowDocument[]> => {
       const source = teamWorkflowDetailQuery.data?.source;
       if (!source) {
@@ -356,13 +830,10 @@ const TeamDetailPage: React.FC = () => {
 
       const workflowYamls = [
         trimText(source.workflowYaml),
-        ...Object.values(source.inlineWorkflowYamls ?? {}).map((yaml) =>
-          trimText(yaml),
-        ),
+        ...Object.values(source.inlineWorkflowYamls ?? {}).map((yaml) => trimText(yaml)),
       ].filter(Boolean);
-      const uniqueWorkflowYamls = [...new Set(workflowYamls)];
       const parsedDocuments = await Promise.all(
-        uniqueWorkflowYamls.map(async (yaml) => {
+        [...new Set(workflowYamls)].map(async (yaml) => {
           const parsed = await studioApi.parseYaml({ yaml });
           return parsed.document ?? null;
         }),
@@ -372,8 +843,16 @@ const TeamDetailPage: React.FC = () => {
         (document): document is StudioWorkflowDocument => Boolean(document),
       );
     },
+    queryKey: [
+      "teams",
+      "workflow-documents",
+      scopeId,
+      activeWorkflowSummary?.workflowId ?? "",
+      lens.activeRevision?.revisionId ?? "",
+    ],
     retry: false,
   });
+
   const teamScopedRoleLoading =
     lens.activeRevision?.implementationKind === "workflow" &&
     (workflowsQuery.isLoading ||
@@ -387,11 +866,11 @@ const TeamDetailPage: React.FC = () => {
       teamWorkflowDocumentsQuery.isError ||
       !teamWorkflowDetailQuery.data?.available ||
       !teamWorkflowDetailQuery.data?.source);
+
   const integrations = React.useMemo(
     () =>
       deriveTeamIntegrationsSummary({
         bindingKind: lens.activeRevision?.implementationKind ?? "unknown",
-        workspaceSettings: workspaceSettingsQuery.data ?? null,
         connectorCatalog: connectorCatalogQuery.data ?? null,
         teamWorkflowRoles:
           lens.activeRevision?.implementationKind !== "workflow"
@@ -400,10 +879,9 @@ const TeamDetailPage: React.FC = () => {
               ? undefined
               : teamScopedRoleUnavailable
                 ? null
-                : deriveTeamWorkflowRoleBindings(
-                    teamWorkflowDocumentsQuery.data ?? [],
-                  ),
+                : deriveTeamWorkflowRoleBindings(teamWorkflowDocumentsQuery.data ?? []),
         workflowDocumentCount: teamWorkflowDocumentsQuery.data?.length ?? 0,
+        workspaceSettings: workspaceSettingsQuery.data ?? null,
       }),
     [
       connectorCatalogQuery.data,
@@ -414,95 +892,21 @@ const TeamDetailPage: React.FC = () => {
       workspaceSettingsQuery.data,
     ],
   );
-  const initialLoading =
-    bindingQuery.isLoading ||
-    servicesQuery.isLoading ||
-    actorsQuery.isLoading ||
-    workflowsQuery.isLoading ||
-    scriptsQuery.isLoading;
-  const teamSignalIssues = [
-    bindingQuery.isError ? "Team binding could not be loaded." : null,
-    servicesQuery.isError ? "Published services could not be loaded." : null,
-    actorsQuery.isError ? "Team members could not be loaded." : null,
-    workflowsQuery.isError ? "Workflow assets could not be loaded." : null,
-    scriptsQuery.isError ? "Scripts could not be loaded." : null,
-    runsQuery.isError ? "Recent team activity could not be loaded." : null,
-    currentRunAuditQuery.isError ? "Current run audit could not be loaded." : null,
-    baselineRunAuditQuery.isError ? "Baseline run audit could not be loaded." : null,
-    actorGraphQuery.isError ? "Collaboration graph could not be loaded." : null,
-    workspaceSettingsQuery.isError ? "Workspace settings could not be loaded." : null,
-    connectorCatalogQuery.isError ? "Connector catalog could not be loaded." : null,
-    teamScopedRoleUnavailable
-      ? "Current workflow connector usage could not be loaded."
-      : null,
-  ].filter((issue): issue is string => Boolean(issue));
-  const activityProvenance: ObservationBadge =
-    runsQuery.isError || currentRunAuditQuery.isError
-      ? { label: "Unavailable", status: "unavailable" }
-      : lens.currentRun
-        ? { label: "Delayed", status: "delayed" }
-        : { label: "Partial", status: "partial" };
-  const compareProvenance: ObservationBadge =
-    currentRunAuditQuery.isError || baselineRunAuditQuery.isError
-      ? { label: "Unavailable", status: "unavailable" }
-      : lens.baselineRun
-        ? { label: "Delayed", status: "delayed" }
-        : { label: "Partial", status: "partial" };
-  const playbackProvenance: ObservationBadge = currentRunAuditQuery.isError
-    ? { label: "Unavailable", status: "unavailable" }
-    : lens.playback.available
-      ? { label: "Delayed", status: "delayed" }
-      : { label: "Partial", status: "partial" };
-  const graphProvenance: ObservationBadge = actorGraphQuery.isError
-    ? { label: "Unavailable", status: "unavailable" }
-    : lens.graph.available
-      ? { label: "Live", status: "live" }
-      : { label: "Partial", status: "partial" };
-  const contextProvenance: ObservationBadge =
-    teamSignalIssues.length > 0 || lens.partialSignals.length > 0
-      ? { label: "Partial", status: "partial" }
-      : { label: "Delayed", status: "delayed" };
-  const currentServingProvenance: ObservationBadge =
-    bindingQuery.isError || servicesQuery.isError
-      ? { label: "Unavailable", status: "unavailable" }
-      : lens.currentBindingContext
-        ? { label: "Live", status: "live" }
-        : { label: "Partial", status: "partial" };
-  const integrationsSignalIssues = [
-    workspaceSettingsQuery.isError
-      ? "Workspace settings are unavailable."
-      : null,
-    connectorCatalogQuery.isError
-      ? "Connector catalog is unavailable."
-      : null,
-    teamScopedRoleUnavailable
-      ? "Current workflow connector usage is unavailable."
-      : null,
-  ].filter((issue): issue is string => Boolean(issue));
-  const integrationsProvenance: ObservationBadge =
-    workspaceSettingsQuery.isError &&
-    connectorCatalogQuery.isError &&
-    teamScopedRoleUnavailable
-      ? { label: "Unavailable", status: "unavailable" }
-      : integrationsSignalIssues.length > 0 ||
-          teamScopedRoleLoading
-        ? { label: "Partial", status: "partial" }
-        : integrations.available
-          ? { label: "Delayed", status: "delayed" }
-          : { label: "Partial", status: "partial" };
+
   const runtimeServiceId =
-    lens.currentService?.serviceId || lens.currentRun?.serviceId || undefined;
+    focusedOperationalUnit?.matchedService?.serviceId ||
+    lens.currentService?.serviceId ||
+    lens.currentRun?.serviceId ||
+    undefined;
+
   const teamBuilderRoute =
     trimText(activeWorkflowSummary?.workflowId).length > 0
       ? buildStudioWorkflowEditorRoute({
           scopeId,
           workflowId: activeWorkflowSummary?.workflowId,
         })
-      : buildStudioWorkflowWorkspaceRoute({
-          scopeId,
-        });
-  const teamBuilderLabel =
-    "Open Team Builder";
+      : buildStudioWorkflowWorkspaceRoute({ scopeId });
+
   const availableActorIds = React.useMemo(
     () =>
       Array.from(
@@ -513,69 +917,57 @@ const TeamDetailPage: React.FC = () => {
       ).filter(Boolean),
     [lens.graph.nodes, lens.members],
   );
+
   const defaultSelectedActorId =
     lens.graph.focusActorId || lens.members[0]?.actorId || "";
-  const [selectedActorId, setSelectedActorId] = React.useState("");
 
   React.useEffect(() => {
     if (availableActorIds.length === 0) {
-      if (selectedActorId) {
-        setSelectedActorId("");
-      }
+      setSelectedActorId("");
       return;
     }
-
     if (!selectedActorId || !availableActorIds.includes(selectedActorId)) {
       setSelectedActorId(defaultSelectedActorId || availableActorIds[0]);
     }
   }, [availableActorIds, defaultSelectedActorId, selectedActorId]);
 
   const effectiveActorId = selectedActorId || defaultSelectedActorId;
-  const selectedMember =
-    lens.members.find((member) => member.actorId === effectiveActorId) || null;
   const selectedGraphNodes = lens.graph.nodes.map((node) => ({
     ...node,
-    isFocused: effectiveActorId
-      ? node.actorId === effectiveActorId
-      : node.isFocused,
+    isFocused: effectiveActorId ? node.actorId === effectiveActorId : node.isFocused,
   }));
-  const selectedGraphRelationships = effectiveActorId
-    ? lens.graph.relationships.filter(
-        (relationship) =>
-          relationship.fromActorId === effectiveActorId ||
-          relationship.toActorId === effectiveActorId,
-      )
-    : lens.graph.relationships;
-  const visibleGraphRelationships =
-    selectedGraphRelationships.length > 0
-      ? selectedGraphRelationships
-      : lens.graph.relationships;
+  const visibleGraphRelationships = lens.graph.relationships.filter(
+    (relationship) =>
+      !effectiveActorId ||
+      relationship.fromActorId === effectiveActorId ||
+      relationship.toActorId === effectiveActorId,
+  );
   const selectedFocusReason =
     effectiveActorId && effectiveActorId !== lens.graph.focusActorId
-      ? `Inspector focus is pinned to ${compactId(effectiveActorId)}. ${lens.graph.focusReason}`
+      ? `当前视角已锁定在 ${compactId(effectiveActorId)}。${lens.graph.focusReason}`
       : lens.graph.focusReason;
-  const selectedPlaybackSteps = effectiveActorId
-    ? lens.playback.steps.filter((step) => step.actorId === effectiveActorId)
-    : lens.playback.steps;
   const visiblePlaybackSteps =
-    selectedPlaybackSteps.length > 0 ? selectedPlaybackSteps : lens.playback.steps;
-  const selectedPlaybackEvents = effectiveActorId
-    ? lens.playback.events.filter((event) => event.actorId === effectiveActorId)
-    : lens.playback.events;
-  const visiblePlaybackEvents =
-    selectedPlaybackEvents.length > 0
-      ? selectedPlaybackEvents
-      : lens.playback.events;
-  const selectedPlaybackSummary =
-    effectiveActorId && selectedPlaybackSteps.length === 0 && selectedPlaybackEvents.length === 0
-      ? `No actor-specific playback facts are visible for ${compactId(
-          effectiveActorId,
-        )} yet, so the rail is showing the latest team-wide activity.`
-      : effectiveActorId
-        ? `The rail is focused on ${compactId(
-            effectiveActorId,
-          )} whenever actor-specific playback is available.`
-        : "";
+    lens.playback.steps.filter(
+      (step) => !effectiveActorId || step.actorId === effectiveActorId,
+    ) || lens.playback.steps;
+
+  const graphProvenance: ObservationBadge = actorGraphQuery.isError
+    ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
+    : lens.graph.available
+      ? { label: formatObservationLabel("live"), status: "live" }
+      : { label: formatObservationLabel("partial"), status: "partial" };
+  const playbackProvenance: ObservationBadge = currentRunAuditQuery.isError
+    ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
+    : lens.playback.available
+      ? { label: formatObservationLabel("delayed"), status: "delayed" }
+      : { label: formatObservationLabel("partial"), status: "partial" };
+  const integrationsProvenance: ObservationBadge =
+    workspaceSettingsQuery.isError && connectorCatalogQuery.isError
+      ? { label: formatObservationLabel("unavailable"), status: "unavailable" }
+      : integrations.available
+        ? { label: formatObservationLabel("delayed"), status: "delayed" }
+        : { label: formatObservationLabel("partial"), status: "partial" };
+
   const handleOpenPlaybackRun = React.useCallback(
     (preferredActorId?: string | null) => {
       const runId = lens.playback.currentRunId?.trim() || "";
@@ -617,16 +1009,13 @@ const TeamDetailPage: React.FC = () => {
         }),
       );
     },
-    [
-      lens.currentRun?.actorId,
-      lens.playback,
-      runtimeServiceId,
-      scopeId,
-    ],
+    [lens.currentRun?.actorId, lens.playback, runtimeServiceId, scopeId],
   );
+
   const handleOpenPlaybackActor = React.useCallback(
     (actorId?: string | null, runId?: string | null) => {
-      const resolvedActorId = actorId?.trim() || lens.playback.rootActorId?.trim() || "";
+      const resolvedActorId =
+        actorId?.trim() || lens.playback.rootActorId?.trim() || "";
       if (!scopeId || !resolvedActorId) {
         return;
       }
@@ -643,464 +1032,516 @@ const TeamDetailPage: React.FC = () => {
     [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
   );
 
-  const activityRail = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={activityProvenance.label}
-            status={activityProvenance.status}
-          />
-        }
-        title="Recent Activity"
-        titleHelp="Start here when you need proof of what this team just did and whether it needs attention."
-      >
-        {runsQuery.isLoading ? (
-          <AevatarInspectorEmpty description="Loading recent team activity." />
-        ) : runsQuery.isError ? (
-          <AevatarInspectorEmpty
-            description="Recent team activity could not be loaded for this team."
-            title="Activity unavailable"
-          />
-        ) : lens.currentRun || lens.baselineRun ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {[lens.currentRun, ...[lens.baselineRun].filter(Boolean)].map((run, index) => {
-              if (!run) {
-                return null;
-              }
+  const teamTitle = activeWorkflowSummary?.displayName || lens.title;
+  const activeWorkflowId =
+    trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
+  const teamCompositionRows = React.useMemo(
+    () =>
+      deriveTeamCompositionRows({
+        documents: teamWorkflowDocumentsQuery.data ?? [],
+        fallbackMembers: lens.members,
+        implementationKind: lens.activeRevision?.implementationKind,
+      }),
+    [lens.activeRevision?.implementationKind, lens.members, teamWorkflowDocumentsQuery.data],
+  );
+  const latestVisibleUpdate =
+    lens.currentRun?.lastUpdatedAt ||
+    lens.currentRunAudit?.summary.lastUpdatedAt ||
+    activeWorkflowSummary?.updatedAt ||
+    "";
+  const activeRunId =
+    lens.currentRun?.runId || focusedOperationalUnit?.latestRun?.runId || "";
+  const currentRevisionId = trimText(lens.activeRevision?.revisionId) || "--";
+  const currentRevisionStatus =
+    trimText(lens.activeRevision?.servingState) ||
+    trimText(lens.activeRevision?.status) ||
+    "--";
+  const currentDeploymentStatus =
+    trimText(lens.currentService?.deploymentStatus) ||
+    trimText(lens.activeRevision?.status) ||
+    "--";
+  const currentHeaderStatus =
+    trimText(lens.currentRun?.completionStatus) || currentDeploymentStatus;
+  const currentHeaderStatusFriendly = formatFriendlyStatus(currentHeaderStatus);
+  const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus);
+  const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus);
+  const currentDeploymentId =
+    trimText(lens.activeRevision?.deploymentId) ||
+    trimText(lens.currentService?.deploymentId) ||
+    "--";
+  const currentServiceKey =
+    trimText(lens.currentService?.serviceKey) ||
+    trimText(activeWorkflowSummary?.serviceKey) ||
+    "--";
+  const currentServiceDisplayName =
+    trimText(lens.currentService?.displayName) || "--";
+  const currentRunStatus = trimText(lens.currentRun?.completionStatus) || "--";
+  const currentRunFriendly = activeRunId
+    ? formatFriendlyStatus(currentRunStatus)
+    : "暂无运行";
+  const currentServiceFriendly =
+    currentServiceDisplayName !== "--"
+      ? currentServiceDisplayName
+      : runtimeServiceId || "--";
+  const currentVersionFriendly =
+    currentRevisionFriendly !== "--"
+      ? currentRevisionFriendly
+      : currentDeploymentFriendly;
+  const currentServicePillText =
+    currentServiceFriendly !== "--"
+      ? `服务 · ${currentServiceFriendly}`
+      : "服务待配置";
+  const currentDeploymentPillText =
+    currentVersionFriendly !== "--"
+      ? `版本 · ${currentVersionFriendly}`
+      : "版本待确认";
+  const currentRunPillText = activeRunId
+    ? `运行 · ${currentRunFriendly}`
+    : "暂无近期运行";
+  const workflowNameValue =
+    trimText(activeWorkflowSummary?.workflowName) ||
+    trimText(lens.activeRevision?.workflowName) ||
+    "--";
+  const currentActorId =
+    trimText(lens.currentRun?.actorId) ||
+    trimText(lens.activeRevision?.primaryActorId) ||
+    "--";
+  const currentStateVersion =
+    lens.currentRun?.stateVersion != null ? String(lens.currentRun.stateVersion) : "--";
+  const currentLastEventId = trimText(lens.currentRun?.lastEventId) || "--";
+  const currentEndpointCount = lens.currentService?.endpoints.length ?? 0;
+  const currentPolicyCount = lens.currentService?.policyIds.length ?? 0;
+  const enabledConnectorCount = integrations.items.filter((item) => item.enabled).length;
+  const connectorHighlights = React.useMemo(
+    () =>
+      integrations.items
+        .filter((item) => item.usedByRoles.length > 0)
+        .slice(0, 3)
+        .map((item) => item.name),
+    [integrations.items],
+  );
+  const compositionDisplayRows = React.useMemo(() => {
+    if (teamCompositionRows.length > 0) {
+      return teamCompositionRows;
+    }
 
-              return (
+    return [
+      {
+        key: "fallback-workflow",
+        kind: "workflow",
+        name: "团队流程",
+        summary: workflowNameValue !== "--" ? workflowNameValue : activeWorkflowId || "--",
+      },
+      {
+        key: "fallback-actor",
+        kind: "actor",
+        name: "当前执行",
+        summary: activeRunId ? `${currentRunFriendly} · ${compactId(currentActorId)}` : "暂无最近运行",
+      },
+      {
+        key: "fallback-service",
+        kind: "service",
+        name: "主服务",
+        summary: currentServiceFriendly,
+      },
+    ];
+  }, [
+    activeWorkflowId,
+    activeRunId,
+    currentActorId,
+    currentRunFriendly,
+    currentServiceKey,
+    currentServiceFriendly,
+    runtimeServiceId,
+    teamCompositionRows,
+    workflowNameValue,
+  ]);
+  const runtimeSummaryRows = [
+    {
+      badge: currentRevisionStatus,
+      badgeColor: currentRevisionStatus === "Active" ? "success" : undefined,
+      key: "revisionId",
+      label: "当前版本",
+      note: `revisionId: ${currentRevisionId}`,
+      value: currentRevisionFriendly,
+    },
+    {
+      badge: runtimeServiceId || "--",
+      badgeColor: runtimeServiceId ? "success" : undefined,
+      key: "serviceKey",
+      label: "主服务",
+      note: `serviceId: ${runtimeServiceId || "--"}`,
+      value: currentServiceFriendly,
+    },
+    {
+      badge: currentRunStatus,
+      badgeColor: currentRunStatus !== "--" ? "success" : undefined,
+      key: "runId",
+      label: "最近状态",
+      note: activeRunId ? `runId: ${activeRunId}` : `actorId: ${currentActorId}`,
+      value: currentRunFriendly,
+    },
+    {
+      badge: currentStateVersion !== "--" ? `v${currentStateVersion}` : "--",
+      key: "lastUpdatedAt",
+      label: "最近更新时间",
+      note: `lastEventId: ${currentLastEventId}`,
+      value: latestVisibleUpdate ? formatCompactTimestamp(latestVisibleUpdate) : "--",
+    },
+    {
+      badge: `${integrations.linkedConnectorCount}`,
+      badgeColor: integrations.linkedConnectorCount > 0 ? "success" : undefined,
+      key: "connectors",
+      label: "连接器",
+      note:
+        connectorHighlights.length > 0
+          ? connectorHighlights.join("、")
+          : `catalog: ${integrations.items.length}`,
+      value:
+        integrations.linkedConnectorCount > 0
+          ? `${integrations.linkedConnectorCount} 个已绑定`
+          : "未配置",
+    },
+  ];
+
+  const tabOptions: TeamTabOption[] = [
+    { label: "概览", value: "overview" },
+    { label: "事件拓扑", value: "topology" },
+    { label: "事件流", value: "events" },
+    { label: "团队成员", value: "members" },
+    { label: "连接器", value: "connectors" },
+    { label: "团队配置", value: "advanced" },
+  ];
+
+  const initialLoading =
+    bindingQuery.isLoading ||
+    servicesQuery.isLoading ||
+    actorsQuery.isLoading ||
+    workflowsQuery.isLoading ||
+    scriptsQuery.isLoading;
+
+  const pushTeamTab = React.useCallback(
+    (tab: TeamDetailTab) => {
+      setActiveTab(tab);
+      history.push(
+        buildTeamDetailHref({
+          scopeId,
+          workflowId: activeWorkflowId || undefined,
+          serviceId: runtimeServiceId,
+          runId: lens.currentRun?.runId || lens.playback.currentRunId || undefined,
+          tab,
+        }),
+      );
+    },
+    [
+      activeWorkflowId,
+      lens.currentRun?.runId,
+      lens.playback.currentRunId,
+      runtimeServiceId,
+      scopeId,
+    ],
+  );
+
+  const handleOpenConversation = React.useCallback(() => {
+    if (lens.playback.currentRunId) {
+      handleOpenPlaybackRun();
+      return;
+    }
+    history.push(
+      buildRuntimeRunsHref({
+        scopeId,
+        serviceId: runtimeServiceId,
+        actorId: lens.currentRun?.actorId || undefined,
+      }),
+    );
+  }, [
+    handleOpenPlaybackRun,
+    lens.currentRun?.actorId,
+    lens.playback.currentRunId,
+    runtimeServiceId,
+    scopeId,
+  ]);
+
+  const handleOpenServiceMapping = React.useCallback(() => {
+    handleOpenPlaybackActor(
+      effectiveActorId ||
+        lens.graph.focusActorId ||
+        lens.playback.rootActorId ||
+        lens.currentRun?.actorId,
+      lens.currentRun?.runId || lens.playback.currentRunId,
+    );
+  }, [
+    effectiveActorId,
+    handleOpenPlaybackActor,
+    lens.currentRun?.actorId,
+    lens.currentRun?.runId,
+    lens.graph.focusActorId,
+    lens.playback.currentRunId,
+    lens.playback.rootActorId,
+  ]);
+
+  const renderOverviewTab = () => {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <div
+          style={{
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 24,
+            boxShadow: token.boxShadowSecondary,
+            display: "flex",
+            flexDirection: "column",
+            gap: 18,
+            padding: 24,
+          }}
+        >
+          <div
+            style={{
+              alignItems: "flex-start",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 12,
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <Space wrap size={8}>
+                <Typography.Text strong style={{ fontSize: 16 }}>
+                  当前态势
+                </Typography.Text>
+                <DetailPill
+                  style={resolveStatusPillStyle(token, currentHeaderStatus)}
+                  text={currentHeaderStatusFriendly}
+                />
+              </Space>
+            </div>
+            <Space wrap size={[8, 8]}>
+              <DetailPill
+                style={{
+                  background: token.colorInfoBg,
+                  border: `1px solid ${token.colorInfoBorder}`,
+                  color: token.colorInfo,
+                }}
+                text={currentServicePillText}
+              />
+              <DetailPill
+                style={resolveStatusPillStyle(token, currentDeploymentStatus)}
+                text={currentDeploymentPillText}
+              />
+              <DetailPill
+                style={resolveStatusPillStyle(token, currentRunStatus)}
+                text={currentRunPillText}
+              />
+            </Space>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gap: 14,
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            }}
+          >
+            <SignalCard
+              label="这支团队现在服务于"
+              captionMonospace
+              value={currentServiceFriendly}
+              caption={currentServiceKey}
+            />
+            <SignalCard
+              label="当前运行状态"
+              value={currentRunFriendly}
+              caption={activeRunId || "--"}
+            />
+            <SignalCard
+              label="最近一次更新"
+              value={formatCompactTimestamp(latestVisibleUpdate)}
+              caption={formatDetailedTimestamp(latestVisibleUpdate)}
+            />
+          </div>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 18,
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          }}
+        >
+          <OverviewMetricCard
+            label="团队在做什么"
+            value={workflowNameValue !== "--" ? workflowNameValue : teamTitle}
+          />
+          <OverviewMetricCard label="主服务入口" value={currentServiceFriendly} />
+          <OverviewMetricCard label="当前状态" value={currentRunFriendly} />
+          <OverviewMetricCard
+            accent
+            label="当前版本状态"
+            value={currentVersionFriendly}
+          />
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gap: 18,
+            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+          }}
+        >
+          <div
+            style={{
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 24,
+              boxShadow: token.boxShadowSecondary,
+              display: "flex",
+              flexDirection: "column",
+              gap: 18,
+              padding: 24,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <Typography.Title level={3} style={{ margin: 0 }}>
+                  团队构成
+                </Typography.Title>
+              </div>
+            </div>
+            {compositionDisplayRows.length > 0 ? (
+              compositionDisplayRows.map((row, index) => (
                 <div
-                  key={run.runId}
+                  key={row.key}
                   style={{
-                    border: "1px solid var(--ant-color-border-secondary)",
-                    borderRadius: 12,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 10,
-                    padding: 14,
+                    alignItems: "start",
+                    borderTop:
+                      index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns: "minmax(120px, 180px) minmax(0, 1fr) max-content",
+                    paddingTop: index === 0 ? 0 : 16,
                   }}
                 >
-                  <Space align="center" wrap>
-                    <Typography.Text strong>
-                      {index === 0 ? "Current run" : "Baseline run"}
-                    </Typography.Text>
-                    <AevatarStatusTag
-                      domain="run"
-                      status={run.completionStatus || "unknown"}
-                      label={run.completionStatus || "unknown"}
-                    />
-                    {run.lastSuccess === true ? (
-                      <Tag color="success">prior good</Tag>
-                    ) : null}
-                  </Space>
-                  <Typography.Text>{run.runId}</Typography.Text>
-                  <Typography.Text type="secondary">
-                    Revision {run.revisionId || "unknown"} · Actor {run.actorId || "n/a"}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    Updated {formatDateTime(run.lastUpdatedAt)}
-                  </Typography.Text>
+                  <Typography.Text strong>{row.name}</Typography.Text>
+                  <FactLine rows={3} secondary text={row.summary} />
+                  <DetailPill
+                    compact
+                    style={resolveCompositionKindPillStyle(token, row.kind)}
+                    text={formatCompositionKind(row.kind)}
+                  />
                 </div>
-              );
-            })}
+              ))
+            ) : (
+              <AevatarInspectorEmpty
+                title="暂无团队构成"
+                description="当前还没有足够事实来生成团队构成。"
+              />
+            )}
           </div>
-        ) : (
-          <AevatarInspectorEmpty description="No recent team activity is available yet." />
-        )}
-      </AevatarPanel>
 
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={compareProvenance.label}
-            status={compareProvenance.status}
-          />
-        }
-        title="What Changed"
-        titleHelp="Compare the latest visible run with the last solid baseline so the team story is explainable."
-      >
-        {!currentRunAuditQuery.isError && !baselineRunAuditQuery.isError && lens.compare.available ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Alert description={lens.compare.summary} showIcon type="info" />
-            {lens.compare.sections.map((section) => (
+          <div
+            style={{
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: 24,
+              boxShadow: token.boxShadowSecondary,
+              display: "flex",
+              flexDirection: "column",
+              gap: 18,
+              padding: 24,
+            }}
+          >
+            <div>
+              <Typography.Title level={3} style={{ margin: 0 }}>
+                运行摘要
+              </Typography.Title>
+            </div>
+            {runtimeSummaryRows.map((row, index) => (
               <div
-                key={section.key}
+                key={row.key}
                 style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
+                  alignItems: "start",
+                  borderTop:
+                    index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "minmax(96px, 128px) minmax(0, 1fr) max-content",
+                  paddingTop: index === 0 ? 0 : 16,
                 }}
               >
-                <Space align="center" size={8}>
-                  <SwapOutlined />
-                  <Typography.Text strong>{section.title}</Typography.Text>
-                </Space>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {section.items.map((detail) => (
-                    <div
-                      key={`${section.key}-${detail}`}
-                      style={{
-                        border: "1px solid var(--ant-color-border-secondary)",
-                        borderRadius: 10,
-                        padding: "10px 12px",
-                      }}
-                    >
-                      <Typography.Text>{detail}</Typography.Text>
-                    </div>
-                  ))}
+                <Typography.Text style={{ paddingTop: 2 }} type="secondary">
+                  {row.label}
+                </Typography.Text>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+                  <FactLine rows={2} text={String(row.value)} />
+                  <FactLine rows={3} secondary text={String(row.note)} />
+                </div>
+                <div
+                  style={{
+                    alignSelf: "start",
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    minWidth: 0,
+                    paddingTop: 2,
+                  }}
+                >
+                  <DetailPill
+                    compact
+                    style={
+                      row.badgeColor === "success"
+                        ? resolveTonePillStyle(token, "success")
+                        : resolveStatusPillStyle(token, row.badge)
+                    }
+                    text={row.badge}
+                  />
                 </div>
               </div>
             ))}
           </div>
-        ) : (
-          <AevatarInspectorEmpty
-            description={
-              currentRunAuditQuery.isError || baselineRunAuditQuery.isError
-                ? "Run audit data could not be loaded for the latest comparison."
-                : lens.compare.summary
-            }
-            title="Compare unavailable"
-          />
-        )}
-      </AevatarPanel>
+        </div>
+      </div>
+    );
+  };
 
+  const renderTopologyTab = () => {
+    return (
       <AevatarPanel
+        title="事件拓扑"
         extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={playbackProvenance.label}
-            status={playbackProvenance.status}
+          <DetailPill
+            compact
+            style={resolveObservationPillStyle(token, graphProvenance.status)}
+            text={graphProvenance.label}
           />
         }
-        title="Human Handoff"
-        titleHelp="Keep the current human gate, the recent step sequence, and the latest runtime events on one rail so the pause makes sense."
-      >
-        {!currentRunAuditQuery.isError && lens.playback.available ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Alert
-              description={lens.playback.summary}
-              showIcon
-              type={lens.playback.interactionLabel ? "warning" : "info"}
-            />
-            {selectedPlaybackSummary ? (
-              <Alert
-                description={selectedPlaybackSummary}
-                showIcon
-                type="info"
-              />
-            ) : null}
-            {lens.playback.currentRunId || lens.playback.rootActorId ? (
-              <Space wrap size={[8, 8]}>
-                {lens.playback.currentRunId ? (
-                  <Button
-                    onClick={() => handleOpenPlaybackRun()}
-                    size="small"
-                  >
-                    Open current run replay
-                  </Button>
-                ) : null}
-                {lens.playback.rootActorId ? (
-                  <Button
-                    onClick={() =>
-                      handleOpenPlaybackActor(
-                        lens.playback.rootActorId,
-                        lens.playback.currentRunId,
-                      )
-                    }
-                    size="small"
-                    type="link"
-                  >
-                    Inspect root actor
-                  </Button>
-                ) : null}
-              </Space>
-            ) : null}
-            {lens.playback.prompt ? (
-              <div
-                style={{
-                  background: "var(--ant-color-warning-bg)",
-                  border: "1px solid var(--ant-color-warning-border)",
-                  borderRadius: 12,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  padding: 12,
-                }}
-              >
-                <Space align="center" size={8}>
-                  <PauseCircleOutlined />
-                  <Typography.Text strong>
-                    {lens.playback.interactionLabel || "Current gate"}
-                  </Typography.Text>
-                  {lens.playback.timeoutLabel ? (
-                    <Tag>{lens.playback.timeoutLabel}</Tag>
-                  ) : null}
-                </Space>
-                <Typography.Text>{lens.playback.prompt}</Typography.Text>
-              </div>
-            ) : null}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {visiblePlaybackSteps.map((step) => (
-                <div
-                  key={step.key}
-                  style={{
-                    border: "1px solid var(--ant-color-border-secondary)",
-                    borderRadius: 12,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    padding: 12,
-                  }}
-                >
-                  <Space align="center" wrap>
-                    <Typography.Text strong>{step.stepId}</Typography.Text>
-                    <Tag color={renderPlaybackTagColor(step.status)}>
-                      {renderPlaybackLabel(step.status)}
-                    </Tag>
-                    <Tag>{step.stepType}</Tag>
-                  </Space>
-                  <Typography.Text type="secondary">{step.summary}</Typography.Text>
-                  <Typography.Text>{step.detail}</Typography.Text>
-                  {step.timestamp ? (
-                    <Typography.Text type="secondary">
-                      {formatDateTime(step.timestamp)}
-                    </Typography.Text>
-                  ) : null}
-                  {step.runId || step.actorId ? (
-                    <Space wrap size={[8, 8]}>
-                      {step.runId ? (
-                        <Button
-                          onClick={() => handleOpenPlaybackRun(step.actorId)}
-                          size="small"
-                        >
-                          Open run replay
-                        </Button>
-                      ) : null}
-                      {step.actorId ? (
-                        <Button
-                          onClick={() =>
-                            handleOpenPlaybackActor(step.actorId, step.runId)
-                          }
-                          size="small"
-                          type="link"
-                        >
-                          Inspect actor
-                        </Button>
-                      ) : null}
-                    </Space>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <Space align="center" size={8}>
-                <ClockCircleOutlined />
-                <Typography.Text strong>Recent runtime events</Typography.Text>
-              </Space>
-              {visiblePlaybackEvents.map((event) => (
-                <div
-                  key={event.key}
-                  style={{
-                    border: "1px solid var(--ant-color-border-secondary)",
-                    borderRadius: 10,
-                    padding: "10px 12px",
-                  }}
-                >
-                  <Space align="center" wrap>
-                    <Tag color={event.tone === "error" ? "error" : event.tone === "warning" ? "warning" : "processing"}>
-                      {event.stage}
-                    </Tag>
-                    {event.timestamp ? (
-                      <Typography.Text type="secondary">
-                        {formatDateTime(event.timestamp)}
-                      </Typography.Text>
-                    ) : null}
-                  </Space>
-                  <Typography.Paragraph style={{ margin: "8px 0 0" }}>
-                    {event.message}
-                  </Typography.Paragraph>
-                  <Typography.Text type="secondary">{event.detail}</Typography.Text>
-                  {event.runId || event.actorId ? (
-                    <Space style={{ marginTop: 8 }} wrap size={[8, 8]}>
-                      {event.runId ? (
-                        <Button
-                          onClick={() => handleOpenPlaybackRun(event.actorId)}
-                          size="small"
-                        >
-                          Open run replay
-                        </Button>
-                      ) : null}
-                      {event.actorId ? (
-                        <Button
-                          onClick={() =>
-                            handleOpenPlaybackActor(event.actorId, event.runId)
-                          }
-                          size="small"
-                          type="link"
-                        >
-                          Inspect actor
-                        </Button>
-                      ) : null}
-                    </Space>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            {lens.playback.roleReplies.length > 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Space align="center" size={8}>
-                  <MessageOutlined />
-                  <Typography.Text strong>Recent replies</Typography.Text>
-                </Space>
-                {lens.playback.roleReplies.map((reply) => (
-                  <div
-                    key={reply}
-                    style={{
-                      border: "1px solid var(--ant-color-border-secondary)",
-                      borderRadius: 10,
-                      padding: "10px 12px",
-                    }}
-                  >
-                    <Typography.Text>{reply}</Typography.Text>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <AevatarInspectorEmpty
-            description={
-              currentRunAuditQuery.isError
-                ? "Run audit data could not be loaded for the latest playback."
-                : lens.playback.summary
-            }
-            title="Playback unavailable"
-          />
-        )}
-      </AevatarPanel>
-    </div>
-  );
-
-  const collaborationStage = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={graphProvenance.label}
-            status={graphProvenance.status}
-          />
-        }
-        title="Collaboration Canvas"
-        titleHelp="Keep one member in focus, then show the nearby collaboration surface around that person."
       >
         {actorGraphQuery.isLoading ? (
-          <AevatarInspectorEmpty description="Loading the current team collaboration focus." />
+          <AevatarInspectorEmpty description="正在加载团队拓扑。" />
         ) : actorGraphQuery.isError ? (
           <AevatarInspectorEmpty
-            description="The collaboration graph could not be loaded, so the team shell falls back to member and run truth."
-            title="Collaboration graph unavailable"
+            title="拓扑暂不可用"
+            description="当前无法读取团队拓扑，请稍后重试。"
           />
-        ) : lens.graph.available ? (
+        ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div
               style={{
                 display: "grid",
                 gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
               }}
             >
               <SignalCard
                 icon={<EyeOutlined />}
-                label="Focused actor"
-                tone="info"
-                value={effectiveActorId || "n/a"}
+                label="焦点成员"
+                value={compactId(effectiveActorId)}
                 caption={selectedFocusReason}
               />
               <SignalCard
                 icon={<BranchesOutlined />}
-                label="Visible relations"
+                label="可见关系"
                 value={visibleGraphRelationships.length}
-                caption={`${selectedGraphNodes.length} nodes in the current focused subgraph`}
+                caption={`${selectedGraphNodes.length} 个节点参与当前焦点视图`}
               />
             </div>
-            <Alert
-              description={`${lens.graph.stageSummary} ${selectedFocusReason}`}
-              showIcon
-              type="info"
-            />
-            <div
-              style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "minmax(220px, 1.1fr) minmax(240px, 1fr)",
-              }}
-            >
-              <div
-                style={{
-                  background: "var(--ant-color-primary-bg)",
-                  border: "1px solid var(--ant-color-primary-border)",
-                  borderRadius: 14,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 12,
-                  padding: 14,
-                }}
-              >
-                <Typography.Text strong>Focused actor</Typography.Text>
-                <Typography.Title level={4} style={{ margin: 0 }}>
-                  {compactId(effectiveActorId)}
-                </Typography.Title>
-                <Typography.Text type="secondary">
-                  {selectedFocusReason}
-                </Typography.Text>
-                {selectedGraphNodes
-                  .filter((node) => node.isFocused)
-                  .slice(0, 1)
-                  .map((node) => (
-                    <Space key={node.actorId} align="center" wrap>
-                      <Tag color="processing">{node.actorType}</Tag>
-                      <Tag>{node.relationCount} relations</Tag>
-                      <Typography.Text type="secondary">{node.caption}</Typography.Text>
-                    </Space>
-                  ))}
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gap: 10,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                }}
-              >
-                {selectedGraphNodes
-                  .filter((node) => !node.isFocused)
-                  .map((node) => (
-                    <div
-                      key={node.actorId}
-                      style={{
-                        border: "1px solid var(--ant-color-border-secondary)",
-                        borderRadius: 12,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                        padding: 12,
-                      }}
-                    >
-                      <Space align="center" wrap>
-                        <Typography.Text strong>{compactId(node.actorId)}</Typography.Text>
-                        <Tag>{node.actorType}</Tag>
-                      </Space>
-                      <Typography.Text type="secondary">{node.caption}</Typography.Text>
-                      <Typography.Text type="secondary">
-                        {node.relationCount} visible relations
-                      </Typography.Text>
-                    </div>
-                  ))}
-              </div>
-            </div>
+            <Alert description={lens.graph.stageSummary} showIcon type="info" />
             <div
               style={{
                 display: "grid",
@@ -1108,485 +1549,438 @@ const TeamDetailPage: React.FC = () => {
                 gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
               }}
             >
-              {visibleGraphRelationships.map((relationship) => (
-                <div
-                  key={relationship.key}
-                  style={{
-                    border: "1px solid var(--ant-color-border-secondary)",
-                    borderRadius: 12,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    padding: 12,
-                  }}
-                >
-                  <Space align="center" wrap>
-                    <BranchesOutlined />
+              {visibleGraphRelationships.length > 0 ? (
+                visibleGraphRelationships.map((relationship) => (
+                  <div
+                    key={relationship.key}
+                    style={{
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: 14,
+                      padding: 14,
+                    }}
+                  >
                     <Typography.Text strong>
                       {compactId(relationship.fromActorId)} → {compactId(relationship.toActorId)}
                     </Typography.Text>
-                  </Space>
-                  <Space align="center" wrap size={[6, 6]}>
-                    <Tag color="processing">{renderDirectionLabel(relationship.direction)}</Tag>
-                    <Tag>{relationship.edgeType}</Tag>
-                  </Space>
-                </div>
-              ))}
+                    <div style={{ marginTop: 8 }}>
+                      <DetailPill
+                        compact
+                        style={resolveTonePillStyle(token, "info")}
+                        text={formatEdgeTypeLabel(relationship.edgeType)}
+                      />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <AevatarInspectorEmpty
+                  title="暂无可见关系"
+                  description="当前没有更多可见的事件拓扑关系。"
+                />
+              )}
             </div>
           </div>
-        ) : (
-          <AevatarInspectorEmpty
-            description="The actor graph is unavailable, so the team shell falls back to member and run truth."
-            title="Collaboration graph unavailable"
-          />
         )}
       </AevatarPanel>
+    );
+  };
 
+  const renderEventsTab = () => {
+    return (
       <AevatarPanel
+        title="事件流"
         extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={contextProvenance.label}
-            status={contextProvenance.status}
+          <DetailPill
+            compact
+            style={resolveObservationPillStyle(token, playbackProvenance.status)}
+            text={playbackProvenance.label}
           />
         }
-        title="Visible Members"
-        titleHelp="Keep the people, roles, and active runtime surface for this team on one stage."
       >
-        <div
-          style={{
-            display: "grid",
-            gap: 12,
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          }}
-        >
-          <SignalCard
-            icon={<ApartmentOutlined />}
-            label="Workflow assets"
-            value={lens.workflowCount}
-            caption="Visible workflow assets in the current team scope"
-          />
-          <SignalCard
-            icon={<DeploymentUnitOutlined />}
-            label="Scripts"
-            value={lens.scriptCount}
-            caption="Scope-aware scripts currently visible"
-          />
-          <SignalCard
-            icon={<SafetyCertificateOutlined />}
-            label="Services"
-            value={lens.serviceCount}
-            caption="Published service surfaces attached to this team"
-          />
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gap: 10,
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          }}
-        >
-          {lens.members.length > 0 ? (
-            lens.members.map((member) => (
-              <button
-                aria-label={`Focus member ${member.actorType} ${member.actorId}`}
-                key={member.actorId}
-                onClick={() => setSelectedActorId(member.actorId)}
-                style={{
-                  background: member.actorId === effectiveActorId
-                    ? "var(--ant-color-primary-bg)"
-                    : "var(--ant-color-bg-container)",
-                  border: member.actorId === effectiveActorId
-                    ? "1px solid var(--ant-color-primary-border)"
-                    : "1px solid var(--ant-color-border-secondary)",
-                  borderRadius: 12,
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  minHeight: 0,
-                  padding: 14,
-                  textAlign: "left",
-                }}
-                type="button"
-              >
-                <Space align="center" wrap>
-                  <Typography.Text strong>{member.actorType}</Typography.Text>
-                  {member.actorId === effectiveActorId ? (
-                    <Tag color="processing">focused</Tag>
-                  ) : null}
-                </Space>
-                <Typography.Text>{member.actorId}</Typography.Text>
-              </button>
-            ))
-          ) : (
-            <Empty
-              description="No team members are visible yet."
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-            />
-          )}
-        </div>
-      </AevatarPanel>
-    </div>
-  );
-
-  const contextAside = (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={effectiveActorId ? "Live" : "Partial"}
-            status={effectiveActorId ? "live" : "partial"}
-          />
-        }
-        title="Member Focus"
-        titleHelp="Pick one visible member and keep the canvas, activity, and inspector pointed at the same person."
-      >
-        {selectedMember || effectiveActorId ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <SignalCard
-              icon={<EyeOutlined />}
-              label="Inspector focus"
-              tone="info"
-              value={compactId(effectiveActorId)}
-              caption={selectedMember?.actorType || "Team member"}
-            />
-            <Typography.Text type="secondary">
-              {visibleGraphRelationships.length > 0
-                ? `${visibleGraphRelationships.length} visible collaboration paths currently touch this member.`
-                : "No visible collaboration path is attached to this member yet."}
-            </Typography.Text>
-            <Space wrap size={[8, 8]}>
-              <Button
-                onClick={() =>
-                  handleOpenPlaybackActor(
-                    effectiveActorId,
-                    lens.playback.currentRunId,
-                  )
-                }
-                size="small"
-                type="link"
-              >
-                Inspect actor
-              </Button>
-              {lens.playback.currentRunId ? (
-                <Button
-                  onClick={() => handleOpenPlaybackRun(effectiveActorId)}
-                  size="small"
-                >
-                  Open run replay
-                </Button>
-              ) : null}
-            </Space>
-          </div>
-        ) : (
+        {runsQuery.isLoading ? (
+          <AevatarInspectorEmpty description="正在加载最近运行。" />
+        ) : runsQuery.isError ? (
           <AevatarInspectorEmpty
-            description="Select a visible member to focus the canvas, playback, and inspector together."
-            title="No member selected"
-          />
-        )}
-      </AevatarPanel>
-
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={contextProvenance.label}
-            status={contextProvenance.status}
-          />
-        }
-        title="Team Health"
-        titleHelp="Answer the simple question first: is this team healthy, blocked, degraded, or still missing critical runtime proof?"
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <SignalCard
-            icon={<SafetyCertificateOutlined />}
-            label="Current state"
-            tone={lens.healthTone}
-            value={renderHealthLabel(lens.healthStatus)}
-            caption={lens.healthSummary}
-          />
-          {lens.healthDetails.length > 0 ? (
-            lens.healthDetails.map((detail) => (
-              <div
-                key={detail}
-                style={{
-                  border: "1px solid var(--ant-color-border-secondary)",
-                  borderRadius: 10,
-                  padding: "10px 12px",
-                }}
-              >
-                <Typography.Text>{detail}</Typography.Text>
-              </div>
-            ))
-          ) : (
-            <Typography.Text type="secondary">
-              No extra health detail is currently available.
-            </Typography.Text>
-          )}
-        </div>
-      </AevatarPanel>
-
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={currentServingProvenance.label}
-            status={currentServingProvenance.status}
-          />
-        }
-        title="Live Configuration"
-        titleHelp="Keep the active workflow, revision, and service identity together before deciding whether to open Studio."
-      >
-        <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-          <Typography.Text strong>{lens.currentBindingTarget}</Typography.Text>
-          <Typography.Text type="secondary">
-            Revision {lens.activeRevision?.revisionId || "unknown"}
-          </Typography.Text>
-          <Typography.Text type="secondary">
-            Service {lens.currentService?.serviceId || lens.currentRun?.serviceId || "n/a"}
-          </Typography.Text>
-          {lens.currentBindingContext ? (
-            <Alert
-              description={lens.currentBindingContext}
-              showIcon
-              type="info"
-            />
-          ) : null}
-          <Space wrap size={[8, 8]}>
-            <Button
-              onClick={() => history.push(teamBuilderRoute)}
-              type="primary"
-            >
-              {teamBuilderLabel}
-            </Button>
-            <Button
-              onClick={() =>
-                history.push(
-                  buildRuntimeRunsHref({
-                    scopeId,
-                    serviceId: lens.currentService?.serviceId || undefined,
-                    actorId: lens.currentRun?.actorId || undefined,
-                  }),
-                )
-              }
-            >
-              Review activity
-            </Button>
-          </Space>
-          <Typography.Text type="secondary">
-            Use Team Builder when the live workflow needs to change. Use activity when
-            you need proof before editing.
-          </Typography.Text>
-        </Space>
-      </AevatarPanel>
-
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={integrationsProvenance.label}
-            status={integrationsProvenance.status}
-          />
-        }
-        title="Connected Systems"
-        titleHelp="Show the external systems and connection capabilities around this team, not extra team members."
-      >
-        {workspaceSettingsQuery.isLoading &&
-        connectorCatalogQuery.isLoading &&
-        (lens.activeRevision?.implementationKind !== "workflow" ||
-          teamScopedRoleLoading) ? (
-          <AevatarInspectorEmpty description="Loading team integrations." />
-        ) : !integrations.available && integrationsSignalIssues.length > 0 ? (
-          <AevatarInspectorEmpty
-            description="Workspace settings, connector definitions, or current team connector usage could not be loaded for this team."
-            title="Integrations unavailable"
+            title="运行信号暂不可用"
+            description="当前无法读取最近运行。"
           />
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {integrationsSignalIssues.length > 0 ? (
-              <Alert
-                description="Some integration facts are missing, so this inspector is showing the best visible workspace truth."
-                showIcon
-                type="warning"
-              />
-            ) : null}
-            {teamScopedRoleLoading ? (
-              <Alert
-                description="Loading team-scoped connector usage from the current workflow."
-                showIcon
-                type="info"
-              />
-            ) : null}
-            <SignalCard
-              icon={<DeploymentUnitOutlined />}
-              label="Runtime base"
-              tone="info"
-              value={integrations.runtimeHostLabel}
-              caption={integrations.workspaceSummary}
-            />
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div
               style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                background: token.colorBgContainerDisabled,
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 16,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                padding: 16,
               }}
             >
-              <SignalCard
-                icon={<BranchesOutlined />}
-                label="Connector definitions"
-                value={integrations.connectorCount}
-                caption="Workspace-visible connection capabilities"
-              />
-              <SignalCard
-                icon={<ApartmentOutlined />}
-                label="Team-linked connectors"
-                value={integrations.linkedConnectorCount}
-                caption={integrations.teamRoleUsageSummary}
-              />
+              <Space wrap>
+                <Typography.Text strong>
+                  {lens.currentRun?.runId || "当前还没有可见运行"}
+                </Typography.Text>
+                {lens.currentRun?.completionStatus ? (
+                  <DetailPill
+                    compact
+                    style={resolveStatusPillStyle(token, lens.currentRun.completionStatus)}
+                    text={formatFriendlyStatus(lens.currentRun.completionStatus)}
+                  />
+                ) : null}
+              </Space>
+              <Typography.Text type="secondary">
+                {lens.playback.summary}
+              </Typography.Text>
+              <Space wrap>
+                <Button onClick={handleOpenConversation}>测试对话</Button>
+                <Button onClick={handleOpenServiceMapping} type="link">
+                  查看服务映射
+                </Button>
+              </Space>
             </div>
-            <Typography.Text type="secondary">
-              {integrations.summary}
-            </Typography.Text>
-            {integrations.items.length > 0 ? (
-              <div
-                style={{
-                  display: "grid",
-                  gap: 10,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                }}
-              >
-                {integrations.items.map((connector) => (
+            {visiblePlaybackSteps.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {visiblePlaybackSteps.slice(0, 4).map((step) => (
                   <div
-                    key={connector.key}
+                    key={step.key}
                     style={{
-                      border: "1px solid var(--ant-color-border-secondary)",
-                      borderRadius: 12,
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 8,
-                      padding: 12,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: 14,
+                      padding: 14,
                     }}
-                  >
-                    <Space align="center" wrap>
-                      <Typography.Text strong>{connector.name}</Typography.Text>
-                      <Tag>{connector.type.toUpperCase()}</Tag>
-                      <Tag color={connector.enabled ? "success" : "default"}>
-                        {connector.enabled ? "enabled" : "disabled"}
-                      </Tag>
-                    </Space>
-                    <Typography.Text type="secondary">
-                      {connector.summary}
-                    </Typography.Text>
-                    {connector.usedByRoles.length > 0 ? (
-                      <Typography.Text type="secondary">
-                        Used by current team roles {connector.usedByRoles.join(", ")}
-                      </Typography.Text>
-                    ) : integrations.teamRoleUsageStatus === "resolved" ? (
-                      <Typography.Text type="secondary">
-                        Current team does not reference this connector.
-                      </Typography.Text>
-                    ) : integrations.teamRoleUsageStatus === "not_applicable" ? (
-                      <Typography.Text type="secondary">
-                        This team is {integrations.bindingKind}-bound, so workflow role usage is not available.
-                      </Typography.Text>
-                    ) : (
-                      <Typography.Text type="secondary">
-                        Team-scoped role usage is not currently available.
-                      </Typography.Text>
-                    )}
+                    >
+                      <Space wrap>
+                        <Typography.Text strong>{step.stepId}</Typography.Text>
+                        <DetailPill
+                          compact
+                          style={resolveTonePillStyle(token, "neutral")}
+                          text={formatStepTypeLabel(step.stepType)}
+                        />
+                      </Space>
+                      <Typography.Paragraph style={{ marginBottom: 0, marginTop: 8 }}>
+                        {step.detail}
+                    </Typography.Paragraph>
                   </div>
                 ))}
               </div>
             ) : (
-              <AevatarInspectorEmpty
-                description="No connector definitions are currently visible for this workspace."
-                title="No connectors visible"
-              />
+              <Typography.Text type="secondary">
+                当前还没有更多可见的步骤事实。
+              </Typography.Text>
             )}
-            {integrations.unresolvedReferences.length > 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Typography.Text strong>Referenced but undefined</Typography.Text>
-                {integrations.unresolvedReferences.map((connectorName) => (
-                  <div
-                    key={connectorName}
-                    style={{
-                      border: "1px solid var(--ant-color-border-secondary)",
-                      borderRadius: 10,
-                      padding: "10px 12px",
-                    }}
-                  >
-                    <Typography.Text>{connectorName}</Typography.Text>
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
         )}
       </AevatarPanel>
+    );
+  };
 
-      <AevatarPanel
-        extra={
-          <AevatarStatusTag
-            domain="observation"
-            label={contextProvenance.label}
-            status={contextProvenance.status}
-          />
-        }
-        title="Trust Summary"
-        titleHelp="This is the buyer-readable trust summary, not a replacement for the full Governance console."
-      >
-        <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-          <div>
-            <Typography.Text strong>Who is serving now</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-              {lens.currentBindingTarget} on revision {lens.governance.servingRevision}
-            </Typography.Paragraph>
+  const renderMembersTab = () => {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <AevatarPanel title="这支团队里有哪些角色">
+          {compositionDisplayRows.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {compositionDisplayRows.map((row) => (
+                <div
+                  key={row.key}
+                  style={{
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 14,
+                    display: "grid",
+                    gap: 12,
+                    gridTemplateColumns: "minmax(120px, 168px) minmax(0, 1fr) max-content",
+                    padding: 14,
+                  }}
+                >
+                  <Typography.Text strong>{row.name}</Typography.Text>
+                  <FactLine rows={3} secondary text={row.summary} />
+                  <DetailPill
+                    compact
+                    style={resolveCompositionKindPillStyle(token, row.kind)}
+                    text={formatCompositionKind(row.kind)}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <AevatarInspectorEmpty
+              title="暂时还没有角色信息"
+              description="当前还没有足够事实来说明这支团队由谁组成。"
+            />
+          )}
+        </AevatarPanel>
+        <AevatarPanel title="当前参与运行">
+          {lens.members.length > 0 ? (
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              }}
+            >
+              {lens.members.map((member) => (
+                <button
+                  aria-label={`选择成员 ${member.actorType} ${member.actorId}`}
+                  key={member.actorId}
+                  onClick={() => setSelectedActorId(member.actorId)}
+                  style={{
+                    background:
+                      member.actorId === effectiveActorId
+                        ? token.colorPrimaryBg
+                        : token.colorBgContainer,
+                    border: `1px solid ${
+                      member.actorId === effectiveActorId
+                        ? token.colorPrimaryBorder
+                        : token.colorBorderSecondary
+                    }`,
+                    borderRadius: 14,
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    padding: 14,
+                    textAlign: "left",
+                  }}
+                  type="button"
+                >
+                  <Space wrap>
+                    <Typography.Text strong>
+                      {member.actorType || compactId(member.actorId)}
+                    </Typography.Text>
+                    {member.actorId === effectiveActorId ? (
+                      <DetailPill
+                        compact
+                        style={resolveTonePillStyle(token, "info")}
+                        text="当前焦点"
+                      />
+                    ) : null}
+                  </Space>
+                  <FactLine rows={2} secondary text={member.actorId} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <AevatarInspectorEmpty
+              title="暂时还没有可见参与者"
+              description="当前还没有观察到这支团队里的运行参与者。"
+            />
+          )}
+        </AevatarPanel>
+      </div>
+    );
+  };
+
+  const renderConnectorsTab = () => {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <AevatarPanel
+          title="服务与连接器"
+          extra={
+            <DetailPill
+              compact
+              style={resolveObservationPillStyle(token, integrationsProvenance.status)}
+              text={integrationsProvenance.label}
+            />
+          }
+        >
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            }}
+          >
+            <SignalCard
+              icon={<DeploymentUnitOutlined />}
+              label="这支团队对外提供"
+              value={currentServiceFriendly}
+              captionMonospace
+              caption={runtimeServiceId || "--"}
+            />
+            <SignalCard
+              icon={<BranchesOutlined />}
+              label="当前可用工具"
+              value={enabledConnectorCount}
+              caption={`已绑定 ${integrations.linkedConnectorCount} 个 · 工作区可见 ${integrations.items.length} 个`}
+            />
           </div>
-          <div>
-            <Typography.Text strong>What changed recently</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-              {lens.compare.summary}
-            </Typography.Paragraph>
+        </AevatarPanel>
+        <AevatarPanel title="可用连接器">
+          {integrations.items.length > 0 ? (
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+              }}
+            >
+              {integrations.items.map((connector) => (
+                <div
+                  key={connector.key}
+                  style={{
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    borderRadius: 14,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    padding: 14,
+                  }}
+                >
+                  <Space wrap>
+                    <Typography.Text strong>{connector.name}</Typography.Text>
+                    <DetailPill
+                      compact
+                      style={resolveTonePillStyle(token, "info")}
+                      text={formatConnectorTypeLabel(connector.type)}
+                    />
+                    <DetailPill
+                      compact
+                      style={resolveTonePillStyle(
+                        token,
+                        connector.enabled ? "success" : "neutral",
+                      )}
+                      text={formatConnectorEnabledLabel(connector.enabled)}
+                    />
+                  </Space>
+                  <Typography.Text type="secondary">{connector.summary}</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {connector.usedByRoles.length > 0
+                      ? `当前团队会用到：${connector.usedByRoles.join("、")}`
+                      : "当前团队还没有用到这个连接器。"}
+                  </Typography.Text>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <AevatarInspectorEmpty
+              title="暂无连接器"
+              description="当前工作区还没有可见的连接器定义。"
+            />
+          )}
+        </AevatarPanel>
+      </div>
+    );
+  };
+
+  const renderAdvancedTab = () => {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <AevatarPanel title="如何继续调整这支团队">
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Typography.Text strong>
+              团队流程：{workflowNameValue !== "--" ? workflowNameValue : teamTitle}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              主服务：{currentServiceFriendly}
+            </Typography.Text>
+            <Typography.Text type="secondary">
+              当前版本：{currentVersionFriendly}
+            </Typography.Text>
+            <Space wrap>
+              <Button onClick={handleOpenServiceMapping} type="primary">
+                查看服务映射
+              </Button>
+              <Button onClick={() => history.push(teamBuilderRoute)}>
+                打开 Team Builder
+              </Button>
+              <Button onClick={handleOpenConversation}>测试对话</Button>
+            </Space>
           </div>
-          <div>
-            <Typography.Text strong>Can we trace the current runtime</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-              {lens.governance.traceability}
-            </Typography.Paragraph>
+        </AevatarPanel>
+        <AevatarPanel title="当前配置记录">
+          <div
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            }}
+          >
+            <SignalCard
+              label="发布状态"
+              value={currentDeploymentFriendly}
+              caption={currentDeploymentStatus}
+            />
+            <SignalCard
+              label="当前版本"
+              value={currentVersionFriendly}
+              caption={currentRevisionId}
+            />
+            <SignalCard
+              label="服务能力"
+              value={`${currentEndpointCount} 个入口`}
+              caption={`${currentPolicyCount} 条策略`}
+            />
           </div>
-          <div>
-            <Typography.Text strong>Can a human intervene</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-              {lens.governance.humanIntervention}
-            </Typography.Paragraph>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div
+              style={{
+                alignItems: "start",
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "minmax(92px, 120px) minmax(0, 1fr)",
+              }}
+            >
+              <Typography.Text type="secondary">workflowId</Typography.Text>
+              <FactLine rows={1} secondary text={activeWorkflowId || "--"} />
+            </div>
+            <div
+              style={{
+                alignItems: "start",
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "minmax(92px, 120px) minmax(0, 1fr)",
+              }}
+            >
+              <Typography.Text type="secondary">serviceKey</Typography.Text>
+              <FactLine rows={1} secondary text={currentServiceKey} />
+            </div>
+            <div
+              style={{
+                alignItems: "start",
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "minmax(92px, 120px) minmax(0, 1fr)",
+              }}
+            >
+              <Typography.Text type="secondary">deploymentId</Typography.Text>
+              <FactLine rows={1} secondary text={currentDeploymentId} />
+            </div>
           </div>
-          <div>
-            <Typography.Text strong>Is there a fallback</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-              {lens.governance.fallback}
-            </Typography.Paragraph>
-          </div>
-          <div>
-            <Typography.Text strong>Rollout posture</Typography.Text>
-            <Typography.Paragraph style={{ marginBottom: 0, marginTop: 4 }}>
-              {lens.governance.rollout}
-            </Typography.Paragraph>
-          </div>
-        </Space>
-      </AevatarPanel>
-    </div>
-  );
+        </AevatarPanel>
+      </div>
+    );
+  };
+
+  let tabContent: React.ReactNode = renderOverviewTab();
+  switch (activeTab) {
+    case "topology":
+      tabContent = renderTopologyTab();
+      break;
+    case "events":
+      tabContent = renderEventsTab();
+      break;
+    case "members":
+      tabContent = renderMembersTab();
+      break;
+    case "connectors":
+      tabContent = renderConnectorsTab();
+      break;
+    case "advanced":
+      tabContent = renderAdvancedTab();
+      break;
+    default:
+      tabContent = renderOverviewTab();
+      break;
+  }
 
   if (!scopeId) {
     return (
       <AevatarPageShell
-        title="Team home"
-        content="Open a concrete team route before entering this team home."
+        title="团队详情"
+        content="请先进入一个具体团队，再查看详情。"
       >
-        <AevatarPanel title="No team selected">
-          <AevatarInspectorEmpty description="A concrete team scope is required to render this workspace." />
+        <AevatarPanel title="未选择团队">
+          <AevatarInspectorEmpty description="当前需要一个明确的 scope 才能渲染团队详情。" />
         </AevatarPanel>
       </AevatarPageShell>
     );
@@ -1595,120 +1989,104 @@ const TeamDetailPage: React.FC = () => {
   return (
     <AevatarPageShell
       title={
-        <Space align="center" wrap size={12}>
-          <Typography.Text strong>{lens.title}</Typography.Text>
-          <AevatarStatusTag
-            domain="run"
-            status={lens.healthStatus === "healthy" ? "completed" : lens.healthStatus}
-            label={renderHealthLabel(lens.healthStatus)}
-          />
-          <Tag>{scopeId}</Tag>
-        </Space>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <Typography.Text
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: 14,
+            }}
+          >
+            Aevatar / Teams
+          </Typography.Text>
+          <Space align="center" wrap size={12}>
+            <Typography.Title level={1} style={{ margin: 0 }}>
+              {teamTitle}
+            </Typography.Title>
+            <DetailPill
+              style={resolveStatusPillStyle(token, currentHeaderStatus)}
+              text={currentHeaderStatusFriendly}
+            />
+          </Space>
+          <Typography.Text
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: 14,
+            }}
+          >
+            团队详情 / {formatTeamTabLabel(activeTab)}
+          </Typography.Text>
+        </div>
       }
-      content={`${lens.subtitle}. Start here to see whether the team needs attention, what changed most recently, and where to edit it.`}
       extra={
         <Space key="team-detail-actions" wrap>
           <Button
-            onClick={() => history.push(teamBuilderRoute)}
+            onClick={handleOpenServiceMapping}
+            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
-            {teamBuilderLabel}
+            查看服务映射
           </Button>
           <Button
-            onClick={() =>
-              history.push(
-                buildRuntimeRunsHref({
-                  scopeId,
-                  serviceId: lens.currentService?.serviceId || undefined,
-                  actorId: lens.currentRun?.actorId || undefined,
-                }),
-              )
-            }
+            onClick={handleOpenConversation}
+            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
           >
-            Open Activity
+            测试对话
           </Button>
           <Button
-            onClick={() =>
-              history.push(
-                buildRuntimeExplorerHref({
-                  actorId: effectiveActorId || lens.graph.focusActorId || undefined,
-                  scopeId,
-                  serviceId: lens.currentService?.serviceId || undefined,
-                }),
-              )
-            }
+            onClick={() => history.push(teamBuilderRoute)}
+            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
           >
-            Open Topology
+            高级编辑
           </Button>
         </Space>
       }
-      titleHelp="This home keeps the team as the top-level story while grounding every module in current runtime, service, and binding truth."
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        {teamSignalIssues.length > 0 ? (
-          <Alert
-            title="Some team signals are currently unavailable"
-            description={teamSignalIssues.join(" ")}
-            showIcon
-            type="warning"
-          />
-        ) : null}
-        {lens.partialSignals.length > 0 ? (
-          <Alert
-            title="Partial runtime truth"
-            description={lens.partialSignals.join(" · ")}
-            showIcon
-            type="info"
-          />
-        ) : null}
-        {isCompactTeamLayout ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {collaborationStage}
-            <div
-              style={{
-                background: token.colorBgLayout,
-                bottom: 12,
-                position: "sticky",
-                zIndex: 2,
-              }}
-            >
-              <Segmented
-                block
-                onChange={(value) =>
-                  setCompactPanel(value as "activity" | "details")
-                }
-                options={[
-                  {
-                    label: `Activity · ${renderObservationLabel(
-                      activityProvenance.status,
-                    )}`,
-                    value: "activity",
-                  },
-                  {
-                    label: `Details · ${renderObservationLabel(
-                      contextProvenance.status,
-                    )}`,
-                    value: "details",
-                  },
-                ]}
-                value={compactPanel}
-              />
-            </div>
-            {compactPanel === "activity" ? activityRail : contextAside}
-          </div>
-        ) : (
-          <AevatarWorkbenchLayout
-            rail={activityRail}
-            railWidth={340}
-            stage={collaborationStage}
-            stageAside={contextAside}
-            stageAsideWidth={340}
-          />
-        )}
+        <div
+          role="tablist"
+          aria-label="团队详情标签"
+          style={{
+            alignItems: "center",
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 20,
+            boxShadow: token.boxShadowSecondary,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 10,
+            padding: 8,
+          }}
+        >
+          {tabOptions.map((option) => {
+            const active = option.value === activeTab;
+            return (
+              <button
+                aria-current={active ? "page" : undefined}
+                key={option.value}
+                onClick={() => pushTeamTab(option.value)}
+                style={{
+                  background: active ? token.colorPrimary : "transparent",
+                  border: `1px solid ${
+                    active ? token.colorPrimary : "transparent"
+                  }`,
+                  borderRadius: 999,
+                  color: active ? token.colorWhite : token.colorTextSecondary,
+                  cursor: "pointer",
+                  fontSize: 14,
+                  fontWeight: active ? 700 : 500,
+                  padding: "10px 16px",
+                  transition: "all 160ms ease",
+                }}
+                type="button"
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+        {tabContent}
         {initialLoading ? (
-          <Typography.Text type="secondary">
-            Loading team shell signals...
-          </Typography.Text>
+          <Typography.Text type="secondary">正在加载团队详情...</Typography.Text>
         ) : null}
       </div>
     </AevatarPageShell>

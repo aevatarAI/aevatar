@@ -1,46 +1,25 @@
-import {
-  CodeOutlined,
-  EyeOutlined,
-  RocketOutlined,
-} from "@ant-design/icons";
-import type { ProListMetas } from "@ant-design/pro-components";
-import { ProList } from "@ant-design/pro-components";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space, Typography } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
+import { PlusOutlined } from "@ant-design/icons";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { Alert, Button, Empty, Space, Typography, theme } from "antd";
+import React from "react";
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
 import { servicesApi } from "@/shared/api/servicesApi";
-import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
-import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {
-  buildRuntimeGAgentsHref,
-  buildRuntimeRunsHref,
-} from "@/shared/navigation/runtimeRoutes";
+  buildTeamCreateHref,
+  buildTeamDetailHref,
+} from "@/shared/navigation/teamRoutes";
+import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import {
-  buildStudioScriptsWorkspaceRoute,
+  buildStudioWorkflowEditorRoute,
   buildStudioWorkflowWorkspaceRoute,
 } from "@/shared/studio/navigation";
-import type {
-  ScopeScriptSummary,
-  ScopeWorkflowSummary,
-} from "@/shared/models/scopes";
-import type { ServiceCatalogSnapshot } from "@/shared/models/services";
 import {
-  describeStudioScopeBindingRevisionContext,
-  describeStudioScopeBindingRevisionTarget,
-  formatStudioScopeBindingImplementationKind,
-  getStudioScopeBindingCurrentRevision,
-  type StudioScopeBindingRevision,
-} from "@/shared/studio/models";
-import {
-  AevatarContextDrawer,
   AevatarInspectorEmpty,
   AevatarPageShell,
   AevatarPanel,
-  AevatarStatusTag,
-  AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
 import ScopeQueryCard from "./components/ScopeQueryCard";
@@ -50,66 +29,397 @@ import {
   readScopeQueryDraft,
   type ScopeQueryDraft,
 } from "./components/scopeQuery";
-
-type ScopeFocus =
-  | { id: string; kind: "revision" | "script" | "workflow" }
-  | null;
-
-function readSelectedFocus(): ScopeFocus {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const revisionId = params.get("revisionId")?.trim();
-  const workflowId = params.get("workflowId")?.trim();
-  const scriptId = params.get("scriptId")?.trim();
-
-  if (revisionId) {
-    return { kind: "revision", id: revisionId };
-  }
-
-  if (workflowId) {
-    return { kind: "workflow", id: workflowId };
-  }
-
-  if (scriptId) {
-    return { kind: "script", id: scriptId };
-  }
-
-  return null;
-}
+import {
+  buildWorkflowOperationalUnits,
+  collectWorkflowOperationalServiceIds,
+  WORKFLOW_RUNTIME_GUARDRAIL,
+  type WorkflowOperationalAttention,
+  type WorkflowOperationalUnit,
+} from "../teams/workflowOperationalUnits";
 
 const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 
-function buildScopedServiceHref(scopeId: string, serviceId: string): string {
-  const params = new URLSearchParams();
-  params.set("tenantId", scopeId.trim());
-  params.set("appId", scopeServiceAppId);
-  params.set("namespace", scopeServiceNamespace);
-  params.set("serviceId", serviceId.trim());
-  return `/services?${params.toString()}`;
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? "";
 }
 
+function formatRunStatusLabel(status: string | null | undefined): string {
+  switch (trimOptional(status).toLowerCase()) {
+    case "waiting":
+    case "waiting_approval":
+    case "waiting_signal":
+      return "待关注";
+    case "failed":
+    case "error":
+      return "异常";
+    case "completed":
+      return "稳定";
+    default:
+      return trimOptional(status) || "未知";
+  }
+}
+
+function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
+  switch (attention) {
+    case "failed":
+      return "待处理";
+    case "waiting":
+      return "待关注";
+    case "healthy":
+      return "运行中";
+    case "draft":
+      return "草稿中";
+    case "no-bound-service":
+      return "待绑定";
+    case "no-recent-runs":
+      return "待运行";
+    default:
+      return "待确认";
+  }
+}
+
+function resolveAttentionPillStyle(
+  token: ReturnType<typeof theme.useToken>["token"],
+  attention: WorkflowOperationalAttention,
+): React.CSSProperties {
+  switch (attention) {
+    case "healthy":
+      return {
+        background: "rgba(24, 144, 255, 0.08)",
+        color: token.colorInfo,
+      };
+    case "waiting":
+    case "no-bound-service":
+    case "no-recent-runs":
+      return {
+        background: "rgba(250, 173, 20, 0.12)",
+        color: token.colorWarning,
+      };
+    case "failed":
+      return {
+        background: "rgba(255, 77, 79, 0.12)",
+        color: token.colorError,
+      };
+    case "draft":
+      return {
+        background: token.colorFillQuaternary,
+        color: token.colorTextSecondary,
+      };
+    default:
+      return {
+        background: token.colorFillQuaternary,
+        color: token.colorTextSecondary,
+      };
+  }
+}
+
+function formatCardDescription(unit: WorkflowOperationalUnit): string {
+  switch (unit.attention) {
+    case "waiting":
+      return "最近一次执行正在等待人工确认或外部信号。";
+    case "failed":
+      return "最近一次执行出现异常，建议先进入详情排查。";
+    case "healthy":
+      return "最近一次执行正常，可继续查看运行状态和配置。";
+    case "no-bound-service":
+      return "已存在 workflow 定义，但当前还没有匹配到可运行的服务入口。";
+    case "no-recent-runs":
+      return "已存在 service 记录，但当前还没有可见的运行信号。";
+    case "draft":
+      return "当前仍处在搭建阶段，建议先完成服务绑定或首次运行。";
+    case "runtime-unresolved":
+      return "当前运行信号暂时不完整，建议稍后刷新或进入详情继续查看。";
+    default:
+      return unit.attentionDetail;
+  }
+}
+
+function formatShortTime(value: string | null | undefined): string {
+  const normalized = trimOptional(value);
+  if (!normalized) {
+    return "--";
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return "--";
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
+  return ((event: React.MouseEvent<HTMLElement>) => {
+    event.stopPropagation();
+    handler();
+  }) as T;
+}
+
+const SummaryStatCard: React.FC<{
+  readonly accent?: boolean;
+  readonly label: string;
+  readonly value: React.ReactNode;
+}> = ({ accent = false, label, value }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <div
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 24,
+        boxShadow: token.boxShadowTertiary,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 128,
+        padding: 22,
+      }}
+    >
+      <Typography.Title
+        level={2}
+        style={{
+          color: accent ? token.colorPrimary : token.colorText,
+          margin: 0,
+        }}
+      >
+        {value}
+      </Typography.Title>
+      <Typography.Text
+        style={{
+          color: token.colorTextSecondary,
+          fontSize: 15,
+        }}
+      >
+        {label}
+      </Typography.Text>
+    </div>
+  );
+};
+
+const EvidencePill: React.FC<{
+  readonly text: string;
+}> = ({ text }) => {
+  const { token } = theme.useToken();
+
+  return (
+    <span
+      style={{
+        background: token.colorInfoBg,
+        border: `1px solid ${token.colorInfoBorder}`,
+        borderRadius: 999,
+        color: token.colorInfo,
+        display: "inline-flex",
+        fontSize: 13,
+        fontWeight: 500,
+        lineHeight: 1,
+        padding: "9px 12px",
+      }}
+    >
+      {text}
+    </span>
+  );
+};
+
+const TeamFact: React.FC<{
+  readonly label: string;
+  readonly value: React.ReactNode;
+}> = ({ label, value }) => (
+  <div
+    style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      minWidth: 0,
+    }}
+  >
+    <Typography.Title
+      level={4}
+      style={{
+        margin: 0,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {value}
+    </Typography.Title>
+    <Typography.Text type="secondary">{label}</Typography.Text>
+  </div>
+);
+
+const WorkflowTeamCard: React.FC<{
+  readonly scopeId: string;
+  readonly unit: WorkflowOperationalUnit;
+}> = ({ scopeId, unit }) => {
+  const { token } = theme.useToken();
+  const detailHref = buildTeamDetailHref({
+    scopeId,
+    workflowId: unit.workflow.workflowId,
+    serviceId: unit.matchedService?.serviceId,
+    runId: unit.latestRun?.runId,
+  });
+  const builderHref = buildStudioWorkflowEditorRoute({
+    scopeId,
+    workflowId: unit.workflow.workflowId,
+  });
+  const runtimeHref = unit.matchedService
+    ? buildRuntimeRunsHref({
+        actorId: unit.latestRun?.actorId || undefined,
+        route: unit.workflow.workflowName || undefined,
+        scopeId,
+        serviceId: unit.matchedService.serviceId,
+      })
+    : "";
+  const description = formatCardDescription(unit);
+  const factChips = [
+    trimOptional(unit.workflow.workflowName),
+    unit.matchedService?.displayName || "",
+    formatRunStatusLabel(unit.latestRun?.completionStatus),
+  ].filter(Boolean);
+
+  return (
+    <div
+      onClick={() => history.push(detailHref)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          history.push(detailHref);
+        }
+      }}
+      role="button"
+      style={{
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 28,
+        boxShadow: token.boxShadowTertiary,
+        cursor: "pointer",
+        display: "flex",
+        flexDirection: "column",
+        gap: 18,
+        minWidth: 0,
+        padding: 22,
+      }}
+      tabIndex={0}
+    >
+      <div
+        style={{
+          alignItems: "flex-start",
+          display: "flex",
+          gap: 16,
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <Typography.Title
+            level={3}
+            style={{
+              margin: 0,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {unit.workflow.displayName || unit.workflow.workflowId}
+          </Typography.Title>
+          <Typography.Paragraph
+            style={{
+              color: token.colorTextSecondary,
+              marginBottom: 0,
+              marginTop: 8,
+            }}
+          >
+            {description}
+          </Typography.Paragraph>
+        </div>
+        <span
+          style={{
+            ...resolveAttentionPillStyle(token, unit.attention),
+            borderRadius: 999,
+            display: "inline-flex",
+            fontSize: 13,
+            fontWeight: 600,
+            lineHeight: 1,
+            padding: "10px 14px",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {formatAttentionLabel(unit.attention)}
+        </span>
+      </div>
+
+      <Space size={[10, 10]} wrap>
+        {factChips.map((chip) => (
+          <EvidencePill key={chip} text={chip} />
+        ))}
+      </Space>
+
+      <div
+        style={{
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          display: "grid",
+          gap: 18,
+          gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+          paddingTop: 18,
+        }}
+      >
+        <TeamFact
+          label="最近步骤"
+          value={unit.latestRun?.totalSteps ?? "--"}
+        />
+        <TeamFact
+          label="角色响应"
+          value={unit.latestRun?.roleReplyCount ?? "--"}
+        />
+        <TeamFact
+          label="最近更新"
+          value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
+        />
+        <TeamFact
+          label="主服务"
+          value={unit.matchedService?.serviceId || "未发布"}
+        />
+      </div>
+
+      <Space wrap>
+        <Button
+          onClick={stopEvent(() => history.push(detailHref))}
+          type="primary"
+        >
+          查看团队
+        </Button>
+        {runtimeHref ? (
+          <Button onClick={stopEvent(() => history.push(runtimeHref))}>
+            查看运行
+          </Button>
+        ) : null}
+        <Button onClick={stopEvent(() => history.push(builderHref))}>
+          高级编辑
+        </Button>
+      </Space>
+    </div>
+  );
+};
+
 const ScopeOverviewPage: React.FC = () => {
-  const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<ScopeQueryDraft>(initialDraft);
-  const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(initialDraft);
-  const [focus, setFocus] = useState<ScopeFocus>(readSelectedFocus());
+  const { token } = theme.useToken();
+  const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [showDrafts, setShowDrafts] = React.useState(false);
+  const [showScopePicker, setShowScopePicker] = React.useState(false);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
     queryFn: () => studioApi.getAuthSession(),
     retry: false,
   });
-  const resolvedScope = useMemo(
+  const resolvedScope = React.useMemo(
     () => resolveStudioScopeContext(authSessionQuery.data),
     [authSessionQuery.data],
   );
 
-  useEffect(() => {
+  React.useEffect(() => {
     if (!resolvedScope?.scopeId) {
       return;
     }
@@ -127,311 +437,286 @@ const ScopeOverviewPage: React.FC = () => {
   }, [resolvedScope?.scopeId]);
 
   const scopeId = activeDraft.scopeId.trim();
+
+  React.useEffect(() => {
+    history.replace(buildScopeHref("/teams", activeDraft));
+  }, [activeDraft]);
+
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["scopes", "binding", scopeId],
+    queryKey: ["teams", "binding", scopeId],
     queryFn: () => studioApi.getScopeBinding(scopeId),
+    retry: false,
   });
   const workflowsQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["scopes", "workflows", scopeId],
+    queryKey: ["teams", "workflows", scopeId],
     queryFn: () => scopesApi.listWorkflows(scopeId),
+    retry: false,
   });
-  const scriptsQuery = useQuery({
+  const servicesQuery = useQuery({
     enabled: scopeId.length > 0,
-    queryKey: ["scopes", "scripts", scopeId],
-    queryFn: () => scopesApi.listScripts(scopeId),
-  });
-  const scopeServicesQuery = useQuery({
-    enabled: scopeId.length > 0,
-    queryKey: ["scopes", "services", scopeId],
+    queryKey: ["teams", "services", scopeId],
     queryFn: () =>
       servicesApi.listServices({
         tenantId: scopeId,
         appId: scopeServiceAppId,
         namespace: scopeServiceNamespace,
       }),
-  });
-  const workflowDetailQuery = useQuery({
-    enabled: scopeId.length > 0 && focus?.kind === "workflow",
-    queryKey: ["scopes", "workflow", scopeId, focus?.id],
-    queryFn: () => scopesApi.getWorkflowDetail(scopeId, focus?.id || ""),
-  });
-  const scriptDetailQuery = useQuery({
-    enabled: scopeId.length > 0 && focus?.kind === "script",
-    queryKey: ["scopes", "script", scopeId, focus?.id],
-    queryFn: () => scopesApi.getScriptDetail(scopeId, focus?.id || ""),
-  });
-  const activateRevisionMutation = useMutation({
-    mutationFn: (revisionId: string) =>
-      studioApi.activateScopeBindingRevision({
-        revisionId,
-        scopeId,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["scopes", "binding", scopeId],
-      });
-    },
-  });
-  const retireRevisionMutation = useMutation({
-    mutationFn: (revisionId: string) =>
-      studioApi.retireScopeBindingRevision({
-        revisionId,
-        scopeId,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["scopes", "binding", scopeId],
-      });
-    },
+    retry: false,
   });
 
-  useEffect(() => {
-    history.replace(
-      buildScopeHref("/teams", activeDraft, {
-        revisionId: focus?.kind === "revision" ? focus.id : "",
-        workflowId: focus?.kind === "workflow" ? focus.id : "",
-        scriptId: focus?.kind === "script" ? focus.id : "",
+  const matchedServiceIds = React.useMemo(
+    () =>
+      collectWorkflowOperationalServiceIds({
+        binding: bindingQuery.data ?? null,
+        services: servicesQuery.data ?? [],
+        workflows: workflowsQuery.data ?? [],
       }),
-    );
-  }, [activeDraft, focus]);
-
-  const binding = bindingQuery.data;
-  const revisions = binding?.revisions ?? [];
-  const activeRevision = getStudioScopeBindingCurrentRevision(binding);
-  const focusedRevision =
-    focus?.kind === "revision"
-      ? revisions.find((item) => item.revisionId === focus.id) ?? null
-      : activeRevision;
-  const currentBindingTarget = describeStudioScopeBindingRevisionTarget(activeRevision);
-  const currentBindingContext = describeStudioScopeBindingRevisionContext(activeRevision);
-  const currentBindingActor =
-    activeRevision?.primaryActorId ||
-    binding?.primaryActorId ||
-    "";
-  const selectedServiceCard =
-    scopeServicesQuery.data?.find((service) => service.serviceId === binding?.serviceId) ??
-    null;
-
-  const workflowMetas = useMemo<ProListMetas<ScopeWorkflowSummary>>(
-    () => ({
-      actions: {
-        render: (_, workflow) => [
-          <Button
-            icon={<EyeOutlined />}
-            key={`${workflow.workflowId}-inspect`}
-            onClick={() => setFocus({ kind: "workflow", id: workflow.workflowId })}
-            type="link"
-          >
-            查看
-          </Button>,
-          <Button
-            icon={<RocketOutlined />}
-            key={`${workflow.workflowId}-runs`}
-            onClick={() =>
-              history.push(
-                buildRuntimeRunsHref({
-                  scopeId,
-                }),
-              )
-            }
-            type="link"
-          >
-            事件流
-          </Button>,
-        ],
-      },
-      description: {
-        render: (_, workflow) =>
-          workflow.serviceKey
-            ? `入口 ${workflow.serviceKey}`
-            : "该行为定义还没有发布为团队默认入口。",
-      },
-      subTitle: {
-        render: (_, workflow) => (
-          <Space wrap size={[8, 8]}>
-            <AevatarStatusTag
-              domain="asset"
-              status={workflow.activeRevisionId ? "active" : "draft"}
-            />
-            <AevatarStatusTag
-              domain="governance"
-              status={workflow.deploymentStatus || "draft"}
-            />
-          </Space>
-        ),
-      },
-      title: {
-        render: (_, workflow) => workflow.displayName || workflow.workflowId,
-      },
-    }),
-    [scopeId],
+    [bindingQuery.data, servicesQuery.data, workflowsQuery.data],
   );
-  const scriptMetas = useMemo<ProListMetas<ScopeScriptSummary>>(
-    () => ({
-      actions: {
-        render: (_, script) => [
-          <Button
-            icon={<EyeOutlined />}
-            key={`${script.scriptId}-inspect`}
-            onClick={() => setFocus({ kind: "script", id: script.scriptId })}
-            type="link"
-          >
-            查看
-          </Button>,
-          <Button
-            icon={<CodeOutlined />}
-            key={`${script.scriptId}-studio`}
-            onClick={() =>
-              history.push(
-                buildStudioScriptsWorkspaceRoute({
-                  scopeId,
-                  scopeLabel: scopeId,
-                  scriptId: script.scriptId,
-                }),
-              )
-            }
-            type="link"
-          >
-            打开脚本行为
-          </Button>,
-        ],
-      },
-      description: {
-        render: (_, script) =>
-          script.activeSourceHash
-            ? `源码哈希 ${script.activeSourceHash}`
-            : "该脚本行为正在等待已提交的源码哈希。",
-      },
-      subTitle: {
-        render: (_, script) => (
-          <Space wrap size={[8, 8]}>
-            <AevatarStatusTag
-              domain="asset"
-              status={script.activeRevision ? "active" : "draft"}
-            />
-            <Typography.Text type="secondary">
-              Revision {script.activeRevision || "n/a"}
-            </Typography.Text>
-          </Space>
-        ),
-      },
-      title: {
-        render: (_, script) => script.scriptId,
-      },
-    }),
-    [],
+  const runtimeSampleServiceIds = matchedServiceIds.slice(
+    0,
+    WORKFLOW_RUNTIME_GUARDRAIL,
+  );
+  const guardrailedServiceIds = React.useMemo(
+    () => new Set(matchedServiceIds.slice(WORKFLOW_RUNTIME_GUARDRAIL)),
+    [matchedServiceIds],
+  );
+  const serviceRunQueries = useQueries({
+    queries: runtimeSampleServiceIds.map((serviceId) => ({
+      enabled: scopeId.length > 0 && servicesQuery.isSuccess,
+      queryKey: ["teams", "runs", scopeId, serviceId],
+      queryFn: () =>
+        scopeRuntimeApi.listServiceRuns(scopeId, serviceId, {
+          take: 12,
+        }),
+      retry: false,
+    })),
+  });
+  const runtimeAvailableByServiceId = React.useMemo(() => {
+    const available = new Set<string>();
+    serviceRunQueries.forEach((query, index) => {
+      if (query.isSuccess) {
+        available.add(runtimeSampleServiceIds[index] ?? "");
+      }
+    });
+    return available;
+  }, [runtimeSampleServiceIds, serviceRunQueries]);
+  const runsByServiceId = React.useMemo(
+    () =>
+      Object.fromEntries(
+        runtimeSampleServiceIds.map((serviceId, index) => [
+          serviceId,
+          serviceRunQueries[index]?.data?.runs ?? [],
+        ]),
+      ) as Record<string, readonly any[]>,
+    [runtimeSampleServiceIds, serviceRunQueries],
+  );
+  const units = React.useMemo(
+    () =>
+      buildWorkflowOperationalUnits({
+        binding: bindingQuery.data ?? null,
+        runsByServiceId,
+        services: servicesQuery.data ?? [],
+        signals: {
+          runtimeAvailableByServiceId,
+          runtimeGuardrailedServiceIds: guardrailedServiceIds,
+          servicesAvailable: servicesQuery.isSuccess,
+        },
+        workflows: workflowsQuery.data ?? [],
+      }),
+    [
+      bindingQuery.data,
+      guardrailedServiceIds,
+      runsByServiceId,
+      runtimeAvailableByServiceId,
+      servicesQuery.data,
+      servicesQuery.isSuccess,
+      workflowsQuery.data,
+    ],
+  );
+
+  const draftUnits = units.filter((unit) => unit.isDraftOnly);
+  const visibleUnits = showDrafts
+    ? units
+    : units.filter((unit) => !unit.isDraftOnly);
+  const activeUnits = units.filter((unit) => !unit.isDraftOnly);
+  const healthyUnits = activeUnits.filter((unit) => unit.attention === "healthy");
+  const runningMembers = new Set(
+    activeUnits.map((unit) =>
+      trimOptional(unit.latestRun?.actorId || unit.workflow.actorId),
+    ),
+  );
+  runningMembers.delete("");
+  const visibleRuns = activeUnits.filter((unit) => unit.latestRun).length;
+  const healthRate =
+    activeUnits.length > 0
+      ? `${((healthyUnits.length / activeUnits.length) * 100).toFixed(1)}%`
+      : "--";
+  const partialIssues = [
+    servicesQuery.isError ? "服务目录暂时不可见。" : null,
+    bindingQuery.isError ? "当前 Scope 绑定信息暂时不可见。" : null,
+    ...serviceRunQueries.map((query) =>
+      query.isError ? "部分运行信号暂时不可见。" : null,
+    ),
+    guardrailedServiceIds.size > 0
+      ? `当前首页只采样前 ${WORKFLOW_RUNTIME_GUARDRAIL} 个服务的运行信号。`
+      : null,
+  ].filter((issue): issue is string => Boolean(issue));
+
+  const titleNode = (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Typography.Text
+        style={{
+          color: token.colorTextSecondary,
+          fontSize: 14,
+        }}
+      >
+        Aevatar / Teams
+      </Typography.Text>
+      <Typography.Title
+        level={1}
+        style={{
+          margin: 0,
+        }}
+      >
+        我的 AI 团队
+      </Typography.Title>
+    </div>
   );
 
   return (
     <AevatarPageShell
+      extra={
+        <Space wrap>
+          <Button
+            icon={<PlusOutlined />}
+            onClick={() => history.push(buildTeamCreateHref())}
+            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
+            type="primary"
+          >
+            组建新团队
+          </Button>
+        </Space>
+      }
       layoutMode="document"
-      title="我的团队"
-      titleHelp="当前团队首页继续复用 scope 级状态板，但会用 Team 语义组织默认绑定、成员资产和下一步动作。"
+      title={titleNode}
     >
-      <AevatarWorkbenchLayout
-        layoutMode="document"
-        rail={
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <AevatarPanel
-              layoutMode="document"
-              title="团队范围"
-              titleHelp="这里先锁定当前 Team（Scope），后续成员、事件流和高级编辑都会沿用这个上下文。"
-            >
-              <ScopeQueryCard
-                activeScopeId={scopeId}
-                draft={draft}
-                loadLabel="加载团队状态"
-                onChange={setDraft}
-                onLoad={() => {
-                  const nextDraft = normalizeScopeDraft(draft);
-                  setDraft(nextDraft);
-                  setActiveDraft(nextDraft);
-                }}
-                onReset={() => {
-                  const nextDraft = normalizeScopeDraft({
-                    scopeId: resolvedScope?.scopeId ?? "",
-                  });
-                  setDraft(nextDraft);
-                  setActiveDraft(nextDraft);
-                  setFocus(null);
-                }}
-                resetDisabled={
-                  normalizeScopeDraft(draft).scopeId ===
-                    (resolvedScope?.scopeId?.trim() ?? "") &&
-                  scopeId === (resolvedScope?.scopeId?.trim() ?? "") &&
-                  focus == null
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 20,
+        }}
+      >
+        {(showScopePicker || !scopeId) && (
+          <AevatarPanel
+            title="Scope 上下文"
+            titleHelp="这一步只负责锁定你当前要查看的 Scope，不把它抢成首页主角。"
+          >
+            <ScopeQueryCard
+              activeScopeId={scopeId}
+              draft={draft}
+              loadLabel="导入团队视图"
+              onChange={setDraft}
+              onLoad={() => {
+                const nextDraft = normalizeScopeDraft(draft);
+                setDraft(nextDraft);
+                setActiveDraft(nextDraft);
+                setShowScopePicker(false);
+              }}
+              onReset={() => {
+                const nextDraft = normalizeScopeDraft({
+                  scopeId: resolvedScope?.scopeId ?? "",
+                });
+                setDraft(nextDraft);
+                setActiveDraft(nextDraft);
+              }}
+              onUseResolvedScope={() => {
+                if (!resolvedScope?.scopeId) {
+                  return;
                 }
-                onUseResolvedScope={() => {
-                  if (!resolvedScope?.scopeId) {
-                    return;
-                  }
 
-                  const nextDraft = normalizeScopeDraft({
-                    scopeId: resolvedScope.scopeId,
-                  });
-                  setDraft(nextDraft);
-                  setActiveDraft(nextDraft);
-                }}
-                resolvedScopeId={resolvedScope?.scopeId}
-                resolvedScopeSource={resolvedScope?.scopeSource}
+                const nextDraft = normalizeScopeDraft({
+                  scopeId: resolvedScope.scopeId,
+                });
+                setDraft(nextDraft);
+                setActiveDraft(nextDraft);
+                setShowScopePicker(false);
+              }}
+              resetDisabled={
+                normalizeScopeDraft(draft).scopeId ===
+                  (resolvedScope?.scopeId?.trim() ?? "") &&
+                scopeId === (resolvedScope?.scopeId?.trim() ?? "")
+              }
+              resolvedScopeId={resolvedScope?.scopeId}
+              resolvedScopeSource={resolvedScope?.scopeSource}
+            />
+          </AevatarPanel>
+        )}
+
+        {!scopeId ? (
+          <Alert
+            showIcon
+            title="先导入一个 Scope，首页才能渲染出这组团队卡片。"
+            type="info"
+          />
+        ) : null}
+
+        {partialIssues.length > 0 ? (
+          <Alert
+            description={partialIssues.join(" ")}
+            showIcon
+            title="部分团队信号暂时不可见"
+            type="warning"
+          />
+        ) : null}
+
+        {scopeId ? (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gap: 16,
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              }}
+            >
+              <SummaryStatCard label="活跃团队" value={activeUnits.length} />
+              <SummaryStatCard label="运行中成员" value={runningMembers.size} />
+              <SummaryStatCard label="可见运行" value={visibleRuns} />
+              <SummaryStatCard accent label="健康团队率" value={healthRate} />
+            </div>
+
+            {workflowsQuery.isLoading ? (
+              <AevatarInspectorEmpty description="正在整理当前 Scope 下的团队卡片。" />
+            ) : workflowsQuery.isError ? (
+              <Alert
+                showIcon
+                title="当前 Scope 下的团队列表暂时无法加载。"
+                type="error"
               />
-            </AevatarPanel>
-
-            <AevatarPanel title="团队操作">
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
-                <Button
-                  disabled={!scopeId}
-                  onClick={() =>
-                    history.push(
-                      scopeId
-                        ? buildTeamDetailHref({
-                            scopeId,
-                          })
-                        : "/teams",
-                    )
-                  }
-                  type="primary"
-                >
-                  打开团队详情
-                </Button>
-                <Button
-                  disabled={!scopeId}
-                  onClick={() =>
-                    history.push(
-                      scopeId
-                        ? buildTeamDetailHref({
-                            scopeId,
-                            tab: "advanced",
-                          })
-                        : "/teams",
-                    )
-                  }
-                >
-                  打开高级编辑
-                </Button>
-                <Button onClick={() => history.push(buildScopeHref("/scopes/assets", activeDraft))}>
-                  打开团队资产
-                </Button>
-                <Button onClick={() => history.push(buildScopeHref("/scopes/invoke", activeDraft, {
-                  serviceId: binding?.serviceId ?? "",
-                }))}>
-                  打开测试入口
-                </Button>
-                <Button
-                  onClick={() =>
-                    history.push(
-                      buildRuntimeGAgentsHref({
-                        scopeId,
-                        actorId: activeRevision?.primaryActorId || undefined,
-                        actorTypeName: activeRevision?.staticActorTypeName || undefined,
-                      }),
-                    )
-                  }
-                >
-                  管理成员
-                </Button>
+            ) : visibleUnits.length > 0 ? (
+              <div
+                style={{
+                  display: "grid",
+                  gap: 18,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+                }}
+              >
+                {visibleUnits.map((unit) => (
+                  <WorkflowTeamCard
+                    key={unit.workflow.workflowId}
+                    scopeId={scopeId}
+                    unit={unit}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Empty
+                description="当前 Scope 里还没有可展示的团队。"
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              >
                 <Button
                   onClick={() =>
                     history.push(
@@ -441,653 +726,28 @@ const ScopeOverviewPage: React.FC = () => {
                       }),
                     )
                   }
+                  type="primary"
                 >
-                  打开行为定义
+                  打开工作流空间
                 </Button>
-                <Button
-                  onClick={() =>
-                    history.push(
-                      selectedServiceCard
-                        ? buildScopedServiceHref(scopeId, selectedServiceCard.serviceId)
-                        : "/services",
-                    )
-                  }
-                >
-                  打开平台服务
+              </Empty>
+            )}
+
+            {draftUnits.length > 0 ? (
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <Button onClick={() => setShowDrafts((value) => !value)}>
+                  {showDrafts
+                    ? `隐藏草稿团队 (${draftUnits.length})`
+                    : `显示草稿团队 (${draftUnits.length})`}
                 </Button>
-              </Space>
-            </AevatarPanel>
-          </div>
-        }
-        stage={
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {!scopeId ? (
-              <Alert
-                title="选择一个团队以查看当前默认成员、版本发布和已拥有资产。"
-                showIcon
-                type="info"
-              />
+              </div>
             ) : null}
 
-            {scopeId ? (
-              <>
-                <AevatarPanel
-                  title="团队状态"
-                  titleHelp="团队首页会把默认入口、成员资产和是否可测试集中展示，不再暴露 project 术语。"
-                >
-                  <div
-                    style={{
-                      display: "grid",
-                      gap: 12,
-                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                    }}
-                  >
-                    <MetricCard label="团队" value={scopeId} />
-                    <MetricCard
-                      label="默认成员"
-                      value={binding?.available ? binding.displayName || binding.serviceId : "Not bound"}
-                    />
-                    <MetricCard
-                      label="绑定目标"
-                      value={currentBindingTarget}
-                    />
-                    <MetricCard
-                      label="实现类型"
-                      value={formatStudioScopeBindingImplementationKind(
-                        activeRevision?.implementationKind,
-                      )}
-                    />
-                    <MetricCard
-                      label="行为定义"
-                      value={workflowsQuery.data?.length ?? 0}
-                    />
-                    <MetricCard label="脚本行为" value={scriptsQuery.data?.length ?? 0} />
-                    <MetricCard
-                      label="成员服务"
-                      value={scopeServicesQuery.data?.length ?? 0}
-                    />
-                    <MetricCard
-                      label="发布状态"
-                      value={binding?.deploymentStatus || "draft"}
-                    />
-                  </div>
-                </AevatarPanel>
-
-                <AevatarPanel
-                  title="当前默认成员"
-                  titleHelp="这里展示当前团队默认服务绑定到的成员实现，便于继续进入事件流或高级编辑。"
-                >
-                  {!binding?.available || !activeRevision ? (
-                    <Alert
-                      title="当前团队还没有可用的默认成员绑定。"
-                      showIcon
-                      type="info"
-                    />
-                  ) : (
-                    <>
-                      <div
-                        style={{
-                          display: "grid",
-                          gap: 12,
-                          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                        }}
-                      >
-                        <MetricCard label="成员" value={binding.displayName || binding.serviceId} />
-                        <MetricCard label="目标" value={currentBindingTarget} />
-                        <MetricCard
-                          label="版本"
-                          value={activeRevision.revisionId}
-                        />
-                        <MetricCard
-                          label="实例"
-                          value={currentBindingActor || "n/a"}
-                        />
-                      </div>
-                      {currentBindingContext ? (
-                      <Alert
-                        description={currentBindingContext}
-                        showIcon
-                        title="绑定详情"
-                        type="info"
-                      />
-                      ) : null}
-                      <Space wrap>
-                        <Button
-                          onClick={() =>
-                            history.push(
-                              buildRuntimeGAgentsHref({
-                                scopeId,
-                                actorId:
-                                  activeRevision.primaryActorId || undefined,
-                                actorTypeName:
-                                  activeRevision.staticActorTypeName || undefined,
-                              }),
-                            )
-                          }
-                        >
-                          在成员页查看
-                        </Button>
-                        <Button
-                          onClick={() =>
-                            history.push(
-                              buildScopeHref("/scopes/invoke", activeDraft, {
-                                serviceId: binding.serviceId,
-                              }),
-                            )
-                          }
-                          type="primary"
-                        >
-                          打开测试入口
-                        </Button>
-                      </Space>
-                    </>
-                  )}
-                </AevatarPanel>
-
-                <AevatarPanel
-                  title="版本发布"
-                  titleHelp="团队默认入口的历史版本仍然保留在这里，方便继续切换或退役。"
-                >
-                  {revisions.length > 0 ? (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                      {revisions.map((revision) => (
-                        <RevisionCard
-                          activating={
-                            activateRevisionMutation.isPending &&
-                            activateRevisionMutation.variables === revision.revisionId
-                          }
-                          canActivate={
-                            !revision.isActiveServing &&
-                            !revision.isDefaultServing &&
-                            !revision.retiredAt
-                          }
-                          canRetire={
-                            !revision.retiredAt &&
-                            revision.revisionId !== binding?.defaultServingRevisionId
-                          }
-                          key={revision.revisionId}
-                          onActivate={() => activateRevisionMutation.mutate(revision.revisionId)}
-                          onInspect={() =>
-                            setFocus({ kind: "revision", id: revision.revisionId })
-                          }
-                          onRetire={() => retireRevisionMutation.mutate(revision.revisionId)}
-                          revision={revision}
-                          retiring={
-                            retireRevisionMutation.isPending &&
-                            retireRevisionMutation.variables === revision.revisionId
-                          }
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <Empty
-                      description="当前团队还没有可切换的版本。"
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    />
-                  )}
-                </AevatarPanel>
-
-                <div
-                  style={{
-                    display: "grid",
-                    gap: 16,
-                    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                  }}
-                >
-                  <AevatarPanel
-                    title="已发布成员"
-                    titleHelp="当前团队下已发布的 service 会在这里展示，并作为成员列表和连接器聚合的基础。"
-                  >
-                    {scopeServicesQuery.error ? (
-                      <Alert
-                        showIcon
-                        title={
-                          scopeServicesQuery.error instanceof Error
-                            ? scopeServicesQuery.error.message
-                            : "加载已发布成员失败。"
-                        }
-                        type="error"
-                      />
-                    ) : scopeServicesQuery.isLoading ? (
-                      <AevatarInspectorEmpty description="正在加载已发布成员。" />
-                    ) : scopeServicesQuery.data && scopeServicesQuery.data.length > 0 ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                        {scopeServicesQuery.data.map((service) => (
-                          <ScopeServiceCard
-                            key={service.serviceKey}
-                            onOpenInvoke={() =>
-                              history.push(
-                                buildScopeHref("/scopes/invoke", activeDraft, {
-                                  serviceId: service.serviceId,
-                                }),
-                              )
-                            }
-                            onOpenServices={() =>
-                              history.push(
-                                buildScopedServiceHref(scopeId, service.serviceId),
-                              )
-                            }
-                            service={service}
-                          />
-                        ))}
-                      </div>
-                    ) : (
-                      <Empty
-                        description="当前团队还没有已发布成员。"
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      />
-                    )}
-                  </AevatarPanel>
-
-                  <AevatarPanel title="行为定义资产">
-                    <ProList<ScopeWorkflowSummary>
-                      dataSource={workflowsQuery.data ?? []}
-                      grid={{ gutter: 16, column: 1 }}
-                      itemCardProps={{
-                        bodyStyle: { padding: 16 },
-                        style: { borderRadius: 12 },
-                      }}
-                      locale={{
-                        emptyText: (
-                          <Empty
-                            description="当前团队还没有行为定义资产。"
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          />
-                        ),
-                      }}
-                      metas={workflowMetas}
-                      pagination={false}
-                      rowKey="workflowId"
-                      split={false}
-                    />
-                  </AevatarPanel>
-
-                  <AevatarPanel title="脚本行为资产">
-                    <ProList<ScopeScriptSummary>
-                      dataSource={scriptsQuery.data ?? []}
-                      grid={{ gutter: 16, column: 1 }}
-                      itemCardProps={{
-                        bodyStyle: { padding: 16 },
-                        style: { borderRadius: 12 },
-                      }}
-                      locale={{
-                        emptyText: (
-                          <Empty
-                            description="当前团队还没有脚本行为资产。"
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          />
-                        ),
-                      }}
-                      metas={scriptMetas}
-                      pagination={false}
-                      rowKey="scriptId"
-                      split={false}
-                    />
-                  </AevatarPanel>
-                </div>
-              </>
-            ) : null}
-          </div>
-        }
-      />
-
-      <AevatarContextDrawer
-        onClose={() => setFocus(null)}
-        open={Boolean(focus)}
-        subtitle="团队检查器"
-        title={
-          focus?.kind === "revision"
-            ? focusedRevision?.revisionId || focus?.id || "版本"
-            : focus?.id || "团队详情"
-        }
-      >
-        {!focus ? (
-          <AevatarInspectorEmpty description="选择一个版本、行为定义或脚本行为来查看它在当前团队中的作用。" />
-        ) : focus.kind === "revision" && focusedRevision ? (
-          <AevatarPanel
-            title="版本快照"
-            titleHelp="Revision posture, rollout identity, and activation affordance stay in one place."
-          >
-            <div
-              style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              }}
-            >
-              <MetricCard label="版本" value={focusedRevision.revisionId} />
-              <MetricCard
-                label="实现类型"
-                value={formatStudioScopeBindingImplementationKind(
-                  focusedRevision.implementationKind,
-                )}
-              />
-              <MetricCard
-                label="目标"
-                value={describeStudioScopeBindingRevisionTarget(focusedRevision)}
-              />
-              <MetricCard label="发布状态" value={focusedRevision.servingState || focusedRevision.status} />
-              <MetricCard
-                label="实例"
-                value={focusedRevision.primaryActorId || "n/a"}
-              />
-            </div>
-            {describeStudioScopeBindingRevisionContext(focusedRevision) ? (
-              <Alert
-                description={describeStudioScopeBindingRevisionContext(
-                  focusedRevision,
-                )}
-                showIcon
-                title="绑定详情"
-                type="info"
-              />
-            ) : null}
-            <Space wrap>
-              <Button
-                disabled={focusedRevision.isActiveServing}
-                loading={activateRevisionMutation.isPending}
-                onClick={() => activateRevisionMutation.mutate(focusedRevision.revisionId)}
-                type="primary"
-              >
-                Activate revision
-              </Button>
-              <Button
-                danger
-                disabled={
-                  Boolean(focusedRevision.retiredAt) ||
-                  focusedRevision.revisionId === binding?.defaultServingRevisionId
-                }
-                loading={retireRevisionMutation.isPending}
-                onClick={() => retireRevisionMutation.mutate(focusedRevision.revisionId)}
-              >
-                Retire revision
-              </Button>
-              <Button
-                onClick={() =>
-                  history.push(
-                    buildRuntimeGAgentsHref({
-                      scopeId,
-                      actorId:
-                        focusedRevision.primaryActorId || undefined,
-                      actorTypeName:
-                        focusedRevision.staticActorTypeName || undefined,
-                    }),
-                  )
-                }
-              >
-                在成员页查看
-              </Button>
-            </Space>
-          </AevatarPanel>
-        ) : focus.kind === "workflow" ? (
-          workflowDetailQuery.data?.available && workflowDetailQuery.data.workflow ? (
-            <>
-              <AevatarPanel title="行为定义资产">
-                <Space direction="vertical" size={8}>
-                  <Space wrap size={[8, 8]}>
-                    <AevatarStatusTag
-                      domain="asset"
-                      status={workflowDetailQuery.data.workflow.activeRevisionId ? "active" : "draft"}
-                    />
-                    <AevatarStatusTag
-                      domain="governance"
-                      status={workflowDetailQuery.data.workflow.deploymentStatus || "draft"}
-                    />
-                  </Space>
-                  <Typography.Text strong>
-                    {workflowDetailQuery.data.workflow.displayName || workflowDetailQuery.data.workflow.workflowId}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    {workflowDetailQuery.data.workflow.serviceKey || "当前还没有已发布入口"}
-                  </Typography.Text>
-                </Space>
-              </AevatarPanel>
-              <AevatarPanel title="行为定义源码">
-                <pre style={codeBlockStyle}>
-                  {workflowDetailQuery.data.source?.workflowYaml || "当前还没有可查看的行为定义 YAML。"}
-                </pre>
-              </AevatarPanel>
-            </>
-          ) : (
-            <AevatarInspectorEmpty description="当前还没有可查看的行为定义详情。" />
-          )
-        ) : focus.kind === "script" ? (
-          scriptDetailQuery.data?.available && scriptDetailQuery.data.script ? (
-            <>
-              <AevatarPanel title="脚本行为资产">
-                <Space direction="vertical" size={8}>
-                  <AevatarStatusTag
-                    domain="asset"
-                    status={scriptDetailQuery.data.script.activeRevision ? "active" : "draft"}
-                  />
-                  <Typography.Text strong>
-                    {scriptDetailQuery.data.script.scriptId}
-                  </Typography.Text>
-                  <Typography.Text type="secondary">
-                    版本 {scriptDetailQuery.data.script.activeRevision || "n/a"} · 哈希{" "}
-                    {scriptDetailQuery.data.script.activeSourceHash || "n/a"}
-                  </Typography.Text>
-                </Space>
-              </AevatarPanel>
-              <AevatarPanel title="源码快照">
-                <pre style={codeBlockStyle}>
-                  {scriptDetailQuery.data.source?.sourceText || "当前还没有可查看的脚本源码。"}
-                </pre>
-              </AevatarPanel>
-            </>
-          ) : (
-            <AevatarInspectorEmpty description="当前还没有可查看的脚本行为详情。" />
-          )
-        ) : (
-          <AevatarInspectorEmpty description="当前还没有可查看的团队详情。" />
-        )}
-      </AevatarContextDrawer>
+          </>
+        ) : null}
+      </div>
     </AevatarPageShell>
   );
-};
-
-const MetricCard: React.FC<{
-  label: string;
-  value: React.ReactNode;
-}> = ({ label, value }) => (
-  <div
-    style={{
-      background: "var(--ant-color-fill-quaternary)",
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 4,
-      minWidth: 0,
-      overflow: "hidden",
-      padding: 12,
-    }}
-  >
-    <Typography.Text
-      style={{ color: "var(--ant-color-text-secondary)", fontWeight: 500 }}
-    >
-      {label}
-    </Typography.Text>
-    <Typography.Text
-      strong
-      style={{
-        display: "block",
-        maxWidth: "100%",
-        overflowWrap: "anywhere",
-        whiteSpace: "normal",
-        wordBreak: "break-word",
-      }}
-    >
-      {value}
-    </Typography.Text>
-  </div>
-);
-
-const ScopeServiceCard: React.FC<{
-  onOpenInvoke: () => void;
-  onOpenServices: () => void;
-  service: ServiceCatalogSnapshot;
-}> = ({ onOpenInvoke, onOpenServices, service }) => (
-  <div
-    style={{
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 8,
-      padding: 12,
-    }}
-  >
-    <Space wrap size={[8, 8]}>
-      <Typography.Text strong>
-        {service.displayName || service.serviceId}
-      </Typography.Text>
-      <AevatarStatusTag
-        domain="governance"
-        status={service.deploymentStatus || "draft"}
-      />
-    </Space>
-    <Typography.Text type="secondary">
-      {service.endpoints.length} 个端点 · 版本{" "}
-      {service.activeServingRevisionId ||
-        service.defaultServingRevisionId ||
-        "n/a"}
-    </Typography.Text>
-    <Typography.Text type="secondary">
-      实例 {service.primaryActorId || "n/a"} · 更新时间 {formatDateTime(service.updatedAt)}
-    </Typography.Text>
-    <Space wrap>
-      <Button onClick={onOpenInvoke} type="primary">
-        打开测试入口
-      </Button>
-      <Button onClick={onOpenServices}>打开平台服务</Button>
-    </Space>
-  </div>
-);
-
-const RevisionCard: React.FC<{
-  activating: boolean;
-  canActivate: boolean;
-  canRetire: boolean;
-  onActivate: () => void;
-  onInspect: () => void;
-  onRetire: () => void;
-  revision: StudioScopeBindingRevision;
-  retiring: boolean;
-}> = ({
-  activating,
-  canActivate,
-  canRetire,
-  onActivate,
-  onInspect,
-  onRetire,
-  revision,
-  retiring,
-}) => (
-  <div
-    style={{
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 8,
-      minWidth: 0,
-      overflow: "hidden",
-      padding: 12,
-    }}
-  >
-    <Space wrap size={[8, 8]} style={{ minWidth: 0 }}>
-      <Typography.Text
-        strong
-        style={{
-          maxWidth: "100%",
-          overflowWrap: "anywhere",
-          whiteSpace: "normal",
-          wordBreak: "break-word",
-        }}
-      >
-        {revision.revisionId}
-      </Typography.Text>
-      <AevatarStatusTag
-        domain="governance"
-        status={revision.servingState || revision.status}
-      />
-      {revision.isActiveServing ? <AevatarStatusTag domain="run" status="active" label="Active serving" /> : null}
-      {revision.isDefaultServing ? <AevatarStatusTag domain="asset" status="active" label="Default" /> : null}
-    </Space>
-    <Typography.Text
-      style={{
-        color: "var(--ant-color-text-secondary)",
-        display: "block",
-        maxWidth: "100%",
-        overflowWrap: "anywhere",
-        whiteSpace: "normal",
-        wordBreak: "break-word",
-      }}
-    >
-      {formatStudioScopeBindingImplementationKind(revision.implementationKind)} ·{" "}
-      {describeStudioScopeBindingRevisionTarget(revision)}
-    </Typography.Text>
-    {describeStudioScopeBindingRevisionContext(revision) ? (
-      <Typography.Text
-        style={{
-          color: "var(--ant-color-text-secondary)",
-          display: "block",
-          maxWidth: "100%",
-          overflowWrap: "anywhere",
-          whiteSpace: "normal",
-          wordBreak: "break-word",
-        }}
-      >
-        {describeStudioScopeBindingRevisionContext(revision)}
-      </Typography.Text>
-    ) : null}
-    <Typography.Text
-      style={{
-        color: "var(--ant-color-text-secondary)",
-        display: "block",
-        maxWidth: "100%",
-        overflowWrap: "anywhere",
-        whiteSpace: "normal",
-        wordBreak: "break-word",
-      }}
-    >
-      实例 {revision.primaryActorId || "n/a"} · 部署{" "}
-      {revision.deploymentId || "draft"}
-    </Typography.Text>
-    <Space wrap>
-      <Button icon={<EyeOutlined />} onClick={onInspect}>
-        查看
-      </Button>
-      <Button
-        disabled={!canActivate}
-        loading={activating}
-        onClick={onActivate}
-        type="primary"
-      >
-        Activate
-      </Button>
-      <Button
-        danger
-        disabled={!canRetire}
-        loading={retiring}
-        onClick={onRetire}
-      >
-        Retire
-      </Button>
-    </Space>
-  </div>
-);
-
-const codeBlockStyle: React.CSSProperties = {
-  background: "var(--ant-color-fill-quaternary)",
-  border: "1px solid var(--ant-color-border-secondary)",
-  borderRadius: 12,
-  margin: 0,
-  maxHeight: 360,
-  overflow: "auto",
-  padding: 12,
-  whiteSpace: "pre-wrap",
 };
 
 export default ScopeOverviewPage;

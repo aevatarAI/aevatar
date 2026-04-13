@@ -7,6 +7,38 @@ type TeamDetailTab =
   | 'advanced';
 
 type QueryValue = string | undefined;
+type TeamDetailRouteState = {
+  readonly runId: string;
+  readonly scopeId: string;
+  readonly serviceId: string;
+  readonly tab: TeamDetailTab;
+  readonly workflowId: string;
+};
+
+function trimOptional(value: string | null | undefined): string {
+  return value?.trim() ?? '';
+}
+
+function decodePathSegment(value: string): string {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+}
+
+function parseTeamTab(value: string | null | undefined): TeamDetailTab {
+  switch (trimOptional(value).toLowerCase()) {
+    case 'topology':
+    case 'events':
+    case 'members':
+    case 'connectors':
+    case 'advanced':
+      return trimOptional(value).toLowerCase() as TeamDetailTab;
+    default:
+      return 'overview';
+  }
+}
 
 function buildHref(
   pathname: string,
@@ -41,17 +73,39 @@ export function buildTeamDetailHref(options: {
   tab?: TeamDetailTab;
   serviceId?: string;
   runId?: string;
+  workflowId?: string;
 }): string {
-  const scopeId = options.scopeId.trim();
+  const scopeId = trimOptional(options.scopeId);
   if (!scopeId) {
     return buildTeamsHref();
   }
 
   return buildHref(`/teams/${encodeURIComponent(scopeId)}`, {
+    workflowId: options.workflowId,
     tab: options.tab,
     serviceId: options.serviceId,
     runId: options.runId,
   });
 }
 
-export type { TeamDetailTab };
+export function readTeamDetailRouteState(
+  search = typeof window === 'undefined' ? '' : window.location.search,
+  pathname = typeof window === 'undefined' ? '' : window.location.pathname,
+): TeamDetailRouteState {
+  const params = new URLSearchParams(search);
+  const pathnameSegments = pathname.split('/').filter(Boolean);
+  const scopeIdFromPath =
+    pathnameSegments[0] === 'teams' && pathnameSegments[1]
+      ? decodePathSegment(pathnameSegments[1])
+      : '';
+
+  return {
+    runId: trimOptional(params.get('runId')),
+    scopeId: trimOptional(params.get('scopeId')) || scopeIdFromPath,
+    serviceId: trimOptional(params.get('serviceId')),
+    tab: parseTeamTab(params.get('tab')),
+    workflowId: trimOptional(params.get('workflowId')),
+  };
+}
+
+export type { TeamDetailRouteState, TeamDetailTab };

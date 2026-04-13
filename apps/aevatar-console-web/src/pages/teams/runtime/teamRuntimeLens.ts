@@ -308,15 +308,24 @@ function formatStepDiffValue(value: string | null | undefined): string {
 
 export function selectTeamCompareRuns(
   runs: readonly ScopeServiceRunSummary[],
+  options?: {
+    preferredRunId?: string | null;
+  },
 ): {
   baselineRun: ScopeServiceRunSummary | null;
   currentRun: ScopeServiceRunSummary | null;
 } {
   const sortedRuns = sortRuns(runs);
-  const currentRun = sortedRuns[0] ?? null;
+  const preferredRunId = trimOptional(options?.preferredRunId);
+  const currentRun =
+    (preferredRunId
+      ? sortedRuns.find((run) => trimOptional(run.runId) === preferredRunId) ?? null
+      : null) ||
+    sortedRuns[0] ||
+    null;
   const baselineRun =
     sortedRuns.find((run) => run.runId !== currentRun?.runId && isSuccessfulRun(run)) ||
-    sortedRuns[1] ||
+    sortedRuns.find((run) => run.runId !== currentRun?.runId) ||
     null;
 
   return {
