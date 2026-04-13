@@ -11,23 +11,34 @@ import { deriveTeamRuntimeLens, selectTeamCompareRuns } from "./teamRuntimeLens"
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 
-export function useTeamRuntimeLens(scopeId: string) {
+type UseTeamRuntimeLensOptions = {
+  includeCatalogSignals?: boolean;
+};
+
+export function useTeamRuntimeLens(
+  scopeId: string,
+  options?: UseTeamRuntimeLensOptions,
+) {
   const normalizedScopeId = scopeId.trim();
+  const includeCatalogSignals = options?.includeCatalogSignals ?? true;
 
   const bindingQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "binding", normalizedScopeId],
     queryFn: () => studioApi.getScopeBinding(normalizedScopeId),
+    retry: false,
   });
   const workflowsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
+    enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "workflows", normalizedScopeId],
     queryFn: () => scopesApi.listWorkflows(normalizedScopeId),
+    retry: false,
   });
   const scriptsQuery = useQuery({
-    enabled: normalizedScopeId.length > 0,
+    enabled: normalizedScopeId.length > 0 && includeCatalogSignals,
     queryKey: ["teams", "scripts", normalizedScopeId],
     queryFn: () => scopesApi.listScripts(normalizedScopeId),
+    retry: false,
   });
   const servicesQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
@@ -38,15 +49,19 @@ export function useTeamRuntimeLens(scopeId: string) {
         appId: scopeServiceAppId,
         namespace: scopeServiceNamespace,
       }),
+    retry: false,
   });
   const actorsQuery = useQuery({
     enabled: normalizedScopeId.length > 0,
     queryKey: ["teams", "actors", normalizedScopeId],
     queryFn: () => runtimeGAgentApi.listActors(normalizedScopeId),
+    retry: false,
   });
 
   const serviceId =
-    bindingQuery.data?.serviceId ||
+    servicesQuery.data?.find(
+      (service) => service.serviceId === bindingQuery.data?.serviceId,
+    )?.serviceId ||
     servicesQuery.data?.[0]?.serviceId ||
     "";
   const runsQuery = useQuery({
@@ -56,6 +71,7 @@ export function useTeamRuntimeLens(scopeId: string) {
       scopeRuntimeApi.listServiceRuns(normalizedScopeId, serviceId, {
         take: 12,
       }),
+    retry: false,
   });
 
   const compareRuns = useMemo(
@@ -93,6 +109,7 @@ export function useTeamRuntimeLens(scopeId: string) {
           actorId: compareRuns.currentRun?.actorId || undefined,
         },
       ),
+    retry: false,
   });
   const baselineRunAuditQuery = useQuery({
     enabled:
@@ -116,6 +133,7 @@ export function useTeamRuntimeLens(scopeId: string) {
           actorId: compareRuns.baselineRun?.actorId || undefined,
         },
       ),
+    retry: false,
   });
   const actorGraphQuery = useQuery({
     enabled: focusActorId.length > 0,
@@ -126,6 +144,7 @@ export function useTeamRuntimeLens(scopeId: string) {
         direction: "Both",
         take: 24,
       }),
+    retry: false,
   });
 
   const lens = useMemo(

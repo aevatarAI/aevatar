@@ -1,9 +1,12 @@
 import type {
   StudioConnectorCatalog,
   StudioConnectorDefinition,
-  StudioRoleCatalog,
+  StudioScopeBindingImplementationKind,
+  StudioWorkflowDocument,
+  StudioWorkflowRoleDocument,
   StudioWorkspaceSettings,
 } from "@/shared/studio/models";
+import { formatStudioScopeBindingImplementationKind } from "@/shared/studio/models";
 
 export type TeamIntegrationItem = {
   key: string;
@@ -16,16 +19,30 @@ export type TeamIntegrationItem = {
 
 export type TeamIntegrationsSummary = {
   available: boolean;
+  bindingKind: StudioScopeBindingImplementationKind;
   connectorCount: number;
   directoryCount: number;
   items: TeamIntegrationItem[];
   linkedConnectorCount: number;
+  roleCount: number;
   roleReferenceCount: number;
   runtimeBaseUrl: string;
   runtimeHostLabel: string;
   summary: string;
+  teamRoleUsageStatus:
+    | "loading"
+    | "resolved"
+    | "unavailable"
+    | "not_applicable";
+  teamRoleUsageSummary: string;
   unresolvedReferences: string[];
+  workflowDocumentCount: number;
   workspaceSummary: string;
+};
+
+export type TeamWorkflowRoleBinding = {
+  connectors: string[];
+  name: string;
 };
 
 function trimOptional(value: string | null | undefined): string {
@@ -65,20 +82,97 @@ function describeConnector(connector: StudioConnectorDefinition): string {
   return "Connector definition";
 }
 
+function asWorkflowRoleDocument(
+  value: unknown,
+): StudioWorkflowRoleDocument | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as StudioWorkflowRoleDocument;
+}
+
+function toConnectorNames(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return trimOptional(entry);
+      }
+
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return "";
+      }
+
+      const record = entry as Record<string, unknown>;
+      return trimOptional(
+        typeof record.name === "string"
+          ? record.name
+          : typeof record.id === "string"
+            ? record.id
+            : "",
+      );
+    })
+    .filter(Boolean);
+}
+
+export function deriveTeamWorkflowRoleBindings(
+  documents: readonly StudioWorkflowDocument[],
+): TeamWorkflowRoleBinding[] {
+  const roleConnectorMap = new Map<string, Set<string>>();
+
+  documents.forEach((document, documentIndex) => {
+    const roles = Array.isArray(document.roles) ? document.roles : [];
+    roles.forEach((role, roleIndex) => {
+      const roleDocument = asWorkflowRoleDocument(role);
+      if (!roleDocument) {
+        return;
+      }
+
+      const roleName =
+        trimOptional(roleDocument.name) ||
+        trimOptional(roleDocument.id) ||
+        `role-${documentIndex + 1}-${roleIndex + 1}`;
+      const connectorNames = toConnectorNames(roleDocument.connectors);
+      if (!roleConnectorMap.has(roleName)) {
+        roleConnectorMap.set(roleName, new Set<string>());
+      }
+
+      const connectorSet = roleConnectorMap.get(roleName);
+      connectorNames.forEach((connectorName) => {
+        connectorSet?.add(connectorName);
+      });
+    });
+  });
+
+  return [...roleConnectorMap.entries()]
+    .map(([name, connectors]) => ({
+      name,
+      connectors: [...connectors].sort(),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 export function deriveTeamIntegrationsSummary(input: {
+  bindingKind: StudioScopeBindingImplementationKind;
   connectorCatalog: StudioConnectorCatalog | null;
-  roleCatalog: StudioRoleCatalog | null;
+  teamWorkflowRoles: TeamWorkflowRoleBinding[] | null | undefined;
+  workflowDocumentCount?: number;
   workspaceSettings: StudioWorkspaceSettings | null;
 }): TeamIntegrationsSummary {
   const runtimeBaseUrl = trimOptional(input.workspaceSettings?.runtimeBaseUrl);
   const runtimeHostLabel = summarizeRuntimeBase(runtimeBaseUrl);
   const directoryCount = input.workspaceSettings?.directories.length ?? 0;
   const connectors = input.connectorCatalog?.connectors ?? [];
-  const roles = input.roleCatalog?.roles ?? [];
+  const teamWorkflowRoles = input.teamWorkflowRoles ?? [];
+  const workflowDocumentCount = input.workflowDocumentCount ?? 0;
 
   const connectorRoleMap = new Map<string, Set<string>>();
-  roles.forEach((role) => {
-    const roleName = trimOptional(role.name) || trimOptional(role.id) || "role";
+  teamWorkflowRoles.forEach((role) => {
+    const roleName = trimOptional(role.name) || "role";
     role.connectors.forEach((connectorName) => {
       const normalizedName = trimOptional(connectorName).toLowerCase();
       if (!normalizedName) {
@@ -138,19 +232,72 @@ export function deriveTeamIntegrationsSummary(input: {
     (count, names) => count + names.size,
     0,
   );
+  const roleCount = teamWorkflowRoles.length;
   const available =
     runtimeBaseUrl.length > 0 ||
     directoryCount > 0 ||
     connectors.length > 0 ||
-    roles.length > 0;
+    teamWorkflowRoles.length > 0;
+
+  const bindingKindLabel = formatStudioScopeBindingImplementationKind(
+    input.bindingKind,
+  );
+  const teamRoleUsageStatus: TeamIntegrationsSummary["teamRoleUsageStatus"] =
+    input.bindingKind !== "workflow"
+      ? "not_applicable"
+      : input.teamWorkflowRoles === undefined
+        ? "loading"
+        : input.teamWorkflowRoles === null
+        ? "unavailable"
+        : "resolved";
+
+  let teamRoleUsageSummary = "";
+  if (teamRoleUsageStatus === "loading") {
+    teamRoleUsageSummary =
+      "Loading team-scoped connector usage from the current workflow";
+  } else if (teamRoleUsageStatus === "resolved") {
+    if (roleReferenceCount > 0) {
+      teamRoleUsageSummary = `${roleReferenceCount} team-scoped connector references across ${roleCount} workflow roles`;
+    } else if (roleCount > 0) {
+      teamRoleUsageSummary = `${roleCount} workflow roles inspected for the current team`;
+    } else {
+      teamRoleUsageSummary =
+        workflowDocumentCount > 0
+          ? "Current workflow has no connector-bearing roles"
+          : "No workflow role source is visible for this team";
+    }
+  } else if (teamRoleUsageStatus === "not_applicable") {
+    teamRoleUsageSummary = `${bindingKindLabel}-bound teams do not expose workflow role connector usage`;
+  } else {
+    teamRoleUsageSummary =
+      "Current workflow source could not be loaded for team-scoped role usage";
+  }
 
   let summary = "No integration facts are currently visible for this team.";
-  if (connectors.length > 0 && linkedConnectorCount > 0) {
-    summary = `${linkedConnectorCount} of ${connectors.length} connector definitions are referenced by saved team roles.`;
-  } else if (connectors.length > 0) {
-    summary = `${connectors.length} connector definitions are available in this workspace, but no saved team role is explicitly using them yet.`;
-  } else if (unresolvedReferences.length > 0) {
-    summary = `${unresolvedReferences.length} saved connector references are visible, but the matching connector definitions are not currently loaded.`;
+  if (teamRoleUsageStatus === "loading" && connectors.length > 0) {
+    summary =
+      "Workspace connector definitions are visible while the current team's workflow connector usage is still loading.";
+  } else if (
+    teamRoleUsageStatus === "resolved" &&
+    unresolvedReferences.length > 0
+  ) {
+    summary = `${unresolvedReferences.length} team-scoped connector references are visible in the current workflow, but the matching connector definitions are not currently loaded.`;
+  } else if (
+    teamRoleUsageStatus === "resolved" &&
+    connectors.length > 0 &&
+    linkedConnectorCount > 0
+  ) {
+    summary = `${linkedConnectorCount} of ${connectors.length} connector definitions are referenced by the current team's workflow roles.`;
+  } else if (teamRoleUsageStatus === "resolved" && connectors.length > 0) {
+    summary =
+      roleCount > 0
+        ? `${connectors.length} connector definitions are available in this workspace, but the current team's workflow roles are not explicitly using them yet.`
+        : `${connectors.length} connector definitions are available in this workspace, but the current team's workflow does not currently expose any connector-bearing roles.`;
+  } else if (teamRoleUsageStatus === "not_applicable" && connectors.length > 0) {
+    summary = `This team is ${bindingKindLabel.toLowerCase()}-bound, so team-scoped role usage is not available. Workspace connector definitions are shown for context only.`;
+  } else if (teamRoleUsageStatus === "unavailable" && connectors.length > 0) {
+    summary =
+      "Workspace connector definitions are visible, but the current team's workflow source could not be loaded, so team-scoped connector usage is unavailable.";
   } else if (available) {
     summary =
       "Workspace integration context is visible, but no connector definitions are currently available.";
@@ -165,15 +312,20 @@ export function deriveTeamIntegrationsSummary(input: {
 
   return {
     available,
+    bindingKind: input.bindingKind,
     connectorCount: connectors.length,
     directoryCount,
     items,
     linkedConnectorCount,
+    roleCount,
     roleReferenceCount,
     runtimeBaseUrl,
     runtimeHostLabel,
     summary,
+    teamRoleUsageStatus,
+    teamRoleUsageSummary,
     unresolvedReferences,
+    workflowDocumentCount,
     workspaceSummary,
   };
 }

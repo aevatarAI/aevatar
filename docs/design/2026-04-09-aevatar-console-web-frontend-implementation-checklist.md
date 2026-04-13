@@ -1,5 +1,15 @@
 # 2026-04-09 Aevatar Console Web Frontend Implementation Checklist
 
+## 0. 2026-04-10 Frontend-only 降级说明
+
+这份清单最初为更完整的 `Team-first` 首页与详情工作台准备，但 2026-04-10 已明确收紧为 **frontend-only V0**：
+
+- 不改任何后端 contract
+- `/teams` 不再只做自动跳详情，而是渲染一个 **current-session-team roster preview**
+- 页面承诺降级为：帮助用户判断“当前 session 这支 team 值不值得现在点进去”
+- 不做真实多团队列表、不做 queue groups、不做 fake KPI strip、不做 unsupported row actions
+- feature flag 仅作为前端本地 build-time 开关使用；关闭时回退到 legacy `/teams` 首页
+
 ## 1. 目标
 
 将 [2026-04-08-aevatar-product-definition.md](./2026-04-08-aevatar-product-definition.md) 落成一份可直接执行的前端实施清单，确保 `console-web` 从当前的 `Projects / Platform / Studio` 组合入口，收敛到：
@@ -13,7 +23,7 @@
 
 - 只做 `frontend-only` 交付，不改后端 contract。
 - 不引入第二套 runtime 模型，所有团队事实统一来自同一个 `team runtime lens`。
-- 不做真实多团队列表；在没有 `listScopes()` 或等价接口前，`/teams` 只负责解析当前团队上下文并跳到 `/teams/:scopeId`。
+- 不做真实多团队列表；在没有 `listScopes()` 或等价接口前，`/teams` 只负责渲染当前 session team 的 roster-style preview。
 - 不做 dedicated human inbox / work queue。
 - 不做 full historical replay editor。
 - 不做 organization-level health center。
@@ -32,8 +42,8 @@
 
 - [ ] 在 [config/config.ts](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/config/config.ts) 暴露 `process.env.AEVATAR_CONSOLE_TEAM_FIRST_ENABLED`。
 - [ ] 新增 [src/shared/config/consoleFeatures.ts](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/shared/config/consoleFeatures.ts)，集中解析 Team-first 开关，避免在页面里散落读 env。
-- [ ] 修改 [src/shared/navigation/consoleHome.ts](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/shared/navigation/consoleHome.ts)，让默认首页根据 feature flag 在 `/teams` 与 `/scopes/overview` 之间切换。
-- [ ] 修改 [src/app.tsx](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/app.tsx)，让 `DEFAULT_PROTECTED_ROUTE`、菜单高亮与首页回跳逻辑统一使用新的 home route。
+- [ ] 保持 [src/shared/navigation/consoleHome.ts](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/shared/navigation/consoleHome.ts) 稳定指向 `/teams`，不要让 rollout 开关改全局 home route。
+- [ ] `Team-first` 开关只在 `/teams` route 内切换 `LegacyTeamsHome` 与 `TeamsHomeRosterV0`，不扩散到全局 app bootstrap。
 
 ### Wave 1: 路由与团队入口
 
@@ -42,12 +52,12 @@
   - 新增 `/teams/:scopeId`
   - 保留 `/overview`、`/scopes`、`/scopes/overview` 的过渡跳转
   - 根路由 `/` 在 flag 打开时默认跳到 `/teams`
-- [ ] 新增 [src/pages/teams/index.tsx](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/pages/teams/index.tsx)，仅负责“解析当前团队上下文并重定向”。
+- [ ] 修改 [src/pages/teams/index.tsx](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/pages/teams/index.tsx)，将其收成 `route shell + LegacyTeamsHome + TeamsHomeRosterV0`。
 - [ ] 新增 [src/pages/teams/detail.tsx](/Users/potter/Desktop/sbt_project/aevatar/apps/aevatar-console-web/src/pages/teams/detail.tsx)，承载团队详情统一工作台。
 - [ ] 约束 `/teams` 行为：
-  - 有 `scopeId` 时直接跳 `/teams/:scopeId`
-  - 无 `scopeId` 且能从 auth/app context 解析时自动跳转
-  - 两者都没有时进入诚实 empty / blocked state，不伪造 team list
+  - 有当前 team 时渲染 roster-style preview，而不是自动跳 `/teams/:scopeId`
+  - 无当前 team 时进入诚实 empty / blocked state，不伪造 team list
+  - 只有用户主动点击 `View details` 时，才进入 `/teams/:scopeId`
 
 ### Wave 2: Scope 上下文与共享 helper 收口
 
@@ -172,7 +182,7 @@
 达到以下结果后，Wave 1 可视为完成：
 
 - 打开 flag 后，登录后的默认入口进入 `Teams`，而不是 `Projects`。
-- `/teams` 能稳定解析当前团队并进入 `/teams/:scopeId`。
+- `/teams` 能稳定解析当前团队并渲染诚实的 single-team roster preview。
 - 团队详情能在不改后端 contract 的前提下显示：
   - collaboration canvas
   - activity rail
@@ -182,6 +192,12 @@
 - 团队 activity 支持最小可用的 run compare。
 - `Studio` 团队深链带 `scopeId` 后，仍然保持现有 `workflow / script / execution` 打开能力。
 - 关闭 flag 后，现有 `/scopes/overview` 仍保持旧行为。
+
+对 frontend-only V0，还要额外满足：
+
+- 页面明确写清 `current session team only` / `reference roster`，不伪装成真实多团队排序
+- 不再出现 fake KPI strip、queue notes、`Pause` 等 unsupported actions
+- 首页只保留一个主动作 `View details`
 
 ## 8. Rollout 策略
 
@@ -193,13 +209,10 @@
 
 建议严格按以下顺序开工：
 
-1. feature flag + home route
-2. `/teams` 与 `/teams/:scopeId`
-3. scope helper 抽离
-4. `team runtime lens`
-5. team detail shell
-6. run compare
-7. health / trust rail
-8. governance snapshot
-9. Studio `scopeId` deep link
-10. legacy cleanup + tests
+1. local feature flag parsing
+2. `/teams` route shell + honest roster preview
+3. `team runtime lens`
+4. `/teams/:scopeId` detail shell
+5. team detail modules
+6. Studio `scopeId` deep link
+7. legacy cleanup + tests

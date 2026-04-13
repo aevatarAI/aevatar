@@ -525,7 +525,12 @@ describe('ScopeInvokePage', () => {
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
-    expect(await screen.findByText('Invoke Lab')).toBeTruthy();
+    expect(await screen.findByText('Legacy Invoke Lab')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        'Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links.',
+      ),
+    ).toBeTruthy();
     expect(
       screen.queryByText(
         'Invoke Lab keeps parameters on the left, execution on the main stage, and deeper context in the drawer or lab console.',
@@ -956,7 +961,7 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    expect(await screen.findByText('Invoke Lab')).toBeTruthy();
+    expect(await screen.findByText('Legacy Invoke Lab')).toBeTruthy();
     fireEvent.click(
       screen.getAllByRole('button', { name: 'Browse services' })[0],
     );

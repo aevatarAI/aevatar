@@ -188,12 +188,51 @@ jest.mock("@/shared/api/scopesApi", () => ({
   scopesApi: {
     listWorkflows: jest.fn(async () => [
       {
+        scopeId: "scope-1",
         workflowId: "workflow-1",
+        displayName: "Support Escalation Triage",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage",
+        actorId: "actor-intake",
+        activeRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        deploymentStatus: "Active",
+        updatedAt: "2026-04-09T09:00:00Z",
       },
       {
+        scopeId: "scope-1",
         workflowId: "workflow-2",
+        displayName: "Support Escalation Triage v1",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage-v1",
+        actorId: "actor-intake-v1",
+        activeRevisionId: "rev-1",
+        deploymentId: "dep-1",
+        deploymentStatus: "Retired",
+        updatedAt: "2026-04-08T09:00:00Z",
       },
     ]),
+    getWorkflowDetail: jest.fn(async () => ({
+      available: true,
+      scopeId: "scope-1",
+      workflow: {
+        scopeId: "scope-1",
+        workflowId: "workflow-1",
+        displayName: "Support Escalation Triage",
+        serviceKey: "scope-1:default",
+        workflowName: "support-triage",
+        actorId: "actor-intake",
+        activeRevisionId: "rev-2",
+        deploymentId: "dep-2",
+        deploymentStatus: "Active",
+        updatedAt: "2026-04-09T09:00:00Z",
+      },
+      source: {
+        workflowYaml: "name: support-triage",
+        definitionActorId: "definition://support-triage",
+        inlineWorkflowYamls: null,
+      },
+    })),
     listScripts: jest.fn(async () => [
       {
         scriptId: "script-1",
@@ -419,20 +458,19 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
-    getRoleCatalog: jest.fn(async () => ({
-      homeDirectory: "/tmp/.aevatar",
-      filePath: "/tmp/.aevatar/roles.json",
-      fileExists: true,
-      roles: [
-        {
-          id: "triage_operator",
-          name: "triage_operator",
-          systemPrompt: "",
-          provider: "openai",
-          model: "gpt-4.1",
-          connectors: ["web-search", "crm-sync"],
-        },
-      ],
+    parseYaml: jest.fn(async () => ({
+      document: {
+        name: "support-triage",
+        roles: [
+          {
+            id: "triage_operator",
+            name: "triage_operator",
+            connectors: ["web-search", "crm-sync"],
+          },
+        ],
+      },
+      graph: null,
+      findings: [],
     })),
   },
 }));
@@ -467,13 +505,13 @@ describe("TeamDetailPage", () => {
   it("renders the Team-first shell with health, compare, and governance modules", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Health / Trust Rail")).toBeTruthy();
-    expect(await screen.findByText("Run Compare / Change Diff")).toBeTruthy();
-    expect(await screen.findByText("Human Escalation Playback")).toBeTruthy();
-    expect(await screen.findByText("Integrations Inspector")).toBeTruthy();
-    expect(await screen.findByText("Governance Snapshot")).toBeTruthy();
+    expect(await screen.findByText("Team Health")).toBeTruthy();
+    expect(await screen.findByText("What Changed")).toBeTruthy();
+    expect(await screen.findByText("Human Handoff")).toBeTruthy();
+    expect(await screen.findByText("Connected Systems")).toBeTruthy();
+    expect(await screen.findByText("Trust Summary")).toBeTruthy();
     expect(await screen.findByText("Collaboration Canvas")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open Team Builder" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Open Team Builder" }).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.getAllByText("Blocked").length).toBeGreaterThan(0);
       expect(screen.getByText("Human intervention is visible in the current run.")).toBeTruthy();
@@ -482,6 +520,12 @@ describe("TeamDetailPage", () => {
       expect(screen.getByText("Recent runtime events")).toBeTruthy();
       expect(screen.getByText("From focus")).toBeTruthy();
       expect(screen.getByText("web-search")).toBeTruthy();
+      expect(
+        screen.getByText("2 team-scoped connector references across 1 workflow roles"),
+      ).toBeTruthy();
+      expect(
+        screen.getByText("Used by current team roles triage_operator"),
+      ).toBeTruthy();
       expect(screen.getByText("Referenced but undefined")).toBeTruthy();
       expect(screen.getByText("crm-sync")).toBeTruthy();
       expect(screen.getByRole("button", { name: "Open current run replay" })).toBeTruthy();
@@ -511,13 +555,13 @@ describe("TeamDetailPage", () => {
       collaborationHeading.compareDocumentPosition(segmentedActivity) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByText("Team Activity")).toBeTruthy();
-    expect(screen.queryByText("Health / Trust Rail")).toBeNull();
+    expect(screen.getByText("Recent Activity")).toBeTruthy();
+    expect(screen.queryByText("Team Health")).toBeNull();
 
     fireEvent.click(screen.getByText("Details · Delayed"));
 
-    expect(await screen.findByText("Health / Trust Rail")).toBeTruthy();
-    expect(screen.queryByText("Team Activity")).toBeNull();
+    expect(await screen.findByText("Team Health")).toBeTruthy();
+    expect(screen.queryByText("Recent Activity")).toBeNull();
   });
 
   it("surfaces team signal failures without leaking raw runtime errors", async () => {
@@ -580,17 +624,36 @@ describe("TeamDetailPage", () => {
     expect(params.get("serviceId")).toBe("default");
   });
 
+  it("opens Team Builder in the current team context from the team detail actions", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByText("Trust Summary");
+    fireEvent.click(screen.getAllByRole("button", { name: "Open Team Builder" })[0]);
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("scopeId")).toBe("scope-1");
+    if (params.get("workflow")) {
+      expect(params.get("workflow")).toBe("workflow-1");
+      expect(params.get("tab")).toBe("studio");
+    } else {
+      expect(params.get("tab")).toBe("workflows");
+    }
+  });
+
   it("lets member selection drive the inspector and explorer focus", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    await screen.findByText("Selected Member");
+    await screen.findByText("Member Focus");
     await screen.findByText("actor-risk");
     fireEvent.click(
       screen.getByRole("button", {
         name: "Focus member RiskReviewAgent actor-risk",
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Open Explorer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Topology" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/explorer");

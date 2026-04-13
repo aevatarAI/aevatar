@@ -31,6 +31,7 @@ export default [
     name: "我的团队",
     component: "./scopes/overview",
     menuGroupKey: "teams",
+    hideInMenu: false,
   },
   {
     path: "/teams/new",

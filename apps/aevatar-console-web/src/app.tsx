@@ -33,6 +33,7 @@ import {
   loadStoredAuthSession,
   sanitizeReturnTo,
 } from "./shared/auth/session";
+import { ProtectedRouteRedirectGate } from "./shared/auth/ProtectedRouteRedirectGate";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
@@ -639,7 +640,6 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 
   return <>{children}</>;
 };
-
 // ProLayout 支持的api https://procomponents.ant.design/components/layout
 export const layout = ({
   initialState,
@@ -652,11 +652,6 @@ export const layout = ({
       }
 
       if (isStudioHostRoute(pathname)) {
-        return;
-      }
-
-      if (!hasRestorableAuthSession()) {
-        history.replace(buildLoginRoute(getCurrentReturnTo(pathname)));
         return;
       }
 
@@ -758,18 +753,15 @@ export const layout = ({
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
           const liveSession = loadStoredAuthSession();
-          if (
+          const needsProtectedRouteRedirect =
             !isPublicRoute &&
             !isStudioRoute &&
             !liveSession &&
-            !hasRestorableAuthSession()
-          ) {
-            history.replace(buildLoginRoute(getCurrentReturnTo(pathname)));
-            return <PageLoading fullscreen />;
-          }
+            !hasRestorableAuthSession();
 
-          const content =
-            !isPublicRoute && !isStudioRoute && !liveSession ? (
+          const content = needsProtectedRouteRedirect ? (
+            <ProtectedRouteRedirectGate pathname={pathname} />
+          ) : !isPublicRoute && !isStudioRoute && !liveSession ? (
               <AuthSessionBootstrap pathname={pathname}>
                 {children}
               </AuthSessionBootstrap>

@@ -1952,170 +1952,184 @@ const RunsPage: React.FC = () => {
           </div>
         </div>
 
-        <Drawer
-          destroyOnHidden
-          mask={false}
-          open={isInspectorDrawerOpen}
-          styles={{ body: drawerBodyStyle }}
-          title={hasPendingInteraction ? "Inspector · interaction pending" : "Inspector"}
-          size={520}
-          onClose={() => setIsInspectorDrawerOpen(false)}
-        >
-          <div style={drawerScrollStyle}>
-            <div style={cardStackStyle}>
-            <RunsInspectorPane
-              actorSnapshot={actorSnapshotQuery.data}
-              actorSnapshotLoading={
-                actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
-              }
-              humanInputRecord={humanInputRecord}
-              latestMessagePreview={latestMessagePreview}
-              runFocus={runFocus}
-              runSummaryRecord={runSummaryRecord}
-              selectedTraceItem={selectedTraceItem}
-              selectedRoutePrimitives={
-                selectedRouteDetails?.primitives ?? []
-              }
-              selectedRouteRecord={selectedRouteRecord}
-              showInteractionAction={false}
-              variant="plain"
-              waitingSignalRecord={waitingSignalRecord}
-            />
-            {humanInputRecord ? (
-              <div style={embeddedPanelStyle}>
-                <Space direction="vertical" style={{ width: "100%" }} size={16}>
-                  <ProDescriptions<HumanInputRecord>
-                    column={1}
-                    dataSource={humanInputRecord}
-                    columns={humanInputColumns}
-                  />
-                  <ProForm<ResumeFormValues>
-                    key={`${humanInputRecord.runId}-${humanInputRecord.stepId}`}
-                    formRef={resumeFormRef}
-                    layout="vertical"
-                    initialValues={{ approved: true, userInput: "" }}
-                    onFinish={async (values) => {
-                      if (
-                        !actorId ||
-                        !humanInputRecord.runId ||
-                        !humanInputRecord.stepId
-                      ) {
-                        return false;
-                      }
+        {isInspectorDrawerOpen ? (
+          <Drawer
+            destroyOnHidden
+            mask={false}
+            open
+            styles={{ body: drawerBodyStyle }}
+            title={
+              hasPendingInteraction
+                ? "Inspector · interaction pending"
+                : "Inspector"
+            }
+            size={520}
+            onClose={() => setIsInspectorDrawerOpen(false)}
+          >
+            <div style={drawerScrollStyle}>
+              <div style={cardStackStyle}>
+                <RunsInspectorPane
+                  actorSnapshot={actorSnapshotQuery.data}
+                  actorSnapshotLoading={
+                    actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
+                  }
+                  humanInputRecord={humanInputRecord}
+                  latestMessagePreview={latestMessagePreview}
+                  runFocus={runFocus}
+                  runSummaryRecord={runSummaryRecord}
+                  selectedTraceItem={selectedTraceItem}
+                  selectedRoutePrimitives={
+                    selectedRouteDetails?.primitives ?? []
+                  }
+                  selectedRouteRecord={selectedRouteRecord}
+                  showInteractionAction={false}
+                  variant="plain"
+                  waitingSignalRecord={waitingSignalRecord}
+                />
+                {humanInputRecord ? (
+                  <div style={embeddedPanelStyle}>
+                    <Space
+                      direction="vertical"
+                      style={{ width: "100%" }}
+                      size={16}
+                    >
+                      <ProDescriptions<HumanInputRecord>
+                        column={1}
+                        dataSource={humanInputRecord}
+                        columns={humanInputColumns}
+                      />
+                      <ProForm<ResumeFormValues>
+                        key={`${humanInputRecord.runId}-${humanInputRecord.stepId}`}
+                        formRef={resumeFormRef}
+                        layout="vertical"
+                        initialValues={{ approved: true, userInput: "" }}
+                        onFinish={async (values) => {
+                          if (
+                            !actorId ||
+                            !humanInputRecord.runId ||
+                            !humanInputRecord.stepId
+                          ) {
+                            return false;
+                          }
 
-                      await resume({
-                        actorId,
-                        runId: humanInputRecord.runId,
-                        stepId: humanInputRecord.stepId,
-                        approved: values.approved,
-                        userInput: values.userInput || undefined,
-                        commandId,
-                      });
+                          await resume({
+                            actorId,
+                            runId: humanInputRecord.runId,
+                            stepId: humanInputRecord.stepId,
+                            approved: values.approved,
+                            userInput: values.userInput || undefined,
+                            commandId,
+                          });
 
-                      messageApi.success("Resume request accepted.");
-                      resumeFormRef.current?.setFieldsValue({
-                        approved: true,
-                        userInput: "",
-                      });
-                      return true;
-                    }}
-                    submitter={{
-                      render: (props) => (
-                        <Space wrap>
-                          <Button
-                            type="primary"
-                            loading={resuming}
-                            onClick={() => props.form?.submit?.()}
-                          >
-                            Submit resume
-                          </Button>
-                        </Space>
-                      ),
-                    }}
-                  >
-                    <ProFormSwitch
-                      name="approved"
-                      label={
-                        isHumanApprovalSuspension(
-                          humanInputRecord.suspensionType
-                        )
-                          ? "Approved"
-                          : "Continue run"
-                      }
-                    />
-                    <ProFormTextArea
-                      name="userInput"
-                      label="Operator response"
-                      fieldProps={{ rows: 4 }}
-                      placeholder="Optional human response"
-                    />
-                  </ProForm>
-                </Space>
+                          messageApi.success("Resume request accepted.");
+                          resumeFormRef.current?.setFieldsValue({
+                            approved: true,
+                            userInput: "",
+                          });
+                          return true;
+                        }}
+                        submitter={{
+                          render: (props) => (
+                            <Space wrap>
+                              <Button
+                                type="primary"
+                                loading={resuming}
+                                onClick={() => props.form?.submit?.()}
+                              >
+                                Submit resume
+                              </Button>
+                            </Space>
+                          ),
+                        }}
+                      >
+                        <ProFormSwitch
+                          name="approved"
+                          label={
+                            isHumanApprovalSuspension(
+                              humanInputRecord.suspensionType
+                            )
+                              ? "Approved"
+                              : "Continue run"
+                          }
+                        />
+                        <ProFormTextArea
+                          name="userInput"
+                          label="Operator response"
+                          fieldProps={{ rows: 4 }}
+                          placeholder="Optional human response"
+                        />
+                      </ProForm>
+                    </Space>
+                  </div>
+                ) : null}
+
+                {waitingSignalRecord ? (
+                  <div style={embeddedPanelStyle}>
+                    <Space
+                      direction="vertical"
+                      style={{ width: "100%" }}
+                      size={16}
+                    >
+                      <ProDescriptions<WaitingSignalRecord>
+                        column={1}
+                        dataSource={waitingSignalRecord}
+                        columns={waitingSignalColumns}
+                      />
+                      <ProForm<SignalFormValues>
+                        key={`${waitingSignalRecord.runId}-${waitingSignalRecord.stepId}`}
+                        formRef={signalFormRef}
+                        layout="vertical"
+                        initialValues={{ payload: "" }}
+                        onFinish={async (values) => {
+                          if (
+                            !actorId ||
+                            !waitingSignal?.runId ||
+                            !waitingSignal.signalName
+                          ) {
+                            return false;
+                          }
+
+                          await signal({
+                            actorId,
+                            runId: waitingSignal.runId,
+                            stepId: waitingSignal.stepId,
+                            signalName: waitingSignal.signalName,
+                            payload: values.payload || undefined,
+                            commandId,
+                          });
+
+                          messageApi.success("Signal accepted.");
+                          signalFormRef.current?.setFieldsValue({ payload: "" });
+                          return true;
+                        }}
+                        submitter={{
+                          render: (props) => (
+                            <Space wrap>
+                              <Button
+                                type="primary"
+                                loading={signaling}
+                                onClick={() => props.form?.submit?.()}
+                              >
+                                Send signal
+                              </Button>
+                            </Space>
+                          ),
+                        }}
+                      >
+                        <ProFormTextArea
+                          name="payload"
+                          label="Signal payload"
+                          fieldProps={{ rows: 4 }}
+                          placeholder="Optional signal payload"
+                        />
+                      </ProForm>
+                    </Space>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-
-            {waitingSignalRecord ? (
-              <div style={embeddedPanelStyle}>
-                <Space direction="vertical" style={{ width: "100%" }} size={16}>
-                  <ProDescriptions<WaitingSignalRecord>
-                    column={1}
-                    dataSource={waitingSignalRecord}
-                    columns={waitingSignalColumns}
-                  />
-                  <ProForm<SignalFormValues>
-                    key={`${waitingSignalRecord.runId}-${waitingSignalRecord.stepId}`}
-                    formRef={signalFormRef}
-                    layout="vertical"
-                    initialValues={{ payload: "" }}
-                    onFinish={async (values) => {
-                      if (
-                        !actorId ||
-                        !waitingSignal?.runId ||
-                        !waitingSignal.signalName
-                      ) {
-                        return false;
-                      }
-
-                      await signal({
-                        actorId,
-                        runId: waitingSignal.runId,
-                        stepId: waitingSignal.stepId,
-                        signalName: waitingSignal.signalName,
-                        payload: values.payload || undefined,
-                        commandId,
-                      });
-
-                      messageApi.success("Signal accepted.");
-                      signalFormRef.current?.setFieldsValue({ payload: "" });
-                      return true;
-                    }}
-                    submitter={{
-                      render: (props) => (
-                        <Space wrap>
-                          <Button
-                            type="primary"
-                            loading={signaling}
-                            onClick={() => props.form?.submit?.()}
-                          >
-                            Send signal
-                          </Button>
-                        </Space>
-                      ),
-                    }}
-                  >
-                    <ProFormTextArea
-                      name="payload"
-                      label="Signal payload"
-                      fieldProps={{ rows: 4 }}
-                      placeholder="Optional signal payload"
-                    />
-                  </ProForm>
-                </Space>
-              </div>
-            ) : null}
             </div>
-          </div>
-        </Drawer>
+          </Drawer>
+        ) : null}
       </div>
     </PageContainer>
   );

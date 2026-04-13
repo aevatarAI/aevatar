@@ -4182,7 +4182,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             >
               Bind team entry
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Team Workspace</Button>
+            <Button onClick={onOpenProjectOverview}>Open Team Home</Button>
           </Space>
         }
       />,
@@ -4192,15 +4192,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-invoke-step"
         type="success"
-        title="Next step: Open Invoke Lab"
-        description="The default team binding is already active. Move to Invoke Lab to test the published entrypoint, then continue in Runs for the full event trace."
+        title="Next step: Open Legacy Invoke Lab"
+        description="The default team binding is already active. Move to the legacy invoke lab to test the published entrypoint, then continue in Runs for the full event trace."
         compact
         action={
           <Space wrap>
             <Button type="primary" onClick={onOpenProjectInvoke}>
-              Open Invoke Lab
+              Open Legacy Invoke Lab
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Team Workspace</Button>
+            <Button onClick={onOpenProjectOverview}>Open Team Home</Button>
             <Button
               onClick={onRunInConsole}
               disabled={!canOpenRunWorkflow}
