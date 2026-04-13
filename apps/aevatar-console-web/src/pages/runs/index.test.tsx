@@ -83,6 +83,132 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
   },
 }));
 
+jest.mock("./components/RunsLaunchRail", () => {
+  const React = require("react");
+
+  const normalizeValues = (value: Record<string, unknown> = {}) => ({
+    actorId:
+      typeof value.actorId === "string" ? value.actorId : undefined,
+    endpointId:
+      typeof value.endpointId === "string" ? value.endpointId : "chat",
+    endpointKind:
+      value.endpointKind === "command" ? "command" : "chat",
+    payloadBase64:
+      typeof value.payloadBase64 === "string" ? value.payloadBase64 : undefined,
+    payloadTypeUrl:
+      typeof value.payloadTypeUrl === "string" ? value.payloadTypeUrl : undefined,
+    prompt: typeof value.prompt === "string" ? value.prompt : "",
+    routeName:
+      typeof value.routeName === "string" ? value.routeName : undefined,
+    scopeId: typeof value.scopeId === "string" ? value.scopeId : undefined,
+    serviceOverrideId:
+      typeof value.serviceOverrideId === "string"
+        ? value.serviceOverrideId
+        : undefined,
+    transport: value.transport === "ws" ? "ws" : "sse",
+  });
+
+  const normalizePatch = (value: Record<string, unknown> = {}) => {
+    const nextValue: Record<string, unknown> = {};
+
+    for (const key of Object.keys(value)) {
+      nextValue[key] = normalizeValues({ [key]: value[key] })[key];
+    }
+
+    return nextValue;
+  };
+
+  const RunsLaunchRail = (props: any) => {
+    const [values, setValues] = React.useState(() =>
+      normalizeValues(props.initialFormValues)
+    );
+
+    React.useEffect(() => {
+      setValues((current: Record<string, unknown>) => ({
+        ...current,
+        ...normalizeValues(props.initialFormValues),
+      }));
+    }, [props.initialFormValues]);
+
+    React.useEffect(() => {
+      if (!props.composerFormRef) {
+        return;
+      }
+
+      props.composerFormRef.current = {
+        getFieldValue: (name: string) => values[name],
+        getFieldsValue: () => values,
+        resetFields: () => setValues(normalizeValues(props.initialFormValues)),
+        setFieldValue: (name: string, value: unknown) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            [name]: value,
+          })),
+        setFieldsValue: (nextValues: Record<string, unknown>) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            ...normalizePatch(nextValues),
+          })),
+        submit: () => props.onSubmitRun(values),
+        validateFields: async () => values,
+      };
+
+      return () => {
+        props.composerFormRef.current = undefined;
+      };
+    }, [props.composerFormRef, props.initialFormValues, props.onSubmitRun, values]);
+
+    return React.createElement(
+      "section",
+      null,
+      React.createElement("div", null, "Launch rail"),
+      React.createElement("textarea", {
+        "aria-label": "Prompt",
+        onChange: (event: any) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            prompt: event.target.value,
+          })),
+        placeholder: "Describe the task to run.",
+        value: values.prompt,
+      }),
+      React.createElement("input", {
+        "aria-label": "Scope ID",
+        onChange: (event: any) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            scopeId: event.target.value,
+          })),
+        value: values.scopeId ?? "",
+      }),
+      React.createElement(
+        "button",
+        {
+          onClick: () => props.onSubmitRun(values),
+          type: "button",
+        },
+        "Start run"
+      ),
+      props.recentRunRows.map((row: any) =>
+        React.createElement(
+          "button",
+          {
+            key: row.key,
+            onClick: () => row.onRestore?.(),
+            type: "button",
+          },
+          "Restore"
+        )
+      )
+    );
+  };
+
+  return {
+    __esModule: true,
+    default: RunsLaunchRail,
+  };
+});
+
 describe("RunsPage", () => {
   const mockedRuntimeCatalogApi = runtimeCatalogApi as unknown as {
     listWorkflowCatalog: jest.Mock;
@@ -139,8 +265,8 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Catalog" })
     ).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "返回团队高级编辑" })
-    ).toBeTruthy();
+      screen.queryByRole("button", { name: "返回团队高级编辑" })
+    ).toBeNull();
     expect(
       screen.getByRole("button", { name: "Explorer" })
     ).toBeTruthy();
