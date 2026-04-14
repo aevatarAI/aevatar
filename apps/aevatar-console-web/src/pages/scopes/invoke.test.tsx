@@ -86,6 +86,22 @@ jest.mock('@/shared/api/servicesApi', () => ({
 
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
+    bindScopeGAgent: jest.fn(async () => ({
+      available: true,
+      scopeId: 'scope-a',
+      serviceId: 'nyxid-chat',
+      displayName: 'NyxID Chat',
+      revisionId: 'rev-nyxid',
+      targetKind: 'gagent',
+      implementationKind: 'gagent',
+      deploymentId: 'deploy-nyxid',
+      deploymentStatus: 'Active',
+      updatedAt: '2026-03-26T08:00:00Z',
+      gAgent: {
+        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        preferredActorId: 'NyxIdChat:scope-a',
+      },
+    })),
     getAuthSession: jest.fn(async () => ({
       enabled: false,
       scopeId: 'scope-a',
@@ -217,6 +233,7 @@ import { servicesApi } from '@/shared/api/servicesApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { studioApi } from '@/shared/studio/api';
 
 describe('ScopeInvokePage', () => {
   beforeEach(() => {
@@ -408,76 +425,55 @@ describe('ScopeInvokePage', () => {
     });
   });
 
-  it('deduplicates repeated service ids before building picker options', () => {
-    expect(
-      buildServiceOptions(
-        [
-          {
-            serviceKey: 'scope-a:default:default:hello-chat:older',
-            tenantId: 'scope-a',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'hello-chat',
-            displayName: 'hello-chat',
-            defaultServingRevisionId: 'rev-1',
-            activeServingRevisionId: 'rev-1',
-            deploymentId: 'deploy-1',
-            primaryActorId: 'actor://scope-a/hello-chat/1',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'chat',
-                kind: 'chat',
-                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
-                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
-                description: 'Chat endpoint.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-04-09T09:00:00Z',
-          },
-          {
-            serviceKey: 'scope-a:default:default:hello-chat:newer',
-            tenantId: 'scope-a',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'hello-chat',
-            displayName: 'hello-chat',
-            defaultServingRevisionId: 'rev-2',
-            activeServingRevisionId: 'rev-2',
-            deploymentId: 'deploy-2',
-            primaryActorId: 'actor://scope-a/hello-chat/2',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'chat',
-                kind: 'chat',
-                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
-                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
-                description: 'Chat endpoint.',
-              },
-              {
-                endpointId: 'health',
-                displayName: 'health',
-                kind: 'command',
-                requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
-                responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
-                description: 'Health endpoint.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-04-09T09:30:00Z',
-          },
-        ],
-        'hello-chat',
-      ),
-    ).toEqual([
+  it('prepends the built-in NyxID Chat service and maps published services', () => {
+    const result = buildServiceOptions(
+      [
+        {
+          serviceKey: 'scope-a:default:default:hello-chat',
+          tenantId: 'scope-a',
+          appId: 'default',
+          namespace: 'default',
+          serviceId: 'hello-chat',
+          displayName: 'hello-chat',
+          defaultServingRevisionId: 'rev-2',
+          activeServingRevisionId: 'rev-2',
+          deploymentId: 'deploy-2',
+          primaryActorId: 'actor://scope-a/hello-chat/2',
+          deploymentStatus: 'Active',
+          endpoints: [
+            {
+              endpointId: 'chat',
+              displayName: 'chat',
+              kind: 'chat',
+              requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+              responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+              description: 'Chat endpoint.',
+            },
+            {
+              endpointId: 'health',
+              displayName: 'health',
+              kind: 'command',
+              requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
+              responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+              description: 'Health endpoint.',
+            },
+          ],
+          policyIds: [],
+          updatedAt: '2026-04-09T09:30:00Z',
+        },
+      ],
+      'hello-chat',
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        serviceId: 'nyxid-chat',
+        kind: 'nyxid-chat',
+      }),
       expect.objectContaining({
         serviceId: 'hello-chat',
-        serviceKey: 'scope-a:default:default:hello-chat:newer',
-        activeServingRevisionId: 'rev-2',
+        kind: 'service',
+        primaryActorId: 'actor://scope-a/hello-chat/2',
       }),
     ]);
   });
@@ -704,6 +700,78 @@ describe('ScopeInvokePage', () => {
     );
   });
 
+  it('defaults to NyxID Chat when no published service is listed for the scope', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([]);
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        type: 'RUN_STARTED',
+        runId: 'run-nyxid',
+        threadId: 'thread-nyxid',
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'TEXT_MESSAGE_CONTENT',
+        delta: 'hello from NyxID Chat',
+        messageId: 'msg-nyxid',
+        timestamp: Date.now(),
+      };
+    });
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    expect((await screen.findAllByText('NyxID Chat')).length).toBeGreaterThan(0);
+    expect(screen.getByText('/ Chat')).toBeTruthy();
+    expect(screen.queryByText('Prompt / Payload')).toBeNull();
+    expect(
+      screen.queryByText('No published project service is selected yet.'),
+    ).toBeNull();
+
+    const promptInput = await screen.findByPlaceholderText(
+      'Describe the task, ask a question, or paste the next operator instruction.',
+    );
+    fireEvent.change(promptInput, {
+      target: { value: 'hello nyxid' },
+    });
+    fireEvent.click(await screen.findByLabelText('Send'));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
+        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        displayName: 'NyxID Chat',
+        endpoints: [
+          {
+            description:
+              'Chat with NyxID about services, credentials, and configuration.',
+            displayName: 'Chat',
+            endpointId: 'chat',
+            kind: 'chat',
+          },
+        ],
+        scopeId: 'scope-a',
+        serviceId: 'nyxid-chat',
+      });
+    });
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-a',
+        {
+          prompt: 'hello nyxid',
+        },
+        expect.any(Object),
+        {
+          serviceId: 'nyxid-chat',
+        },
+      );
+    });
+
+    expect(await screen.findByText('hello from NyxID Chat')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Observed Events' }));
+    expect(await screen.findByText('Observed Events (2)')).toBeTruthy();
+    expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
+  });
+
   it('keeps the invoke lab workspace constrained so the chat composer stays visible', async () => {
     (servicesApi.listServices as jest.Mock).mockResolvedValue([
       {
@@ -904,12 +972,15 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    const invokeButton = await screen.findByRole('button', {
-      name: 'Invoke endpoint',
-    });
-    await waitFor(() => {
-      expect(invokeButton).not.toBeDisabled();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText('Prompt / Payload')).toBeTruthy();
+        expect(
+          screen.getByRole('button', { name: 'Invoke endpoint' }),
+        ).not.toBeDisabled();
+      },
+      { timeout: 5000 },
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 

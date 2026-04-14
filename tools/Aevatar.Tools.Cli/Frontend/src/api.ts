@@ -722,6 +722,40 @@ export const nyxidChat = {
     ),
 };
 
+/* ─── Streaming Proxy APIs (runtime) ─── */
+export const streamingProxy = {
+  createRoom: (scopeId: string, roomName?: string) =>
+    request<{ roomId: string; roomName: string; createdAt: string }>(
+      `/scopes/${enc(scopeId)}/streaming-proxy/rooms`,
+      { method: 'POST', body: JSON.stringify(roomName ? { roomName } : {}) },
+    ),
+
+  streamChat: (
+    scopeId: string,
+    roomId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+    sessionId?: string,
+    llmRoute?: string,
+    llmModel?: string,
+  ) => {
+    const body: any = { prompt };
+    if (sessionId) body.sessionId = sessionId;
+    if (llmRoute !== undefined) body.llmRoute = llmRoute;
+    if (llmModel !== undefined) body.llmModel = llmModel;
+    return streamSse(
+      `/scopes/${enc(scopeId)}/streaming-proxy/rooms/${enc(roomId)}:chat`,
+      body,
+      onFrame ?? (() => {}),
+      signal,
+    );
+  },
+
+  deleteRoom: (scopeId: string, roomId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/streaming-proxy/rooms/${enc(roomId)}`, { method: 'DELETE' }),
+};
+
 /* ─── Chat History APIs (local, chrono-storage backed) ─── */
 export const chatHistory = {
   getIndex: (scopeId: string) =>
@@ -730,7 +764,7 @@ export const chatHistory = {
     ),
 
   getConversation: (scopeId: string, convId: string) =>
-    request<Array<{ id: string; role: string; content: string; timestamp: number; status: string; error?: string; thinking?: string }>>(
+    request<Array<{ id: string; role: string; content: string; authorId?: string; authorName?: string; timestamp: number; status: string; error?: string; thinking?: string }>>(
       `/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`,
     ),
 

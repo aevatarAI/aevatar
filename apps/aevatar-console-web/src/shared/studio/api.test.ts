@@ -3,14 +3,20 @@ import { persistAuthSession } from '@/shared/auth/session';
 
 describe('studioApi host-session requests', () => {
   const originalFetch = global.fetch;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
     window.localStorage.clear();
+    process.env = {
+      ...originalEnv,
+    };
+    delete process.env.ORNN_BASE_URL;
     jest.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
   });
 
   afterEach(() => {
     global.fetch = originalFetch;
+    process.env = originalEnv;
     jest.restoreAllMocks();
     window.localStorage.clear();
   });
@@ -106,6 +112,144 @@ describe('studioApi host-session requests', () => {
     expect(new Headers(init?.headers).get('Authorization')).toBe(
       'Bearer access-token',
     );
+  });
+
+  it('loads user config from the Studio host using bearer auth', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        defaultModel: 'gpt-5.4-mini',
+        runtimeBaseUrl: '',
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.getUserConfig();
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe('/api/user-config');
+    expect(init?.credentials).toBe('same-origin');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+  });
+
+  it('decodes NyxID model metadata from snake_case response fields', async () => {
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        providers: [
+          {
+            provider_slug: 'openai',
+            provider_name: 'OpenAI',
+            status: 'ready',
+            proxy_url: 'https://nyx.example/proxy/openai',
+          },
+        ],
+        gateway_url: 'https://nyx.example/gateway',
+        supported_models: ['gpt-5.4-mini'],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.getUserConfigModels()).resolves.toEqual({
+      providers: [
+        {
+          providerSlug: 'openai',
+          providerName: 'OpenAI',
+          status: 'ready',
+          proxyUrl: 'https://nyx.example/proxy/openai',
+        },
+      ],
+      gatewayUrl: 'https://nyx.example/gateway',
+      supportedModels: ['gpt-5.4-mini'],
+    });
+  });
+
+  it('loads Ornn skills from the Ornn platform using bearer auth', async () => {
+    process.env.ORNN_BASE_URL = 'https://ornn.example.com';
+    persistAuthSession({
+      tokens: {
+        accessToken: 'access-token',
+        tokenType: 'Bearer',
+        expiresIn: 3600,
+        expiresAt: Date.now() + 3_600_000,
+      },
+      user: {
+        sub: 'user-1',
+      },
+    });
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        baseUrl: 'https://ornn.chrono-ai.fun',
+        total: 0,
+        totalPages: 0,
+        page: 1,
+        pageSize: 100,
+        items: [],
+      }),
+    } as Response);
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await studioApi.searchSkills({ query: 'ornn', pageSize: 100 });
+
+    const [input, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(input).toBe(
+      'https://ornn.example.com/api/web/skill-search?query=ornn&mode=keyword&scope=mixed&page=1&pageSize=100',
+    );
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer access-token',
+    );
+  });
+
+  it('returns a stable empty skill result when ORNN_BASE_URL is invalid', async () => {
+    process.env.ORNN_BASE_URL = '://bad-url';
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await expect(studioApi.searchSkills()).resolves.toEqual({
+      baseUrl: '',
+      total: 0,
+      totalPages: 0,
+      page: 1,
+      pageSize: 50,
+      items: [],
+      message:
+        'ORNN_BASE_URL must be a valid http(s) URL or a root-relative path such as /ornn.',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('surfaces RFC 9110 problem details as a readable Studio error', async () => {

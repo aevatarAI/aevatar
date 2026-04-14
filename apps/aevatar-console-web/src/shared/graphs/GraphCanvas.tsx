@@ -38,6 +38,7 @@ type GraphCanvasProps = {
   edges: Edge[];
   height?: number | string;
   bottomInset?: number;
+  overlayContent?: React.ReactNode;
   selectedNodeId?: string;
   selectedEdgeId?: string;
   variant?: 'default' | 'studio';
@@ -244,6 +245,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
   edges,
   height = 420,
   bottomInset = 0,
+  overlayContent,
   selectedNodeId,
   selectedEdgeId,
   variant = 'default',
@@ -333,6 +335,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         height,
         minHeight: 0,
         overflow: 'hidden',
+        position: 'relative',
         width: '100%',
       }}
     >
@@ -365,7 +368,10 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
         onNodesChange={isStudioVariant ? handleNodesChange : undefined}
         onNodeDragStop={
           isStudioVariant
-            ? (_, __, nextNodes) => onNodeLayoutChange?.(nextNodes)
+            ? () =>
+                onNodeLayoutChange?.(
+                  (flowInstance?.getNodes() as Node[]) ?? localNodes,
+                )
             : undefined
         }
         onConnect={
@@ -442,6 +448,7 @@ const GraphCanvas: React.FC<GraphCanvasProps> = ({
           <Controls showInteractive={false} />
         )}
       </ReactFlow>
+      {overlayContent}
     </div>
   );
 };

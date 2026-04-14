@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { StudioEditorPage } from './StudioWorkbenchSections';
 
@@ -8,7 +8,7 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
     const React = require('react');
     return React.createElement(
       'div',
-      null,
+      { 'data-testid': 'graph-canvas' },
       [
         React.createElement('div', { key: 'canvas' }, 'Graph canvas'),
         React.createElement(
@@ -26,6 +26,13 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
           },
           'Open canvas palette',
         ),
+        props.overlayContent
+          ? React.createElement(
+              'div',
+              { key: 'overlay', 'data-testid': 'graph-canvas-overlay' },
+              props.overlayContent,
+            )
+          : null,
       ].filter(Boolean),
     );
   },
@@ -174,6 +181,7 @@ function createBaseProps(overrides = {}) {
     scopeBinding: null,
     scopeBindingLoading: false,
     scopeBindingError: null,
+    projectEntryReadyForCurrentWorkflow: true,
     gAgentTypes: [],
     gAgentTypesLoading: false,
     gAgentTypesError: null,
@@ -234,7 +242,11 @@ describe('StudioEditorPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Add node/i }));
 
-    expect(await screen.findByText('Node library')).toBeInTheDocument();
+    const graphCanvas = screen.getByTestId('graph-canvas');
+
+    expect(await within(graphCanvas).findByText('Node library')).toBeInTheDocument();
+    expect(graphCanvas.querySelector('.ant-drawer-left')).not.toBeNull();
+    expect(graphCanvas.querySelector('.ant-drawer-right')).toBeNull();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Insert' })[0]);
 
@@ -259,12 +271,28 @@ describe('StudioEditorPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Ask AI/i }));
 
-    expect(await screen.findByText('Workflow prompt')).toBeInTheDocument();
-    expect(screen.getByText('Validated YAML')).toBeInTheDocument();
+    const graphCanvas = screen.getByTestId('graph-canvas');
+
+    expect(await within(graphCanvas).findByText('Workflow prompt')).toBeInTheDocument();
+    expect(within(graphCanvas).getByText('Validated YAML')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
 
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the workflow inspector drawer inside the graph canvas from the left', async () => {
+    render(
+      React.createElement(StudioEditorPage, createBaseProps() as any),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Open YAML inspector/i }));
+
+    const graphCanvas = screen.getByTestId('graph-canvas');
+
+    expect(await within(graphCanvas).findByText('Inspector content')).toBeInTheDocument();
+    expect(graphCanvas.querySelector('.ant-drawer-left')).not.toBeNull();
+    expect(graphCanvas.querySelector('.ant-drawer-right')).toBeNull();
   });
 
   it('guides dirty drafts toward save before later project steps', async () => {
@@ -281,14 +309,140 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next step: Save asset')).toBeInTheDocument();
+    expect(await screen.findByText('Next: Save asset')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand guidance' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Save asset' }));
 
     expect(onSaveDraft).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps scope binding details collapsed until requested', async () => {
+  it('keeps save success feedback out of the inline editor chrome', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          saveNotice: {
+            type: 'success',
+            message: 'Saved workspace-demo to Workspace.',
+          },
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next: Run draft')).toBeInTheDocument();
+    expect(screen.queryByText('Workflow saved')).not.toBeInTheDocument();
+    expect(screen.queryByText('Saved workspace-demo to Workspace.')).not.toBeInTheDocument();
+  });
+
+  it('opens the workflow guide drawer from the compact guidance bar', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          isDraftDirty: true,
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand guidance' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Why?' }));
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    expect(await screen.findByText('Draft path')).toBeInTheDocument();
+    expect(screen.getByText('Published project path')).toBeInTheDocument();
+  });
+
+  it('lets users dismiss and restore the floating guidance', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          isDraftDirty: true,
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Close guidance' }));
+
+    expect(screen.queryByText('Next: Save asset')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show guidance' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show guidance' }));
+
+    expect(await screen.findByRole('button', { name: 'Collapse guidance' })).toBeInTheDocument();
+    expect(screen.getByText('Next: Save asset')).toBeInTheDocument();
+  });
+
+  it('animates the floating guidance when the next step changes', async () => {
+    const view = render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          isDraftDirty: true,
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next: Save asset')).toBeInTheDocument();
+    expect(screen.getByTestId('studio-guidance-floating-card')).toHaveAttribute(
+      'data-guidance-updated',
+      'false',
+    );
+
+    view.rerender(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          isDraftDirty: false,
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next: Bind project')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('studio-guidance-floating-card')).toHaveAttribute(
+        'data-guidance-updated',
+        'true',
+      );
+    });
+  });
+
+  it('lets users drag the floating guidance to a new position', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          isDraftDirty: true,
+        }) as any,
+      ),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand guidance' }));
+
+    const guidanceCard = await screen.findByTestId('studio-guidance-floating-card');
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Drag guidance' }), {
+      clientX: 520,
+      clientY: 120,
+    });
+    fireEvent.mouseMove(window, {
+      clientX: 440,
+      clientY: 176,
+    });
+    fireEvent.mouseUp(window);
+
+    await waitFor(() => {
+      expect(guidanceCard.style.transform).toContain('translate3d(-80px, 56px, 0)');
+    });
+  });
+
+  it('opens scope binding details in a drawer when requested', async () => {
     render(
       React.createElement(
         StudioEditorPage,
@@ -303,16 +457,17 @@ describe('StudioEditorPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /show details/i }));
 
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
     expect(await screen.findByText('No published binding')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /hide details/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close panel' }));
 
     await waitFor(() => {
       expect(screen.queryByText('No published binding')).not.toBeInTheDocument();
     });
   });
 
-  it('guides published teams toward the legacy invoke lab', async () => {
+  it('guides published teams toward project invoke', async () => {
     const onOpenProjectInvoke = jest.fn();
 
     render(
@@ -339,11 +494,151 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next step: Open Legacy Invoke Lab')).toBeInTheDocument();
+    expect(await screen.findByText('Next: Open Project Invoke')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Legacy Invoke Lab' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand guidance' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Project Invoke' }));
 
     expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('guides published chat-ready projects toward Chat', async () => {
+    const onOpenProjectInvoke = jest.fn();
+
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          projectEntrySurface: 'chat',
+          scopeBinding: {
+            available: true,
+            scopeId: 'scope-a',
+            serviceId: 'default',
+            displayName: 'Workspace Demo',
+            serviceKey: 'scope-a:default',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            deploymentStatus: 'Active',
+            primaryActorId: 'actor://scope-a/default',
+            updatedAt: '2026-03-26T08:00:00Z',
+            revisions: [],
+          },
+          onOpenProjectInvoke,
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next: Open Chat')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand guidance' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Chat' }));
+
+    expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Chat unavailable until the current workflow is rebound', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          projectEntrySurface: 'chat',
+          projectEntryReadyForCurrentWorkflow: false,
+          scopeBinding: {
+            available: true,
+            scopeId: 'scope-a',
+            serviceId: 'default',
+            displayName: 'Workspace Demo',
+            serviceKey: 'scope-a:default',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            deploymentStatus: 'Active',
+            primaryActorId: 'actor://scope-a/default',
+            updatedAt: '2026-03-26T08:00:00Z',
+            revisions: [],
+          },
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Next: Bind project')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand guidance' }));
+    expect(screen.queryByRole('button', { name: 'Open Chat' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Bind project' }).length).toBeGreaterThan(0);
+  });
+
+  it('keeps published binding revision details inside the details drawer', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          resolvedScopeId: 'scope-a',
+          scopeBinding: {
+            available: true,
+            scopeId: 'scope-a',
+            serviceId: 'default',
+            displayName: 'Workspace Demo',
+            serviceKey: 'scope-a:default',
+            defaultServingRevisionId: 'rev-2026040208260375-9752a1bbf42643469087df61787e9f45',
+            activeServingRevisionId: 'rev-2026040208260375-9752a1bbf42643469087df61787e9f45',
+            deploymentId: 'deploy-2',
+            deploymentStatus: 'Active',
+            primaryActorId: 'actor://scope-a/default',
+            updatedAt: '2026-03-26T08:00:00Z',
+            revisions: [
+              {
+                revisionId: 'rev-2026040208260375-9752a1bbf42643469087df61787e9f45',
+                implementationKind: 'workflow',
+                status: 'Active',
+                artifactHash: 'hash-1',
+                failureReason: '',
+                isDefaultServing: true,
+                isActiveServing: true,
+                isServingTarget: true,
+                allocationWeight: 100,
+                servingState: 'serving',
+                deploymentId: 'deploy-2',
+                primaryActorId: 'actor://scope-a/default',
+                createdAt: '2026-03-26T08:00:00Z',
+                preparedAt: '2026-03-26T08:00:00Z',
+                publishedAt: '2026-03-26T08:00:00Z',
+                retiredAt: null,
+                workflowName: 'draft',
+                workflowDefinitionActorId: 'workflow://draft',
+                inlineWorkflowCount: 0,
+                scriptId: '',
+                scriptRevision: '',
+                scriptDefinitionActorId: '',
+                scriptSourceHash: '',
+                staticActorTypeName: '',
+                staticPreferredActorId: '',
+              },
+            ],
+          },
+        }) as any,
+      ),
+    );
+
+    expect(await screen.findByText('Workspace Demo')).toBeInTheDocument();
+    expect(screen.queryByText('Target: draft')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open GAgents' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('rev-2026040208260375-9752a1bbf42643469087df61787e9f45'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /show details/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByText(
+          'rev-2026040208260375-9752a1bbf42643469087df61787e9f45',
+        ).length,
+      ).toBeGreaterThan(0);
+    });
   });
 
   it('adds another GAgent endpoint before binding', async () => {
