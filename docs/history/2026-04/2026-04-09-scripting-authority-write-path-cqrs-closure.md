@@ -219,6 +219,33 @@ definition 的权威事实源仍为：
 
 `ScriptDefinitionSnapshotDocument` 是查询副本，不再参与 runtime provisioning 的同步成功判定。
 
+## 8. 后续收尾项
+
+在 `#158` / `#159` 合入之后，剩余的 follow-up 聚焦在 `#160` / `#161` / `#162`：
+
+- 为 scripting 写路径补专属 CQRS 守卫，直接阻断 authority activation / query-port 回流。
+- 对 `ScriptBehaviorRuntimeCapabilities._definitionSnapshots` 做边界归类。
+- 收紧 `ConcurrentDictionary` 相关架构门禁的检测精度。
+
+### 8.1 `_definitionSnapshots` 的分类结论
+
+`_definitionSnapshots` 保留，但它只允许作为 capability activation-local 的 transient cache：
+
+- 生命周期只跟随单个 `ScriptBehaviorRuntimeCapabilities` 实例。
+- 只缓存同一交互内已经由写侧显式拿到的 `ScriptDefinitionSnapshot`。
+- 不参与跨请求、跨节点、跨 run 的事实判定。
+- miss 时仍然回到 `IScriptDefinitionSnapshotPort` 获取正式查询副本。
+
+因此它不是 authority state，也不是 shadow state；它只是一个受限的 non-durable shortcut cache。若后续出现跨交互复用、命中结果影响业务判定、或 cache 成为唯一事实来源，就应立即重构或删除。
+
+### 8.2 守卫策略
+
+新增/收紧的守卫应表达为：
+
+- scripting write path 不得依赖 `IScriptAuthorityReadModelActivationPort`
+- scripting catalog write path 不得依赖 `IScriptCatalogQueryPort`
+- concurrent collection 检测应以字段类型为主，而不是只靠字段名命中
+
 ### 7.2 Catalog
 
 catalog 的权威事实源仍为：

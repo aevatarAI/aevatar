@@ -43,6 +43,9 @@
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming/Aevatar.Foundation.Runtime.Implementations.Orleans.Streaming.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider/Aevatar.Foundation.Runtime.Implementations.Orleans.Transport.KafkaProvider.csproj" />
     <Project Path="src/Aevatar.Foundation.Runtime.Implementations.Orleans/Aevatar.Foundation.Runtime.Implementations.Orleans.csproj" />
+    <Project Path="src/Aevatar.Interop.A2A.Abstractions/Aevatar.Interop.A2A.Abstractions.csproj" />
+    <Project Path="src/Aevatar.Interop.A2A.Application/Aevatar.Interop.A2A.Application.csproj" />
+    <Project Path="src/Aevatar.Interop.A2A.Hosting/Aevatar.Interop.A2A.Hosting.csproj" />
     <Project Path="src\Aevatar.AI.Abstractions\Aevatar.AI.Abstractions.csproj" />
     <Project Path="src\Aevatar.AI.Core\Aevatar.AI.Core.csproj" />
     <Project Path="src\Aevatar.AI.LLMProviders.MEAI\Aevatar.AI.LLMProviders.MEAI.csproj" />
@@ -130,6 +133,7 @@
     <Project Path="src/workflow/extensions/Aevatar.Workflow.Extensions.Bridge/Aevatar.Workflow.Extensions.Bridge.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Aevatar.Interop.A2A.Tests/Aevatar.Interop.A2A.Tests.csproj" />
     <Project Path="test/Aevatar.Studio.Tests/Aevatar.Studio.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Core.Tests\Aevatar.AI.Core.Tests.csproj" />
     <Project Path="test\Aevatar.AI.Tests\Aevatar.AI.Tests.csproj" />
