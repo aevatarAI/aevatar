@@ -1,5 +1,7 @@
 using Aevatar.GAgents.ChatHistory;
+using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.GAgents.Registry;
+using Aevatar.GAgents.RoleCatalog;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.GAgents.UserMemory;
@@ -1040,6 +1042,424 @@ public sealed class ActorBackedGAgentStateTransitionTests
         var unrelated = new ActorRegisteredEvent { GagentType = "T", ActorId = "x" };
 
         var next = ApplyHistoryIndex(state, unrelated);
+
+        next.Should().BeSameAs(state);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  8. ConnectorCatalogGAgent
+    // ═══════════════════════════════════════════════════════════════════
+
+    #region ConnectorCatalog helpers
+
+    private static ConnectorCatalogState ApplyConnectorCatalog(
+        ConnectorCatalogState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<ConnectorCatalogSavedEvent>(ApplyConnectorCatalogSaved)
+            .On<ConnectorDraftSavedEvent>(ApplyConnectorDraftSaved)
+            .On<ConnectorDraftDeletedEvent>(ApplyConnectorDraftDeleted)
+            .OrCurrent();
+
+    private static ConnectorCatalogState ApplyConnectorCatalogSaved(
+        ConnectorCatalogState state, ConnectorCatalogSavedEvent evt)
+    {
+        var next = state.Clone();
+        next.Connectors.Clear();
+        next.Connectors.AddRange(evt.Connectors);
+        return next;
+    }
+
+    private static ConnectorCatalogState ApplyConnectorDraftSaved(
+        ConnectorCatalogState state, ConnectorDraftSavedEvent evt)
+    {
+        var next = state.Clone();
+        next.Draft = new ConnectorDraftEntry
+        {
+            Draft = evt.Draft?.Clone(),
+            UpdatedAtUtc = evt.UpdatedAtUtc,
+        };
+        return next;
+    }
+
+    private static ConnectorCatalogState ApplyConnectorDraftDeleted(
+        ConnectorCatalogState state, ConnectorDraftDeletedEvent _)
+    {
+        var next = state.Clone();
+        next.Draft = null;
+        return next;
+    }
+
+    private static ConnectorDefinitionEntry MakeConnector(string name, string type = "http") =>
+        new()
+        {
+            Name = name,
+            Type = type,
+            Enabled = true,
+            TimeoutMs = 30000,
+            Retry = 3,
+        };
+
+    #endregion
+
+    [Fact]
+    public void ConnectorCatalog_SaveCatalog_ReplacesAll()
+    {
+        var state = new ConnectorCatalogState();
+        state.Connectors.Add(MakeConnector("old-conn"));
+
+        var evt = new ConnectorCatalogSavedEvent();
+        evt.Connectors.Add(MakeConnector("new-conn-1"));
+        evt.Connectors.Add(MakeConnector("new-conn-2", "mcp"));
+
+        var next = ApplyConnectorCatalog(state, evt);
+
+        next.Connectors.Should().HaveCount(2);
+        next.Connectors[0].Name.Should().Be("new-conn-1");
+        next.Connectors[1].Name.Should().Be("new-conn-2");
+        next.Connectors[1].Type.Should().Be("mcp");
+    }
+
+    [Fact]
+    public void ConnectorCatalog_SaveCatalog_EmptyList_ClearsAll()
+    {
+        var state = new ConnectorCatalogState();
+        state.Connectors.Add(MakeConnector("existing"));
+
+        var evt = new ConnectorCatalogSavedEvent();
+
+        var next = ApplyConnectorCatalog(state, evt);
+
+        next.Connectors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ConnectorCatalog_SaveDraft_SetsNewDraft()
+    {
+        var state = new ConnectorCatalogState();
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new ConnectorDraftSavedEvent
+        {
+            Draft = MakeConnector("draft-conn", "cli"),
+            UpdatedAtUtc = ts,
+        };
+
+        var next = ApplyConnectorCatalog(state, evt);
+
+        next.Draft.Should().NotBeNull();
+        next.Draft!.Draft.Name.Should().Be("draft-conn");
+        next.Draft.Draft.Type.Should().Be("cli");
+        next.Draft.UpdatedAtUtc.Should().Be(ts);
+    }
+
+    [Fact]
+    public void ConnectorCatalog_SaveDraft_OverwritesPreviousDraft()
+    {
+        var state = new ConnectorCatalogState
+        {
+            Draft = new ConnectorDraftEntry
+            {
+                Draft = MakeConnector("old-draft"),
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(-1)),
+            },
+        };
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new ConnectorDraftSavedEvent
+        {
+            Draft = MakeConnector("new-draft", "mcp"),
+            UpdatedAtUtc = ts,
+        };
+
+        var next = ApplyConnectorCatalog(state, evt);
+
+        next.Draft!.Draft.Name.Should().Be("new-draft");
+        next.Draft.UpdatedAtUtc.Should().Be(ts);
+    }
+
+    [Fact]
+    public void ConnectorCatalog_DeleteDraft_ClearsDraft()
+    {
+        var state = new ConnectorCatalogState
+        {
+            Draft = new ConnectorDraftEntry
+            {
+                Draft = MakeConnector("to-delete"),
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        var next = ApplyConnectorCatalog(state, new ConnectorDraftDeletedEvent());
+
+        next.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void ConnectorCatalog_DeleteDraft_NoDraft_ReturnsNullDraft()
+    {
+        var state = new ConnectorCatalogState();
+
+        var next = ApplyConnectorCatalog(state, new ConnectorDraftDeletedEvent());
+
+        next.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void ConnectorCatalog_SaveCatalog_DoesNotAffectDraft()
+    {
+        var draft = new ConnectorDraftEntry
+        {
+            Draft = MakeConnector("my-draft"),
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var state = new ConnectorCatalogState { Draft = draft };
+
+        var evt = new ConnectorCatalogSavedEvent();
+        evt.Connectors.Add(MakeConnector("catalog-conn"));
+
+        var next = ApplyConnectorCatalog(state, evt);
+
+        next.Connectors.Should().HaveCount(1);
+        next.Draft.Should().NotBeNull();
+        next.Draft!.Draft.Name.Should().Be("my-draft");
+    }
+
+    [Fact]
+    public void ConnectorCatalog_EmptyState_IsValid()
+    {
+        var state = new ConnectorCatalogState();
+
+        state.Connectors.Should().BeEmpty();
+        state.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void ConnectorCatalog_UnknownEvent_ReturnsCurrentState()
+    {
+        var state = new ConnectorCatalogState();
+        state.Connectors.Add(MakeConnector("keep"));
+
+        var unrelated = new ActorRegisteredEvent { GagentType = "T", ActorId = "x" };
+
+        var next = ApplyConnectorCatalog(state, unrelated);
+
+        next.Should().BeSameAs(state);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  9. RoleCatalogGAgent
+    // ═══════════════════════════════════════════════════════════════════
+
+    #region RoleCatalog helpers
+
+    private static RoleCatalogState ApplyRoleCatalog(
+        RoleCatalogState current, IMessage evt) =>
+        StateTransitionMatcher
+            .Match(current, evt)
+            .On<RoleCatalogSavedEvent>(ApplyRoleCatalogSaved)
+            .On<RoleDraftSavedEvent>(ApplyRoleDraftSaved)
+            .On<RoleDraftDeletedEvent>(ApplyRoleDraftDeleted)
+            .OrCurrent();
+
+    private static RoleCatalogState ApplyRoleCatalogSaved(
+        RoleCatalogState state, RoleCatalogSavedEvent evt)
+    {
+        var next = state.Clone();
+        next.Roles.Clear();
+        next.Roles.AddRange(evt.Roles);
+        return next;
+    }
+
+    private static RoleCatalogState ApplyRoleDraftSaved(
+        RoleCatalogState state, RoleDraftSavedEvent evt)
+    {
+        var next = state.Clone();
+        next.Draft = new RoleDraftEntry
+        {
+            Draft = evt.Draft?.Clone(),
+            UpdatedAtUtc = evt.UpdatedAtUtc,
+        };
+        return next;
+    }
+
+    private static RoleCatalogState ApplyRoleDraftDeleted(
+        RoleCatalogState state, RoleDraftDeletedEvent _)
+    {
+        var next = state.Clone();
+        next.Draft = null;
+        return next;
+    }
+
+    private static RoleDefinitionEntry MakeRole(string id, string name = "Test Role") =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            SystemPrompt = $"You are {name}",
+            Provider = "anthropic",
+            Model = "claude-opus",
+        };
+
+    #endregion
+
+    [Fact]
+    public void RoleCatalog_SaveCatalog_ReplacesAll()
+    {
+        var state = new RoleCatalogState();
+        state.Roles.Add(MakeRole("old-role"));
+
+        var evt = new RoleCatalogSavedEvent();
+        evt.Roles.Add(MakeRole("role-1", "Assistant"));
+        evt.Roles.Add(MakeRole("role-2", "Translator"));
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Roles.Should().HaveCount(2);
+        next.Roles[0].Id.Should().Be("role-1");
+        next.Roles[0].Name.Should().Be("Assistant");
+        next.Roles[1].Id.Should().Be("role-2");
+    }
+
+    [Fact]
+    public void RoleCatalog_SaveCatalog_EmptyList_ClearsAll()
+    {
+        var state = new RoleCatalogState();
+        state.Roles.Add(MakeRole("existing"));
+
+        var evt = new RoleCatalogSavedEvent();
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Roles.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RoleCatalog_SaveDraft_SetsNewDraft()
+    {
+        var state = new RoleCatalogState();
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new RoleDraftSavedEvent
+        {
+            Draft = MakeRole("draft-role", "Draft Assistant"),
+            UpdatedAtUtc = ts,
+        };
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Draft.Should().NotBeNull();
+        next.Draft!.Draft.Id.Should().Be("draft-role");
+        next.Draft.Draft.Name.Should().Be("Draft Assistant");
+        next.Draft.UpdatedAtUtc.Should().Be(ts);
+    }
+
+    [Fact]
+    public void RoleCatalog_SaveDraft_OverwritesPreviousDraft()
+    {
+        var state = new RoleCatalogState
+        {
+            Draft = new RoleDraftEntry
+            {
+                Draft = MakeRole("old-draft"),
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow.AddHours(-1)),
+            },
+        };
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new RoleDraftSavedEvent
+        {
+            Draft = MakeRole("new-draft", "Updated Role"),
+            UpdatedAtUtc = ts,
+        };
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Draft!.Draft.Name.Should().Be("Updated Role");
+        next.Draft.UpdatedAtUtc.Should().Be(ts);
+    }
+
+    [Fact]
+    public void RoleCatalog_DeleteDraft_ClearsDraft()
+    {
+        var state = new RoleCatalogState
+        {
+            Draft = new RoleDraftEntry
+            {
+                Draft = MakeRole("to-delete"),
+                UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        };
+
+        var next = ApplyRoleCatalog(state, new RoleDraftDeletedEvent());
+
+        next.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void RoleCatalog_DeleteDraft_NoDraft_ReturnsNullDraft()
+    {
+        var state = new RoleCatalogState();
+
+        var next = ApplyRoleCatalog(state, new RoleDraftDeletedEvent());
+
+        next.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void RoleCatalog_SaveCatalog_DoesNotAffectDraft()
+    {
+        var draft = new RoleDraftEntry
+        {
+            Draft = MakeRole("my-draft", "Keep This"),
+            UpdatedAtUtc = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+        var state = new RoleCatalogState { Draft = draft };
+
+        var evt = new RoleCatalogSavedEvent();
+        evt.Roles.Add(MakeRole("catalog-role"));
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Roles.Should().HaveCount(1);
+        next.Draft.Should().NotBeNull();
+        next.Draft!.Draft.Name.Should().Be("Keep This");
+    }
+
+    [Fact]
+    public void RoleCatalog_SaveDraft_WithConnectors()
+    {
+        var state = new RoleCatalogState();
+        var role = MakeRole("with-conn", "Connected Role");
+        role.Connectors.Add("web-search");
+        role.Connectors.Add("code-runner");
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new RoleDraftSavedEvent { Draft = role, UpdatedAtUtc = ts };
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Draft!.Draft.Connectors.Should().BeEquivalentTo(["web-search", "code-runner"]);
+    }
+
+    [Fact]
+    public void RoleCatalog_EmptyState_IsValid()
+    {
+        var state = new RoleCatalogState();
+
+        state.Roles.Should().BeEmpty();
+        state.Draft.Should().BeNull();
+    }
+
+    [Fact]
+    public void RoleCatalog_UnknownEvent_ReturnsCurrentState()
+    {
+        var state = new RoleCatalogState();
+        state.Roles.Add(MakeRole("keep"));
+
+        var unrelated = new ActorRegisteredEvent { GagentType = "T", ActorId = "x" };
+
+        var next = ApplyRoleCatalog(state, unrelated);
 
         next.Should().BeSameAs(state);
     }
