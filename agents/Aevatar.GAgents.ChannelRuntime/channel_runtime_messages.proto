@@ -183,6 +183,17 @@ message AgentRegistryEntry {
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   bool tombstoned = 9;
+  string agent_type = 10;
+  string template_name = 11;
+  string scope_id = 12;
+  string api_key_id = 13;
+  string schedule_cron = 14;
+  string schedule_timezone = 15;
+  string status = 16;
+  google.protobuf.Timestamp last_run_at = 17;
+  google.protobuf.Timestamp next_run_at = 18;
+  int32 error_count = 19;
+  string last_error = 20;
 }
 
 message AgentRegistryState {
@@ -196,10 +207,26 @@ message AgentRegistryUpsertCommand {
   string nyx_provider_slug = 4;
   string nyx_api_key = 5;
   string owner_nyx_user_id = 6;
+  string agent_type = 7;
+  string template_name = 8;
+  string scope_id = 9;
+  string api_key_id = 10;
+  string schedule_cron = 11;
+  string schedule_timezone = 12;
+  string status = 13;
 }
 
 message AgentRegistryTombstoneCommand {
   string agent_id = 1;
+}
+
+message AgentRegistryExecutionUpdateCommand {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
 }
 
 message AgentRegistryUpsertedEvent {
@@ -208,6 +235,15 @@ message AgentRegistryUpsertedEvent {
 
 message AgentRegistryTombstonedEvent {
   string agent_id = 1;
+}
+
+message AgentRegistryExecutionUpdatedEvent {
+  string agent_id = 1;
+  string status = 2;
+  google.protobuf.Timestamp last_run_at = 3;
+  google.protobuf.Timestamp next_run_at = 4;
+  int32 error_count = 5;
+  string last_error = 6;
 }
 
 message AgentRegistryDocument {
@@ -223,6 +259,112 @@ message AgentRegistryDocument {
   google.protobuf.Timestamp updated_at_utc = 10;
   string actor_id = 11;
   google.protobuf.Timestamp created_at_utc = 12;
+  string agent_type = 13;
+  string template_name = 14;
+  string scope_id = 15;
+  string api_key_id = 16;
+  string schedule_cron = 17;
+  string schedule_timezone = 18;
+  string status = 19;
+  google.protobuf.Timestamp last_run_at_utc = 20;
+  google.protobuf.Timestamp next_run_at_utc = 21;
+  int32 error_count = 22;
+  string last_error = 23;
+}
+
+// ─── Skill Runner (persistent scheduled agent) ───
+
+message SkillRunnerOutboundConfig {
+  string conversation_id = 1;
+  string nyx_provider_slug = 2;
+  string nyx_api_key = 3;
+  string owner_nyx_user_id = 4;
+  string api_key_id = 5;
+}
+
+message SkillRunnerState {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  google.protobuf.Timestamp last_run_at = 8;
+  google.protobuf.Timestamp next_run_at = 9;
+  int32 error_count = 10;
+  string last_output = 11;
+  string last_error = 12;
+  bool enabled = 13;
+  string scope_id = 14;
+  string provider_name = 15;
+  string model = 16;
+  optional double temperature = 17;
+  optional int32 max_tokens = 18;
+  optional int32 max_tool_rounds = 19;
+  optional int32 max_history_messages = 20;
+}
+
+message InitializeSkillRunnerCommand {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message SkillRunnerInitializedEvent {
+  string skill_name = 1;
+  string template_name = 2;
+  string skill_content = 3;
+  string execution_prompt = 4;
+  string schedule_cron = 5;
+  string schedule_timezone = 6;
+  SkillRunnerOutboundConfig outbound_config = 7;
+  bool enabled = 8;
+  string scope_id = 9;
+  string provider_name = 10;
+  string model = 11;
+  optional double temperature = 12;
+  optional int32 max_tokens = 13;
+  optional int32 max_tool_rounds = 14;
+  optional int32 max_history_messages = 15;
+}
+
+message TriggerSkillRunnerExecutionCommand {
+  string reason = 1;
+}
+
+message SkillRunnerNextRunScheduledEvent {
+  google.protobuf.Timestamp next_run_at = 1;
+}
+
+message SkillRunnerExecutionCompletedEvent {
+  google.protobuf.Timestamp completed_at = 1;
+  string output = 2;
+}
+
+message SkillRunnerExecutionFailedEvent {
+  google.protobuf.Timestamp failed_at = 1;
+  string error = 2;
+}
+
+message DisableSkillRunnerCommand {
+  string reason = 1;
+}
+
+message SkillRunnerDisabledEvent {
+  string reason = 1;
 }
 
 // ─── Channel Chat Lifecycle (continuation pattern) ───

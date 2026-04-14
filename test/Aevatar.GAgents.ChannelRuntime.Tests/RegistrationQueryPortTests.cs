@@ -1,5 +1,6 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using FluentAssertions;
+using Google.Protobuf.WellKnownTypes;
 using NSubstitute;
 using Xunit;
 
@@ -346,6 +347,17 @@ public sealed class RegistrationQueryPortTests
                 NyxProviderSlug = "api-lark-bot",
                 NyxApiKey = "nyx-key-1",
                 OwnerNyxUserId = "user-1",
+                AgentType = "skill_runner",
+                TemplateName = "daily_report",
+                ScopeId = "scope-1",
+                ApiKeyId = "key-1",
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+                Status = "running",
+                LastRunAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
+                NextRunAtUtc = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
+                ErrorCount = 2,
+                LastError = "last-error",
                 StateVersion = 7,
                 ActorId = "agent-registry-store",
             }));
@@ -360,6 +372,17 @@ public sealed class RegistrationQueryPortTests
         result.NyxProviderSlug.Should().Be("api-lark-bot");
         result.NyxApiKey.Should().Be("nyx-key-1");
         result.OwnerNyxUserId.Should().Be("user-1");
+        result.AgentType.Should().Be("skill_runner");
+        result.TemplateName.Should().Be("daily_report");
+        result.ScopeId.Should().Be("scope-1");
+        result.ApiKeyId.Should().Be("key-1");
+        result.ScheduleCron.Should().Be("0 9 * * *");
+        result.ScheduleTimezone.Should().Be("UTC");
+        result.Status.Should().Be("running");
+        result.LastRunAt.Should().NotBeNull();
+        result.NextRunAt.Should().NotBeNull();
+        result.ErrorCount.Should().Be(2);
+        result.LastError.Should().Be("last-error");
     }
 
     [Fact]
@@ -395,6 +418,8 @@ public sealed class RegistrationQueryPortTests
                         Platform = "lark",
                         ConversationId = "oc_a",
                         NyxApiKey = "key-a",
+                        AgentType = "skill_runner",
+                        TemplateName = "daily_report",
                         StateVersion = 1,
                     },
                     new AgentRegistryDocument
@@ -415,6 +440,8 @@ public sealed class RegistrationQueryPortTests
         result.Should().ContainSingle();
         result[0].AgentId.Should().Be("agent-a");
         result[0].NyxApiKey.Should().Be("key-a");
+        result[0].AgentType.Should().Be("skill_runner");
+        result[0].TemplateName.Should().Be("daily_report");
     }
 
     [Fact]

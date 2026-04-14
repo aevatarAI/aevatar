@@ -27,6 +27,7 @@
     <ProjectReference Include="..\Aevatar.GAgents.Household\Aevatar.GAgents.Household.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Cronos" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.Tools">
       <PrivateAssets>all</PrivateAssets>

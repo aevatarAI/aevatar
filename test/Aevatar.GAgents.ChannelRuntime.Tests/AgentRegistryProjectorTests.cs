@@ -42,6 +42,17 @@ public sealed class AgentRegistryProjectorTests
                     NyxProviderSlug = "api-lark-bot",
                     NyxApiKey = "nyx-key-1",
                     OwnerNyxUserId = "user-1",
+                    AgentType = "skill_runner",
+                    TemplateName = "daily_report",
+                    ScopeId = "scope-1",
+                    ApiKeyId = "key-1",
+                    ScheduleCron = "0 9 * * *",
+                    ScheduleTimezone = "UTC",
+                    Status = "running",
+                    LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)),
+                    NextRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
+                    ErrorCount = 1,
+                    LastError = "last-error",
                     CreatedAt = createdAt,
                 },
             },
@@ -57,6 +68,17 @@ public sealed class AgentRegistryProjectorTests
         document.NyxProviderSlug.Should().Be("api-lark-bot");
         document.NyxApiKey.Should().Be("nyx-key-1");
         document.OwnerNyxUserId.Should().Be("user-1");
+        document.AgentType.Should().Be("skill_runner");
+        document.TemplateName.Should().Be("daily_report");
+        document.ScopeId.Should().Be("scope-1");
+        document.ApiKeyId.Should().Be("key-1");
+        document.ScheduleCron.Should().Be("0 9 * * *");
+        document.ScheduleTimezone.Should().Be("UTC");
+        document.Status.Should().Be("running");
+        document.LastRunAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 8, 0, 0, TimeSpan.Zero)));
+        document.NextRunAtUtc.Should().Be(Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)));
+        document.ErrorCount.Should().Be(1);
+        document.LastError.Should().Be("last-error");
         document.StateVersion.Should().Be(3);
         document.LastEventId.Should().Be("evt-agent-1");
         document.ActorId.Should().Be("agent-registry-store");

@@ -475,6 +475,7 @@ public sealed class ChannelUserGAgent : GAgentBase<ChannelUserState>
         chatRequest.Metadata[ChannelMetadataKeys.Platform] = session.Platform;
         chatRequest.Metadata[ChannelMetadataKeys.SenderId] = session.SenderId;
         chatRequest.Metadata[ChannelMetadataKeys.SenderName] = session.SenderName;
+        chatRequest.Metadata[ChannelMetadataKeys.ConversationId] = session.ConversationId;
         chatRequest.Metadata[ChannelMetadataKeys.MessageId] = session.MessageId;
         chatRequest.Metadata[ChannelMetadataKeys.ChatType] = session.ChatType;
 

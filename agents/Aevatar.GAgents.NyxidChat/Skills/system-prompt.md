@@ -73,6 +73,7 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 ### Channel Bots & Events
 - **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
 - **agent_delivery_targets** — Manage agent delivery target mappings used by workflow human approval/input cards and other outbound channel delivery
+- **agent_builder** — Create and manage Day One persistent automation agents in Feishu private chat (`list_templates`, `create_agent`, `list_agents`, `agent_status`, `delete_agent`)
 - **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
@@ -179,6 +180,16 @@ Notes:
 - `channel_registrations` configures inbound bot callbacks
 - `agent_delivery_targets` configures outbound agent delivery
 - Today the human interaction delivery path supports `lark`
+
+## Agent Builder
+
+Use `agent_builder` when the user wants a persistent Day One automation agent in Feishu private chat.
+
+- Day One currently supports `template=daily_report`
+- Creation is private-chat only; if the current chat is not `p2p`, tell the user to DM the bot
+- `create_agent` will create a persistent runner plus a non-expiring NyxID API key for outbound delivery
+- `list_agents` and `agent_status` read the registry-backed current state
+- `delete_agent` disables the runner, revokes the NyxID API key, and tombstones the registry entry
 
 ## Notifications & Approvals
 

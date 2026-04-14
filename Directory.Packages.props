@@ -69,6 +69,7 @@
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <!-- CLI Utilities -->
     <PackageVersion Include="Spectre.Console" Version="0.54.0" />
+    <PackageVersion Include="Cronos" Version="0.11.1" />
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- ASP.NET Core - .NET 10                                      -->
     <!-- ════════════════════════════════════════════════════════════ -->
