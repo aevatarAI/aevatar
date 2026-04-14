@@ -1,7 +1,5 @@
-import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, InputNumber, Space, Typography, theme } from 'antd';
+import { Button, Input, InputNumber, Space } from 'antd';
 import React from 'react';
-import { moduleCardProps } from '@/shared/ui/proComponents';
 import type { ServiceQueryDraft } from './serviceQuery';
 
 type ServiceQueryCardProps = {
@@ -17,16 +15,21 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
   onChange,
   onLoad,
   onReset,
-  loadLabel = 'Load services',
+  loadLabel = 'Apply',
 }) => {
-  const { token } = theme.useToken();
-
   return (
-    <ProCard {...moduleCardProps}>
-      <Space wrap>
+    <div
+      style={{
+        background: '#ffffff',
+        border: '1px solid #e8e8e8',
+        borderRadius: 8,
+        padding: '10px 14px',
+      }}
+    >
+      <Space wrap size={[8, 8]}>
         <Input
           placeholder="tenantId (scopeId)"
-          style={{ width: 200 }}
+          style={{ width: 220 }}
           value={draft.tenantId}
           onChange={(event) =>
             onChange({
@@ -37,7 +40,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         />
         <Input
           placeholder="appId"
-          style={{ width: 160 }}
+          style={{ width: 180 }}
           value={draft.appId}
           onChange={(event) =>
             onChange({
@@ -60,6 +63,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         <InputNumber
           min={1}
           max={500}
+          style={{ width: 96 }}
           value={draft.take}
           onChange={(value) =>
             onChange({
@@ -68,18 +72,12 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
             })
           }
         />
-        <Button type="primary" onClick={onLoad}>
+        <Button onClick={onLoad}>
           {loadLabel}
         </Button>
         {onReset ? <Button onClick={onReset}>Reset</Button> : null}
       </Space>
-      <Typography.Text
-        style={{ color: token.colorTextSecondary, display: 'block', marginTop: 12 }}
-      >
-        Raw platform catalog only. End-user workflow assets should be opened
-        from Projects.
-      </Typography.Text>
-    </ProCard>
+    </div>
   );
 };
 

@@ -207,7 +207,7 @@ function renderInteractionSummary(
 ): React.ReactNode {
   if (humanInputRecord) {
     return (
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Space wrap size={[6, 6]}>
           <Tag color="warning">Human input</Tag>
           <Tag>{humanInputRecord.suspensionType || "n/a"}</Tag>
@@ -235,7 +235,7 @@ function renderInteractionSummary(
 
   if (waitingSignalRecord) {
     return (
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Space wrap size={[6, 6]}>
           <Tag color="warning">Waiting signal</Tag>
           <Tag>{waitingSignalRecord.signalName || "n/a"}</Tag>
@@ -286,7 +286,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
   const content = (
     <div style={cardStackStyle}>
       <div style={embeddedPanelStyle}>
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="A compact summary of the current run state, identifiers, and latest visible output."
             title="Run digest"
@@ -299,7 +299,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
               padding: 12,
             }}
           >
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={8} style={{ width: "100%" }}>
               <Space wrap size={[6, 6]}>
                 <Tag color={focusTone.tagColor}>{runFocus.title}</Tag>
                 <Tag>{runSummaryRecord.focusLabel}</Tag>
@@ -390,7 +390,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       </div>
 
       <div style={embeddedPanelStyle}>
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="The currently selected timeline item and its raw event payload."
             title="Selection"
@@ -463,7 +463,7 @@ const RunsInspectorPane: React.FC<RunsInspectorPaneProps> = ({
       </div>
 
       <div style={embeddedPanelStyle}>
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <SectionHeader
             help="Operator interactions, route profile, and the latest actor-owned state."
             title="Runtime sidecars"

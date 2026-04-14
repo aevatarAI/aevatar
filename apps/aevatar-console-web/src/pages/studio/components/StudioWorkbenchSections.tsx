@@ -913,31 +913,31 @@ function getStudioNoticeAccent(
       return {
         border: 'rgba(82, 196, 26, 0.28)',
         background: 'rgba(246, 255, 237, 0.96)',
-        label: 'Success',
+        label: '成功',
       };
     case 'warning':
       return {
         border: 'rgba(250, 173, 20, 0.28)',
         background: 'rgba(255, 251, 230, 0.96)',
-        label: 'Warning',
+        label: '注意',
       };
     case 'error':
       return {
         border: 'rgba(255, 77, 79, 0.28)',
         background: 'rgba(255, 241, 240, 0.96)',
-        label: 'Error',
+        label: '错误',
       };
     case 'info':
       return {
         border: 'rgba(22, 119, 255, 0.24)',
         background: 'rgba(240, 245, 255, 0.96)',
-        label: 'Info',
+        label: '提示',
       };
     default:
       return {
         border: 'var(--ant-color-border-secondary)',
         background: 'var(--ant-color-fill-quaternary)',
-        label: 'Status',
+        label: '状态',
       };
   }
 }
@@ -960,8 +960,8 @@ const StudioNoticeCard: React.FC<StudioNoticeCardProps> = ({
   action,
   compact = false,
   defaultExpanded,
-  expandLabel = 'Details',
-  collapseLabel = 'Hide details',
+  expandLabel = '查看详情',
+  collapseLabel = '收起详情',
 }) => {
   const accent = getStudioNoticeAccent(type);
   const canToggleDescription =
@@ -1229,29 +1229,29 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
         ? 'success'
         : 'default';
   const bindingStateLabel = loading
-    ? 'Loading'
+    ? '加载中'
     : error
-      ? 'Unavailable'
+      ? '不可用'
       : binding?.available
-        ? 'Active'
-        : 'Not published';
+        ? '已发布'
+        : '未发布';
   const bindingSummary = loading
-    ? 'Loading the current scope binding status.'
+    ? '正在读取当前团队入口状态。'
     : error
-      ? 'Studio could not load the published binding for this scope.'
+      ? '暂时无法读取当前团队入口。'
       : binding?.available
-        ? `Default binding routes through ${currentTarget || binding.displayName || binding.serviceId}.`
-        : `Scope ${scopeId} has not published a service binding yet.`;
+        ? `当前默认入口指向 ${currentTarget || binding.displayName || binding.serviceId}。`
+        : `团队 ${scopeId} 还没有发布默认入口。`;
   const detailsContent = loading ? (
     <StudioNoticeCard
-      title="Loading scope binding"
-      description="Fetching the current revision history and serving state for this scope."
+      title="正在加载团队入口"
+      description="正在读取当前发布版本和服务状态。"
       compact
     />
   ) : error ? (
     <StudioNoticeCard
       type="error"
-      title="Failed to load scope binding"
+      title="读取团队入口失败"
       description={describeError(error)}
       compact
       defaultExpanded
@@ -1259,8 +1259,8 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
   ) : !binding?.available ? (
     <StudioNoticeCard
       type="info"
-      title="No published binding"
-      description="Use Bind scope to publish the current workflow as the scope's default service."
+      title="尚未发布默认入口"
+      description="发布当前行为定义或脚本后，这里会显示团队默认入口。"
       compact
     />
   ) : (
@@ -1289,69 +1289,53 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
           }}
         >
           <Space direction="vertical" size={2}>
-            <Typography.Text strong>Current posture</Typography.Text>
+            <Typography.Text strong>当前入口</Typography.Text>
             <Typography.Text type="secondary">
-              The current published default binding, target identity, and serving posture live together here.
+              当前发布版本、目标对象和服务状态。
             </Typography.Text>
           </Space>
 
           <div style={summaryMetricGridStyle}>
+            <StudioSummaryMetric label="版本数" value={binding.revisions.length} />
             <StudioSummaryMetric
-              label="Revisions"
-              value={binding.revisions.length}
-            />
-            <StudioSummaryMetric
-              label="Binding kind"
+              label="入口类型"
               value={formatStudioScopeBindingImplementationKind(
                 currentRevision?.implementationKind,
               )}
             />
+            <StudioSummaryMetric label="当前目标" value={currentTarget} />
             <StudioSummaryMetric
-              label="Current target"
-              value={currentTarget}
-            />
-            <StudioSummaryMetric
-              label="Default"
+              label="默认版本"
               tone="success"
               value={binding.defaultServingRevisionId || 'n/a'}
             />
             <StudioSummaryMetric
-              label="Active"
+              label="生效版本"
               tone="info"
               value={binding.activeServingRevisionId || 'n/a'}
             />
             <StudioSummaryMetric
-              label="Deployment"
+              label="部署状态"
               value={binding.deploymentStatus || 'n/a'}
             />
           </div>
 
           <div style={summaryFieldGridStyle}>
+            <StudioSummaryField label="服务键" copyable value={binding.serviceKey} />
+            <StudioSummaryField label="目标" value={currentTarget} />
             <StudioSummaryField
-              label="Service key"
-              copyable
-              value={binding.serviceKey}
-            />
-            <StudioSummaryField
-              label="Target"
-              value={currentTarget}
-            />
-            <StudioSummaryField
-              label="Target detail"
+              label="目标说明"
               copyable
               value={currentContext || 'n/a'}
             />
             <StudioSummaryField
-              label="Primary actor"
+              label="主 Actor"
               copyable
               value={currentActor || 'n/a'}
             />
+            <StudioSummaryField label="部署 ID" value={binding.deploymentId} />
             <StudioSummaryField
-              label="Deployment"
-              value={binding.deploymentId}
-            />
-            <StudioSummaryField
-              label="Updated"
+              label="更新时间"
               value={formatDateTime(binding.updatedAt)}
             />
           </div>
@@ -1376,9 +1360,9 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
           }}
         >
           <Space direction="vertical" size={2}>
-            <Typography.Text strong>Revision rollout</Typography.Text>
+            <Typography.Text strong>版本发布</Typography.Text>
             <Typography.Text type="secondary">
-              Review published revisions, switch the default serving revision, or retire stale ones.
+              查看已发布版本、切换默认版本，或下线旧版本。
             </Typography.Text>
           </Space>
 
@@ -1432,10 +1416,10 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
                         {revision.status || 'unknown'}
                       </Tag>
                       {revision.isDefaultServing ? (
-                        <Tag color="success">default</Tag>
+                        <Tag color="success">默认</Tag>
                       ) : null}
                       {revision.isActiveServing ? (
-                        <Tag color="processing">active</Tag>
+                        <Tag color="processing">生效</Tag>
                       ) : null}
                       {revision.isServingTarget ? (
                         <Tag color="blue">
@@ -1472,7 +1456,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
                       loading={pendingRevisionId === revision.revisionId}
                       onClick={() => onActivateRevision(revision.revisionId)}
                     >
-                      {revision.isDefaultServing ? 'Serving' : 'Activate'}
+                      {revision.isDefaultServing ? '当前默认' : '设为默认'}
                     </Button>
                     <Button
                       danger
@@ -1482,7 +1466,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
                       }
                       onClick={() => onRetireRevision(revision.revisionId)}
                     >
-                      Retire
+                      下线
                     </Button>
                   </Space>
                 </div>
@@ -1505,7 +1489,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
       <div style={workflowSectionHeaderStyle}>
         <div style={workflowDirectoryTextStackStyle}>
           <Typography.Text style={workflowSectionHeadingStyle}>
-            Scope Binding
+            团队入口
           </Typography.Text>
           <Space wrap size={[8, 8]}>
             <Typography.Title
@@ -1514,7 +1498,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
             >
               {binding?.available
                 ? binding.displayName || binding.serviceId
-                : 'No active binding'}
+                : '未发布默认入口'}
             </Typography.Title>
             <Tag color={bindingStateColor}>{bindingStateLabel}</Tag>
             {binding?.available ? (
@@ -1544,7 +1528,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
               )
             }
           >
-            Open GAgents
+            查看成员
           </Button>
           <Button
             type="text"
@@ -1560,7 +1544,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
               />
             }
           >
-            {detailsOpen ? 'Hide details' : 'Show details'}
+            {detailsOpen ? '收起详情' : '查看详情'}
           </Button>
         </Space>
       </div>
@@ -2391,12 +2375,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   workflowGraph,
   draftWorkflowName,
   activeWorkflowName,
-  activeWorkflowDescription,
-  activeDirectoryLabel,
-  savePending,
-  canSaveWorkflow,
   runPending,
-  canOpenRunWorkflow,
   canRunWorkflow,
   executionCanStop,
   executionStopPending,
@@ -2404,12 +2383,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   executionNotice,
   logsPopoutMode = false,
   logsDetached = false,
-  onSwitchStudioView,
   onOpenExecution,
-  onSaveDraft,
-  onExportDraft,
-  onSetDraftWorkflowName,
-  onSetWorkflowDescription,
   onRunPromptChange,
   onStartExecution,
   onResumeExecution,
@@ -2438,10 +2412,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const [executionActionPendingKey, setExecutionActionPendingKey] =
     React.useState('');
   const [runModalOpen, setRunModalOpen] = React.useState(false);
-  const [descriptionEditorOpen, setDescriptionEditorOpen] = React.useState(false);
-  const [descriptionDraft, setDescriptionDraft] = React.useState(
-    activeWorkflowDescription,
-  );
   const logsResizeSessionRef = React.useRef<{
     readonly clientY: number;
     readonly height: number;
@@ -2458,12 +2428,6 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
     setExecutionActionInput('');
     setExecutionActionPendingKey('');
   }, [executionTrace, selectedExecutionDetail?.executionId]);
-
-  React.useEffect(() => {
-    if (!descriptionEditorOpen) {
-      setDescriptionDraft(activeWorkflowDescription);
-    }
-  }, [activeWorkflowDescription, descriptionEditorOpen]);
 
   React.useEffect(() => {
     if (!logsResizing || typeof window === 'undefined') {
@@ -2513,8 +2477,8 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
   const executionSummaryLabel = selectedExecutionDetail
     ? `${formatDateTime(selectedExecutionDetail.startedAtUtc)} · ${selectedExecutionDetail.status}`
     : currentWorkflowExecutions.length > 0
-      ? `${currentWorkflowExecutions.length} runs`
-      : 'No runs';
+      ? `${currentWorkflowExecutions.length} 次运行`
+      : '暂无运行';
   const selectedExecutionActorId = selectedExecutionDetail?.actorId || null;
   const activeExecutionLog =
     executionTrace && Number.isInteger(activeExecutionLogIndex)
@@ -2549,6 +2513,66 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       ),
     [activeExecutionLogIndex, executionTrace, workflowGraph.edges, workflowGraph.nodes],
   );
+  const executionLogCount = executionTrace?.logs.length ?? 0;
+  const executionExecutedSteps = React.useMemo(
+    () =>
+      new Set(
+        (executionTrace?.logs ?? [])
+          .map((log) => log.stepId || '')
+          .filter(Boolean),
+      ).size,
+    [executionTrace],
+  );
+  const executionTotalSteps =
+    workflowGraph.steps.length || workflowGraph.nodes.length;
+  const executionStatusKey = String(selectedExecutionDetail?.status || '')
+    .trim()
+    .toLowerCase();
+  const executionStatusLabel =
+    executionStatusKey === 'running'
+      ? '运行中'
+      : executionStatusKey === 'completed'
+        ? '已完成'
+        : executionStatusKey === 'failed'
+          ? '执行失败'
+          : selectedExecutionDetail
+            ? '等待执行'
+            : '未开始';
+  const executionAccentColor =
+    executionStatusKey === 'running'
+      ? '#1890ff'
+      : executionStatusKey === 'completed'
+        ? '#52c41a'
+        : executionStatusKey === 'failed'
+          ? '#ff4d4f'
+          : '#8c8c8c';
+  const executionBarStyle: React.CSSProperties =
+    executionStatusKey === 'running'
+      ? {
+          background: '#e6f7ff',
+          borderBottom: '1px solid #91d5ff',
+        }
+      : executionStatusKey === 'completed'
+        ? {
+            background: '#f6ffed',
+            borderBottom: '1px solid #b7eb8f',
+          }
+        : executionStatusKey === 'failed'
+          ? {
+              background: '#fff2f0',
+              borderBottom: '1px solid #ffccc7',
+            }
+          : {
+              background: '#fafafa',
+              borderBottom: '1px solid #f0f0f0',
+            };
+  const executionPromptPreview = (selectedExecutionDetail?.prompt || runPrompt).trim();
+  const executionDurationLabel = selectedExecutionDetail
+    ? formatDurationBetween(
+        selectedExecutionDetail.startedAtUtc,
+        selectedExecutionDetail.completedAtUtc,
+      )
+    : '';
 
   const copyText = async (value: string): Promise<boolean> => {
     if (!value || typeof navigator === 'undefined' || !navigator.clipboard) {
@@ -3080,7 +3104,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         {selectedExecution.isError ? (
           <StudioNoticeCard
             type="error"
-            title="Failed to load execution detail"
+            title="读取执行详情失败"
             description={describeError(selectedExecution.error)}
           />
         ) : selectedExecution.data ? (
@@ -3088,28 +3112,26 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
         ) : (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Pick a Studio execution to inspect its logs."
+            description="选择一条测试运行后，这里会显示执行日志。"
           />
         )}
       </div>
     );
   }
 
-  const executionLogsBottomInset = logsCollapsed ? 84 : logsHeight + 28;
-
   return (
     <div style={cardStackStyle}>
       {executions.isError ? (
         <StudioNoticeCard
           type="error"
-          title="Failed to load Studio executions"
+          title="读取测试运行列表失败"
           description={describeError(executions.error)}
         />
       ) : null}
       {selectedExecution.isError ? (
         <StudioNoticeCard
           type="error"
-          title="Failed to load execution detail"
+          title="读取执行详情失败"
           description={describeError(selectedExecution.error)}
         />
       ) : null}
@@ -3118,10 +3140,10 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           type={executionNotice.type}
           title={
             executionNotice.type === 'error'
-              ? 'Execution action failed'
+              ? '执行操作失败'
               : executionNotice.type === 'info'
-                ? 'Execution stop requested'
-                : 'Execution updated'
+                ? '已请求停止运行'
+                : '执行状态已更新'
           }
           description={executionNotice.message}
         />
@@ -3129,16 +3151,16 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       {selectedExecutionDetail?.error ? (
         <StudioNoticeCard
           type="error"
-          title="Execution error"
+          title="执行异常"
           description={selectedExecutionDetail.error}
         />
       ) : null}
 
       <div
         style={{
-          background: '#F2F1EE',
+          background: '#FFFFFF',
           border: '1px solid #E6E3DE',
-          borderRadius: 36,
+          borderRadius: 28,
           boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
           display: 'flex',
           flexDirection: 'column',
@@ -3146,168 +3168,91 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
           overflow: 'hidden',
         }}
       >
-        <header className="studio-editor-header">
-          <div className="studio-editor-toolbar">
-            <div className="studio-view-switch">
-              {(['editor', 'execution'] as const).map((view) => (
-                <button
-                  key={view}
-                  type="button"
-                  onClick={() => onSwitchStudioView(view)}
-                  className={`studio-view-switch-button ${view === 'execution' ? 'active' : ''}`}
-                >
-                  {view === 'editor' ? 'Edit' : 'Runs'}
-                </button>
-              ))}
-            </div>
-            <div className="studio-title-bar">
-              <div className="studio-title-group">
-                <input
-                  aria-label="Studio workflow title"
-                  className="studio-title-input"
-                  placeholder={activeWorkflowName || 'draft'}
-                  value={draftWorkflowName}
-                  onChange={(event) => onSetDraftWorkflowName(event.target.value)}
-                />
-                <StudioInfoPopover
-                  open={descriptionEditorOpen}
-                  ariaLabel="Edit workflow description"
-                  onOpenChange={(open) => {
-                    setDescriptionEditorOpen(open);
-                    if (open) {
-                      setDescriptionDraft(activeWorkflowDescription);
-                    }
-                  }}
-                >
-                  <textarea
-                    aria-label="Studio workflow description"
-                    placeholder="Workflow description"
-                    value={descriptionDraft}
-                    onChange={(event) => setDescriptionDraft(event.target.value)}
-                    style={studioDescriptionEditorStyle}
-                  />
-                  <div style={studioInfoPopoverActionsStyle}>
-                    <Button
-                      size="small"
-                      style={{ minWidth: 72, borderRadius: 10 }}
-                      onClick={() => {
-                        setDescriptionDraft(activeWorkflowDescription);
-                        setDescriptionEditorOpen(false);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="primary"
-                      size="small"
-                      style={{ minWidth: 72, borderRadius: 10 }}
-                      onClick={() => {
-                        onSetWorkflowDescription(descriptionDraft);
-                        setDescriptionEditorOpen(false);
-                      }}
-                    >
-                      Save
-                    </Button>
-                  </div>
-                </StudioInfoPopover>
-              </div>
-              <div className="studio-header-actions">
-                <button
-                  type="button"
-                  onClick={onSaveDraft}
-                  disabled={!canSaveWorkflow || savePending}
-                  aria-label="Save"
-                  title="Save"
-                  className="panel-icon-button header-toolbar-action header-save-action"
-                >
-                  {savePending ? <LoadingOutlined /> : <SaveOutlined />}
-                </button>
-                <button
-                  type="button"
-                  onClick={onExportDraft}
-                  aria-label="Export"
-                  title="Export"
-                  className="panel-icon-button header-toolbar-action header-export-action"
-                >
-                  <ExportOutlined />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRunModalOpen(true)}
-                  disabled={!canOpenRunWorkflow || runPending}
-                  aria-label="Run"
-                  title="Run"
-                  className="panel-icon-button header-toolbar-action header-run-action"
-                >
-                  {runPending ? <LoadingOutlined /> : <PlayCircleFilled />}
-                </button>
-                {executionCanStop ? (
-                  <button
-                    type="button"
-                    onClick={onStopExecution}
-                    disabled={executionStopPending}
-                    aria-label="Stop"
-                    title="Stop"
-                    className="panel-icon-button header-toolbar-action header-stop-action"
-                  >
-                    {executionStopPending ? <LoadingOutlined /> : <CloseCircleFilled />}
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <section
+        <div
           style={{
-            background: '#F2F1EE',
+            ...executionBarStyle,
+            alignItems: 'center',
+            display: 'flex',
+            gap: 12,
+            minHeight: 36,
+            padding: '0 16px',
+          }}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: executionAccentColor,
+            }}
+          />
+          <Typography.Text
+            strong
+            style={{ color: executionAccentColor, margin: 0 }}
+          >
+            {executionStatusLabel}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ margin: 0 }}>
+            {(activeWorkflowName || draftWorkflowName || '当前流程').trim() || '当前流程'} ·
+            已执行 {executionExecutedSteps}/{executionTotalSteps || 0} 步骤
+            {executionDurationLabel ? ` · 耗时 ${executionDurationLabel}` : ''}
+          </Typography.Text>
+          {executionPromptPreview ? (
+            <Typography.Text
+              type="secondary"
+              style={{
+                marginLeft: 'auto',
+                maxWidth: 380,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              输入: "{executionPromptPreview}"
+            </Typography.Text>
+          ) : null}
+          <Button
+            type="primary"
+            size="small"
+            loading={runPending}
+            disabled={!canRunWorkflow || runPending}
+            onClick={() => setRunModalOpen(true)}
+          >
+            重新运行
+          </Button>
+          {executionCanStop ? (
+            <Button
+              danger
+              size="small"
+              loading={executionStopPending}
+              disabled={executionStopPending}
+              onClick={onStopExecution}
+            >
+              停止
+            </Button>
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            background: '#FAFAFA',
             display: 'flex',
             flex: 1,
             flexDirection: 'column',
             minHeight: 0,
-            overflow: 'hidden',
           }}
         >
           <div
             style={{
               flex: 1,
-              minHeight: 0,
+              minHeight: 320,
               overflow: 'hidden',
               position: 'relative',
             }}
           >
-            <div className="canvas-overlay-stack">
-              <div className="canvas-meta-card">
-                <div className="canvas-meta-label">{activeDirectoryLabel}</div>
-                <div className="canvas-meta-value">
-                  {workflowGraph.nodes.length} nodes · {workflowGraph.edges.length} edges
-                </div>
-              </div>
-
-              <div className="canvas-meta-card canvas-meta-card-wide">
-                <div className="canvas-meta-label">Run</div>
-                <select
-                  className="canvas-meta-select"
-                  value={selectedExecutionDetail?.executionId || ''}
-                  onChange={(event) => {
-                    if (event.target.value) {
-                      onOpenExecution(event.target.value);
-                    }
-                  }}
-                >
-                  <option value="">{executionSummaryLabel}</option>
-                  {currentWorkflowExecutions.map((execution) => (
-                    <option key={execution.executionId} value={execution.executionId}>
-                      {formatDateTime(execution.startedAtUtc)} · {execution.status}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
             <GraphCanvas
               height="100%"
-              bottomInset={executionLogsBottomInset}
+              bottomInset={0}
               variant="studio"
               nodes={decoratedExecutionNodes}
               edges={decoratedExecutionEdges}
@@ -3328,20 +3273,325 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
                 }
               }}
             />
-            {renderExecutionLogsSection({ overlay: true })}
           </div>
-        </section>
+
+          <section
+            style={{
+              background: '#FFFFFF',
+              borderTop: '1px solid #F0F0F0',
+              display: 'flex',
+              flexDirection: 'column',
+              maxHeight: 320,
+              minHeight: activeExecutionInteraction ? 280 : 220,
+            }}
+          >
+            <div
+              style={{
+                alignItems: 'center',
+                background: '#FAFAFA',
+                borderBottom: '1px solid #F0F0F0',
+                display: 'flex',
+                gap: 12,
+                minHeight: 40,
+                padding: '0 12px',
+              }}
+            >
+              <Typography.Text strong style={{ fontSize: 12, margin: 0 }}>
+                执行日志
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 11, margin: 0 }}>
+                {executionLogCount} 个事件
+              </Typography.Text>
+              <div
+                style={{
+                  alignItems: 'center',
+                  display: 'flex',
+                  gap: 8,
+                  marginLeft: 'auto',
+                }}
+              >
+                {currentWorkflowExecutions.length > 0 ? (
+                  <select
+                    aria-label="选择测试运行"
+                    value={selectedExecutionDetail?.executionId || ''}
+                    onChange={(event) => {
+                      if (event.target.value) {
+                        onOpenExecution(event.target.value);
+                      }
+                    }}
+                    style={{
+                      border: '1px solid #D9D9D9',
+                      borderRadius: 4,
+                      fontSize: 12,
+                      height: 28,
+                      minWidth: 220,
+                      padding: '0 8px',
+                    }}
+                  >
+                    <option value="">{executionSummaryLabel}</option>
+                    {currentWorkflowExecutions.map((execution) => (
+                      <option key={execution.executionId} value={execution.executionId}>
+                        {formatDateTime(execution.startedAtUtc)} · {execution.status}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {selectedExecutionActorId ? (
+                  <>
+                    <Typography.Text type="secondary" style={{ fontSize: 11, margin: 0 }}>
+                      Actor ID
+                    </Typography.Text>
+                    <code
+                      title={selectedExecutionActorId}
+                      style={{
+                        color: '#595959',
+                        fontSize: 11,
+                        maxWidth: 220,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {selectedExecutionActorId}
+                    </code>
+                    <button
+                      type="button"
+                      className={`panel-icon-button execution-logs-copy-action ${copiedExecutionActorId === selectedExecutionActorId ? 'active' : ''}`}
+                      title="复制 Actor ID"
+                      aria-label="Copy Actor ID."
+                      onClick={() =>
+                        void handleCopyExecutionActorId(selectedExecutionActorId)
+                      }
+                    >
+                      {copiedExecutionActorId === selectedExecutionActorId ? (
+                        <CheckOutlined />
+                      ) : (
+                        <CopyOutlined />
+                      )}
+                    </button>
+                  </>
+                ) : null}
+                {selectedExecutionDetail?.executionId ? (
+                  <button
+                    type="button"
+                    className={`panel-icon-button execution-logs-window-action ${logsDetached ? 'active' : ''}`}
+                    title={logsDetached ? '聚焦日志窗口' : '弹出日志窗口'}
+                    aria-label="Pop out execution logs."
+                    onClick={onPopOutLogs}
+                  >
+                    <ExpandOutlined />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {activeExecutionInteraction ? (
+              <div
+                style={{
+                  borderBottom: '1px solid #F5F5F5',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 12,
+                  padding: 12,
+                }}
+              >
+                <div
+                  style={{
+                    alignItems: 'center',
+                    display: 'flex',
+                    gap: 12,
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <div>
+                    <Typography.Text strong>
+                      {activeExecutionInteraction.kind === 'human_approval'
+                        ? '等待人工审批'
+                        : '等待人工输入'}
+                    </Typography.Text>
+                    <div className="execution-action-subtitle">
+                      {activeExecutionInteraction.kind === 'human_approval'
+                        ? '查看当前关卡并决定通过或驳回。'
+                        : '补充缺失信息后，当前步骤会继续执行。'}
+                    </div>
+                  </div>
+                  <span className="execution-action-badge">
+                    {activeExecutionInteraction.stepId}
+                  </span>
+                </div>
+                {activeExecutionInteraction.prompt ? (
+                  <div className="execution-action-prompt">
+                    {activeExecutionInteraction.prompt}
+                  </div>
+                ) : null}
+                <textarea
+                  aria-label="执行交互输入"
+                  value={executionActionInput}
+                  onChange={(event) => setExecutionActionInput(event.target.value)}
+                  className="panel-textarea execution-action-textarea"
+                  placeholder={
+                    activeExecutionInteraction.kind === 'human_approval'
+                      ? '可选补充说明'
+                      : '输入继续执行所需的内容'
+                  }
+                />
+                <div className="execution-action-footer">
+                  {activeExecutionInteraction.kind === 'human_approval' ? (
+                    <>
+                      <button
+                        type="button"
+                        className="ghost-action execution-danger-action"
+                        disabled={
+                          executionActionPendingKey ===
+                          `${executionActionKeyBase}:reject`
+                        }
+                        onClick={() =>
+                          void handleExecutionInteraction(
+                            activeExecutionInteraction,
+                            'reject',
+                          )
+                        }
+                      >
+                        {executionActionPendingKey ===
+                        `${executionActionKeyBase}:reject`
+                          ? '驳回中...'
+                          : '驳回'}
+                      </button>
+                      <button
+                        type="button"
+                        className="solid-action"
+                        disabled={
+                          executionActionPendingKey ===
+                          `${executionActionKeyBase}:approve`
+                        }
+                        onClick={() =>
+                          void handleExecutionInteraction(
+                            activeExecutionInteraction,
+                            'approve',
+                          )
+                        }
+                      >
+                        {executionActionPendingKey ===
+                        `${executionActionKeyBase}:approve`
+                          ? '通过中...'
+                          : '通过'}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="solid-action"
+                      disabled={
+                        executionActionPendingKey ===
+                        `${executionActionKeyBase}:submit`
+                      }
+                      onClick={() =>
+                        void handleExecutionInteraction(
+                          activeExecutionInteraction,
+                          'submit',
+                        )
+                      }
+                    >
+                      {executionActionPendingKey ===
+                      `${executionActionKeyBase}:submit`
+                        ? '提交中...'
+                        : '提交'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+              {currentWorkflowExecutions.length === 0 ? (
+                <StudioCatalogEmptyPanel
+                  icon={<CaretRightFilled style={{ color: '#CBD5E1' }} />}
+                  title="暂无运行记录"
+                  copy="开始一次测试运行后，这里会显示执行日志。"
+                />
+              ) : executionTrace?.logs?.length ? (
+                executionTrace.logs.map((log, index) => (
+                  <button
+                    key={`${log.timestamp}-${log.stepId || 'run'}-${log.title}`}
+                    type="button"
+                    onClick={() => void handleExecutionLogClick(log, index)}
+                    style={{
+                      alignItems: 'flex-start',
+                      background:
+                        activeExecutionLogIndex === index ? '#F5F7FF' : '#FFFFFF',
+                      border: 'none',
+                      borderBottom: '1px solid #FAFAFA',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      gap: 8,
+                      padding: '6px 12px',
+                      textAlign: 'left',
+                      width: '100%',
+                    }}
+                    title="点击复制这条日志"
+                  >
+                    <span
+                      style={{
+                        color: '#BFBFBF',
+                        fontFamily: 'SF Mono, Menlo, Monaco, Consolas, monospace',
+                        fontSize: 11,
+                        minWidth: 64,
+                      }}
+                    >
+                      {formatDateTime(log.timestamp)}
+                    </span>
+                    <span
+                      style={{
+                        color:
+                          log.tone === 'failed'
+                            ? '#ff4d4f'
+                            : log.tone === 'completed'
+                              ? '#52c41a'
+                              : log.tone === 'pending'
+                                ? '#faad14'
+                                : '#1890ff',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        minWidth: 64,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {log.tone === 'failed'
+                        ? '失败'
+                        : log.tone === 'completed'
+                          ? '完成'
+                          : log.tone === 'pending'
+                            ? '等待'
+                            : log.tone === 'run'
+                              ? '运行'
+                              : '开始'}
+                    </span>
+                    <span style={{ color: '#434343', flex: 1, fontSize: 12 }}>
+                      {log.previewText || log.meta || log.title}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <StudioCatalogEmptyPanel
+                  icon={<FileTextOutlined style={{ color: '#CBD5E1' }} />}
+                  title="还没有日志"
+                  copy="选择一条测试运行后，这里会显示步骤执行和状态变化。"
+                />
+              )}
+            </div>
+          </section>
+        </div>
       </div>
 
       <Modal
         open={runModalOpen}
-        title="Run"
+        title="测试运行"
         onCancel={() => setRunModalOpen(false)}
         onOk={() => {
           void onStartExecution();
           setRunModalOpen(false);
         }}
-        okText="Run"
+        okText="开始运行"
         okButtonProps={{
           disabled: !canRunWorkflow,
           loading: runPending,
@@ -3350,14 +3600,13 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
       >
         <div style={cardStackStyle}>
           <Typography.Text type="secondary">
-            Execution prompt will be passed into the workflow as{' '}
-            <Typography.Text code>$input</Typography.Text>.
+            这段输入会作为 <Typography.Text code>$input</Typography.Text> 传入当前行为定义。
           </Typography.Text>
           <Input.TextArea
             aria-label="Studio execution prompt"
             autoSize={{ minRows: 6, maxRows: 10 }}
             className="run-prompt-textarea"
-            placeholder="What should this run do?"
+            placeholder="这次运行要做什么？"
             value={runPrompt}
             onChange={(event) => onRunPromptChange(event.target.value)}
           />
@@ -3368,6 +3617,7 @@ export const StudioExecutionPage: React.FC<StudioExecutionPageProps> = ({
 };
 
 export type StudioEditorPageProps = {
+  readonly workflows: QueryState<StudioWorkflowSummary[]>;
   readonly selectedWorkflow: QueryState<unknown>;
   readonly templateWorkflow: QueryState<unknown>;
   readonly connectors: QueryState<StudioConnectorCatalog>;
@@ -3457,6 +3707,8 @@ export type StudioEditorPageProps = {
   readonly onPublishWorkflow: () => void;
   readonly onOpenProjectOverview: () => void;
   readonly onOpenProjectInvoke: () => void;
+  readonly onOpenWorkflow: (workflowId: string) => void;
+  readonly onStartBlankDraft: () => void;
   readonly onBindGAgent: (input: {
     displayName?: string;
     actorTypeName: string;
@@ -3494,12 +3746,14 @@ export type StudioEditorPageProps = {
 };
 
 export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
+  workflows,
   selectedWorkflow,
   templateWorkflow,
   connectors,
   draftYaml,
   draftWorkflowName,
   draftDirectoryId,
+  selectedWorkflowId,
   templateWorkflowName,
   activeWorkflowDescription,
   activeWorkflowFile,
@@ -3556,6 +3810,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   onPublishWorkflow,
   onOpenProjectOverview,
   onOpenProjectInvoke,
+  onOpenWorkflow,
+  onStartBlankDraft,
   onBindGAgent,
   onActivateBindingRevision,
   onRetireBindingRevision,
@@ -3570,7 +3826,6 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     React.useState<StudioToolDrawerMode | null>(null);
   const [nodePaletteSearch, setNodePaletteSearch] = React.useState('');
   const [nodePaletteSection, setNodePaletteSection] = React.useState('AI');
-  const [inspectorDrawerOpen, setInspectorDrawerOpen] = React.useState(false);
   const [runModalOpen, setRunModalOpen] = React.useState(false);
   const [gAgentModalOpen, setGAgentModalOpen] = React.useState(false);
   const [gAgentBindingPending, setGAgentBindingPending] = React.useState(false);
@@ -3810,12 +4065,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     activeWorkflowFile?.name ||
     templateWorkflowName ||
     'draft';
-
-  React.useEffect(() => {
-    if (inspectorTab === 'node') {
-      setInspectorDrawerOpen(hasSelectedGraphNode);
-    }
-  }, [hasSelectedGraphNode, inspectorTab]);
+  const visibleWorkflowDefinitions = React.useMemo(
+    () => dedupeStudioWorkflowSummaries(workflows.data ?? [], selectedWorkflowId),
+    [selectedWorkflowId, workflows.data],
+  );
 
   React.useEffect(() => {
     if (askAiPending || askAiNotice || askAiAnswer || askAiReasoning) {
@@ -3835,37 +4088,24 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   };
 
   const askAiStatusText = askAiPending
-    ? 'Generating and validating YAML...'
+    ? '正在生成并校验 YAML...'
     : askAiAnswer.trim()
-      ? 'Validated YAML applied to the current draft.'
-      : 'Return format: workflow YAML only.';
+      ? '校验通过的 YAML 已写回当前草稿。'
+      : '返回格式仅限 workflow YAML。';
   const toolDrawerVisible = Boolean(draftYaml) && toolDrawerMode !== null;
   const toolDrawerTitle =
-    toolDrawerMode === 'palette' ? 'Add node' : 'Ask AI';
-  const inspectorDrawerVisible =
-    Boolean(draftYaml) &&
-    inspectorDrawerOpen &&
-    (inspectorTab !== 'node' || hasSelectedGraphNode);
-  const inspectorDrawerTitle =
-    inspectorTab === 'node'
-      ? selectedGraphNodeId
-        ? `Node · ${selectedGraphNodeId}`
-        : 'Node'
-      : inspectorTab === 'roles'
-        ? 'Roles'
-        : 'YAML';
+    toolDrawerMode === 'palette' ? '添加步骤' : 'AI 辅助';
   const nodePaletteDrawerContent = (
     <div style={cardStackStyle}>
       <div style={studioToolDrawerSectionStyle}>
-        <Typography.Text strong>Node library</Typography.Text>
+        <Typography.Text strong>步骤库</Typography.Text>
         <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-          Search primitives or configured connectors, then insert the next step at
-          the current canvas target.
+          搜索基础步骤或已配置集成，然后把新步骤插入到当前画布位置。
         </Typography.Paragraph>
         <Input
           allowClear
           prefix={<SearchOutlined />}
-          placeholder="Search primitives or connectors"
+          placeholder="搜索步骤或集成"
           value={nodePaletteSearch}
           onChange={(event) => setNodePaletteSearch(event.target.value)}
         />
@@ -3930,7 +4170,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                           size="small"
                           onClick={() => handleAddNodeFromPalette(item)}
                         >
-                          Insert
+                          插入
                         </Button>
                       </div>
                     </div>
@@ -3979,7 +4219,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               <ApiOutlined />
             </div>
             <Typography.Text strong style={{ flex: 1 }}>
-              Configured connectors
+              已配置集成
             </Typography.Text>
             <Tag>{filteredConnectorPalette.length}</Tag>
           </Button>
@@ -3993,9 +4233,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       <Space wrap size={[6, 6]}>
                         <Tag>{connector.type}</Tag>
                         {connector.enabled ? (
-                          <Tag color="success">enabled</Tag>
+                          <Tag color="success">已启用</Tag>
                         ) : (
-                          <Tag color="default">disabled</Tag>
+                          <Tag color="default">已停用</Tag>
                         )}
                       </Space>
                     </div>
@@ -4009,7 +4249,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                           )
                         }
                       >
-                        Insert
+                        插入
                       </Button>
                     </div>
                   </div>
@@ -4024,15 +4264,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   const askAiDrawerContent = (
     <div style={cardStackStyle}>
       <div style={studioToolDrawerSectionStyle}>
-        <Typography.Text strong>Workflow prompt</Typography.Text>
+        <Typography.Text strong>行为描述</Typography.Text>
         <Typography.Paragraph style={{ margin: 0 }} type="secondary">
-          Describe the workflow outcome. Studio applies validated YAML back into
-          the current draft automatically.
+          描述你想要的行为结果。Studio 会把校验通过的 YAML 自动写回当前草稿。
         </Typography.Paragraph>
         <Input.TextArea
           aria-label="Studio AI workflow prompt"
           autoSize={{ minRows: 5, maxRows: 10 }}
-          placeholder="Build a workflow that triages incidents, routes risky cases to human approval, and posts the result to Slack."
+          placeholder="构建一个能分诊事件、把高风险情况交给人工审批，并把结果发到 Slack 的流程。"
           value={askAiPrompt}
           onChange={(event) => onAskAiPromptChange(event.target.value)}
         />
@@ -4052,7 +4291,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             loading={askAiPending}
             onClick={onAskAiGenerate}
           >
-            {askAiPending ? 'Thinking' : 'Generate'}
+            {askAiPending ? '生成中' : '生成'}
           </Button>
         </div>
       </div>
@@ -4062,17 +4301,17 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           type={askAiNotice.type}
           title={
             askAiNotice.type === 'error'
-              ? 'Studio AI generation failed'
-              : 'Studio AI generation updated the draft'
+              ? 'AI 辅助生成失败'
+              : 'AI 辅助已更新当前草稿'
           }
           description={askAiNotice.message}
         />
       ) : null}
 
       <div style={studioToolDrawerSectionStyle}>
-        <Typography.Text strong>Thinking</Typography.Text>
+        <Typography.Text strong>推理过程</Typography.Text>
         <pre style={{ ...codeBlockStyle, margin: 0, maxHeight: 160 }}>
-          {askAiReasoning || 'LLM reasoning will stream here.'}
+          {askAiReasoning || '模型推理会显示在这里。'}
         </pre>
       </div>
 
@@ -4085,13 +4324,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             justifyContent: 'space-between',
           }}
         >
-          <Typography.Text strong>Validated YAML</Typography.Text>
+          <Typography.Text strong>校验后的 YAML</Typography.Text>
           <Tag color={askAiAnswer.trim() ? 'success' : 'default'}>
-            {askAiAnswer.trim() ? 'Applied to draft' : 'Waiting for valid YAML'}
+            {askAiAnswer.trim() ? '已写回草稿' : '等待有效 YAML'}
           </Tag>
         </div>
         <pre style={{ ...codeBlockStyle, margin: 0, maxHeight: 260 }}>
-          {askAiAnswer || 'Validated workflow YAML will appear here.'}
+          {askAiAnswer || '校验通过的 workflow YAML 会显示在这里。'}
         </pre>
       </div>
     </div>
@@ -4104,8 +4343,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-project-step"
         type="warning"
-        title="Next step: resolve the current project"
-        description="This workflow path only becomes a real project flow after Studio resolves the current project scope. Once resolved, save the asset, run the draft, then bind the project."
+        title="下一步：确认当前团队"
+        description="Studio 需要先绑定到当前团队，后续的保存、测试运行和发布入口才会真正落到这个团队里。"
         compact
       />,
     );
@@ -4114,8 +4353,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-draft-step"
         type="warning"
-        title="Next step: finish the workflow draft"
-        description="Add a workflow name and valid YAML first. Then save the asset before you run the draft or bind the project."
+        title="下一步：完成行为定义"
+        description="先补齐名称和有效 YAML，再继续保存、测试运行或发布团队入口。"
         compact
       />,
     );
@@ -4124,13 +4363,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-save-step"
         type="info"
-        title="Next step: Save asset"
-        description="Save stores this workflow as a named project asset. That keeps the project catalog in sync before you verify the draft or publish the default binding."
+        title="下一步：保存定义"
+        description="先把当前行为定义保存下来，再继续测试运行或发布团队入口。"
         compact
         action={
           <Space wrap>
             <Button type="primary" onClick={onSaveDraft} loading={savePending}>
-              Save asset
+              保存定义
             </Button>
           </Space>
         }
@@ -4141,8 +4380,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-run-step"
         type="success"
-        title="Next step: Run draft"
-        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the team entry so Invoke Lab can use the published entrypoint."
+        title="下一步：测试运行"
+        description="先验证当前草稿的运行结果，确认无误后再把它发布成团队默认入口。"
         compact
         action={
           <Space wrap>
@@ -4151,14 +4390,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               onClick={onRunInConsole}
               disabled={!canOpenRunWorkflow}
             >
-              Run draft
+              测试运行
             </Button>
             <Button
               onClick={onPublishWorkflow}
               loading={publishPending}
               disabled={!canPublishWorkflow}
             >
-              Bind team entry
+              发布团队入口
             </Button>
           </Space>
         }
@@ -4169,8 +4408,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-bind-step"
         type="warning"
-        title="Next step: Bind team entry"
-        description="The workflow asset is ready, but the current team still has no active default binding. Bind this workflow when you want the published team entrypoint to use it."
+        title="下一步：发布团队入口"
+        description="当前行为定义已经就绪，但团队还没有生效的默认入口。发布后，团队会从这个入口对外提供能力。"
         compact
         action={
           <Space wrap>
@@ -4180,9 +4419,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               loading={publishPending}
               disabled={!canPublishWorkflow}
             >
-              Bind team entry
+              发布团队入口
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Team Home</Button>
+            <Button onClick={onOpenProjectOverview}>返回团队详情</Button>
           </Space>
         }
       />,
@@ -4192,20 +4431,20 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-invoke-step"
         type="success"
-        title="Next step: Open Legacy Invoke Lab"
-        description="The default team binding is already active. Move to the legacy invoke lab to test the published entrypoint, then continue in Runs for the full event trace."
+        title="下一步：打开测试台"
+        description="当前团队默认入口已经生效，可以前往测试台验证对外入口，再回到测试运行查看完整执行轨迹。"
         compact
         action={
           <Space wrap>
             <Button type="primary" onClick={onOpenProjectInvoke}>
-              Open Legacy Invoke Lab
+              打开测试台
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Team Home</Button>
+            <Button onClick={onOpenProjectOverview}>返回团队详情</Button>
             <Button
               onClick={onRunInConsole}
               disabled={!canOpenRunWorkflow}
             >
-              Run draft
+              测试运行
             </Button>
           </Space>
         }
@@ -4220,8 +4459,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         type={saveNotice.type}
         title={
           saveNotice.type === 'success'
-            ? 'Workflow saved'
-            : 'Workflow save failed'
+            ? '定义已保存'
+            : '定义保存失败'
         }
         description={saveNotice.message}
         compact
@@ -4236,8 +4475,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         type={workflowImportNotice.type}
         title={
           workflowImportNotice.type === 'error'
-            ? 'Workflow import failed'
-            : 'Workflow imported'
+            ? '定义导入失败'
+            : '定义已导入'
         }
         description={workflowImportNotice.message}
         compact
@@ -4252,8 +4491,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         type={runNotice.type}
         title={
           runNotice.type === 'success'
-            ? 'Draft run ready'
-            : 'Draft run failed'
+            ? '测试运行已启动'
+            : '测试运行失败'
         }
         description={runNotice.message}
         compact
@@ -4268,8 +4507,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         type={publishNotice.type}
         title={
           publishNotice.type === 'error'
-            ? 'Scope binding failed'
-            : 'Scope binding updated'
+            ? '团队入口发布失败'
+            : '团队入口已更新'
         }
         description={publishNotice.message}
         compact
@@ -4294,24 +4533,34 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       compact
     />
   ) : null;
+  const inspectorPanelBody = (
+    <div
+      style={{
+        display: 'flex',
+        flex: 1,
+        flexDirection: 'column',
+        gap: 12,
+        minHeight: 0,
+        overflowY: 'auto',
+        padding: 12,
+      }}
+    >
+      <datalist id="studio-workflow-role-options">
+        {workflowRoleIds.map((roleId) => (
+          <option key={roleId} value={roleId} />
+        ))}
+      </datalist>
+      <datalist id="studio-workflow-step-options">
+        {workflowStepIds.map((stepId) => (
+          <option key={stepId} value={stepId} />
+        ))}
+      </datalist>
+      {inspectorContent}
+    </div>
+  );
 
   return (
     <div style={cardStackStyle}>
-      {editorStatusItems.length > 0 ? (
-        <div style={studioNoticeStripStyle}>{editorStatusItems}</div>
-      ) : null}
-
-      <StudioScopeBindingPanel
-        scopeId={resolvedScopeId}
-        binding={scopeBinding}
-        loading={scopeBindingLoading}
-        error={scopeBindingError}
-        pendingRevisionId={bindingActivationRevisionId}
-        pendingRetirementRevisionId={bindingRetirementRevisionId}
-        onActivateRevision={onActivateBindingRevision}
-        onRetireRevision={onRetireBindingRevision}
-      />
-
       {editorFatalNotice ? (
         <div style={studioNoticeStripStyle}>{editorFatalNotice}</div>
       ) : draftYaml ? (
@@ -4342,9 +4591,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 background: 'rgba(255,255,255,0.96)',
                 borderBottom: '1px solid #E8E2D9',
                 display: 'flex',
-                gap: 12,
+                gap: 16,
                 justifyContent: 'space-between',
-                padding: '14px 18px',
+                padding: '12px 16px',
               }}
             >
               <div
@@ -4352,16 +4601,10 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   alignItems: 'center',
                   display: 'flex',
                   flex: 1,
-                  gap: 12,
+                  gap: 10,
                   minWidth: 0,
                 }}
               >
-                <Space.Compact>
-                  <Button type="primary" onClick={() => onSwitchStudioView('editor')}>
-                    Edit
-                  </Button>
-                  <Button onClick={() => onSwitchStudioView('execution')}>Runs</Button>
-                </Space.Compact>
                 <div style={studioTitleBarStyle}>
                   <div style={studioTitleGroupStyle}>
                     <input
@@ -4422,110 +4665,34 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 style={{
                   alignItems: 'center',
                   display: 'flex',
-                  gap: 10,
+                  gap: 8,
                   justifyContent: 'flex-end',
                   minWidth: 0,
                 }}
               >
                 <Button
+                  size="small"
                   icon={<AppstoreOutlined />}
                   onClick={() => setToolDrawerMode('palette')}
                 >
-                  Add node
+                  添加步骤
                 </Button>
                 <Button
+                  size="small"
                   icon={<RobotOutlined />}
                   type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
                   onClick={() => setToolDrawerMode('ask-ai')}
                 >
-                  Ask AI
+                  AI 辅助
                 </Button>
                 <Button
-                  icon={<BarsOutlined />}
-                  onClick={onRunInConsole}
-                  disabled={!resolvedScopeId}
-                >
-                  Run draft
-                </Button>
-                <Button
+                  size="small"
                   icon={<RobotOutlined />}
                   onClick={openGAgentModal}
                   disabled={!resolvedScopeId}
                 >
-                  GAgent service
+                  绑定 GAgent
                 </Button>
-                <Button
-                  icon={<SafetyCertificateOutlined />}
-                  loading={publishPending}
-                  disabled={!canPublishWorkflow}
-                  onClick={onPublishWorkflow}
-                >
-                  Bind team entry
-                </Button>
-                <Button
-                  type="text"
-                  shape="circle"
-                  icon={<CheckOutlined />}
-                  loading={savePending}
-                  disabled={!canSaveWorkflow}
-                  onClick={onSaveDraft}
-                  aria-label="Save"
-                  title="Save"
-                />
-                <Button
-                  type="text"
-                  shape="circle"
-                  icon={<UploadOutlined />}
-                  onClick={onExportDraft}
-                  aria-label="Export"
-                  title="Export"
-                />
-                <Button
-                  type="primary"
-                  shape="circle"
-                  icon={<CaretRightFilled />}
-                  disabled={!canOpenRunWorkflow}
-                  onClick={() => setRunModalOpen(true)}
-                  aria-label="Run"
-                  title="Run"
-                />
-              </div>
-            </div>
-
-            <div style={{ padding: '12px 12px 0' }}>
-              <div style={studioStatusStripStyle}>
-                <div style={studioStatusPillStyle}>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    Active directory
-                  </Typography.Text>
-                  <Typography.Text strong ellipsis={{ tooltip: activeDirectoryLabel }}>
-                    {activeDirectoryLabel}
-                  </Typography.Text>
-                </div>
-                <div style={studioStatusPillStyle}>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    Graph
-                  </Typography.Text>
-                  <Typography.Text strong>
-                    {workflowGraph.nodes.length} nodes · {workflowGraph.edges.length}{' '}
-                    edges
-                  </Typography.Text>
-                </div>
-                <div style={studioStatusPillStyle}>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    Draft state
-                  </Typography.Text>
-                  <Space wrap size={[6, 6]}>
-                    <Tag color={isDraftDirty ? 'warning' : 'success'}>
-                      {isDraftDirty ? 'Unsaved changes' : 'In sync'}
-                    </Tag>
-                    {selectedGraphNodeId ? (
-                      <Typography.Text type="secondary">
-                        Selected: {selectedGraphNodeId}
-                      </Typography.Text>
-                    ) : null}
-                  </Space>
-                </div>
               </div>
             </div>
 
@@ -4535,148 +4702,288 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 flex: 1,
                 minHeight: 0,
                 padding: 12,
+                gap: 12,
               }}
             >
               <div
-                style={studioCanvasViewportStyle}
+                style={{
+                  background: '#FAFAFA',
+                  border: '1px solid #E8E2D9',
+                  borderRadius: 24,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flexShrink: 0,
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  width: 220,
+                }}
               >
                 <div
                   style={{
                     alignItems: 'center',
+                    borderBottom: '1px solid #E8E2D9',
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: 10,
-                    position: 'absolute',
-                    right: 16,
-                    top: 16,
-                    zIndex: 4,
+                    justifyContent: 'space-between',
+                    padding: '12px 14px',
                   }}
                 >
-                  <Button
-                    shape="circle"
-                    icon={<UserOutlined />}
-                    onClick={() => {
-                      onSetInspectorTab('roles');
-                      setInspectorDrawerOpen(true);
-                    }}
-                    type={inspectorTab === 'roles' && inspectorDrawerOpen ? 'primary' : 'default'}
-                    aria-label="Open roles inspector"
-                    title="Roles"
-                    style={{ height: 40, width: 40 }}
-                  />
-                  <Button
-                    shape="circle"
-                    icon={<CodeOutlined />}
-                    onClick={() => {
-                      onSetInspectorTab('yaml');
-                      setInspectorDrawerOpen(true);
-                    }}
-                    type={inspectorTab === 'yaml' && inspectorDrawerOpen ? 'primary' : 'default'}
-                    aria-label="Open YAML inspector"
-                    title="YAML"
-                    style={{ height: 40, width: 40 }}
-                  />
+                  <Typography.Text strong>行为定义</Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {visibleWorkflowDefinitions.length}
+                  </Typography.Text>
                 </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flex: 1,
+                    flexDirection: 'column',
+                    minHeight: 0,
+                    overflowY: 'auto',
+                  }}
+                >
+                  {workflows.isLoading ? (
+                    <div style={{ padding: 14 }}>
+                      <Typography.Text type="secondary">
+                        正在加载行为定义...
+                      </Typography.Text>
+                    </div>
+                  ) : workflows.isError ? (
+                    <div style={{ padding: 14 }}>
+                      <Typography.Text type="danger">
+                        行为定义加载失败
+                      </Typography.Text>
+                    </div>
+                  ) : visibleWorkflowDefinitions.length > 0 ? (
+                    visibleWorkflowDefinitions.map((workflow) => {
+                      const active = workflow.workflowId === selectedWorkflowId;
+                      return (
+                        <button
+                          key={workflow.workflowId}
+                          type="button"
+                          onClick={() => onOpenWorkflow(workflow.workflowId)}
+                          style={{
+                            background: active ? '#E6F7FF' : 'transparent',
+                            border: 'none',
+                            borderLeft: active ? '3px solid #1890FF' : '3px solid transparent',
+                            borderTop: '1px solid #F0F0F0',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 4,
+                            padding: '10px 14px 10px 12px',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <Typography.Text strong ellipsis={{ tooltip: workflow.name }}>
+                            {workflow.name}
+                          </Typography.Text>
+                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                            {workflow.stepCount} 步骤 ·{' '}
+                            {formatDateTime(workflow.updatedAtUtc) || '刚刚更新'}
+                          </Typography.Text>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div style={{ padding: 14 }}>
+                      <Typography.Text type="secondary">
+                        当前还没有可编辑的行为定义。
+                      </Typography.Text>
+                    </div>
+                  )}
+                </div>
+                <div
+                  style={{
+                    borderTop: '1px solid #E8E2D9',
+                    padding: 12,
+                  }}
+                >
+                  <Button block onClick={onStartBlankDraft}>
+                    + 新建定义
+                  </Button>
+                </div>
+              </div>
 
-                {selectedGraphEdge ? (
-                  <div
-                    style={{
-                      bottom: 24,
-                      left: 24,
-                      position: 'absolute',
-                      zIndex: 2,
-                    }}
-                  >
+              <div
+                style={{
+                  display: 'flex',
+                  flex: 1,
+                  gap: 12,
+                  minWidth: 0,
+                }}
+              >
+                <div
+                  style={{
+                    ...studioCanvasViewportStyle,
+                    flex: 1,
+                    minWidth: 0,
+                  }}
+                >
+                  {selectedGraphEdge ? (
                     <div
                       style={{
-                        backdropFilter: 'blur(12px)',
-                        background: 'rgba(255, 255, 255, 0.96)',
-                        border: '1px solid #E8E2D9',
-                        borderRadius: 20,
-                        boxShadow: '0 14px 32px rgba(17, 24, 39, 0.10)',
-                        maxWidth: 320,
-                        padding: '12px 14px',
+                        bottom: 24,
+                        left: 24,
+                        position: 'absolute',
+                        zIndex: 2,
                       }}
                     >
                       <div style={cardStackStyle}>
-                        <Typography.Text strong>Connection selected</Typography.Text>
-                        <Typography.Text type="secondary">
-                          {selectedGraphEdge.branchLabel
-                            ? `${selectedGraphEdge.sourceStepId} -> ${selectedGraphEdge.targetStepId} (${selectedGraphEdge.branchLabel})`
-                            : `${selectedGraphEdge.sourceStepId} -> ${selectedGraphEdge.targetStepId}`}
-                        </Typography.Text>
-                        <Space wrap size={[8, 8]}>
-                          <Tag color={selectedGraphEdge.kind === 'branch' ? 'purple' : 'processing'}>
-                            {selectedGraphEdge.kind === 'branch' ? 'branch' : 'next'}
-                          </Tag>
-                          {selectedGraphEdge.implicit ? <Tag>auto-flow</Tag> : null}
-                          <Button
-                            danger
-                            size="small"
-                            disabled={selectedGraphEdge.implicit}
-                            onClick={onDeleteSelectedGraphEdge}
-                          >
-                            Remove connection
-                          </Button>
-                        </Space>
+                        <div
+                          style={{
+                            backdropFilter: 'blur(12px)',
+                            background: 'rgba(255, 255, 255, 0.96)',
+                            border: '1px solid #E8E2D9',
+                            borderRadius: 20,
+                            boxShadow: '0 14px 32px rgba(17, 24, 39, 0.10)',
+                            maxWidth: 320,
+                            padding: '12px 14px',
+                          }}
+                        >
+                          <div style={cardStackStyle}>
+                            <Typography.Text strong>Connection selected</Typography.Text>
+                            <Typography.Text type="secondary">
+                              {selectedGraphEdge.branchLabel
+                                ? `${selectedGraphEdge.sourceStepId} -> ${selectedGraphEdge.targetStepId} (${selectedGraphEdge.branchLabel})`
+                                : `${selectedGraphEdge.sourceStepId} -> ${selectedGraphEdge.targetStepId}`}
+                            </Typography.Text>
+                            <Space wrap size={[8, 8]}>
+                              <Tag color={selectedGraphEdge.kind === 'branch' ? 'purple' : 'processing'}>
+                                {selectedGraphEdge.kind === 'branch' ? 'branch' : 'next'}
+                              </Tag>
+                              {selectedGraphEdge.implicit ? <Tag>auto-flow</Tag> : null}
+                              <Button
+                                danger
+                                size="small"
+                                disabled={selectedGraphEdge.implicit}
+                                onClick={onDeleteSelectedGraphEdge}
+                              >
+                                Remove connection
+                              </Button>
+                            </Space>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
 
-                {workflowGraph.nodes.length === 0 ? (
+                  {workflowGraph.nodes.length === 0 ? (
+                    <div
+                      style={{
+                        alignItems: 'center',
+                        color: '#6B7280',
+                        display: 'flex',
+                        inset: 12,
+                        justifyContent: 'center',
+                        pointerEvents: 'none',
+                        position: 'absolute',
+                        textAlign: 'center',
+                        zIndex: 1,
+                      }}
+                    >
+                      <div>
+                        <Typography.Text strong style={{ display: 'block' }}>
+                          This workflow has no steps yet.
+                        </Typography.Text>
+                        <Typography.Text type="secondary">
+                          Right click the canvas to place the first workflow step.
+                        </Typography.Text>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <GraphCanvas
+                    nodes={workflowGraph.nodes}
+                    edges={workflowGraph.edges}
+                    height="calc(100vh - 278px)"
+                    variant="studio"
+                    selectedNodeId={selectedGraphNodeId}
+                    selectedEdgeId={selectedGraphEdge?.edgeId}
+                    onNodeSelect={(nodeId) => {
+                      onSelectGraphNode(nodeId);
+                    }}
+                    onEdgeSelect={(edgeId) => {
+                      onSelectGraphEdge(edgeId);
+                    }}
+                    onCanvasSelect={() => {
+                      onClearGraphSelection();
+                    }}
+                    onCanvasContextMenu={({ flowX, flowY }) => {
+                      setPendingAddPosition({
+                        x: flowX,
+                        y: flowY,
+                      });
+                      setToolDrawerMode('palette');
+                    }}
+                    onConnectNodes={onConnectGraphNodes}
+                    onNodeLayoutChange={onUpdateGraphLayout}
+                  />
+                </div>
+
+                <div
+                  style={{
+                    background: '#FFFFFF',
+                    border: '1px solid #E8E2D9',
+                    borderRadius: 24,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    flexShrink: 0,
+                    minHeight: 0,
+                    overflow: 'hidden',
+                    width: 320,
+                  }}
+                >
                   <div
                     style={{
-                      alignItems: 'center',
-                      color: '#6B7280',
-                      display: 'flex',
-                      inset: 12,
-                      justifyContent: 'center',
-                      pointerEvents: 'none',
-                      position: 'absolute',
-                      textAlign: 'center',
-                      zIndex: 1,
+                      borderBottom: '1px solid #F0F0F0',
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, 1fr)',
                     }}
                   >
-                    <div>
-                      <Typography.Text strong style={{ display: 'block' }}>
-                        This workflow has no steps yet.
-                      </Typography.Text>
-                      <Typography.Text type="secondary">
-                        Right click the canvas to place the first workflow step.
-                      </Typography.Text>
-                    </div>
+                    {[
+                      { label: '步骤属性', value: 'node' as const },
+                      { label: '角色', value: 'roles' as const },
+                      { label: 'YAML', value: 'yaml' as const },
+                    ].map((item) => {
+                      const active = inspectorTab === item.value;
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          onClick={() => onSetInspectorTab(item.value)}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            borderBottom: `2px solid ${active ? '#1890FF' : 'transparent'}`,
+                            color: active ? '#1890FF' : '#8C8C8C',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            padding: '10px 0',
+                          }}
+                        >
+                          {item.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                ) : null}
-
-                <GraphCanvas
-                  nodes={workflowGraph.nodes}
-                  edges={workflowGraph.edges}
-                  height="calc(100vh - 278px)"
-                  variant="studio"
-                  selectedNodeId={selectedGraphNodeId}
-                  selectedEdgeId={selectedGraphEdge?.edgeId}
-                  onNodeSelect={(nodeId) => {
-                    setInspectorDrawerOpen(true);
-                    onSelectGraphNode(nodeId);
-                  }}
-                  onEdgeSelect={(edgeId) => {
-                    onSelectGraphEdge(edgeId);
-                  }}
-                  onCanvasSelect={() => {
-                    onClearGraphSelection();
-                  }}
-                  onCanvasContextMenu={({ flowX, flowY }) => {
-                    setPendingAddPosition({
-                      x: flowX,
-                      y: flowY,
-                    });
-                    setToolDrawerMode('palette');
-                  }}
-                  onConnectNodes={onConnectGraphNodes}
-                  onNodeLayoutChange={onUpdateGraphLayout}
-                />
-
+                  <div
+                    style={{
+                      borderBottom: '1px solid #F5F5F5',
+                      padding: '10px 12px',
+                    }}
+                  >
+                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                      {inspectorTab === 'node'
+                        ? hasSelectedGraphNode
+                          ? `选中: ${selectedGraphNodeId}`
+                          : '选择一个步骤后可在这里编辑属性'
+                        : inspectorTab === 'roles'
+                          ? '管理当前 workflow 的 Agent 角色'
+                          : '查看和校验当前 YAML'}
+                    </Typography.Text>
+                  </div>
+                  {inspectorPanelBody}
+                </div>
               </div>
             </div>
           </div>
@@ -4698,33 +5005,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
             </div>
           </Drawer>
 
-          <Drawer
-            open={inspectorDrawerVisible}
-            title={inspectorDrawerTitle}
-            placement="right"
-            size={420}
-            onClose={() => setInspectorDrawerOpen(false)}
-            destroyOnClose={false}
-            styles={{ body: drawerBodyStyle }}
-          >
-            <div style={drawerScrollStyle}>
-              <datalist id="studio-workflow-role-options">
-                {workflowRoleIds.map((roleId) => (
-                  <option key={roleId} value={roleId} />
-                ))}
-              </datalist>
-              <datalist id="studio-workflow-step-options">
-                {workflowStepIds.map((stepId) => (
-                  <option key={stepId} value={stepId} />
-                ))}
-              </datalist>
-              {inspectorContent}
-            </div>
-          </Drawer>
-
           <Modal
             open={gAgentModalOpen}
-            title="Bind GAgent service"
+            title="绑定 GAgent 服务"
             onCancel={() => setGAgentModalOpen(false)}
             footer={[
               <Button
@@ -4732,7 +5015,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 onClick={() => setGAgentModalOpen(false)}
                 disabled={gAgentBindingPending}
               >
-                Cancel
+                取消
               </Button>,
               <Button
                 key="bind"
@@ -4740,7 +5023,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 loading={gAgentBindingPending}
                 disabled={!resolvedScopeId}
               >
-                Bind
+                仅绑定
               </Button>,
               <Button
                 key="bind-open-runs"
@@ -4749,17 +5032,17 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 loading={gAgentBindingPending}
                 disabled={!resolvedScopeId}
               >
-                Bind + Open Runs
+                绑定并打开测试运行
               </Button>,
             ]}
           >
             <div style={cardStackStyle}>
               <Typography.Text type="secondary">
-                Bind the scope default service directly to a static GAgent and optionally open the runtime runs workbench for the configured endpoint.
+                把当前团队默认入口直接绑定到静态 GAgent，并在需要时为选中的服务入口打开测试运行页面。
               </Typography.Text>
               <Input
-                aria-label="GAgent display name"
-                placeholder="Display name"
+                aria-label="GAgent 展示名称"
+                placeholder="展示名称"
                 value={gAgentDraft.displayName}
                 onChange={(event) =>
                   setGAgentDraft((current) => ({
@@ -4769,15 +5052,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 }
               />
               <Select
-                aria-label="Discovered GAgent type"
+                aria-label="已发现 GAgent 类型"
                 showSearch
                 style={{ width: '100%' }}
                 placeholder={
                   gAgentTypesLoading
-                    ? 'Loading discovered GAgent types'
+                    ? '正在读取可绑定的 GAgent 类型'
                     : gAgentTypes.length > 0
-                    ? 'Select a discovered GAgent type'
-                    : 'No discovered GAgent types available'
+                      ? '选择一个已发现的 GAgent 类型'
+                      : '当前没有可绑定的 GAgent 类型'
                 }
                 value={
                   selectedDiscoveredGAgentType
@@ -4790,7 +5073,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   label: buildRuntimeGAgentTypeLabel(descriptor),
                 }))}
                 notFoundContent={
-                  gAgentTypesLoading ? 'Loading GAgent types...' : 'No GAgent types found.'
+                  gAgentTypesLoading ? '正在读取 GAgent 类型...' : '没有找到 GAgent 类型。'
                 }
                 onChange={(value) =>
                   setGAgentDraft((current) => ({
@@ -4805,12 +5088,12 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 </Typography.Text>
               ) : (
                 <Typography.Text type="secondary">
-                  Studio discovers bindable GAgent types from the runtime capability endpoint and fills the actor type contract for you.
+                  Studio 会从运行时能力接口中发现可绑定的 GAgent 类型，并自动填充 Actor 类型契约。
                 </Typography.Text>
               )}
               <Input
-                aria-label="GAgent actor type name"
-                placeholder="Assembly-qualified actor type name"
+                aria-label="GAgent Actor 类型"
+                placeholder="程序集限定 Actor 类型名"
                 value={gAgentDraft.actorTypeName}
                 onChange={(event) =>
                   setGAgentDraft((current) => ({
@@ -4819,7 +5102,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   }))
                 }
               />
-              <Divider style={{ marginBlock: 8 }}>Endpoints</Divider>
+              <Divider style={{ marginBlock: 8 }}>服务入口</Divider>
               <Space
                 direction="vertical"
                 size={12}
@@ -4834,14 +5117,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   }}
                 >
                   <Typography.Text type="secondary">
-                    Add one or more GAgent endpoints, then choose which endpoint
-                    Runs should open after binding.
+                    添加一个或多个 GAgent 服务入口，然后选择绑定后默认打开哪个测试运行入口。
                   </Typography.Text>
                   <Button
                     icon={<PlusOutlined />}
                     onClick={() => addGAgentEndpointDraft()}
                   >
-                    Add endpoint
+                    添加入口
                   </Button>
                 </div>
                 {gAgentDraft.endpoints.map((endpoint, endpointIndex) => (
@@ -4864,7 +5146,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }}
                     >
                       <Typography.Text strong>
-                        Endpoint {endpointIndex + 1}
+                        入口 {endpointIndex + 1}
                       </Typography.Text>
                       <Button
                         danger
@@ -4874,12 +5156,12 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                           removeGAgentEndpointDraft(endpointIndex)
                         }
                       >
-                        Remove
+                        删除
                       </Button>
                     </div>
                     <Input
-                      aria-label={`GAgent endpoint id ${endpointIndex + 1}`}
-                      placeholder="Endpoint ID"
+                      aria-label={`GAgent 入口 ID ${endpointIndex + 1}`}
+                      placeholder="入口 ID"
                       value={endpoint.endpointId}
                       onChange={(event) =>
                         updateGAgentEndpointDraft(endpointIndex, {
@@ -4888,8 +5170,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input
-                      aria-label={`GAgent endpoint display name ${endpointIndex + 1}`}
-                      placeholder="Endpoint display name"
+                      aria-label={`GAgent 入口展示名 ${endpointIndex + 1}`}
+                      placeholder="入口展示名称"
                       value={endpoint.displayName}
                       onChange={(event) =>
                         updateGAgentEndpointDraft(endpointIndex, {
@@ -4898,14 +5180,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Select
-                      aria-label={`GAgent endpoint kind ${endpointIndex + 1}`}
+                      aria-label={`GAgent 入口类型 ${endpointIndex + 1}`}
                       options={[
                         {
-                          label: 'Command endpoint',
+                          label: '命令入口',
                           value: 'command',
                         },
                         {
-                          label: 'Chat endpoint',
+                          label: '聊天入口',
                           value: 'chat',
                         },
                       ]}
@@ -4917,8 +5199,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input
-                      aria-label={`GAgent request type URL ${endpointIndex + 1}`}
-                      placeholder="Request type URL"
+                      aria-label={`GAgent 请求类型 URL ${endpointIndex + 1}`}
+                      placeholder="请求类型 URL"
                       value={endpoint.requestTypeUrl}
                       onChange={(event) =>
                         updateGAgentEndpointDraft(endpointIndex, {
@@ -4927,8 +5209,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input
-                      aria-label={`GAgent response type URL ${endpointIndex + 1}`}
-                      placeholder="Response type URL (optional)"
+                      aria-label={`GAgent 响应类型 URL ${endpointIndex + 1}`}
+                      placeholder="响应类型 URL（可选）"
                       value={endpoint.responseTypeUrl}
                       onChange={(event) =>
                         updateGAgentEndpointDraft(endpointIndex, {
@@ -4937,9 +5219,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                       }
                     />
                     <Input.TextArea
-                      aria-label={`GAgent endpoint description ${endpointIndex + 1}`}
+                      aria-label={`GAgent 入口说明 ${endpointIndex + 1}`}
                       autoSize={{ minRows: 2, maxRows: 4 }}
-                      placeholder="Endpoint description"
+                      placeholder="入口说明"
                       value={endpoint.description}
                       onChange={(event) =>
                         updateGAgentEndpointDraft(endpointIndex, {
@@ -4951,9 +5233,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 ))}
               </Space>
               <Select
-                aria-label="GAgent runs endpoint"
+                aria-label="测试运行默认入口"
                 style={{ width: '100%' }}
-                placeholder="Choose the endpoint that Runs should open"
+                placeholder="选择绑定后默认打开的测试运行入口"
                 value={selectedOpenRunsEndpoint?.endpointId || undefined}
                 options={launchableGAgentEndpoints.map((endpoint) => ({
                   value: endpoint.endpointId,
@@ -4961,7 +5243,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                     endpoint.displayName.trim() || endpoint.endpointId.trim()
                   } (${endpoint.kind})`,
                 }))}
-                notFoundContent="Enter an endpoint ID to enable Runs launch."
+                notFoundContent="先填写入口 ID，才能启用测试运行跳转。"
                 onChange={(value) =>
                   setGAgentDraft((current) => ({
                     ...current,
@@ -4971,14 +5253,14 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               />
               <Typography.Text type="secondary">
                 {selectedOpenRunsEndpoint?.kind === 'chat'
-                  ? 'Runs currently recognizes direct chat launches through the special "chat" endpoint id.'
-                  : 'Command endpoints can pass either a text prompt or a custom payload draft into Runs.'}
+                  ? '测试运行目前会通过特殊的 “chat” 入口 ID 直接打开聊天类入口。'
+                  : '命令入口可以把一段文本提示，或者一份自定义载荷草稿带入测试运行。'}
               </Typography.Text>
               <Divider style={{ marginBlock: 8 }} />
               <Input.TextArea
-                aria-label="GAgent run prompt"
+                aria-label="测试运行默认提示词"
                 autoSize={{ minRows: 4, maxRows: 8 }}
-                placeholder="Prompt for the runtime runs console"
+                placeholder="测试运行默认提示词"
                 value={gAgentDraft.prompt}
                 onChange={(event) =>
                   setGAgentDraft((current) => ({
@@ -4988,9 +5270,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                 }
               />
               <Input.TextArea
-                aria-label="GAgent payload base64"
+                aria-label="GAgent 载荷 Base64"
                 autoSize={{ minRows: 3, maxRows: 6 }}
-                placeholder="Payload base64 for custom request types (optional)"
+                placeholder="自定义请求类型的 Base64 载荷（可选）"
                 value={gAgentDraft.payloadBase64}
                 onChange={(event) =>
                   setGAgentDraft((current) => ({
@@ -5004,13 +5286,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
 
           <Modal
             open={runModalOpen}
-            title="Test run"
+            title="测试运行"
             onCancel={() => setRunModalOpen(false)}
             onOk={() => {
               void onStartExecution();
               setRunModalOpen(false);
             }}
-            okText="Open runtime runs"
+            okText="打开测试运行"
             okButtonProps={{
               disabled: !canRunWorkflow,
               loading: runPending,
@@ -5019,17 +5301,32 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           >
             <div style={cardStackStyle}>
               <Typography.Text type="secondary">
-                Studio will open the runtime runs console and execute this draft through <Typography.Text code>/api/scopes/{'{scopeId}'}/workflow/draft-run</Typography.Text>.
+                Studio 会打开测试运行页面，并通过 <Typography.Text code>/api/scopes/{'{scopeId}'}/workflow/draft-run</Typography.Text> 执行当前草稿。
               </Typography.Text>
               <Input.TextArea
-                aria-label="Studio execution prompt"
+                aria-label="Studio 测试运行输入"
                 autoSize={{ minRows: 6, maxRows: 10 }}
-                placeholder="What should this run do?"
+                placeholder="这次运行要做什么？"
                 value={runPrompt}
                 onChange={(event) => onRunPromptChange(event.target.value)}
               />
             </div>
           </Modal>
+
+          {editorStatusItems.length > 0 ? (
+            <div style={studioNoticeStripStyle}>{editorStatusItems}</div>
+          ) : null}
+
+          <StudioScopeBindingPanel
+            scopeId={resolvedScopeId}
+            binding={scopeBinding}
+            loading={scopeBindingLoading}
+            error={scopeBindingError}
+            pendingRevisionId={bindingActivationRevisionId}
+            pendingRetirementRevisionId={bindingRetirementRevisionId}
+            onActivateRevision={onActivateBindingRevision}
+            onRetireRevision={onRetireBindingRevision}
+          />
         </>
       ) : (
         <Empty

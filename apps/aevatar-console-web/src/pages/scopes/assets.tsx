@@ -534,7 +534,7 @@ const TeamAssetsPage: React.FC = () => {
       },
       title: {
         render: (_, record) => (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text
               strong
               style={{ color: surfaceToken.colorTextHeading, fontSize: 15 }}
@@ -650,7 +650,7 @@ const TeamAssetsPage: React.FC = () => {
       },
       title: {
         render: (_, record) => (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text
               strong
               style={{ color: surfaceToken.colorTextHeading, fontSize: 15 }}
@@ -857,7 +857,7 @@ const TeamAssetsPage: React.FC = () => {
                   padding: "16px 18px 0",
                 }}
               >
-                <Space direction="vertical" size={2}>
+                <Space orientation="vertical" size={2}>
                   <Typography.Text
                     strong
                     style={{ color: surfaceToken.colorTextHeading, fontSize: 16 }}

@@ -287,8 +287,10 @@ public sealed class NyxIdApiClient
     public Task<string> VerifyChannelBotAsync(string token, string id, CancellationToken ct) =>
         PostAsync(token, $"/api/v1/channel-bots/{Uri.EscapeDataString(id)}/verify", "{}", ct);
 
-    public Task<string> ListConversationRoutesAsync(string token, CancellationToken ct) =>
-        GetAsync(token, "/api/v1/channel-conversations", ct);
+    public Task<string> ListConversationRoutesAsync(string token, string? botId, CancellationToken ct) =>
+        GetAsync(token, string.IsNullOrWhiteSpace(botId)
+            ? "/api/v1/channel-conversations"
+            : $"/api/v1/channel-conversations?bot_id={Uri.EscapeDataString(botId)}", ct);
 
     public Task<string> GetConversationRouteAsync(string token, string id, CancellationToken ct) =>
         GetAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);

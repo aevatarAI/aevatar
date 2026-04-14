@@ -30,6 +30,7 @@ describe("AccountSettingsPage", () => {
 
     renderWithQueryClient(React.createElement(AccountSettingsPage));
 
+    expect(await screen.findByText("Aevatar / Settings")).toBeTruthy();
     expect(await screen.findByText("Settings")).toBeTruthy();
     expect(screen.getByText("Operator Account")).toBeTruthy();
     expect(screen.getAllByText("Ada Lovelace")).toHaveLength(2);

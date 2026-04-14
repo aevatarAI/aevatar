@@ -536,8 +536,21 @@ public class RoleGAgent : AIGAgentBase<RoleGAgentState>, IRoleAgent
             await ScheduleApprovalTimeoutAsync(pendingApproval);
         }
 
-        await PersistSessionCompletionAsync(request, replayRecord);
+        // Publish first so consumers (relay, SSE) get the response immediately.
+        // Persist is best-effort: concurrency conflicts must not block the reply.
         await PublishCompletionAsync(request.SessionId, replayRecord.Content);
+
+        try
+        {
+            await PersistSessionCompletionAsync(request, replayRecord);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex,
+                "[{Role}] Failed to persist session completion. session={SessionId}. " +
+                "Response was already published — session replay may be unavailable.",
+                RoleName, request.SessionId);
+        }
     }
 
     private static int ResolveLlmTimeoutMs(ChatRequestEvent request)
