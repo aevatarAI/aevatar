@@ -2,6 +2,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Events;
+using Aevatar.Foundation.VoicePresence.Transport;
 using Google.Protobuf;
 using Google.Protobuf.Reflection;
 using Google.Protobuf.WellKnownTypes;
@@ -71,6 +72,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     public bool IsInitialized { get; private set; }
 
     public bool IsTransportAttached => _userTransport != null;
+
+    public int PcmSampleRateHz =>
+        _sessionConfig is { SampleRateHz: > 0 }
+            ? _sessionConfig.SampleRateHz
+            : WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz;
 
     // ── IEventModule ──────────────────────────────────────────
 

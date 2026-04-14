@@ -28,7 +28,7 @@ namespace Aevatar.Foundation.Core;
 /// Stateless GAgent base class with unified event pipeline, module management,
 /// and dual hook channels (virtual methods + IGAgentExecutionHook pipeline).
 /// </summary>
-public abstract class GAgentBase : IAgent
+public abstract class GAgentBase : IAgent, IEventModuleContainer<IEventHandlerContext>
 {
     private EventHandlerMetadata[]? _staticHandlers;
     private volatile IEventModule<IEventHandlerContext>[] _modules = [];

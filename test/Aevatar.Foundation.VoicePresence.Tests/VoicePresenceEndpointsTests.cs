@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Shouldly;
 
@@ -23,6 +24,27 @@ public class VoicePresenceEndpointsTests
         var route = GetVoiceEndpoint(app);
 
         route.RoutePattern.RawText.ShouldBe("/voice/{actorId}");
+    }
+
+    [Fact]
+    public async Task Request_should_resolve_session_from_registered_service()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+
+        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
+        using var app = CreateApp(resolver);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+        context.RequestAborted = cts.Token;
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        resolver.RequestedActorIds.ShouldContain("agent-1");
     }
 
     [Fact]
@@ -145,6 +167,18 @@ public class VoicePresenceEndpointsTests
         return app;
     }
 
+    private static WebApplication CreateApp(IVoicePresenceSessionResolver resolver)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.Services.AddSingleton(resolver);
+        var app = builder.Build();
+        app.MapVoicePresenceWebSocket("/voice/{actorId}");
+        return app;
+    }
+
     private static RouteEndpoint GetVoiceEndpoint(WebApplication app) =>
         ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -264,6 +298,17 @@ public class VoicePresenceEndpointsTests
         {
             Disposed = true;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
+    {
+        public List<string> RequestedActorIds { get; } = [];
+
+        public Task<VoicePresenceSession?> ResolveAsync(string actorId, CancellationToken ct = default)
+        {
+            RequestedActorIds.Add(actorId);
+            return Task.FromResult(session);
         }
     }
 }

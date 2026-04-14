@@ -17,6 +17,7 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.Abstractions.Connectors;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -158,6 +159,8 @@ public class AIFeatureBootstrapCoverageTests
         var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
             .OfType<VoicePresenceModuleFactory>()
             .Single();
+        provider.GetRequiredService<IVoicePresenceSessionResolver>()
+            .Should().BeOfType<InProcessActorVoicePresenceSessionResolver>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();

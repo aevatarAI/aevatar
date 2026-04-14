@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Shouldly;
 
@@ -21,6 +22,28 @@ public class VoicePresenceWhipEndpointsTests
 
         GetWhipEndpoint(app, HttpMethods.Post).RoutePattern.RawText.ShouldStartWith("/voice/webrtc/{actorId}");
         GetWhipEndpoint(app, HttpMethods.Delete).RoutePattern.RawText.ShouldStartWith("/voice/webrtc/{actorId}");
+    }
+
+    [Fact]
+    public async Task Post_should_resolve_session_from_registered_service()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+
+        var transport = new StubVoiceTransport();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "answer", completion.Task));
+        using var app = CreateApp(resolver, factory);
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
+
+        resolver.RequestedActorIds.ShouldContain("agent-1");
+
+        completion.SetResult();
+        await transport.DisposedTask.Task;
     }
 
     [Fact]
@@ -156,6 +179,20 @@ public class VoicePresenceWhipEndpointsTests
         return app;
     }
 
+    private static WebApplication CreateApp(
+        IVoicePresenceSessionResolver resolver,
+        IWebRtcVoiceTransportFactory? transportFactory = null)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development,
+        });
+        builder.Services.AddSingleton(resolver);
+        var app = builder.Build();
+        app.MapVoicePresenceWhip("/voice/webrtc/{actorId}", transportFactory);
+        return app;
+    }
+
     private static RouteEndpoint GetWhipEndpoint(WebApplication app, string method) =>
         ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(x => x.Endpoints)
@@ -253,6 +290,17 @@ public class VoicePresenceWhipEndpointsTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
+    {
+        public List<string> RequestedActorIds { get; } = [];
+
+        public Task<VoicePresenceSession?> ResolveAsync(string actorId, CancellationToken ct = default)
+        {
+            RequestedActorIds.Add(actorId);
+            return Task.FromResult(session);
+        }
     }
 
     private sealed class StubVoiceTransport : IVoiceTransport

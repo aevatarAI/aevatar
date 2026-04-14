@@ -7,6 +7,7 @@ using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
 
@@ -24,6 +25,13 @@ public sealed record VoicePresenceSession(
 /// </summary>
 public static class VoicePresenceEndpoints
 {
+    public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
+        this IEndpointRouteBuilder endpoints,
+        string pattern) =>
+        endpoints.MapVoicePresenceWebSocket(
+            pattern,
+            static (actorId, ctx) => ResolveSessionFromServicesAsync(ctx, actorId));
+
     /// <summary>
     /// Maps a WebSocket endpoint that bridges user audio to a voice-enabled GAgent.
     /// <para>
@@ -100,6 +108,19 @@ public static class VoicePresenceEndpoints
             }
         });
     }
+
+    /// <summary>
+    /// Maps a minimal WHIP-compatible endpoint for browser WebRTC voice sessions.
+    /// Audio uses RTP/Opus and control frames use a WebRTC data channel.
+    /// </summary>
+    public static IEndpointConventionBuilder MapVoicePresenceWhip(
+        this IEndpointRouteBuilder endpoints,
+        string pattern,
+        IWebRtcVoiceTransportFactory? transportFactory = null) =>
+        endpoints.MapVoicePresenceWhip(
+            pattern,
+            static (actorId, ctx) => ResolveSessionFromServicesAsync(ctx, actorId),
+            transportFactory);
 
     /// <summary>
     /// Maps a minimal WHIP-compatible endpoint for browser WebRTC voice sessions.
@@ -207,6 +228,14 @@ public static class VoicePresenceEndpoints
         });
 
         return group;
+    }
+
+    private static Task<VoicePresenceSession?> ResolveSessionFromServicesAsync(
+        HttpContext ctx,
+        string actorId)
+    {
+        var resolver = ctx.RequestServices.GetRequiredService<IVoicePresenceSessionResolver>();
+        return resolver.ResolveAsync(actorId, ctx.RequestAborted);
     }
 
     private static async Task TryCloseConflictAsync(WebSocket ws)

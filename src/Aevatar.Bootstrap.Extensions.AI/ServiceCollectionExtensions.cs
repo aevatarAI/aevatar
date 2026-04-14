@@ -25,6 +25,7 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.MiniCPM;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.OpenAI;
@@ -135,6 +136,7 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
+        services.TryAddSingleton<IVoicePresenceSessionResolver, InProcessActorVoicePresenceSessionResolver>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
