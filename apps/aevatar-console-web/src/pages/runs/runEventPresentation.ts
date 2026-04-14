@@ -58,6 +58,8 @@ export type RunTimelineGroup = {
 
 const PAYLOAD_PREVIEW_LIMIT = 180;
 
+type JsonRecord = Record<string, unknown>;
+
 export const eventStatusValueEnum = {
   processing: { text: 'Processing', status: 'Processing' },
   success: { text: 'Completed', status: 'Success' },
@@ -124,6 +126,60 @@ function getEventDisplayType(event: AGUIEvent): string {
 function readOptionalEventString(event: AGUIEvent, key: string): string {
   const candidate = (event as unknown as Record<string, unknown>)[key];
   return typeof candidate === 'string' ? candidate : '';
+}
+
+function asRecord(value: unknown): JsonRecord | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  return value as JsonRecord;
+}
+
+function readOptionalRecordString(
+  record: JsonRecord | undefined,
+  key: string,
+): string {
+  if (!record) {
+    return '';
+  }
+
+  const candidate = record[key];
+  return typeof candidate === 'string' ? candidate : '';
+}
+
+export function extractRunFinishedOutput(events: AGUIEvent[]): string {
+  const latestRunFinished = [...events]
+    .reverse()
+    .find((event) => event.type === AGUIEventType.RUN_FINISHED);
+
+  if (!latestRunFinished) {
+    return '';
+  }
+
+  const result = asRecord(
+    (latestRunFinished as unknown as Record<string, unknown>).result,
+  );
+
+  return (
+    readOptionalRecordString(result, 'output') ||
+    readOptionalRecordString(result, 'Output') ||
+    ''
+  );
+}
+
+export function resolveRunMessageFallback(
+  events: AGUIEvent[],
+  snapshotLastOutput?: string | null,
+): string {
+  const runFinishedOutput = extractRunFinishedOutput(events).trim();
+  if (runFinishedOutput) {
+    return runFinishedOutput;
+  }
+
+  return typeof snapshotLastOutput === 'string'
+    ? snapshotLastOutput.trim()
+    : '';
 }
 
 function mergeTimelineStatus(
