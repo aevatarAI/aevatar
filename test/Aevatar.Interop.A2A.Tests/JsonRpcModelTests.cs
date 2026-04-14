@@ -327,4 +327,57 @@ public class JsonRpcModelTests
         deserialized.Should().BeOfType<TextPart>();
         deserialized!.Metadata.Should().ContainKey("source");
     }
+
+    [Fact]
+    public void FilePart_WithMetadata_Roundtrips()
+    {
+        Part part = new FilePart
+        {
+            File = new FileContent { Name = "doc.pdf", MimeType = "application/pdf" },
+            Metadata = new() { ["size"] = "1024" },
+        };
+
+        var json = JsonSerializer.Serialize(part, JsonOptions);
+        json.Should().Contain("\"metadata\"");
+        json.Should().Contain("\"size\"");
+
+        var deserialized = JsonSerializer.Deserialize<Part>(json, JsonOptions);
+        deserialized.Should().BeOfType<FilePart>();
+        deserialized!.Metadata.Should().ContainKey("size");
+    }
+
+    [Fact]
+    public void DataPart_WithMetadata_Roundtrips()
+    {
+        Part part = new DataPart
+        {
+            Data = new Dictionary<string, object?> { ["key"] = "val" },
+            Metadata = new() { ["origin"] = "system" },
+        };
+
+        var json = JsonSerializer.Serialize(part, JsonOptions);
+        json.Should().Contain("\"metadata\"");
+
+        var deserialized = JsonSerializer.Deserialize<Part>(json, JsonOptions);
+        deserialized.Should().BeOfType<DataPart>();
+        deserialized!.Metadata.Should().ContainKey("origin");
+    }
+
+    [Fact]
+    public void UnknownPartType_ThrowsJsonException()
+    {
+        var json = """{"type":"video","url":"http://example.com/v.mp4"}""";
+        var act = () => JsonSerializer.Deserialize<Part>(json, JsonOptions);
+        act.Should().Throw<JsonException>().WithMessage("*Unknown part type*");
+    }
+
+    [Fact]
+    public void Part_WithNullMetadata_DeserializesCleanly()
+    {
+        var json = """{"type":"text","text":"hi","metadata":null}""";
+        var part = JsonSerializer.Deserialize<Part>(json, JsonOptions);
+
+        part.Should().BeOfType<TextPart>();
+        part!.Metadata.Should().BeNull();
+    }
 }
