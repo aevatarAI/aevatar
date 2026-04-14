@@ -62,19 +62,16 @@ public sealed class NyxIdChatGAgent : RoleGAgent
     {
         var prompt = basePrompt;
 
-        // Inject relay callback URL
-        var relayUrl = ResolveRelayCallbackUrl();
-        prompt += $"""
+        // Inject channel runtime callback base URL
+        prompt += """
 
-## Relay Configuration (Auto-Injected)
+## Channel Runtime Configuration (Auto-Injected)
 
-This agent's relay callback URL is: `{relayUrl}`
+Aevatar's channel callback base URL is: `https://aevatar-console-backend-api.aevatar.ai`
 
-When setting up channel bots, use this URL as the `callback_url` for API keys:
-```
-nyxid_api_keys action=create name="telegram-relay" scopes="read write proxy" callback_url="{relayUrl}"
-```
-Then create a default conversation route linking the bot to this API key.
+When registering channel bots, use `channel_registrations` tool (NOT `nyxid_channel_bots`).
+The callback URL for Lark developer console is:
+`https://aevatar-console-backend-api.aevatar.ai/api/channels/lark/callback/<registration_id>`
 """;
 
         if (_skillRegistry != null && _skillRegistry.Count > 0)
@@ -85,16 +82,6 @@ Then create a default conversation route linking the bot to this API key.
         }
 
         return prompt;
-    }
-
-    /// <summary>
-    /// Resolves the relay callback URL using the well-known default remote runtime URL.
-    /// Does NOT call chrono-storage (which would block the Orleans grain scheduler).
-    /// </summary>
-    private static string ResolveRelayCallbackUrl()
-    {
-        const string relayPath = "/api/webhooks/nyxid-relay";
-        return $"{UserConfigRuntimeDefaults.RemoteRuntimeBaseUrl}{relayPath}";
     }
 
     private bool RequiresNyxIdProviderMigration()

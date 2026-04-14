@@ -1,5 +1,6 @@
 export type StudioTab =
   | 'workflows'
+  | 'files'
   | 'studio'
   | 'scripts'
   | 'executions'
@@ -8,6 +9,10 @@ export type StudioTab =
   | 'settings';
 
 type StudioRouteOptions = {
+  scopeId?: string;
+  scopeLabel?: string;
+  memberId?: string;
+  memberLabel?: string;
   workflowId?: string;
   scriptId?: string;
   template?: string;
@@ -47,6 +52,18 @@ function resolveStudioTab(options?: StudioRouteOptions): StudioTab | undefined {
 
 export function buildStudioRoute(options?: StudioRouteOptions): string {
   const params = new URLSearchParams();
+  if (options?.scopeId?.trim()) {
+    params.set('scopeId', options.scopeId.trim());
+  }
+  if (options?.scopeLabel?.trim()) {
+    params.set('scopeLabel', options.scopeLabel.trim());
+  }
+  if (options?.memberId?.trim()) {
+    params.set('memberId', options.memberId.trim());
+  }
+  if (options?.memberLabel?.trim()) {
+    params.set('memberLabel', options.memberLabel.trim());
+  }
   if (options?.workflowId?.trim()) {
     params.set('workflow', options.workflowId.trim());
   }
@@ -80,13 +97,29 @@ export function buildStudioRoute(options?: StudioRouteOptions): string {
   return query ? `/studio?${query}` : '/studio';
 }
 
-export function buildStudioWorkflowWorkspaceRoute(): string {
+export function buildStudioWorkflowWorkspaceRoute(options?: {
+  scopeId?: string;
+  scopeLabel?: string;
+  memberId?: string;
+  memberLabel?: string;
+}): string {
   return buildStudioRoute({
+    ...options,
     tab: 'workflows',
   });
 }
 
+export function buildStudioFilesWorkspaceRoute(): string {
+  return buildStudioRoute({
+    tab: 'files',
+  });
+}
+
 export function buildStudioWorkflowEditorRoute(options?: {
+  scopeId?: string;
+  scopeLabel?: string;
+  memberId?: string;
+  memberLabel?: string;
   workflowId?: string;
   template?: string;
   draftMode?: 'new';
@@ -100,6 +133,10 @@ export function buildStudioWorkflowEditorRoute(options?: {
 }
 
 export function buildStudioScriptsWorkspaceRoute(options?: {
+  scopeId?: string;
+  scopeLabel?: string;
+  memberId?: string;
+  memberLabel?: string;
   scriptId?: string;
 }): string {
   return buildStudioRoute({

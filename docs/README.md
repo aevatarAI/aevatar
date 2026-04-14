@@ -11,6 +11,7 @@ Authoritative architecture and developer guides. Each covers one topic.
 - [Connector 配置与执行逻辑](canon/connector.md)
 - [Aevatar CQRS 架构（Maker 插件化后）](canon/cqrs-projection.md)
 - [Event Sourcing 基线文档（2026-02-23）](canon/event-sourcing.md)
+- [Aevatar 前端设计基线](canon/frontend-design.md)
 - [Workflow LLM 流式链路详细架构文档（2026-02-25）](canon/llm-streaming.md)
 - [NyxID LLM Provider 集成指南](canon/nyxid-llm-integration.md)
 - [Aevatar 项目架构（Maker 插件化基线）](canon/overview.md)
@@ -27,8 +28,6 @@ Immutable records of architectural choices and their rationale.
 - [Aevatar 项目拆分策略（2026-02-21）](decisions/0001-project-split-strategy.md)
 - [Aevatar Mainnet 架构说明](decisions/0002-mainnet-architecture.md)
 - [Orleans Kafka Provider Backend Architecture](decisions/0003-kafka-transport.md)
-- [基于当前代码现状的 Aevatar AI App 平台组织建议（2026-03-25）](decisions/0004-platform-organization.md)
-- [Aevatar User-Scoped Service 极简架构草案（2026-03-26）](decisions/0005-user-scoped-service.md)
 - [Workflow 调度 Actor 化 & 多智能体协作演进方案](decisions/0006-multi-agent-evolution.md)
 - [Aevatar Stream Forward 架构说明（2026-02-22）](decisions/0007-stream-forward.md)
 
@@ -39,12 +38,8 @@ Point-in-time design snapshots. Not authoritative — for context only.
 ### 2026-03
 
 - [chatbot-3rd-party-spec](history/2026-03/chatbot-3rd-party-spec.md)
-- [console-design-system](history/2026-03/console-design-system.md)
 - [external-link-framework](history/2026-03/external-link-framework.md)
 - [maf-integration](history/2026-03/maf-integration.md)
-- [projection-links-analysis](history/2026-03/projection-links-analysis.md)
-- [readmodel-protobuf-refactor](history/2026-03/readmodel-protobuf-refactor.md)
-- [studio-boundary-separation](history/2026-03/studio-boundary-separation.md)
 - [workflow-call-refactor](history/2026-03/workflow-call-refactor.md)
 
 ### 2026-04
@@ -54,7 +49,7 @@ Point-in-time design snapshots. Not authoritative — for context only.
 
 ## Audit Scorecard
 
-- [TEMPLATE.md](audit-scorecard/TEMPLATE.md)
+- [FEATURE_APP_SERVICES_AUDIT.md](audit-scorecard/FEATURE_APP_SERVICES_AUDIT.md)
 
 ## Templates
 

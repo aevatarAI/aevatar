@@ -32,4 +32,30 @@ describe("sseFrameNormalizer", () => {
       type: AGUIEventType.TOOL_CALL_END,
     });
   });
+
+  it("flattens typed tool approval frames that keep payload in a nested object", () => {
+    expect(
+      normalizeBackendSseFrame({
+        timestamp: 3,
+        toolApprovalRequest: {
+          argumentsJson: "{\"scopeId\":\"scope-a\"}",
+          isDestructive: true,
+          requestId: "approval-1",
+          timeoutSeconds: 30,
+          toolCallId: "tool-7",
+          toolName: "scope.bind",
+        },
+        type: "TOOL_APPROVAL_REQUEST",
+      })
+    ).toEqual({
+      argumentsJson: "{\"scopeId\":\"scope-a\"}",
+      isDestructive: true,
+      requestId: "approval-1",
+      timeoutSeconds: 30,
+      timestamp: 3,
+      toolCallId: "tool-7",
+      toolName: "scope.bind",
+      type: "TOOL_APPROVAL_REQUEST",
+    });
+  });
 });

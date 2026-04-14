@@ -1,11 +1,17 @@
 export {
+  applyRuntimeEvent,
+  createRuntimeEventAccumulator,
   describeRuntimeEvent,
   extractReasoningDelta,
+  extractRunInterventionRequest,
   extractRunContext,
   extractStepCompleted,
   extractStepCompletedOutput,
   extractStepRequest,
+  extractToolApprovalRequest,
   isRawObserved,
   normalizeRuntimeFrame,
   type RuntimeEvent,
+  type RuntimeRunInterventionInfo,
+  type RuntimeToolApprovalRequestInfo,
 } from "@/shared/agui/runtimeEventSemantics";

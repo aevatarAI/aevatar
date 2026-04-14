@@ -64,4 +64,17 @@ describe('catalogVisibility', () => {
       },
     ]);
   });
+
+  it('adds a temporary unavailable option when the selected workflow is missing from the catalog', () => {
+    expect(buildWorkflowCatalogOptions(catalog, 'direct')).toEqual([
+      {
+        label: 'direct · Unavailable in catalog',
+        value: 'direct',
+      },
+      {
+        label: 'visible_flow · Library',
+        value: 'visible_flow',
+      },
+    ]);
+  });
 });

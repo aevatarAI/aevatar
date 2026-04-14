@@ -38,13 +38,25 @@ describe("StudioShell", () => {
 
     expect(container.firstChild).toHaveStyle({
       flex: "1",
-      minHeight: "calc(100vh - 176px)",
+      height: "100%",
+      minHeight: "0",
+      overflow: "hidden",
     });
     expect(container.querySelector(".ant-row")).toHaveStyle({
       flex: "1",
       minHeight: "0",
     });
-    expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+    const contentBody = screen.getByText("Studio content").parentElement;
+    const contentShell = contentBody?.parentElement;
+
+    expect(contentBody).toHaveStyle({
+      display: "flex",
+      flex: "1",
+      flexDirection: "column",
+      minHeight: "0",
+      overflow: "hidden",
+    });
+    expect(contentShell).toHaveStyle({
       flex: "1",
       minHeight: "0",
       overflowX: "hidden",
@@ -74,5 +86,22 @@ describe("StudioShell", () => {
     expect(
       screen.getByRole("button", { name: "Collapse workbench" })
     ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("allows callers to hand scroll ownership to the page content", () => {
+    render(
+      React.createElement(StudioShell, {
+        contentOverflow: "hidden",
+        currentPage: "workflows",
+        navItems,
+        onSelectPage: jest.fn(),
+        pageTitle: "Studio page",
+        children: React.createElement("div", null, "Studio content"),
+      })
+    );
+
+    expect(screen.getByText("Studio content").parentElement?.parentElement).toHaveStyle({
+      overflowY: "hidden",
+    });
   });
 });
