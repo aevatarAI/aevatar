@@ -7,6 +7,7 @@ internal static class AgentBuilderCardFlow
 {
     private const string PrivateChatType = "p2p";
     private const string CardActionChatType = "card_action";
+    private const string OpenDailyReportFormAction = "open_daily_report_form";
     private const string DailyReportAction = "create_daily_report";
     private const string ListAgentsAction = "list_agents";
     private const string AgentStatusAction = "agent_status";
@@ -61,6 +62,10 @@ internal static class AgentBuilderCardFlow
 
         switch ((action ?? string.Empty).Trim())
         {
+            case OpenDailyReportFormAction:
+                decision = AgentBuilderFlowDecision.DirectReply(BuildDailyReportCard());
+                return true;
+
             case DailyReportAction:
                 if (!TryBuildCreateDailyReportArguments(evt, out var argumentsJson, out var validationError))
                 {
@@ -365,8 +370,21 @@ internal static class AgentBuilderCardFlow
         if (!string.IsNullOrWhiteSpace(note))
             lines.Add(note!);
 
-        lines.Add("Send /agents to view your current agents.");
-        return string.Join("\n", lines);
+        return BuildInfoCard(
+            "Daily Report Agent",
+            string.Join("\n", lines),
+            "green",
+            new object[]
+            {
+                BuildButton("View Agents", "primary", new
+                {
+                    agent_builder_action = ListAgentsAction,
+                }),
+                BuildButton("Create Another", "default", new
+                {
+                    agent_builder_action = OpenDailyReportFormAction,
+                }),
+            });
     }
 
     private static string FormatListAgentsResult(JsonElement root)
@@ -377,7 +395,7 @@ internal static class AgentBuilderCardFlow
         if (!root.TryGetProperty("agents", out var agentsElement) ||
             agentsElement.ValueKind != JsonValueKind.Array)
         {
-            return "No agents found. Send /daily-report to create one.";
+            return BuildEmptyAgentListCard();
         }
 
         var agents = new List<AgentListCardItem>();
@@ -391,7 +409,7 @@ internal static class AgentBuilderCardFlow
         }
 
         return agents.Count == 0
-            ? "No agents found. Send /daily-report to create one."
+            ? BuildEmptyAgentListCard()
             : BuildAgentListCard(agents);
     }
 
@@ -536,6 +554,18 @@ internal static class AgentBuilderCardFlow
             });
         }
 
+        elements.Add(new
+        {
+            tag = "action",
+            actions = new object[]
+            {
+                BuildButton("Create Daily Report", "default", new
+                {
+                    agent_builder_action = OpenDailyReportFormAction,
+                }),
+            },
+        });
+
         return JsonSerializer.Serialize(new
         {
             config = new
@@ -552,6 +582,45 @@ internal static class AgentBuilderCardFlow
                 template = "wathet",
             },
             elements,
+        });
+    }
+
+    private static string BuildEmptyAgentListCard()
+    {
+        return JsonSerializer.Serialize(new
+        {
+            config = new
+            {
+                wide_screen_mode = true,
+            },
+            header = new
+            {
+                title = new
+                {
+                    tag = "plain_text",
+                    content = "Current Agents",
+                },
+                template = "wathet",
+            },
+            elements = new object[]
+            {
+                new
+                {
+                    tag = "markdown",
+                    content = "No agents found yet. Create your first daily report agent from here.",
+                },
+                new
+                {
+                    tag = "action",
+                    actions = new object[]
+                    {
+                        BuildButton("Create Daily Report", "primary", new
+                        {
+                            agent_builder_action = OpenDailyReportFormAction,
+                        }),
+                    },
+                },
+            },
         });
     }
 

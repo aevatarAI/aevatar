@@ -427,8 +427,9 @@ public class ChannelUserGAgentContinuationTests
         await agent.HandleInbound(inbound);
 
         adapter.Replies.Should().ContainSingle();
-        adapter.Replies[0].ReplyText.Should().StartWith("Daily report agent created: skill-runner-");
-        adapter.Replies[0].ReplyText.Should().Contain("Next scheduled run:");
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Daily report agent created: skill-runner-");
+        adapter.Replies[0].ReplyText.Should().Contain("View Agents");
         agent.State.PendingSessions.Should().BeEmpty();
         agent.State.ProcessedMessageIds.Should().Contain("evt_card_1");
 
@@ -499,12 +500,54 @@ public class ChannelUserGAgentContinuationTests
         runtime.ChatRequests.Should().BeEmpty();
         adapter.Replies.Should().ContainSingle();
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Create Daily Report");
         adapter.Replies[0].ReplyText.Should().Contain("agent_status");
         adapter.Replies[0].ReplyText.Should().Contain("confirm_delete_agent");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Current Agents");
+    }
+
+    [Fact]
+    public async Task HandleInbound_OpenDailyReportFormCardAction_ShouldSendBuilderCard()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"open_daily_report_form"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_open_form_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "open_daily_report_form" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Create Daily Report Agent");
     }
 
     [Fact]
