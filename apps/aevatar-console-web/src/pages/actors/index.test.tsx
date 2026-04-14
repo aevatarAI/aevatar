@@ -38,18 +38,18 @@ describe('ActorsPage', () => {
       React.createElement(ActorsPage),
     );
 
-    expect(container.textContent).toContain('Runtime Explorer');
-    expect(container.textContent).toContain('Actor Focus');
-    expect(container.textContent).toContain('Explorer Digest');
-    expect(container.textContent).toContain('Observed Actors');
-    expect(screen.getByPlaceholderText('Enter actor ID')).toBeTruthy();
-    expect(screen.getByPlaceholderText('Filter discovered actors')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Clear focus' })).toBeTruthy();
-    expect(container.textContent).toContain('0 actor entries in view');
-    expect(container.textContent).toContain(
-      'Snapshot, timeline, and subgraph all resolve from the same actor-focused inspector.',
-    );
-    expect(container.textContent).toContain('No runtime actors matched the current filter.');
+    expect(container.textContent).toContain('Aevatar / Platform');
+    expect(container.textContent).toContain('Topology');
+    expect(container.textContent).toContain('Search');
+    expect(container.textContent).toContain('Actors');
+    expect(container.textContent).toContain('可见 Actor');
+    expect(container.textContent).toContain('当前焦点');
+    expect(screen.getByPlaceholderText('Actor ID')).toBeTruthy();
+    expect(screen.getByPlaceholderText('Filter actors')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeTruthy();
+    expect(container.textContent).toContain('No actors');
+    expect(container.textContent).not.toContain('Actor Focus');
+    expect(container.textContent).not.toContain('Observed Actors');
   });
 
   it('opens the actor inspector when an actor ID is provided', async () => {
@@ -95,7 +95,7 @@ describe('ActorsPage', () => {
 
     renderWithQueryClient(React.createElement(ActorsPage));
 
-    fireEvent.change(screen.getByPlaceholderText('Enter actor ID'), {
+    fireEvent.change(screen.getByPlaceholderText('Actor ID'), {
       target: { value: 'actor://selected' },
     });
 
@@ -104,13 +104,12 @@ describe('ActorsPage', () => {
         'actor://selected',
       );
     });
-    expect(await screen.findByText('Snapshot')).toBeTruthy();
+    expect(await screen.findByText('Summary')).toBeTruthy();
     expect(screen.getByText('Timeline')).toBeTruthy();
-    expect(screen.getByText('Topology Digest')).toBeTruthy();
-    expect(screen.getByText('SupportWorkflow')).toBeTruthy();
-    expect(screen.getByText(/Last output:/i).textContent).toContain(
-      'Completed successfully.',
-    );
+    expect(screen.getAllByText('Topology').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('SupportWorkflow').length).toBeGreaterThan(0);
+    expect(screen.getByText('Last output')).toBeTruthy();
+    expect(screen.getByText('Completed successfully.')).toBeTruthy();
   });
 
   it('preserves playback explorer context from the incoming route', async () => {

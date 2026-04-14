@@ -9,7 +9,7 @@ import {
   StopOutlined,
 } from "@ant-design/icons";
 import type { ProListMetas } from "@ant-design/pro-components";
-import { PageContainer, ProCard, ProList } from "@ant-design/pro-components";
+import { ProCard, ProList } from "@ant-design/pro-components";
 import {
   useMutation,
   useQuery,
@@ -39,6 +39,8 @@ import {
 import { servicesApi } from "@/shared/api/servicesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
+import { resolveStudioScopeContext } from "@/shared/scope/context";
+import { studioApi } from "@/shared/studio/api";
 import type {
   ServiceCatalogSnapshot,
   ServiceIdentityQuery,
@@ -57,7 +59,8 @@ import {
   type AevatarStatusDomain,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
-import { AevatarTitleWithHelp } from "@/shared/ui/aevatarPageShells";
+import ConsoleMetricCard from "@/shared/ui/ConsoleMetricCard";
+import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 
 type DeploymentDrawerTab = "compare" | "rollback" | "weights";
 
@@ -83,6 +86,9 @@ type DeploymentWorkbenchItem = {
   title: string;
   updatedAt: string;
 };
+
+const defaultScopeServiceAppId = "default";
+const defaultScopeServiceNamespace = "default";
 
 function readSelectedServiceId(): string {
   if (typeof window === "undefined") {
@@ -277,6 +283,35 @@ const DeploymentsPage: React.FC = () => {
   );
   const [candidateRevisionId, setCandidateRevisionId] = useState("");
   const [notice, setNotice] = useState<DeploymentNotice | null>(null);
+  const authSessionQuery = useQuery({
+    queryKey: ["deployments", "auth-session"],
+    queryFn: () => studioApi.getAuthSession(),
+    retry: false,
+  });
+  const resolvedScope = useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data],
+  );
+
+  useEffect(() => {
+    if (
+      draft.tenantId.trim() ||
+      draft.appId.trim() ||
+      draft.namespace.trim() ||
+      !resolvedScope?.scopeId?.trim()
+    ) {
+      return;
+    }
+
+    const nextDraft = {
+      ...draft,
+      appId: defaultScopeServiceAppId,
+      namespace: defaultScopeServiceNamespace,
+      tenantId: resolvedScope.scopeId.trim(),
+    };
+    setDraft(nextDraft);
+    setQuery(trimServiceQuery(nextDraft));
+  }, [draft, resolvedScope?.scopeId]);
 
   const servicesQuery = useQuery({
     queryFn: () => servicesApi.listServices(query),
@@ -421,6 +456,15 @@ const DeploymentsPage: React.FC = () => {
   const items = useMemo(
     () => buildDeploymentItems(servicesQuery.data, rolloutIdByService),
     [rolloutIdByService, servicesQuery.data],
+  );
+  const deploymentDigest = useMemo(
+    () => ({
+      deployments: items.filter((item) => item.deploymentId.trim()).length,
+      revisions: revisionsQuery.data?.revisions.length ?? 0,
+      rollouts: items.filter((item) => item.rolloutId.trim()).length,
+      services: items.length,
+    }),
+    [items, revisionsQuery.data?.revisions.length],
   );
 
   const selectedDeployment = useMemo(
@@ -609,7 +653,7 @@ const DeploymentsPage: React.FC = () => {
               setSelectedDeploymentId(record.deploymentId);
             }}
           >
-            Open detail
+            Details
           </Button>,
         ],
       },
@@ -676,14 +720,9 @@ const DeploymentsPage: React.FC = () => {
   );
 
   return (
-    <PageContainer
-      className="aevatar-page-shell-document"
-      title={
-        <AevatarTitleWithHelp
-          help="Deployment center focused on rollout visibility. The list stays concise, the detail column stays readable, and rollout policy, weight, and rollback controls live inside one extra-wide drawer."
-          title="Deployments"
-        />
-      }
+    <ConsoleMenuPageShell
+      breadcrumb="Aevatar / Platform"
+      title="Deployments"
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         {notice ? (
@@ -702,7 +741,14 @@ const DeploymentsPage: React.FC = () => {
           onChange={setDraft}
           onLoad={() => setQuery(trimServiceQuery(draft))}
           onReset={() => {
-            const nextDraft = readServiceQueryDraft("");
+            const nextDraft = resolvedScope?.scopeId?.trim()
+              ? {
+                  ...readServiceQueryDraft(""),
+                  appId: defaultScopeServiceAppId,
+                  namespace: defaultScopeServiceNamespace,
+                  tenantId: resolvedScope.scopeId.trim(),
+                }
+              : readServiceQueryDraft("");
             setDraft(nextDraft);
             setQuery(trimServiceQuery(nextDraft));
             setSelectedServiceId("");
@@ -710,6 +756,19 @@ const DeploymentsPage: React.FC = () => {
             setCandidateRevisionId("");
           }}
         />
+
+        <div
+          style={{
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          }}
+        >
+          <ConsoleMetricCard label="服务数" tone="purple" value={deploymentDigest.services} />
+          <ConsoleMetricCard label="活跃部署" value={deploymentDigest.deployments} />
+          <ConsoleMetricCard label="滚动发布" value={deploymentDigest.rollouts} />
+          <ConsoleMetricCard label="版本数" tone="green" value={deploymentDigest.revisions} />
+        </div>
 
         <div
           style={{
@@ -727,14 +786,19 @@ const DeploymentsPage: React.FC = () => {
               padding: 16,
             }}
             style={buildAevatarPanelStyle(surfaceToken)}
-            title="Deployment Inventory"
+            title="Deployments"
           >
             <ProList<DeploymentWorkbenchItem>
               dataSource={items}
+              grid={{ gutter: 16, column: 1 }}
+              itemCardProps={{
+                bodyStyle: { padding: 16 },
+                style: { borderRadius: 12 },
+              }}
               locale={{
                 emptyText: servicesQuery.isLoading
-                  ? "Loading deployments…"
-                  : "No services matched the current identity query.",
+                  ? "Loading..."
+                  : "No deployments",
               }}
               metas={listMetas}
               pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -759,13 +823,13 @@ const DeploymentsPage: React.FC = () => {
                         icon={<PercentageOutlined />}
                         onClick={() => openDrawer("weights")}
                       >
-                        Policy & Weight
+                        Weights
                       </Button>
                       <Button
                         icon={<SendOutlined />}
                         onClick={() => openDrawer("compare")}
                       >
-                        Rollout Strategy
+                        Rollout
                       </Button>
                       <Button
                         danger
@@ -816,7 +880,7 @@ const DeploymentsPage: React.FC = () => {
                   <ProCard
                     bodyStyle={{ display: "flex", flexDirection: "column", gap: 16 }}
                     style={buildAevatarPanelStyle(surfaceToken)}
-                    title="Dual Revision Compare"
+                    title="Compare"
                     extra={
                       <Select
                         options={(revisionsQuery.data?.revisions ?? []).map((revision) => ({
@@ -847,25 +911,24 @@ const DeploymentsPage: React.FC = () => {
                       />
                     </div>
                     <Typography.Text type="secondary">
-                      Traffic view:{" "}
                       {trafficQuery.data?.endpoints
                         .map(
                           (endpoint) =>
-                            `${endpoint.endpointId} -> ${endpoint.targets
+                            `${endpoint.endpointId}: ${endpoint.targets
                               .map(
                                 (target) =>
-                                  `${target.revisionId}:${target.allocationWeight}%`,
+                                  `${target.revisionId} ${target.allocationWeight}%`,
                               )
                               .join(", ")}`,
                         )
-                        .join(" | ") || "No traffic materialized yet."}
+                        .join(" | ") || "No traffic"}
                     </Typography.Text>
                   </ProCard>
 
                   <ProCard
                     bodyStyle={{ display: "flex", flexDirection: "column", gap: 12 }}
                     style={buildAevatarPanelStyle(surfaceToken)}
-                    title="Deployment Detail"
+                    title="Summary"
                   >
                     {selectedDeployment ? (
                       <>
@@ -908,7 +971,7 @@ const DeploymentsPage: React.FC = () => {
                       </>
                     ) : (
                       <Empty
-                        description="Choose a deployment from the inventory to inspect its detail."
+                        description="Select a deployment"
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
@@ -918,7 +981,7 @@ const DeploymentsPage: React.FC = () => {
             ) : (
               <ProCard style={buildAevatarPanelStyle(surfaceToken)}>
                 <Empty
-                  description="Select a deployment from the left list to open the two-column detail view."
+                  description="Select a deployment"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               </ProCard>
@@ -930,7 +993,7 @@ const DeploymentsPage: React.FC = () => {
       <Drawer
         open={drawerState.open}
         size="large"
-        title="Deployment Control Drawer"
+        title="Deployment Controls"
         styles={{
           body: aevatarDrawerBodyStyle,
           wrapper: {
@@ -966,12 +1029,6 @@ const DeploymentsPage: React.FC = () => {
                 <Tag>{selectedDeployment.revisionId}</Tag>
               ) : null}
             </Space>
-            <Typography.Paragraph
-              style={{ color: surfaceToken.colorTextSecondary, marginBottom: 0, marginTop: 10 }}
-            >
-              Keep the detail page focused on observability. All rollout policy,
-              weight shifts, and rollback actions are staged here.
-            </Typography.Paragraph>
           </div>
 
           <Tabs
@@ -996,7 +1053,7 @@ const DeploymentsPage: React.FC = () => {
                       <ProCard
                         bodyStyle={{ display: "flex", flexDirection: "column", gap: 12 }}
                         style={buildAevatarPanelStyle(surfaceToken)}
-                        title="Candidate Selector"
+                        title="Candidate"
                       >
                         <Select
                           options={(revisionsQuery.data?.revisions ?? []).map((revision) => ({
@@ -1050,7 +1107,7 @@ const DeploymentsPage: React.FC = () => {
                   </div>
                 ),
                 key: "compare",
-                label: "Compare",
+                        label: "Compare",
               },
               {
                 children: (
@@ -1124,7 +1181,7 @@ const DeploymentsPage: React.FC = () => {
                       ))
                     ) : (
                       <Empty
-                        description="No serving targets are available to edit."
+                        description="No targets"
                         image={Empty.PRESENTED_IMAGE_SIMPLE}
                       />
                     )}
@@ -1145,7 +1202,7 @@ const DeploymentsPage: React.FC = () => {
                   </div>
                 ),
                 key: "weights",
-                label: "Policy & Weight",
+                label: "Weights",
               },
               {
                 children: (
@@ -1214,7 +1271,7 @@ const DeploymentsPage: React.FC = () => {
           />
         </div>
       </Drawer>
-    </PageContainer>
+    </ConsoleMenuPageShell>
   );
 };
 

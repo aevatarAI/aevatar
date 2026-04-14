@@ -227,23 +227,23 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
       title={
         target?.kind === "policy"
           ? target.mode === "create"
-            ? "Create Policy"
-            : `Policy · ${target.record.policyId}`
+            ? "New Policy"
+            : target.record.policyId
           : target?.kind === "binding"
-            ? `Binding · ${target.record.bindingId}`
+            ? target.record.bindingId
             : target?.kind === "endpoint"
-              ? `Endpoint · ${target.record.endpointId}`
+              ? target.record.endpointId
               : target?.kind === "activation"
-                ? "Activation Diagnostic"
+                ? "Activation"
                 : target?.kind === "audit"
-                  ? "Audit Detail"
-                  : "Governance Inspector"
+                  ? "Activity"
+                  : "Governance"
       }
     >
       <div style={aevatarDrawerScrollStyle}>
         {!canManage ? (
           <Alert
-            message="Select a service context first to enable governance actions."
+            message="Select a service"
             type="info"
           />
         ) : null}

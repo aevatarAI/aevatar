@@ -305,20 +305,20 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
   it('adds and removes package files through in-app dialogs', async () => {
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Add C# file' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'File path' }), {
+    fireEvent.click(await screen.findByRole('button', { name: '添加 C# 文件' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '文件路径' }), {
       target: {
         value: 'Handlers/EmailValidator.cs',
       },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加文件' }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Handlers/EmailValidator.cs').length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove Handlers/EmailValidator.cs' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除 Handlers/EmailValidator.cs' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
 
     await waitFor(() => {
       expect(screen.queryByText('Handlers/EmailValidator.cs')).toBeNull();
@@ -350,11 +350,11 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     renderPage();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Add proto file' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add file' }));
+    fireEvent.click(await screen.findByRole('button', { name: '添加 Proto 文件' }));
+    fireEvent.click(screen.getByRole('button', { name: '添加文件' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Problems 1')).toBeTruthy();
+      expect(screen.getByText('诊断 1')).toBeTruthy();
     });
 
     fireEvent.click(
@@ -369,7 +369,7 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       ).toBe('Behavior.cs');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Problems 1/ }));
+    fireEvent.click(screen.getByRole('button', { name: /诊断 1/ }));
     fireEvent.click(screen.getByRole('button', { name: /Message name is required/ }));
 
     await waitFor(() => {
@@ -393,19 +393,15 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     const headerScope = within(header as HTMLElement);
     expect(headerScope.getByText(/^draft-/)).toBeTruthy();
-    expect(headerScope.getByText('Embedded')).toBeTruthy();
-    expect(headerScope.getByText('Scope 1626c177…b0d6')).toBeTruthy();
-    expect(headerScope.getByRole('button', { name: 'Save' })).toBeTruthy();
-    expect(headerScope.getByRole('button', { name: 'More script actions' })).toBeTruthy();
-
-    fireEvent.click(headerScope.getByRole('button', { name: 'More script actions' }));
-
-    expect(await screen.findByText('Validate')).toBeTruthy();
-    expect(screen.getByText('Promote')).toBeTruthy();
-    expect(screen.getByText('Test Run')).toBeTruthy();
+    expect(headerScope.getByText('嵌入式 Host')).toBeTruthy();
+    expect(headerScope.getByText('团队 1626c177…b0d6')).toBeTruthy();
+    expect(headerScope.getByRole('button', { name: '保存' })).toBeTruthy();
+    expect(headerScope.getByRole('button', { name: '校验' })).toBeTruthy();
+    expect(headerScope.getByRole('button', { name: '发布' })).toBeTruthy();
+    expect(headerScope.getByRole('button', { name: '测试运行' })).toBeTruthy();
   });
 
-  it('keeps Test Run available in proxy mode while gating Ask AI', async () => {
+  it('keeps proxy mode gated for testing and AI actions', async () => {
     renderPage({
       mode: 'proxy',
     });
@@ -413,15 +409,12 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     await screen.findByLabelText('Script ID');
 
     const askAiTrigger = screen.getByRole('button', {
-      name: 'Ask AI to generate script code.',
+      name: '使用 AI 生成脚本代码。',
     });
     expect(askAiTrigger.hasAttribute('disabled')).toBe(true);
-
-    fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
-
-    expect(await screen.findByText('Validate')).toBeTruthy();
-    expect(screen.getByText('Promote')).toBeTruthy();
-    expect(screen.getByText('Test Run')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '校验' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '发布' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '测试运行' })).toBeDisabled();
   });
 
   it('cancels Ask AI generation from the floating panel', async () => {
@@ -440,12 +433,12 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'Ask AI to generate script code.',
+        name: '使用 AI 生成脚本代码。',
       }),
     );
     fireEvent.change(
       screen.getByPlaceholderText(
-        'Build a script that validates an email address, normalizes it, and returns a JSON summary.',
+        '构建一个脚本：校验邮箱、完成标准化处理，并返回 JSON 摘要。',
       ),
       {
         target: {
@@ -453,16 +446,16 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
         },
       },
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成' }));
 
     await waitFor(() => {
       expect(mockedScriptsApi.generateScript).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Cancelled AI generation.')).toBeTruthy();
+      expect(screen.getByText('已取消 AI 生成。')).toBeTruthy();
     });
   });
 
@@ -473,19 +466,20 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
     });
 
     await screen.findByLabelText('Script ID');
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
       expect(mockedScriptsApi.saveScript).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Bind scope' }));
+    fireEvent.click(screen.getByRole('button', { name: '脚本信息' }));
+    fireEvent.click(screen.getByRole('button', { name: '绑定到团队' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Bind saved script')).toBeTruthy();
+      expect(screen.getByText('绑定已保存脚本')).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Bind' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认绑定' }));
 
     await waitFor(() => {
       expect(mockedStudioApi.bindScopeScript).toHaveBeenCalledWith({
@@ -499,11 +493,11 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     expect(
       await screen.findByText(
-        'Review the active binding, revision rollout, and saved script assets from the team views.',
+        '你可以回到团队页查看当前入口、版本发布和已保存脚本。',
       ),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Team Assets' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开团队资产' }));
 
     expect(mockedHistory.push).toHaveBeenCalledWith(
       '/scopes/assets?scopeId=scope-1&tab=scripts&scriptId=script-1',
@@ -518,23 +512,16 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     await screen.findByLabelText('Script ID');
     await waitFor(() => {
-      expect(screen.queryAllByText('Checking')).toHaveLength(0);
+      expect(screen.queryAllByText('校验中')).toHaveLength(0);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'More script actions' }));
-    const testRunItem = await screen.findByRole('menuitem', {
-      name: /Test Run/,
-    });
-    await waitFor(() => {
-      expect(testRunItem).toHaveAttribute('aria-disabled', 'false');
-    });
-    fireEvent.click(testRunItem);
-    fireEvent.change(await screen.findByLabelText('Script test run input'), {
+    fireEvent.click(screen.getByRole('button', { name: '测试运行' }));
+    fireEvent.change(await screen.findByLabelText('脚本测试输入'), {
       target: {
         value: 'hello from draft run',
       },
     });
-    fireEvent.click(await screen.findByRole('button', { name: 'Run draft' }));
+    fireEvent.click(await screen.findByRole('button', { name: '开始运行' }));
 
     await waitFor(() => {
       expect(mockedScriptsApi.runDraftScript).toHaveBeenCalledWith({
@@ -553,6 +540,6 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
       expect(mockedStudioApi.bindScopeScript).not.toHaveBeenCalled();
       expect(mockedHistory.push).not.toHaveBeenCalled();
     });
-    expect(await screen.findByText(/Started draft run run-1 on runtime runtime-1/)).toBeTruthy();
+    expect(await screen.findByText(/已启动测试运行 run-1，运行实例 runtime-1。/)).toBeTruthy();
   });
 });

@@ -106,7 +106,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         }}
       >
         <Empty
-          description="Governance activity will appear here after a service is selected."
+          description="No activity"
           style={{ margin: "auto" }}
         />
       </div>
@@ -128,18 +128,11 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
         size={16}
         style={{ display: "flex", minHeight: 0 }}
       >
-        <div>
-          <Typography.Text strong>Governance Audit Timeline</Typography.Text>
-          <Typography.Paragraph style={{ margin: "6px 0 0" }} type="secondary">
-            Compiled from live governance catalogs, revision lifecycle state,
-            and activation diagnostics so operators can follow who changed the
-            surface, when it happened, and which capability was affected.
-          </Typography.Paragraph>
-        </div>
+        <Typography.Text strong>Activity</Typography.Text>
 
         <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 4 }}>
           <Timeline
-            pending={loading ? "Synchronizing governance activity..." : null}
+            pending={loading ? "Loading..." : null}
             items={events.map((event) => ({
               color: buildEventDotColor(surfaceToken, event.status),
               dot: (

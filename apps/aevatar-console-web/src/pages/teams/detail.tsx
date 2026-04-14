@@ -87,7 +87,7 @@ function formatTeamTabLabel(tab: TeamDetailTab): string {
     case "events":
       return "事件流";
     case "members":
-      return "团队成员";
+      return "成员";
     case "connectors":
       return "连接器";
     case "advanced":
@@ -665,6 +665,158 @@ const FactLine: React.FC<{
   );
 };
 
+type TeamEventLogTone = "error" | "msg" | "reply" | "route" | "sched";
+
+type TeamEventLogRow = {
+  detail: string;
+  flow: string;
+  key: string;
+  time: string;
+  tone: TeamEventLogTone;
+  type: string;
+};
+
+type TeamTopologyNodeLayout = {
+  actorId: string;
+  actorType: string;
+  caption: string;
+  external: boolean;
+  isFocused: boolean;
+  relationCount: number;
+  x: number;
+  y: number;
+};
+
+function formatPreviewTime(value: string | null | undefined): string {
+  const normalized = trimText(value);
+  if (!normalized) {
+    return "--:--:--";
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return "--:--:--";
+  }
+
+  return parsed.toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function formatEventLogType(stepType: string): TeamEventLogTone {
+  const normalized = normalizeStatus(stepType);
+  if (normalized.includes("error") || normalized.includes("failed")) {
+    return "error";
+  }
+  if (normalized.includes("reply") || normalized.includes("completed")) {
+    return "reply";
+  }
+  if (
+    normalized.includes("human") ||
+    normalized.includes("schedule") ||
+    normalized.includes("signal")
+  ) {
+    return "sched";
+  }
+  if (normalized.includes("llm") || normalized.includes("route")) {
+    return "route";
+  }
+  return "msg";
+}
+
+function formatEventLogTypeLabel(stepType: string): string {
+  const normalized = normalizeStatus(stepType);
+  if (normalized.includes("error") || normalized.includes("failed")) {
+    return "ERROR";
+  }
+  if (normalized.includes("reply") || normalized.includes("completed")) {
+    return "REPLY";
+  }
+  if (normalized.includes("human") || normalized.includes("signal")) {
+    return "SCHED";
+  }
+  if (normalized.includes("llm")) {
+    return "LLM";
+  }
+  if (normalized.includes("route")) {
+    return "ROUTED";
+  }
+  return "MSG_IN";
+}
+
+function buildTopologyNodeLayouts(
+  nodes: readonly {
+    actorId: string;
+    actorType: string;
+    caption: string;
+    isFocused: boolean;
+    relationCount: number;
+  }[],
+): TeamTopologyNodeLayout[] {
+  if (nodes.length === 0) {
+    return [];
+  }
+
+  if (nodes.length === 1) {
+    const node = nodes[0];
+    return [
+      {
+        ...node,
+        external: false,
+        x: 380,
+        y: 112,
+      },
+    ];
+  }
+
+  return nodes.map((node, index) => {
+    const lane = index % 2;
+    const column = Math.floor(index / 2);
+    const external = /(connector|telegram|http|mcp|llm)/i.test(
+      `${node.actorType} ${node.caption}`,
+    );
+
+    return {
+      ...node,
+      external,
+      x: 84 + column * 220,
+      y: lane === 0 ? 42 : 176,
+    };
+  });
+}
+
+function buildTeamEventLogRows(
+  playback: TeamPlaybackSummary,
+): TeamEventLogRow[] {
+  const eventRows = playback.events.map((event) => {
+    const type = formatEventLogTypeLabel(event.stage);
+    return {
+      detail: event.detail || event.message,
+      flow: compactId(event.actorId) || event.stage || "team",
+      key: `event-${event.key}`,
+      time: formatPreviewTime(event.timestamp),
+      tone: formatEventLogType(event.stage),
+      type,
+    };
+  });
+
+  const stepRows = playback.steps.map((step) => ({
+    detail: step.detail || step.summary,
+    flow: step.owner || compactId(step.actorId) || "team",
+    key: `step-${step.key}`,
+    time: formatPreviewTime(step.timestamp),
+    tone: formatEventLogType(step.stepType || step.status),
+    type: formatEventLogTypeLabel(step.stepType || step.status),
+  }));
+
+  return [...eventRows, ...stepRows]
+    .sort((left, right) => right.time.localeCompare(left.time))
+    .slice(0, 24);
+}
+
 const TeamDetailPage: React.FC = () => {
   const routeState = React.useMemo(() => readTeamDetailRouteState(), []);
   const scopeId = routeState.scopeId.trim();
@@ -672,6 +824,9 @@ const TeamDetailPage: React.FC = () => {
     routeState.serviceId,
   );
   const [activeTab, setActiveTab] = React.useState<TeamDetailTab>(routeState.tab);
+  const [memberSearch, setMemberSearch] = React.useState("");
+  const [memberStatusFilter, setMemberStatusFilter] = React.useState("all");
+  const [memberTypeFilter, setMemberTypeFilter] = React.useState("all");
   const [selectedActorId, setSelectedActorId] = React.useState("");
   const { token } = theme.useToken();
 
@@ -970,7 +1125,10 @@ const TeamDetailPage: React.FC = () => {
 
   const handleOpenPlaybackRun = React.useCallback(
     (preferredActorId?: string | null) => {
-      const runId = lens.playback.currentRunId?.trim() || "";
+      const runId =
+        lens.playback.currentRunId?.trim() ||
+        lens.currentRun?.runId?.trim() ||
+        "";
       if (!scopeId || !runId) {
         return;
       }
@@ -980,17 +1138,28 @@ const TeamDetailPage: React.FC = () => {
         lens.playback.rootActorId?.trim() ||
         lens.currentRun?.actorId?.trim() ||
         "";
+      const commandId = lens.playback.commandId?.trim() || "";
+      const routeName =
+        lens.playback.workflowName?.trim() ||
+        lens.currentRun?.workflowName?.trim() ||
+        undefined;
       const observedDraftKey = saveObservedRunSessionPayload({
         actorId: actorId || undefined,
-        commandId: lens.playback.commandId || undefined,
+        commandId: commandId || undefined,
         endpointId: "chat",
         endpointKind: "chat",
-        events: createObservedPlaybackEvents(lens.playback),
+        events: createObservedPlaybackEvents({
+          commandId: commandId || null,
+          currentRunId: runId,
+          rootActorId: actorId || null,
+        }),
         prompt:
           lens.playback.launchPrompt ||
           lens.playback.prompt ||
-          lens.playback.summary,
-        routeName: lens.playback.workflowName || undefined,
+          lens.playback.summary ||
+          lens.currentRun?.lastOutput ||
+          "",
+        routeName,
         runId,
         scopeId,
         serviceOverrideId: runtimeServiceId,
@@ -1003,13 +1172,21 @@ const TeamDetailPage: React.FC = () => {
           endpointId: "chat",
           endpointKind: "chat",
           prompt: lens.playback.launchPrompt || undefined,
-          route: lens.playback.workflowName || undefined,
+          route: routeName,
           scopeId,
           serviceId: runtimeServiceId,
         }),
       );
     },
-    [lens.currentRun?.actorId, lens.playback, runtimeServiceId, scopeId],
+    [
+      lens.currentRun?.actorId,
+      lens.currentRun?.lastOutput,
+      lens.currentRun?.runId,
+      lens.currentRun?.workflowName,
+      lens.playback,
+      runtimeServiceId,
+      scopeId,
+    ],
   );
 
   const handleOpenPlaybackActor = React.useCallback(
@@ -1203,14 +1380,120 @@ const TeamDetailPage: React.FC = () => {
           : "未配置",
     },
   ];
+  const detailStripItems = [
+    {
+      label: "成员",
+      value: `${Math.max(lens.members.length, compositionDisplayRows.length)} agents`,
+    },
+    {
+      label: "类型",
+      value: `${lens.workflowCount} workflow, ${lens.scriptCount} scripting`,
+    },
+    {
+      label: "连接器",
+      value:
+        connectorHighlights.length > 0
+          ? connectorHighlights.join("、")
+          : integrations.linkedConnectorCount > 0
+            ? `${integrations.linkedConnectorCount} 个已绑定`
+            : "未配置",
+    },
+    {
+      label: "事件 (24h)",
+      value: String(lens.playback.events.length + lens.playback.steps.length),
+    },
+    {
+      label: "当前状态",
+      value: currentHeaderStatusFriendly,
+    },
+  ];
+  const eventLogRows = React.useMemo(
+    () => buildTeamEventLogRows(lens.playback),
+    [lens.playback],
+  );
+  const topologyNodeLayouts = React.useMemo(
+    () => buildTopologyNodeLayouts(selectedGraphNodes),
+    [selectedGraphNodes],
+  );
+  const topologyLayoutByActorId = React.useMemo(
+    () =>
+      Object.fromEntries(
+        topologyNodeLayouts.map((node) => [node.actorId, node]),
+      ) as Record<string, TeamTopologyNodeLayout>,
+    [topologyNodeLayouts],
+  );
+  const memberRows = React.useMemo(() => {
+    return lens.members.map((member, index) => {
+      const roleRow = compositionDisplayRows[index];
+      const actorEventCount =
+        lens.playback.steps.filter((step) => step.actorId === member.actorId).length +
+        lens.playback.events.filter((event) => event.actorId === member.actorId).length;
+      const implementationType = formatCompositionKind(
+        roleRow?.kind || member.actorType || "actor",
+      );
+      const runtimeStatus =
+        member.actorId === effectiveActorId
+          ? currentHeaderStatusFriendly
+          : lens.healthStatus === "healthy"
+            ? "运行中"
+            : "已观察";
+
+      return {
+        actionsLabel: member.actorId,
+        actorId: member.actorId,
+        governanceService: runtimeServiceId || "--",
+        implementationType,
+        key: member.actorId,
+        messageCount: actorEventCount,
+        name: member.actorType || compactId(member.actorId),
+        role:
+          roleRow?.summary ||
+          topologyLayoutByActorId[member.actorId]?.caption ||
+          "当前还没有更细的角色说明。",
+        status: runtimeStatus,
+        uptime:
+          lens.healthStatus === "healthy"
+            ? "99.9%"
+            : lens.healthStatus === "blocked"
+              ? "等待处理"
+              : "可见",
+      };
+    });
+  }, [
+    compositionDisplayRows,
+    currentHeaderStatusFriendly,
+    effectiveActorId,
+    lens.healthStatus,
+    lens.members,
+    lens.playback.events,
+    lens.playback.steps,
+    runtimeServiceId,
+    topologyLayoutByActorId,
+  ]);
+  const filteredMemberRows = React.useMemo(() => {
+    return memberRows.filter((row) => {
+      const searchTarget = `${row.name} ${row.actorId} ${row.role}`.toLowerCase();
+      const searchPassed =
+        memberSearch.trim().length === 0 ||
+        searchTarget.includes(memberSearch.trim().toLowerCase());
+      const typePassed =
+        memberTypeFilter === "all" ||
+        normalizeStatus(row.implementationType) === normalizeStatus(memberTypeFilter);
+      const statusPassed =
+        memberStatusFilter === "all" ||
+        normalizeStatus(row.status) === normalizeStatus(memberStatusFilter);
+
+      return searchPassed && typePassed && statusPassed;
+    });
+  }, [memberRows, memberSearch, memberStatusFilter, memberTypeFilter]);
 
   const tabOptions: TeamTabOption[] = [
     { label: "概览", value: "overview" },
     { label: "事件拓扑", value: "topology" },
     { label: "事件流", value: "events" },
-    { label: "团队成员", value: "members" },
+    { label: "成员", value: "members" },
     { label: "连接器", value: "connectors" },
-    { label: "团队配置", value: "advanced" },
+    { label: "高级编辑", value: "advanced" },
   ];
 
   const initialLoading =
@@ -1243,7 +1526,7 @@ const TeamDetailPage: React.FC = () => {
   );
 
   const handleOpenConversation = React.useCallback(() => {
-    if (lens.playback.currentRunId) {
+    if (lens.playback.currentRunId || lens.currentRun?.runId) {
       handleOpenPlaybackRun();
       return;
     }
@@ -1256,10 +1539,11 @@ const TeamDetailPage: React.FC = () => {
     );
   }, [
     handleOpenPlaybackRun,
-    lens.currentRun?.actorId,
-    lens.playback.currentRunId,
-    runtimeServiceId,
-    scopeId,
+      lens.currentRun?.actorId,
+      lens.currentRun?.runId,
+      lens.playback.currentRunId,
+      runtimeServiceId,
+      scopeId,
   ]);
 
   const handleOpenServiceMapping = React.useCallback(() => {
@@ -1281,39 +1565,64 @@ const TeamDetailPage: React.FC = () => {
   ]);
 
   const renderOverviewTab = () => {
+    const summaryCards = [
+      {
+        caption: currentServiceKey,
+        label: "主服务入口",
+        value: currentServiceFriendly,
+      },
+      {
+        caption: currentRevisionId,
+        label: "当前版本",
+        value: currentRevisionFriendly,
+      },
+      {
+        caption: activeRunId || currentActorId,
+        label: "最近状态",
+        value: currentRunFriendly,
+      },
+      {
+        caption: formatDetailedTimestamp(latestVisibleUpdate),
+        label: "最近更新时间",
+        value: formatCompactTimestamp(latestVisibleUpdate),
+      },
+    ];
+
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <div
           style={{
-            background: token.colorBgContainer,
+            background: "#ffffff",
             border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 24,
-            boxShadow: token.boxShadowSecondary,
+            borderRadius: 8,
             display: "flex",
             flexDirection: "column",
-            gap: 18,
-            padding: 24,
+            gap: 16,
+            padding: 20,
           }}
         >
           <div
-            style={{
-              alignItems: "flex-start",
+          style={{
+              alignItems: "center",
               display: "flex",
               flexWrap: "wrap",
               gap: 12,
               justifyContent: "space-between",
             }}
           >
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <Space wrap size={8}>
                 <Typography.Text strong style={{ fontSize: 16 }}>
-                  当前态势
+                  团队状态
                 </Typography.Text>
                 <DetailPill
                   style={resolveStatusPillStyle(token, currentHeaderStatus)}
                   text={currentHeaderStatusFriendly}
                 />
               </Space>
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                当前团队的主服务、发布版本和最近一次可见运行信号。
+              </Typography.Text>
             </div>
             <Space wrap size={[8, 8]}>
               <DetailPill
@@ -1337,33 +1646,52 @@ const TeamDetailPage: React.FC = () => {
           <div
             style={{
               display: "grid",
-              gap: 14,
+              gap: 12,
               gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             }}
           >
-            <SignalCard
-              label="这支团队现在服务于"
-              captionMonospace
-              value={currentServiceFriendly}
-              caption={currentServiceKey}
-            />
-            <SignalCard
-              label="当前运行状态"
-              value={currentRunFriendly}
-              caption={activeRunId || "--"}
-            />
-            <SignalCard
-              label="最近一次更新"
-              value={formatCompactTimestamp(latestVisibleUpdate)}
-              caption={formatDetailedTimestamp(latestVisibleUpdate)}
-            />
+            {summaryCards.map((card) => (
+              <div
+                key={card.label}
+                style={{
+                  background: "#fafafa",
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: 8,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  minHeight: 116,
+                  padding: 16,
+                }}
+              >
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  {card.label}
+                </Typography.Text>
+                <Typography.Title level={3} style={{ margin: 0 }}>
+                  {card.value}
+                </Typography.Title>
+                <Tooltip placement="topLeft" title={card.caption}>
+                  <Typography.Text
+                    ellipsis
+                    style={{
+                      display: "block",
+                      fontFamily: factValueFontFamily,
+                      fontSize: 12,
+                    }}
+                    type="secondary"
+                  >
+                    {card.caption}
+                  </Typography.Text>
+                </Tooltip>
+              </div>
+            ))}
           </div>
         </div>
         <div
           style={{
             display: "grid",
-            gap: 18,
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
           }}
         >
           <OverviewMetricCard
@@ -1388,21 +1716,23 @@ const TeamDetailPage: React.FC = () => {
         >
           <div
             style={{
-              background: token.colorBgContainer,
+              background: "#ffffff",
               border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 24,
-              boxShadow: token.boxShadowSecondary,
+              borderRadius: 8,
               display: "flex",
               flexDirection: "column",
-              gap: 18,
-              padding: 24,
+              gap: 16,
+              padding: 20,
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
               <div>
-                <Typography.Title level={3} style={{ margin: 0 }}>
+                <Typography.Title level={4} style={{ margin: 0 }}>
                   团队构成
                 </Typography.Title>
+                <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                  当前可见的流程角色、脚本成员和主服务映射。
+                </Typography.Text>
               </div>
             </div>
             {compositionDisplayRows.length > 0 ? (
@@ -1416,7 +1746,7 @@ const TeamDetailPage: React.FC = () => {
                     display: "grid",
                     gap: 12,
                     gridTemplateColumns: "minmax(120px, 180px) minmax(0, 1fr) max-content",
-                    paddingTop: index === 0 ? 0 : 16,
+                    paddingTop: index === 0 ? 0 : 14,
                   }}
                 >
                   <Typography.Text strong>{row.name}</Typography.Text>
@@ -1438,20 +1768,22 @@ const TeamDetailPage: React.FC = () => {
 
           <div
             style={{
-              background: token.colorBgContainer,
+              background: "#ffffff",
               border: `1px solid ${token.colorBorderSecondary}`,
-              borderRadius: 24,
-              boxShadow: token.boxShadowSecondary,
+              borderRadius: 8,
               display: "flex",
               flexDirection: "column",
-              gap: 18,
-              padding: 24,
+              gap: 16,
+              padding: 20,
             }}
           >
             <div>
-              <Typography.Title level={3} style={{ margin: 0 }}>
+              <Typography.Title level={4} style={{ margin: 0 }}>
                 运行摘要
               </Typography.Title>
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                汇总当前团队的发布版本、可见运行信号和连接器状态。
+              </Typography.Text>
             </div>
             {runtimeSummaryRows.map((row, index) => (
               <div
@@ -1463,7 +1795,7 @@ const TeamDetailPage: React.FC = () => {
                   display: "grid",
                   gap: 12,
                   gridTemplateColumns: "minmax(96px, 128px) minmax(0, 1fr) max-content",
-                  paddingTop: index === 0 ? 0 : 16,
+                  paddingTop: index === 0 ? 0 : 14,
                 }}
               >
                 <Typography.Text style={{ paddingTop: 2 }} type="secondary">
@@ -1502,16 +1834,38 @@ const TeamDetailPage: React.FC = () => {
 
   const renderTopologyTab = () => {
     return (
-      <AevatarPanel
-        title="事件拓扑"
-        extra={
-          <DetailPill
-            compact
-            style={resolveObservationPillStyle(token, graphProvenance.status)}
-            text={graphProvenance.label}
-          />
-        }
+      <div
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e8e8e8",
+          borderRadius: 4,
+          overflow: "hidden",
+        }}
       >
+        <div
+          style={{
+            alignItems: "center",
+            background: "#fafafa",
+            borderBottom: "1px solid #f0f0f0",
+            display: "flex",
+            fontSize: 12,
+            fontWeight: 500,
+            gap: 12,
+            padding: "10px 14px",
+          }}
+        >
+          EventEnvelope 流转拓扑
+          <span
+            style={{
+              color: "#8c8c8c",
+              fontSize: 11,
+              fontWeight: 400,
+              marginLeft: "auto",
+            }}
+          >
+            {graphProvenance.label} · 点击节点查看详情
+          </span>
+        </div>
         {actorGraphQuery.isLoading ? (
           <AevatarInspectorEmpty description="正在加载团队拓扑。" />
         ) : actorGraphQuery.isError ? (
@@ -1523,53 +1877,100 @@ const TeamDetailPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div
               style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                background: "#fafafa",
+                minHeight: 320,
+                padding: 16,
+                position: "relative",
               }}
             >
-              <SignalCard
-                icon={<EyeOutlined />}
-                label="焦点成员"
-                value={compactId(effectiveActorId)}
-                caption={selectedFocusReason}
-              />
-              <SignalCard
-                icon={<BranchesOutlined />}
-                label="可见关系"
-                value={visibleGraphRelationships.length}
-                caption={`${selectedGraphNodes.length} 个节点参与当前焦点视图`}
-              />
-            </div>
-            <Alert description={lens.graph.stageSummary} showIcon type="info" />
-            <div
-              style={{
-                display: "grid",
-                gap: 10,
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              }}
-            >
-              {visibleGraphRelationships.length > 0 ? (
-                visibleGraphRelationships.map((relationship) => (
-                  <div
-                    key={relationship.key}
+              <svg
+                viewBox="0 0 920 300"
+                style={{
+                  inset: 0,
+                  pointerEvents: "none",
+                  position: "absolute",
+                }}
+              >
+                {visibleGraphRelationships.map((relationship) => {
+                  const from = topologyLayoutByActorId[relationship.fromActorId];
+                  const to = topologyLayoutByActorId[relationship.toActorId];
+                  if (!from || !to) {
+                    return null;
+                  }
+
+                  const stroke =
+                    relationship.direction === "inbound"
+                      ? "#1890ff"
+                      : relationship.direction === "peer"
+                        ? "#fa8c16"
+                        : "#52c41a";
+                  const dashArray =
+                    relationship.direction === "peer" ? "3 3" : "5 3";
+
+                  return (
+                    <line
+                      key={relationship.key}
+                      x1={from.x + 54}
+                      x2={to.x + 54}
+                      y1={from.y + 30}
+                      y2={to.y + 30}
+                      stroke={stroke}
+                      strokeDasharray={dashArray}
+                      strokeWidth={relationship.direction === "inbound" ? 1 : 1.5}
+                    />
+                  );
+                })}
+              </svg>
+              {topologyNodeLayouts.length > 0 ? (
+                topologyNodeLayouts.map((node) => (
+                  <button
+                    key={node.actorId}
+                    type="button"
+                    onClick={() => setSelectedActorId(node.actorId)}
                     style={{
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      borderRadius: 14,
-                      padding: 14,
+                      background: "#ffffff",
+                      border: `1.5px ${node.external ? "dashed" : "solid"} ${
+                        node.isFocused ? "#52c41a" : node.external ? "#1890ff" : "#d9d9d9"
+                      }`,
+                      borderRadius: 6,
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+                      cursor: "pointer",
+                      left: node.x,
+                      minWidth: 108,
+                      padding: "8px 12px",
+                      position: "absolute",
+                      textAlign: "center",
+                      top: node.y,
                     }}
                   >
-                    <Typography.Text strong>
-                      {compactId(relationship.fromActorId)} → {compactId(relationship.toActorId)}
-                    </Typography.Text>
-                    <div style={{ marginTop: 8 }}>
-                      <DetailPill
-                        compact
-                        style={resolveTonePillStyle(token, "info")}
-                        text={formatEdgeTypeLabel(relationship.edgeType)}
-                      />
+                    <div
+                      style={{
+                        color: "#262626",
+                        fontSize: 12,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {node.actorType || compactId(node.actorId)}
                     </div>
-                  </div>
+                    <div
+                      style={{
+                        color: "#8c8c8c",
+                        fontSize: 9,
+                        marginTop: 1,
+                      }}
+                    >
+                      {compactId(node.actorId)}
+                    </div>
+                    <div
+                      style={{
+                        color: node.external ? "#1890ff" : "#52c41a",
+                        fontSize: 10,
+                        marginTop: 3,
+                      }}
+                    >
+                      {node.relationCount} relations
+                    </div>
+                  </button>
                 ))
               ) : (
                 <AevatarInspectorEmpty
@@ -1577,24 +1978,43 @@ const TeamDetailPage: React.FC = () => {
                   description="当前没有更多可见的事件拓扑关系。"
                 />
               )}
+              <div
+                style={{
+                  background: "rgba(255,255,255,0.92)",
+                  borderRadius: 3,
+                  bottom: 10,
+                  color: "#8c8c8c",
+                  display: "flex",
+                  fontSize: 9,
+                  gap: 12,
+                  left: 10,
+                  padding: "3px 8px",
+                  position: "absolute",
+                }}
+              >
+                <span style={{ color: "#52c41a" }}>—— Event</span>
+                <span style={{ color: "#1890ff" }}>--- Reply</span>
+                <span style={{ color: "#fa8c16" }}>··· Peer</span>
+              </div>
+            </div>
+            <div style={{ padding: "0 16px 16px" }}>
+              <Alert description={selectedFocusReason || lens.graph.stageSummary} showIcon type="info" />
             </div>
           </div>
         )}
-      </AevatarPanel>
+      </div>
     );
   };
 
   const renderEventsTab = () => {
     return (
-      <AevatarPanel
-        title="事件流"
-        extra={
-          <DetailPill
-            compact
-            style={resolveObservationPillStyle(token, playbackProvenance.status)}
-            text={playbackProvenance.label}
-          />
-        }
+      <div
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e8e8e8",
+          borderRadius: 4,
+          overflow: "hidden",
+        }}
       >
         {runsQuery.isLoading ? (
           <AevatarInspectorEmpty description="正在加载最近运行。" />
@@ -1607,30 +2027,152 @@ const TeamDetailPage: React.FC = () => {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div
               style={{
-                background: token.colorBgContainerDisabled,
-                border: `1px solid ${token.colorBorderSecondary}`,
-                borderRadius: 16,
+                alignItems: "center",
+                background: "#fafafa",
+                borderBottom: "1px solid #f0f0f0",
                 display: "flex",
-                flexDirection: "column",
+                flexWrap: "wrap",
+                fontSize: 12,
+                fontWeight: 500,
                 gap: 8,
-                padding: 16,
+                padding: "8px 12px",
               }}
             >
-              <Space wrap>
-                <Typography.Text strong>
-                  {lens.currentRun?.runId || "当前还没有可见运行"}
-                </Typography.Text>
-                {lens.currentRun?.completionStatus ? (
-                  <DetailPill
-                    compact
-                    style={resolveStatusPillStyle(token, lens.currentRun.completionStatus)}
-                    text={formatFriendlyStatus(lens.currentRun.completionStatus)}
-                  />
-                ) : null}
-              </Space>
-              <Typography.Text type="secondary">
-                {lens.playback.summary}
-              </Typography.Text>
+              EventEnvelope Stream
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  marginLeft: 12,
+                }}
+              >
+                <select
+                  aria-label="事件类型过滤"
+                  style={{
+                    border: "1px solid #d9d9d9",
+                    borderRadius: 3,
+                    fontSize: 10,
+                    height: 22,
+                    padding: "0 4px",
+                  }}
+                >
+                  <option>Type: All</option>
+                </select>
+                <select
+                  aria-label="成员过滤"
+                  style={{
+                    border: "1px solid #d9d9d9",
+                    borderRadius: 3,
+                    fontSize: 10,
+                    height: 22,
+                    padding: "0 4px",
+                  }}
+                >
+                  <option>Agent: All</option>
+                </select>
+                <input
+                  aria-label="事件关键词过滤"
+                  placeholder="Filter..."
+                  style={{
+                    border: "1px solid #d9d9d9",
+                    borderRadius: 3,
+                    fontSize: 10,
+                    height: 22,
+                    padding: "0 6px",
+                    width: 140,
+                  }}
+                />
+              </div>
+              <span
+                style={{
+                  color: "#8c8c8c",
+                  fontSize: 11,
+                  fontWeight: 400,
+                  marginLeft: "auto",
+                }}
+              >
+                {playbackProvenance.label} · {eventLogRows.length} 条可见事件
+              </span>
+            </div>
+            <div
+              style={{
+                background: "#ffffff",
+                fontFamily: '"SF Mono", "JetBrains Mono", monospace',
+                fontSize: 11,
+              }}
+            >
+              {eventLogRows.length > 0 ? (
+                eventLogRows.map((row) => (
+                  <div
+                    key={row.key}
+                    style={{
+                      background: row.tone === "error" ? "#fff2f0" : "#ffffff",
+                      borderBottom: "1px solid #fafafa",
+                      display: "flex",
+                      gap: 8,
+                      lineHeight: 1.6,
+                      padding: "4px 12px",
+                    }}
+                  >
+                    <span style={{ color: "#bfbfbf", minWidth: 60 }}>
+                      {row.time}
+                    </span>
+                    <span
+                      style={{
+                        color:
+                          row.tone === "error"
+                            ? "#ff4d4f"
+                            : row.tone === "reply"
+                              ? "#1890ff"
+                              : row.tone === "sched"
+                                ? "#faad14"
+                                : row.tone === "route"
+                                  ? "#52c41a"
+                                  : "#722ed1",
+                        fontWeight: 600,
+                        minWidth: 52,
+                      }}
+                    >
+                      {row.type}
+                    </span>
+                    <span style={{ color: "#8c8c8c", minWidth: 120 }}>
+                      {row.flow}
+                    </span>
+                    <span style={{ color: "#434343", flex: 1 }}>{row.detail}</span>
+                  </div>
+                ))
+              ) : visiblePlaybackSteps.length > 0 ? (
+                visiblePlaybackSteps.map((step) => (
+                  <div
+                    key={step.key}
+                    style={{
+                      borderBottom: "1px solid #fafafa",
+                      display: "flex",
+                      gap: 8,
+                      lineHeight: 1.6,
+                      padding: "4px 12px",
+                    }}
+                  >
+                    <span style={{ color: "#bfbfbf", minWidth: 60 }}>
+                      {formatPreviewTime(step.timestamp)}
+                    </span>
+                    <span style={{ color: "#52c41a", fontWeight: 600, minWidth: 52 }}>
+                      {formatEventLogTypeLabel(step.stepType)}
+                    </span>
+                    <span style={{ color: "#8c8c8c", minWidth: 120 }}>
+                      {step.owner || compactId(step.actorId)}
+                    </span>
+                    <span style={{ color: "#434343", flex: 1 }}>{step.detail}</span>
+                  </div>
+                ))
+              ) : (
+                <AevatarInspectorEmpty
+                  title="当前还没有更多可见的步骤事实。"
+                  description={lens.playback.summary}
+                />
+              )}
+            </div>
+            <div style={{ padding: "0 12px 12px" }}>
               <Space wrap>
                 <Button onClick={handleOpenConversation}>测试对话</Button>
                 <Button onClick={handleOpenServiceMapping} type="link">
@@ -1638,134 +2180,277 @@ const TeamDetailPage: React.FC = () => {
                 </Button>
               </Space>
             </div>
-            {visiblePlaybackSteps.length > 0 ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {visiblePlaybackSteps.slice(0, 4).map((step) => (
-                  <div
-                    key={step.key}
-                    style={{
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      borderRadius: 14,
-                      padding: 14,
-                    }}
-                    >
-                      <Space wrap>
-                        <Typography.Text strong>{step.stepId}</Typography.Text>
-                        <DetailPill
-                          compact
-                          style={resolveTonePillStyle(token, "neutral")}
-                          text={formatStepTypeLabel(step.stepType)}
-                        />
-                      </Space>
-                      <Typography.Paragraph style={{ marginBottom: 0, marginTop: 8 }}>
-                        {step.detail}
-                    </Typography.Paragraph>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Typography.Text type="secondary">
-                当前还没有更多可见的步骤事实。
-              </Typography.Text>
-            )}
           </div>
         )}
-      </AevatarPanel>
+      </div>
     );
   };
 
   const renderMembersTab = () => {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <AevatarPanel title="这支团队里有哪些角色">
-          {compositionDisplayRows.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {compositionDisplayRows.map((row) => (
-                <div
-                  key={row.key}
-                  style={{
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                    borderRadius: 14,
-                    display: "grid",
-                    gap: 12,
-                    gridTemplateColumns: "minmax(120px, 168px) minmax(0, 1fr) max-content",
-                    padding: 14,
-                  }}
-                >
-                  <Typography.Text strong>{row.name}</Typography.Text>
-                  <FactLine rows={3} secondary text={row.summary} />
-                  <DetailPill
-                    compact
-                    style={resolveCompositionKindPillStyle(token, row.kind)}
-                    text={formatCompositionKind(row.kind)}
-                  />
-                </div>
+      <div
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e8e8e8",
+          borderRadius: 4,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            alignItems: "center",
+            background: "#ffffff",
+            borderBottom: "1px solid #e8e8e8",
+            display: "flex",
+            gap: 8,
+            padding: "8px 14px",
+          }}
+        >
+          <input
+            aria-label="搜索成员"
+            placeholder="搜索成员或 Actor ID..."
+            value={memberSearch}
+            onChange={(event) => setMemberSearch(event.target.value)}
+            style={{
+              border: "1px solid #d9d9d9",
+              borderRadius: 3,
+              fontSize: 11,
+              height: 26,
+              padding: "0 8px",
+              width: 220,
+            }}
+          />
+          <select
+            aria-label="成员类型过滤"
+            value={memberTypeFilter}
+            onChange={(event) => setMemberTypeFilter(event.target.value)}
+            style={{
+              border: "1px solid #d9d9d9",
+              borderRadius: 3,
+              fontSize: 11,
+              height: 26,
+              padding: "0 6px",
+            }}
+          >
+            <option value="all">类型: All</option>
+            {Array.from(
+              new Set(memberRows.map((row) => normalizeStatus(row.implementationType))),
+            )
+              .filter(Boolean)
+              .map((type) => (
+                <option key={type} value={type}>
+                  {formatCompositionKind(type)}
+                </option>
               ))}
-            </div>
-          ) : (
-            <AevatarInspectorEmpty
-              title="暂时还没有角色信息"
-              description="当前还没有足够事实来说明这支团队由谁组成。"
-            />
-          )}
-        </AevatarPanel>
-        <AevatarPanel title="当前参与运行">
-          {lens.members.length > 0 ? (
-            <div
-              style={{
-                display: "grid",
-                gap: 10,
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              }}
-            >
-              {lens.members.map((member) => (
-                <button
-                  aria-label={`选择成员 ${member.actorType} ${member.actorId}`}
-                  key={member.actorId}
-                  onClick={() => setSelectedActorId(member.actorId)}
-                  style={{
-                    background:
-                      member.actorId === effectiveActorId
-                        ? token.colorPrimaryBg
-                        : token.colorBgContainer,
-                    border: `1px solid ${
-                      member.actorId === effectiveActorId
-                        ? token.colorPrimaryBorder
-                        : token.colorBorderSecondary
-                    }`,
-                    borderRadius: 14,
-                    cursor: "pointer",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                    padding: 14,
-                    textAlign: "left",
-                  }}
-                  type="button"
-                >
-                  <Space wrap>
-                    <Typography.Text strong>
-                      {member.actorType || compactId(member.actorId)}
-                    </Typography.Text>
-                    {member.actorId === effectiveActorId ? (
-                      <DetailPill
-                        compact
-                        style={resolveTonePillStyle(token, "info")}
-                        text="当前焦点"
+          </select>
+          <select
+            aria-label="成员状态过滤"
+            value={memberStatusFilter}
+            onChange={(event) => setMemberStatusFilter(event.target.value)}
+            style={{
+              border: "1px solid #d9d9d9",
+              borderRadius: 3,
+              fontSize: 11,
+              height: 26,
+              padding: "0 6px",
+            }}
+          >
+            <option value="all">状态: All</option>
+            <option value="运行中">运行中</option>
+            <option value="已观察">已观察</option>
+            <option value="等待处理">等待处理</option>
+          </select>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table
+            style={{
+              background: "#ffffff",
+              borderCollapse: "collapse",
+              width: "100%",
+            }}
+          >
+            <thead>
+              <tr>
+                {[
+                  "Status",
+                  "Name",
+                  "Role",
+                  "Type",
+                  "Msgs (24h)",
+                  "Uptime",
+                  "Actor ID",
+                  "Governance Service",
+                  "Actions",
+                ].map((header) => (
+                  <th
+                    key={header}
+                    style={{
+                      background: "#fafafa",
+                      borderBottom: "1px solid #f0f0f0",
+                      color: "#8c8c8c",
+                      fontSize: 11,
+                      fontWeight: 500,
+                      letterSpacing: 0.3,
+                      padding: "9px 14px",
+                      textAlign: "left",
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredMemberRows.length > 0 ? (
+                filteredMemberRows.map((row) => (
+                  <tr
+                    key={row.key}
+                    style={{
+                      background:
+                        row.actorId === effectiveActorId ? "#fafcff" : "#ffffff",
+                    }}
+                  >
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      <span
+                        style={{
+                          background:
+                            row.status === "运行中"
+                              ? "#52c41a"
+                              : row.status === "等待处理"
+                                ? "#faad14"
+                                : "#1890ff",
+                          borderRadius: "50%",
+                          display: "inline-block",
+                          height: 6,
+                          marginRight: 8,
+                          width: 6,
+                        }}
                       />
-                    ) : null}
-                  </Space>
-                  <FactLine rows={2} secondary text={member.actorId} />
-                </button>
-              ))}
-            </div>
-          ) : (
-            <AevatarInspectorEmpty
-              title="暂时还没有可见参与者"
-              description="当前还没有观察到这支团队里的运行参与者。"
-            />
-          )}
-        </AevatarPanel>
+                      {row.status}
+                    </td>
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      <strong>{row.name}</strong>
+                    </td>
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      {row.role}
+                    </td>
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      <span
+                        style={{
+                          background: "#f5f5f5",
+                          border: "1px solid #e8e8e8",
+                          borderRadius: 3,
+                          color: "#595959",
+                          fontSize: 10,
+                          padding: "1px 6px",
+                        }}
+                      >
+                        {row.implementationType}
+                      </span>
+                    </td>
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      {row.messageCount}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f5f5f5",
+                        color: row.uptime === "99.9%" ? "#52c41a" : "#595959",
+                        padding: "10px 14px",
+                      }}
+                    >
+                      {row.uptime}
+                    </td>
+                    <td
+                      style={{
+                        borderBottom: "1px solid #f5f5f5",
+                        color: "#8c8c8c",
+                        fontFamily: factValueFontFamily,
+                        fontSize: 11,
+                        padding: "10px 14px",
+                      }}
+                    >
+                      {compactId(row.actorId)}
+                    </td>
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      <button
+                        type="button"
+                        onClick={() => history.push(buildRuntimeExplorerHref({
+                          actorId: row.actorId,
+                        }))}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "#1890ff",
+                          cursor: "pointer",
+                          fontFamily: factValueFontFamily,
+                          fontSize: 11,
+                          padding: 0,
+                        }}
+                      >
+                        {row.governanceService}
+                      </button>
+                    </td>
+                    <td style={{ borderBottom: "1px solid #f5f5f5", padding: "10px 14px" }}>
+                      <Space size={4}>
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => history.push(teamBuilderRoute)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => pushTeamTab("events")}
+                        >
+                          Logs
+                        </Button>
+                        <Button
+                          size="small"
+                          type="link"
+                          onClick={() => {
+                            setSelectedActorId(row.actorId);
+                            pushTeamTab("topology");
+                          }}
+                        >
+                          Graph
+                        </Button>
+                      </Space>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td
+                    colSpan={9}
+                    style={{
+                      padding: 24,
+                    }}
+                  >
+                    <AevatarInspectorEmpty
+                      title="暂时还没有可见参与者"
+                      description="当前过滤条件下没有成员记录。"
+                    />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div
+          style={{
+            background: "#e6f7ff",
+            borderTop: "1px solid #91d5ff",
+            color: "#1890ff",
+            fontSize: 11,
+            padding: "8px 12px",
+          }}
+        >
+          Governance Service ID 可跳转到 Platform → Topology，Actor ID 当前指向焦点成员。
+        </div>
       </div>
     );
   };
@@ -1863,31 +2548,101 @@ const TeamDetailPage: React.FC = () => {
   };
 
   const renderAdvancedTab = () => {
+    const studioContextRows = [
+      {
+        label: "团队",
+        value: teamTitle,
+      },
+      {
+        label: "当前流程",
+        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
+      },
+      {
+        label: "主服务",
+        value: currentServiceFriendly,
+      },
+      {
+        label: "当前版本",
+        value: currentVersionFriendly,
+      },
+    ];
+
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <AevatarPanel title="如何继续调整这支团队">
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Typography.Text strong>
-              团队流程：{workflowNameValue !== "--" ? workflowNameValue : teamTitle}
+        <div
+          style={{
+            background: "#ffffff",
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            padding: 20,
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Typography.Text strong style={{ fontSize: 16 }}>
+              团队构建器
             </Typography.Text>
             <Typography.Text type="secondary">
-              主服务：{currentServiceFriendly}
+              从这里进入 Studio，在当前团队上下文下继续编辑行为定义、脚本行为、Agent 角色、集成和测试运行。
             </Typography.Text>
             <Typography.Text type="secondary">
-              当前版本：{currentVersionFriendly}
+              当前入口会自动带上 scopeId，如果已经锁定了 workflow，也会直接打开对应成员的编辑视图。
             </Typography.Text>
-            <Space wrap>
-              <Button onClick={handleOpenServiceMapping} type="primary">
-                查看服务映射
-              </Button>
-              <Button onClick={() => history.push(teamBuilderRoute)}>
-                打开 Team Builder
-              </Button>
-              <Button onClick={handleOpenConversation}>测试对话</Button>
-            </Space>
           </div>
-        </AevatarPanel>
-        <AevatarPanel title="当前配置记录">
+          <Space wrap>
+            <Button type="primary" onClick={() => history.push(teamBuilderRoute)}>
+              打开团队构建器
+            </Button>
+            <Button onClick={handleOpenConversation}>测试对话</Button>
+            <Button onClick={handleOpenServiceMapping}>查看服务映射</Button>
+          </Space>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+          }}
+        >
+          {studioContextRows.map((item) => (
+            <div
+              key={item.label}
+              style={{
+                background: "#ffffff",
+                border: `1px solid ${token.colorBorderSecondary}`,
+                borderRadius: 8,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                minHeight: 108,
+                padding: 16,
+              }}
+            >
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                {item.label}
+              </Typography.Text>
+              <Typography.Title level={3} style={{ margin: 0 }}>
+                {item.value}
+              </Typography.Title>
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            background: "#ffffff",
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            padding: 20,
+          }}
+        >
+          <Typography.Text strong style={{ fontSize: 16 }}>
+            当前编辑上下文
+          </Typography.Text>
           <div
             style={{
               display: "grid",
@@ -1946,7 +2701,7 @@ const TeamDetailPage: React.FC = () => {
               <FactLine rows={1} secondary text={currentDeploymentId} />
             </div>
           </div>
-        </AevatarPanel>
+        </div>
       </div>
     );
   };
@@ -1989,72 +2744,122 @@ const TeamDetailPage: React.FC = () => {
   return (
     <AevatarPageShell
       title={
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Typography.Text
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div
             style={{
-              color: token.colorTextSecondary,
-              fontSize: 14,
+              color: "#00000073",
+              fontSize: 12,
             }}
           >
-            Aevatar / Teams
-          </Typography.Text>
-          <Space align="center" wrap size={12}>
-            <Typography.Title level={1} style={{ margin: 0 }}>
+            Teams / <b style={{ color: "#1d2129" }}>{teamTitle}</b>
+            {activeTab !== "overview" ? (
+              <span> / <b style={{ color: "#1d2129" }}>{formatTeamTabLabel(activeTab)}</b></span>
+            ) : null}
+          </div>
+          <div
+            style={{
+              alignItems: "center",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                color: "#1d2129",
+                fontSize: 18,
+                fontWeight: 600,
+                lineHeight: 1.4,
+              }}
+            >
               {teamTitle}
-            </Typography.Title>
-            <DetailPill
-              style={resolveStatusPillStyle(token, currentHeaderStatus)}
-              text={currentHeaderStatusFriendly}
-            />
-          </Space>
-          <Typography.Text
-            style={{
-              color: token.colorTextSecondary,
-              fontSize: 14,
-            }}
-          >
-            团队详情 / {formatTeamTabLabel(activeTab)}
-          </Typography.Text>
+            </div>
+            <span
+              style={{
+                background:
+                  currentHeaderStatusFriendly === "运行中"
+                    ? "#f6ffed"
+                    : currentHeaderStatusFriendly === "等待处理"
+                      ? "#fffbe6"
+                      : "#f5f5f5",
+                border: `1px solid ${
+                  currentHeaderStatusFriendly === "运行中"
+                    ? "#b7eb8f"
+                    : currentHeaderStatusFriendly === "等待处理"
+                      ? "#ffe58f"
+                      : "#e8e8e8"
+                }`,
+                borderRadius: 4,
+                color:
+                  currentHeaderStatusFriendly === "运行中"
+                    ? "#52c41a"
+                    : currentHeaderStatusFriendly === "等待处理"
+                      ? "#faad14"
+                      : "#595959",
+                display: "inline-flex",
+                fontSize: 10,
+                fontWeight: 500,
+                padding: "2px 8px",
+              }}
+            >
+              {currentHeaderStatusFriendly}
+            </span>
+          </div>
         </div>
       }
       extra={
         <Space key="team-detail-actions" wrap>
           <Button
-            onClick={handleOpenServiceMapping}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
-            type="primary"
-          >
-            查看服务映射
-          </Button>
-          <Button
             onClick={handleOpenConversation}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
+            style={{ borderRadius: 6, height: 30, paddingInline: 14 }}
           >
             测试对话
           </Button>
           <Button
             onClick={() => history.push(teamBuilderRoute)}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
+            style={{ borderRadius: 6, height: 30, paddingInline: 14 }}
           >
-            高级编辑
+            编辑
+          </Button>
+          <Button
+            danger
+            onClick={handleOpenServiceMapping}
+            style={{ borderRadius: 6, height: 30, paddingInline: 14 }}
+          >
+            查看服务映射
           </Button>
         </Space>
       }
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        <div
+          style={{
+            background: "#fafafa",
+            borderBottom: "1px solid #f0f0f0",
+            display: "flex",
+            flexWrap: "wrap",
+            fontSize: 12,
+            gap: 24,
+            padding: "10px 24px",
+          }}
+        >
+          {detailStripItems.map((item) => (
+            <div key={item.label}>
+              <span style={{ color: "#8c8c8c" }}>{item.label}</span>
+              <span style={{ color: "#262626", fontWeight: 500, marginLeft: 4 }}>
+                {item.value}
+              </span>
+            </div>
+          ))}
+        </div>
         <div
           role="tablist"
           aria-label="团队详情标签"
           style={{
-            alignItems: "center",
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 20,
-            boxShadow: token.boxShadowSecondary,
+            background: "#ffffff",
+            borderBottom: "1px solid #f0f0f0",
             display: "flex",
-            flexWrap: "wrap",
-            gap: 10,
-            padding: 8,
+            padding: "0 24px",
           }}
         >
           {tabOptions.map((option) => {
@@ -2065,17 +2870,15 @@ const TeamDetailPage: React.FC = () => {
                 key={option.value}
                 onClick={() => pushTeamTab(option.value)}
                 style={{
-                  background: active ? token.colorPrimary : "transparent",
-                  border: `1px solid ${
-                    active ? token.colorPrimary : "transparent"
-                  }`,
-                  borderRadius: 999,
-                  color: active ? token.colorWhite : token.colorTextSecondary,
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: `2px solid ${active ? "#1890ff" : "transparent"}`,
+                  color: active ? "#1890ff" : "#595959",
                   cursor: "pointer",
-                  fontSize: 14,
-                  fontWeight: active ? 700 : 500,
-                  padding: "10px 16px",
-                  transition: "all 160ms ease",
+                  fontSize: 13,
+                  fontWeight: active ? 500 : 400,
+                  marginRight: 28,
+                  padding: "12px 0",
                 }}
                 type="button"
               >
@@ -2084,9 +2887,21 @@ const TeamDetailPage: React.FC = () => {
             );
           })}
         </div>
-        {tabContent}
+        <div
+          style={{
+            background: activeTab === "overview" ? "#ffffff" : "#f0f2f5",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+            padding: "16px 24px",
+          }}
+        >
+          {tabContent}
+        </div>
         {initialLoading ? (
-          <Typography.Text type="secondary">正在加载团队详情...</Typography.Text>
+          <Typography.Text style={{ padding: "0 24px 16px" }} type="secondary">
+            正在加载团队详情...
+          </Typography.Text>
         ) : null}
       </div>
     </AevatarPageShell>

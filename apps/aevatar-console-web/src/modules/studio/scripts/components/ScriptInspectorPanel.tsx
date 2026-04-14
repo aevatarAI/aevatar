@@ -15,6 +15,10 @@ type ScriptInspectorPanelProps = {
   appContext: StudioAppContext;
   scopeBacked: boolean;
   selectedDraft: ScriptDraft | null;
+  canAskAi?: boolean;
+  canBindScope?: boolean;
+  onOpenAskAi?: () => void;
+  onOpenBindScope?: () => void;
 };
 
 function renderValue(value: string | number | null | undefined): string {
@@ -26,20 +30,22 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
   appContext,
   scopeBacked,
   selectedDraft,
+  canAskAi = false,
+  canBindScope = false,
+  onOpenAskAi,
+  onOpenBindScope,
 }) => {
   if (!selectedDraft) {
     return (
       <section className="console-scripts-panel">
         <div className="console-scripts-panel-header">
-          <div className="console-scripts-eyebrow">Inspector</div>
-          <div className="console-scripts-panel-header-title">
-            Draft metadata
-          </div>
+          <div className="console-scripts-eyebrow">脚本信息</div>
+          <div className="console-scripts-panel-header-title">当前脚本</div>
         </div>
         <div className="console-scripts-panel-body">
           <ScriptsStudioEmptyState
-            title="No draft selected."
-            copy="Select a draft to inspect its identity, contract, actors, and scope state."
+            title="还没有选中脚本。"
+            copy="选择一个脚本草稿后，这里会显示脚本信息、行为合约和发布状态。"
           />
         </div>
       </section>
@@ -48,207 +54,184 @@ const ScriptInspectorPanel: React.FC<ScriptInspectorPanelProps> = ({
 
   const isEmbeddedMode = appContext.mode === 'embedded';
   const availableActions = [
-    'Validate',
-    ...(scopeBacked ? ['Save', 'Promote'] : []),
-    ...(isEmbeddedMode ? ['Draft Run', 'Ask AI'] : []),
+    '校验',
+    ...(scopeBacked ? ['保存', '发布'] : []),
+    ...(isEmbeddedMode ? ['测试运行', 'AI 辅助'] : []),
   ];
   const unavailableActions = [
     ...(!scopeBacked
-      ? ['Save (requires current scope)', 'Promote (requires current scope)']
+      ? ['保存（需要当前团队）', '发布（需要当前团队）']
       : []),
     ...(!isEmbeddedMode
-      ? ['Draft Run (requires embedded host)', 'Ask AI (requires embedded host)']
+      ? ['测试运行（需要嵌入式 Host）', 'AI 辅助（需要嵌入式 Host）']
       : []),
   ];
+  const scopeScript = selectedDraft.scopeDetail?.script || null;
 
   return (
     <section className="console-scripts-panel">
       <div className="console-scripts-panel-header">
-        <div className="console-scripts-eyebrow">Inspector</div>
-        <div className="console-scripts-panel-header-title">Draft metadata</div>
+        <div className="console-scripts-eyebrow">脚本信息</div>
+        <div className="console-scripts-panel-header-title">
+          {selectedDraft.package.entryBehaviorTypeName || selectedDraft.scriptId}
+        </div>
       </div>
       <div className="console-scripts-panel-body">
-        <ScriptsStudioSection eyebrow="Identity" title="Draft identity">
+        <ScriptsStudioSection eyebrow="概要" title="当前脚本">
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Script ID</div>
+              <div className="console-scripts-field-label">脚本 ID</div>
               <div className="console-scripts-field-value">
                 {selectedDraft.scriptId}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Draft Revision</div>
+              <div className="console-scripts-field-label">版本</div>
               <div className="console-scripts-field-value">
                 {selectedDraft.revision}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Base Revision</div>
+              <div className="console-scripts-field-label">入口类</div>
               <div className="console-scripts-field-value">
-                {renderValue(selectedDraft.baseRevision)}
+                {renderValue(selectedDraft.package.entryBehaviorTypeName)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Updated</div>
+              <div className="console-scripts-field-label">当前文件</div>
               <div className="console-scripts-field-value">
-                {formatScriptDateTime(selectedDraft.updatedAtUtc)}
+                {renderValue(selectedDraft.selectedFilePath)}
               </div>
             </div>
           </div>
         </ScriptsStudioSection>
 
         <ScriptsStudioSection
-          eyebrow="Contract"
-          title="Current app contract"
+          eyebrow="合约"
+          title="行为合约"
         >
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Storage</div>
+              <div className="console-scripts-field-label">存储位置</div>
               <div className="console-scripts-field-value">
                 {scopeBacked
-                  ? `Resolved scope · ${appContext.scopeId}`
-                  : 'Local-only draft'}
+                  ? `当前团队 · ${appContext.scopeId}`
+                  : '仅本地草稿'}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Input Type</div>
+              <div className="console-scripts-field-label">输入类型</div>
               <div className="console-scripts-copy-value">
                 {appContext.scriptContract.inputType}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Read Model Fields</div>
+              <div className="console-scripts-field-label">ReadModel 字段</div>
               <div className="console-scripts-field-value">
                 {appContext.scriptContract.readModelFields.join(', ') || '-'}
+              </div>
+            </div>
+            <div className="console-scripts-field">
+              <div className="console-scripts-field-label">Host 模式</div>
+              <div className="console-scripts-field-value">
+                {formatStudioHostModeLabel(appContext.mode)}
               </div>
             </div>
           </div>
         </ScriptsStudioSection>
 
-        <ScriptsStudioSection
-          eyebrow="Host"
-          title="Host capabilities"
-        >
+        <ScriptsStudioSection eyebrow="操作" title="当前可用操作">
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Host Mode</div>
-              <div className="console-scripts-field-value">
-                {formatStudioHostModeLabel(appContext.mode)}
-              </div>
-            </div>
-            <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Available Here</div>
+              <div className="console-scripts-field-label">当前可用</div>
               <div className="console-scripts-field-value">
                 {availableActions.join(', ')}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Unavailable Here</div>
+              <div className="console-scripts-field-label">当前不可用</div>
               <div className="console-scripts-field-value">
-                {unavailableActions.join(', ') || 'None'}
+                {unavailableActions.join(', ') || '无'}
               </div>
             </div>
+          </div>
+          <div
+            className="console-scripts-inline-actions"
+            style={{ marginTop: 16, justifyContent: 'space-between' }}
+          >
+            <button
+              type="button"
+              className="console-scripts-ghost-action"
+              onClick={onOpenAskAi}
+              disabled={!canAskAi}
+            >
+              AI 辅助
+            </button>
+            <button
+              type="button"
+              className="console-scripts-solid-action"
+              onClick={onOpenBindScope}
+              disabled={!canBindScope}
+            >
+              绑定到团队
+            </button>
           </div>
           <div className="console-scripts-detail-copy">
             {getStudioHostModeTooltip(appContext.mode)}
           </div>
         </ScriptsStudioSection>
 
-        <ScriptsStudioSection
-          eyebrow="Actors"
-          title="Binding and runtime ids"
-        >
+        <ScriptsStudioSection eyebrow="更多信息" title="运行与发布">
           <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Definition Actor</div>
+              <div className="console-scripts-field-label">定义 Actor</div>
               <div className="console-scripts-copy-value">
                 {renderValue(selectedDraft.definitionActorId)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Runtime Actor</div>
+              <div className="console-scripts-field-label">运行 Actor</div>
               <div className="console-scripts-copy-value">
                 {renderValue(selectedDraft.runtimeActorId)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Source Hash</div>
+              <div className="console-scripts-field-label">源码哈希</div>
               <div className="console-scripts-copy-value">
                 {renderValue(selectedDraft.lastSourceHash)}
               </div>
             </div>
-          </div>
-        </ScriptsStudioSection>
-
-        <ScriptsStudioSection
-          eyebrow="Package"
-          title="Draft package"
-        >
-          <div className="console-scripts-detail-grid">
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Selected File</div>
+              <div className="console-scripts-field-label">已发布版本</div>
               <div className="console-scripts-field-value">
-                {renderValue(selectedDraft.selectedFilePath)}
+                {renderValue(scopeScript?.activeRevision)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Entry Source</div>
+              <div className="console-scripts-field-label">目录 Actor</div>
+              <div className="console-scripts-copy-value">
+                {renderValue(scopeScript?.catalogActorId)}
+              </div>
+            </div>
+            <div className="console-scripts-field">
+              <div className="console-scripts-field-label">入口源文件</div>
               <div className="console-scripts-field-value">
                 {renderValue(selectedDraft.package.entrySourcePath)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">Entry Type</div>
+              <div className="console-scripts-field-label">基线版本</div>
               <div className="console-scripts-field-value">
-                {renderValue(selectedDraft.package.entryBehaviorTypeName)}
+                {renderValue(selectedDraft.baseRevision)}
               </div>
             </div>
             <div className="console-scripts-field">
-              <div className="console-scripts-field-label">C# / Proto</div>
+              <div className="console-scripts-field-label">更新时间</div>
               <div className="console-scripts-field-value">
-                {selectedDraft.package.csharpSources.length} /{' '}
-                {selectedDraft.package.protoFiles.length}
+                {formatScriptDateTime(selectedDraft.updatedAtUtc)}
               </div>
             </div>
           </div>
-        </ScriptsStudioSection>
-
-        <ScriptsStudioSection
-          eyebrow="Scope Snapshot"
-          title="Saved scope state"
-        >
-          {selectedDraft.scopeDetail?.script ? (
-            <div className="console-scripts-detail-grid">
-              <div className="console-scripts-field">
-                <div className="console-scripts-field-label">Scope Script</div>
-                <div className="console-scripts-field-value">
-                  {selectedDraft.scopeDetail.script.scriptId}
-                </div>
-              </div>
-              <div className="console-scripts-field">
-                <div className="console-scripts-field-label">Scope Revision</div>
-                <div className="console-scripts-field-value">
-                  {selectedDraft.scopeDetail.script.activeRevision}
-                </div>
-              </div>
-              <div className="console-scripts-field">
-                <div className="console-scripts-field-label">Catalog Actor</div>
-                <div className="console-scripts-copy-value">
-                  {renderValue(selectedDraft.scopeDetail.script.catalogActorId)}
-                </div>
-              </div>
-              <div className="console-scripts-field">
-                <div className="console-scripts-field-label">Updated</div>
-                <div className="console-scripts-field-value">
-                  {formatScriptDateTime(selectedDraft.scopeDetail.script.updatedAt)}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="console-scripts-detail-copy">
-              This draft has not been saved into the current scope catalog yet.
-            </div>
-          )}
         </ScriptsStudioSection>
       </div>
     </section>

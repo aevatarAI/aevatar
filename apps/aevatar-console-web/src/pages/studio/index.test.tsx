@@ -905,13 +905,14 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 
 jest.mock("./components/StudioShell", () => ({
   __esModule: true,
-  default: ({ alerts, children, navItems = [], onSelectPage }: any) => {
+  default: ({ alerts, children, contextBar, navItems = [], onSelectPage }: any) => {
     const React = require("react");
     return React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "workbench" }, "Workbench"),
+        contextBar ? React.createElement("div", { key: "context-bar" }, contextBar) : null,
         alerts ? React.createElement("div", { key: "alerts" }, alerts) : null,
         ...navItems.map((item: any) =>
           React.createElement(
@@ -1625,8 +1626,9 @@ describe("StudioPage", () => {
       "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
     );
 
-    expect(await screen.findByText("团队构建器上下文")).toBeTruthy();
-    expect(screen.getByText("团队 A / 成员 Alpha")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "← 团队 A" })).toBeTruthy();
+    expect(screen.getByText(/成员 Alpha/)).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "测试运行" }).length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");
@@ -1640,7 +1642,7 @@ describe("StudioPage", () => {
     expect(searchParams.get("workflow")).toBe("workflow-1");
     expect(searchParams.get("tab")).toBe("studio");
 
-    fireEvent.click(screen.getByRole("button", { name: "查看行为定义" }));
+    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
@@ -1955,6 +1957,48 @@ describe("StudioPage", () => {
     expect(await screen.findByTestId("workflow-graph-node-count")).toHaveTextContent(
       "2"
     );
+  });
+
+  it("prefers the active scope binding workflow when Studio opens in a team context", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([
+      {
+        workflowId: "workflow-2",
+        name: "other-workflow",
+        description: "Other workflow",
+        fileName: "other-workflow.yaml",
+        filePath: "/tmp/workflows/other-workflow.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 1,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+      {
+        workflowId: "workflow-1",
+        name: "workspace-demo",
+        description: "Workspace workflow",
+        fileName: "workspace-demo.yaml",
+        filePath: "/tmp/workflows/workspace-demo.yaml",
+        directoryId: "dir-1",
+        directoryLabel: "Workspace",
+        stepCount: 2,
+        hasLayout: true,
+        updatedAtUtc: "2026-03-18T00:00:00Z",
+      },
+    ]);
+
+    renderStudioPage("/studio?scopeId=scope-1&tab=studio");
+
+    await waitFor(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("workflow")).toBe("workflow-1");
+      expect(searchParams.get("tab")).toBe("studio");
+    });
   });
 
   it("opens the scripts workspace when the route only carries a script id", async () => {
