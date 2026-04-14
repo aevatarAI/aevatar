@@ -136,6 +136,63 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   };
 }
 
+export type ScopeScriptCommandAcceptedHandle = {
+  actorId: string;
+  commandId: string;
+  correlationId: string;
+};
+
+export type ScopeScriptAcceptedSummary = {
+  scopeId: string;
+  scriptId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  revisionId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type AppScopeScriptSaveAcceptedResponse = {
+  acceptedScript: ScopeScriptAcceptedSummary;
+  submittedSource: {
+    sourceText: string;
+    definitionActorId: string;
+    revision: string;
+    sourceHash: string;
+  };
+  definitionCommand: ScopeScriptCommandAcceptedHandle;
+  catalogCommand: ScopeScriptCommandAcceptedHandle;
+  scopeId: string;
+  scriptId: string;
+  revisionId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type AppScopeScriptSaveObservationRequest = {
+  revisionId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+  acceptedAt: string;
+};
+
+export type AppScopeScriptSaveObservationResult = {
+  scopeId: string;
+  scriptId: string;
+  status: 'pending' | 'applied' | 'rejected';
+  message: string;
+  currentScript: any | null;
+  isTerminal: boolean;
+};
+
 async function requestText(path: string, opts?: RequestInit): Promise<string> {
   const headers = createRequestHeaders(opts);
   const res = await fetch(`${BASE}${path}`, {
@@ -824,7 +881,9 @@ export const app = {
   listScriptRuntimes: (take = 24) => request<any>(`/app/scripts/runtimes?take=${take}`),
   getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
   getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
-  saveScript: (data: any) => request<any>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
+  saveScript: (data: any) => request<AppScopeScriptSaveAcceptedResponse>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
+  observeScriptSave: (scriptId: string, data: AppScopeScriptSaveObservationRequest) =>
+    request<AppScopeScriptSaveObservationResult>(`/app/scripts/${encodeURIComponent(scriptId)}/save-observation`, { method: 'POST', body: JSON.stringify(data) }),
   runDraftScript: (scopeId: string, data: any) => request<any>(`/scopes/${enc(scopeId)}/scripts/draft-run`, { method: 'POST', body: JSON.stringify(data) }),
 };
 

@@ -30,6 +30,7 @@ public sealed class AppScopedScriptService
 
     private readonly IScopeScriptQueryPort? _scriptQueryPort;
     private readonly IScopeScriptCommandPort? _scriptCommandPort;
+    private readonly IScopeScriptSaveObservationPort? _scriptSaveObservationPort;
     private readonly IScriptDefinitionSnapshotPort? _definitionSnapshotPort;
     private readonly IScriptEvolutionApplicationService? _scriptEvolutionService;
     private readonly IScriptCatalogQueryPort? _scriptCatalogQueryPort;
@@ -43,6 +44,7 @@ public sealed class AppScopedScriptService
         IHttpClientFactory httpClientFactory,
         IScopeScriptQueryPort? scriptQueryPort = null,
         IScopeScriptCommandPort? scriptCommandPort = null,
+        IScopeScriptSaveObservationPort? scriptSaveObservationPort = null,
         IScriptDefinitionSnapshotPort? definitionSnapshotPort = null,
         IScriptEvolutionApplicationService? scriptEvolutionService = null,
         IScriptCatalogQueryPort? scriptCatalogQueryPort = null,
@@ -54,6 +56,7 @@ public sealed class AppScopedScriptService
         _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
         _scriptQueryPort = scriptQueryPort;
         _scriptCommandPort = scriptCommandPort;
+        _scriptSaveObservationPort = scriptSaveObservationPort;
         _definitionSnapshotPort = definitionSnapshotPort;
         _scriptEvolutionService = scriptEvolutionService;
         _scriptCatalogQueryPort = scriptCatalogQueryPort;
@@ -218,7 +221,7 @@ public sealed class AppScopedScriptService
             allowNotFound: true);
     }
 
-    public async Task<ScopeScriptDetail> SaveAsync(
+    public async Task<AppScopeScriptSaveAcceptedResponse> SaveAsync(
         string scopeId,
         AppScopeScriptSaveRequest request,
         CancellationToken ct = default)
@@ -229,9 +232,7 @@ public sealed class AppScopedScriptService
         var sourceText = NormalizeRequired(
             AppScriptPackagePayloads.ResolvePersistedSource(request.Package, request.SourceText),
             nameof(request.SourceText));
-        var scriptId = string.IsNullOrWhiteSpace(request.ScriptId)
-            ? StudioDocumentIdNormalizer.Normalize(request.ScriptId, "script")
-            : NormalizeRequired(request.ScriptId, nameof(request.ScriptId));
+        var scriptId = StudioDocumentIdNormalizer.Normalize(request.ScriptId, "script");
 
         ScopeScriptUpsertResult upsertResult;
         if (_scriptCommandPort != null)
@@ -257,16 +258,41 @@ public sealed class AppScopedScriptService
                 ct) ?? throw new InvalidOperationException("Script save returned an empty response.");
         }
 
-        var detail = BuildSavedDetail(normalizedScopeId, sourceText, upsertResult);
+        var accepted = BuildAcceptedSaveResponse(sourceText, upsertResult);
+        _ = UploadScriptBestEffortAsync(scriptId, sourceText);
+        return accepted;
+    }
 
-        try
-        {
-            if (_scriptStoragePort != null)
-                await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, ct);
-        }
-        catch { /* don't fail the save if chrono-storage upload fails */ }
+    public async Task<ScopeScriptSaveObservationResult> ObserveSaveAsync(
+        string scopeId,
+        string scriptId,
+        AppScopeScriptSaveObservationRequest request,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
 
-        return detail;
+        var normalizedScopeId = NormalizeRequired(scopeId, nameof(scopeId));
+        var normalizedScriptId = NormalizeRequired(scriptId, nameof(scriptId));
+        var normalizedRevisionId = NormalizeRequired(request.RevisionId ?? string.Empty, nameof(request.RevisionId));
+        var normalizedDefinitionActorId = NormalizeRequired(request.DefinitionActorId ?? string.Empty, nameof(request.DefinitionActorId));
+        var normalizedSourceHash = NormalizeRequired(request.SourceHash ?? string.Empty, nameof(request.SourceHash));
+        var remoteRequest = new ScopeScriptSaveObservationRequest(
+            normalizedRevisionId,
+            normalizedDefinitionActorId,
+            normalizedSourceHash,
+            request.ProposalId?.Trim() ?? string.Empty,
+            request.ExpectedBaseRevision?.Trim() ?? string.Empty,
+            request.AcceptedAt);
+
+        if (_scriptSaveObservationPort != null)
+            return await _scriptSaveObservationPort.ObserveAsync(normalizedScopeId, normalizedScriptId, remoteRequest, ct);
+
+        return await SendAsync<ScopeScriptSaveObservationResult>(
+                   HttpMethod.Post,
+                   $"/api/scopes/{Uri.EscapeDataString(normalizedScopeId)}/scripts/{Uri.EscapeDataString(normalizedScriptId)}/save-observation",
+                   remoteRequest,
+                   ct) ??
+               throw new InvalidOperationException("Script save observation returned an empty response.");
     }
 
     public async Task<ScriptPromotionDecision> ProposeEvolutionAsync(
@@ -462,38 +488,46 @@ public sealed class AppScopedScriptService
         (mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
          mediaType.Contains("application/xhtml+xml", StringComparison.OrdinalIgnoreCase));
 
-    private static ScopeScriptDetail BuildSavedDetail(
-        string scopeId,
+    private static AppScopeScriptSaveAcceptedResponse BuildAcceptedSaveResponse(
         string sourceText,
         ScopeScriptUpsertResult upsertResult)
     {
         ArgumentNullException.ThrowIfNull(upsertResult);
 
-        var summary = upsertResult.Script;
-        var normalizedSourceText = sourceText ?? string.Empty;
-        var sourceHash = string.IsNullOrWhiteSpace(summary.ActiveSourceHash)
-            ? ComputeSha256(normalizedSourceText)
-            : summary.ActiveSourceHash;
+        var submittedSource = new ScopeScriptSource(
+            sourceText ?? string.Empty,
+            upsertResult.DefinitionActorId,
+            upsertResult.RevisionId,
+            string.IsNullOrWhiteSpace(upsertResult.SourceHash)
+                ? ComputeSha256(sourceText ?? string.Empty)
+                : upsertResult.SourceHash);
 
-        return new ScopeScriptDetail(
-            Available: true,
-            ScopeId: scopeId,
-            Script: summary,
-            Source: new ScopeScriptSource(
-                normalizedSourceText,
-                string.IsNullOrWhiteSpace(upsertResult.DefinitionActorId)
-                    ? summary.DefinitionActorId
-                    : upsertResult.DefinitionActorId,
-                string.IsNullOrWhiteSpace(upsertResult.RevisionId)
-                    ? summary.ActiveRevision
-                    : upsertResult.RevisionId,
-                sourceHash));
+        return new AppScopeScriptSaveAcceptedResponse(
+            upsertResult.AcceptedScript,
+            submittedSource,
+            upsertResult.DefinitionCommand,
+            upsertResult.CatalogCommand);
     }
 
     private static string ComputeSha256(string value)
     {
         var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private async Task UploadScriptBestEffortAsync(string scriptId, string sourceText)
+    {
+        if (_scriptStoragePort == null)
+            return;
+
+        try
+        {
+            await _scriptStoragePort.UploadScriptAsync(scriptId, sourceText, CancellationToken.None);
+        }
+        catch
+        {
+            /* don't fail the accepted save if chrono-storage upload fails */
+        }
     }
 
     private static string FormatReadModelJson(Any? payload)
@@ -576,6 +610,14 @@ public sealed record AppScopeScriptSaveRequest(
     string? ExpectedBaseRevision = null,
     AppScriptPackage? Package = null);
 
+public sealed record AppScopeScriptSaveObservationRequest(
+    string? RevisionId,
+    string? DefinitionActorId,
+    string? SourceHash,
+    string? ProposalId,
+    string? ExpectedBaseRevision,
+    DateTimeOffset AcceptedAt);
+
 public sealed record AppScopeScriptEvolutionRequest(
     string? ScriptId,
     string? BaseRevision,
@@ -585,6 +627,23 @@ public sealed record AppScopeScriptEvolutionRequest(
     string? Reason,
     string? ProposalId,
     AppScriptPackage? CandidatePackage = null);
+
+public sealed record AppScopeScriptSaveAcceptedResponse(
+    ScopeScriptAcceptedSummary AcceptedScript,
+    ScopeScriptSource SubmittedSource,
+    ScopeScriptCommandAcceptedHandle DefinitionCommand,
+    ScopeScriptCommandAcceptedHandle CatalogCommand)
+{
+    public string ScopeId => AcceptedScript.ScopeId;
+    public string ScriptId => AcceptedScript.ScriptId;
+    public string RevisionId => AcceptedScript.RevisionId;
+    public string CatalogActorId => AcceptedScript.CatalogActorId;
+    public string DefinitionActorId => AcceptedScript.DefinitionActorId;
+    public string SourceHash => AcceptedScript.SourceHash;
+    public DateTimeOffset AcceptedAt => AcceptedScript.AcceptedAt;
+    public string ProposalId => AcceptedScript.ProposalId;
+    public string ExpectedBaseRevision => AcceptedScript.ExpectedBaseRevision;
+}
 
 public sealed record AppScriptCatalogSnapshot(
     string ScriptId,

@@ -1,4 +1,5 @@
 using Aevatar.CQRS.Core.Abstractions.Commands;
+using Aevatar.Scripting.Core.Ports;
 
 namespace Aevatar.Scripting.Infrastructure.Ports;
 
@@ -15,6 +16,7 @@ public sealed class ScriptingCommandAcceptedReceiptFactory
         return new ScriptingCommandAcceptedReceipt(
             target.TargetId,
             context.CommandId,
-            context.CorrelationId);
+            context.CorrelationId,
+            DateTimeOffset.UtcNow);
     }
 }

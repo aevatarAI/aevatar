@@ -2,7 +2,7 @@ namespace Aevatar.Scripting.Core.Ports;
 
 public interface IScriptCatalogCommandPort
 {
-    Task PromoteCatalogRevisionAsync(
+    Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
         string? catalogActorId,
         string scriptId,
         string expectedBaseRevision,
@@ -12,7 +12,7 @@ public interface IScriptCatalogCommandPort
         string proposalId,
         CancellationToken ct);
 
-    Task PromoteCatalogRevisionAsync(
+    Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
         string? catalogActorId,
         string scriptId,
         string expectedBaseRevision,
@@ -32,7 +32,7 @@ public interface IScriptCatalogCommandPort
             proposalId,
             ct);
 
-    Task RollbackCatalogRevisionAsync(
+    Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
         string? catalogActorId,
         string scriptId,
         string targetRevision,
@@ -41,7 +41,7 @@ public interface IScriptCatalogCommandPort
         string expectedCurrentRevision,
         CancellationToken ct);
 
-    Task RollbackCatalogRevisionAsync(
+    Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
         string? catalogActorId,
         string scriptId,
         string targetRevision,

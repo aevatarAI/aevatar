@@ -375,21 +375,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = CreateCatalogCommandService(
-            runtime,
-            new ProjectionScriptCatalogQueryPort((_, scriptId, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return Task.FromResult<ScriptCatalogEntrySnapshot?>(
-                    new ScriptCatalogEntrySnapshot(
-                        scriptId,
-                        "rev-2",
-                        "definition-2",
-                        "hash-2",
-                        "rev-1",
-                        ["rev-2"],
-                        "proposal-1"));
-            }));
+        var service = CreateCatalogCommandService(runtime);
 
         await service.PromoteCatalogRevisionAsync(
             catalogActorId: null,
@@ -420,21 +406,7 @@ public class RuntimeScriptInfrastructurePortsTests
                 return Task.CompletedTask;
             }),
         };
-        var service = CreateCatalogCommandService(
-            runtime,
-            new ProjectionScriptCatalogQueryPort((_, scriptId, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                return Task.FromResult<ScriptCatalogEntrySnapshot?>(
-                    new ScriptCatalogEntrySnapshot(
-                        scriptId,
-                        "rev-1",
-                        string.Empty,
-                        string.Empty,
-                        "rev-2",
-                        ["rev-1", "rev-2"],
-                        "proposal-rollback"));
-            }));
+        var service = CreateCatalogCommandService(runtime);
 
         await service.RollbackCatalogRevisionAsync(
             catalogActorId: "catalog-custom",
@@ -898,8 +870,7 @@ public class RuntimeScriptInfrastructurePortsTests
     }
 
     private static RuntimeScriptCatalogCommandService CreateCatalogCommandService(
-        TestActorRuntime runtime,
-        ProjectionScriptCatalogQueryPort catalogQueryPort)
+        TestActorRuntime runtime)
     {
         return new RuntimeScriptCatalogCommandService(
             CreateDispatchService(
@@ -915,9 +886,7 @@ public class RuntimeScriptInfrastructurePortsTests
                     new StaticAddressResolver()),
                 new RollbackScriptCatalogRevisionCommandEnvelopeFactory()),
             new StaticAddressResolver(),
-            new RuntimeScriptActorAccessor(runtime),
-            new NoOpAuthorityReadModelActivationPort(),
-            catalogQueryPort);
+            new RuntimeScriptActorAccessor(runtime));
     }
 
     private static ICommandDispatchService<TCommand, ScriptingCommandAcceptedReceipt, ScriptingCommandStartError> CreateDispatchService<TCommand>(
@@ -1018,16 +987,6 @@ public class RuntimeScriptInfrastructurePortsTests
 
         public Task RestoreAllAsync(CancellationToken ct = default)
         {
-            ct.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class NoOpAuthorityReadModelActivationPort : IScriptAuthorityReadModelActivationPort
-    {
-        public Task ActivateAsync(string actorId, CancellationToken ct)
-        {
-            _ = actorId;
             ct.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         }
