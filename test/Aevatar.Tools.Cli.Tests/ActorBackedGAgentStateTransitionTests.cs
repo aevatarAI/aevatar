@@ -1154,6 +1154,25 @@ public sealed class ActorBackedGAgentStateTransitionTests
     }
 
     [Fact]
+    public void ConnectorCatalog_SaveDraft_NullDraft_SetsEntryWithNullPayload()
+    {
+        var state = new ConnectorCatalogState();
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new ConnectorDraftSavedEvent
+        {
+            Draft = null,
+            UpdatedAtUtc = ts,
+        };
+
+        var next = ApplyConnectorCatalog(state, evt);
+
+        next.Draft.Should().NotBeNull();
+        next.Draft!.Draft.Should().BeNull();
+        next.Draft.UpdatedAtUtc.Should().Be(ts);
+    }
+
+    [Fact]
     public void ConnectorCatalog_SaveDraft_OverwritesPreviousDraft()
     {
         var state = new ConnectorCatalogState
@@ -1351,6 +1370,25 @@ public sealed class ActorBackedGAgentStateTransitionTests
         next.Draft.Should().NotBeNull();
         next.Draft!.Draft.Id.Should().Be("draft-role");
         next.Draft.Draft.Name.Should().Be("Draft Assistant");
+        next.Draft.UpdatedAtUtc.Should().Be(ts);
+    }
+
+    [Fact]
+    public void RoleCatalog_SaveDraft_NullDraft_SetsEntryWithNullPayload()
+    {
+        var state = new RoleCatalogState();
+        var ts = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var evt = new RoleDraftSavedEvent
+        {
+            Draft = null,
+            UpdatedAtUtc = ts,
+        };
+
+        var next = ApplyRoleCatalog(state, evt);
+
+        next.Draft.Should().NotBeNull();
+        next.Draft!.Draft.Should().BeNull();
         next.Draft.UpdatedAtUtc.Should().Be(ts);
     }
 
