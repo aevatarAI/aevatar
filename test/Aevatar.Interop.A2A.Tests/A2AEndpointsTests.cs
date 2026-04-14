@@ -56,6 +56,24 @@ public class A2AEndpointsTests : IDisposable
         return await _client.PostAsync("/a2a", content);
     }
 
+    private static async Task<string> ReadSseEventAsync(StreamReader reader)
+    {
+        var lines = new List<string>();
+        while (true)
+        {
+            var line = await reader.ReadLineAsync();
+            line.Should().NotBeNull("the SSE stream should emit a complete event");
+            if (string.IsNullOrEmpty(line))
+            {
+                break;
+            }
+
+            lines.Add(line);
+        }
+
+        return string.Join(Environment.NewLine, lines) + Environment.NewLine + Environment.NewLine;
+    }
+
     // ─── Agent Card ───
 
     [Fact]
@@ -296,14 +314,18 @@ public class A2AEndpointsTests : IDisposable
             new Message { Role = "user", Parts = [new TextPart { Text = "hi" }] });
         await _taskStore.UpdateTaskStateAsync("t-stream", TaskState.Working);
 
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(100);
-            await _taskStore.UpdateTaskStateAsync("t-stream", TaskState.Completed);
-        });
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/a2a/subscribe/t-stream");
+        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var reader = new StreamReader(stream);
 
-        var response = await _client.GetAsync("/a2a/subscribe/t-stream");
-        var body = await response.Content.ReadAsStringAsync();
+        var initialEvent = await ReadSseEventAsync(reader);
+        initialEvent.Should().Contain("event: status");
+        initialEvent.Should().Contain("working");
+
+        await _taskStore.UpdateTaskStateAsync("t-stream", TaskState.Completed);
+
+        var body = initialEvent + await reader.ReadToEndAsync();
 
         body.Should().Contain("event: status");
         body.Should().Contain("event: close");

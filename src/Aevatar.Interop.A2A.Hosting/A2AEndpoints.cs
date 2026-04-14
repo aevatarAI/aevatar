@@ -161,7 +161,10 @@ public static class A2AEndpoints
         context.Response.Headers["X-Accel-Buffering"] = "no";
         await context.Response.StartAsync(ct);
 
-        // Send current state as initial event
+        var reader = taskStore.SubscribeAsync(taskId);
+
+        // Subscribe before sending the first event so a transition that happens
+        // during stream startup is still observed by the reader.
         await WriteSseEventAsync(context.Response, "status", task.Status, ct);
 
         // If task is already in terminal state, close the stream
@@ -171,8 +174,6 @@ public static class A2AEndpoints
             return;
         }
 
-        // Subscribe to updates via channel (no polling)
-        var reader = taskStore.SubscribeAsync(taskId);
         try
         {
             await foreach (var update in reader.ReadAllAsync(ct))
