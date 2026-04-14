@@ -56,6 +56,67 @@ public class AgentModuleLifecycleAndPipelineTests
         module.DisposeCount.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task RegisterModule_after_activate_should_initialize_lifecycle_module()
+    {
+        var agent = new StatelessModuleAgent();
+        agent.SetId("late-register");
+        await agent.ActivateAsync();
+
+        var module = new LifecycleTrackingModule();
+        agent.RegisterModule(module);
+
+        module.InitializeCount.ShouldBe(1);
+
+        await agent.DeactivateAsync();
+        module.DisposeCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task SetModules_should_dispose_removed_lifecycle_modules()
+    {
+        var agent = new StatelessModuleAgent();
+        agent.SetId("set-dispose");
+
+        var first = new LifecycleTrackingModule();
+        agent.RegisterModule(first);
+        await agent.ActivateAsync();
+        first.InitializeCount.ShouldBe(1);
+
+        var replacement = new LifecycleTrackingModule();
+        agent.SetModules([replacement]);
+
+        first.DisposeCount.ShouldBe(1);
+        replacement.InitializeCount.ShouldBe(1);
+
+        await agent.DeactivateAsync();
+        replacement.DisposeCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Deactivate_should_stop_external_links_even_if_module_dispose_throws()
+    {
+        var agent = new StatelessModuleAgent();
+        agent.SetId("dispose-finally");
+
+        var throwingModule = new ThrowingDisposeModule();
+        agent.RegisterModule(throwingModule);
+        await agent.ActivateAsync();
+
+        var ex = await Should.ThrowAsync<AggregateException>(agent.DeactivateAsync());
+        ex.InnerExceptions.Count.ShouldBe(1);
+    }
+
+    private sealed class ThrowingDisposeModule : ILifecycleAwareEventModule
+    {
+        public string Name => "throwing";
+        public int Priority => 0;
+        public bool CanHandle(EventEnvelope envelope) => false;
+        public Task HandleAsync(EventEnvelope envelope, IEventHandlerContext ctx, CancellationToken ct) => Task.CompletedTask;
+        public Task InitializeAsync(CancellationToken ct) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => throw new InvalidOperationException("dispose failed");
+    }
+
     private sealed class TrackingModule : IEventModule<IEventHandlerContext>
     {
         public string Name => "tracking";

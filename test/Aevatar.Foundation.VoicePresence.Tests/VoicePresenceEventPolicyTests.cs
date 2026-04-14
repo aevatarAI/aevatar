@@ -64,6 +64,22 @@ public class VoicePresenceEventPolicyTests
         policy.Evaluate(later, now.AddSeconds(5)).ShouldBe(VoicePresenceEventPolicyDecision.Admit);
     }
 
+    [Fact]
+    public void Null_payload_event_should_still_be_admitted_and_deduped()
+    {
+        var policy = new VoicePresenceEventPolicy();
+        var now = DateTimeOffset.UtcNow;
+        var envelope = new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTimeOffset(now),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
+        };
+
+        policy.Evaluate(envelope, now).ShouldBe(VoicePresenceEventPolicyDecision.Admit);
+        policy.Evaluate(envelope, now.AddMilliseconds(100)).ShouldBe(VoicePresenceEventPolicyDecision.DropDuplicate);
+    }
+
     private static EventEnvelope MakeEnvelope(string person, DateTimeOffset observedAt)
     {
         return new EventEnvelope

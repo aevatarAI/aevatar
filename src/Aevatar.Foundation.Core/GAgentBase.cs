@@ -95,8 +95,14 @@ public abstract class GAgentBase : IAgent
     /// <summary>Deactivates agent.</summary>
     public virtual async Task DeactivateAsync(CancellationToken ct = default)
     {
-        await DisposeLifecycleAwareModulesAsync();
-        await StopExternalLinksAsync();
+        try
+        {
+            await DisposeLifecycleAwareModulesAsync();
+        }
+        finally
+        {
+            await StopExternalLinksAsync();
+        }
     }
 
     // Unified event dispatch (with dual hook channels)
@@ -219,7 +225,7 @@ public abstract class GAgentBase : IAgent
 
     // Module management APIs
 
-    /// <summary>Registers a dynamic event module.</summary>
+    /// <summary>Registers a dynamic event module. If lifecycle modules have already been initialized, the new module is initialized immediately.</summary>
     public void RegisterModule(IEventModule<IEventHandlerContext> module)
     {
         var current = _modules;
@@ -228,13 +234,37 @@ public abstract class GAgentBase : IAgent
         next[current.Length] = module;
         _modules = next;
         InvalidatePipelineCache();
+
+        if (_lifecycleAwareModulesInitialized && module is ILifecycleAwareEventModule lifecycleAware)
+            lifecycleAware.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
     }
 
-    /// <summary>Replaces dynamic event modules in batch.</summary>
+    /// <summary>Replaces dynamic event modules in batch. Disposes removed lifecycle modules.</summary>
     public void SetModules(IEnumerable<IEventModule<IEventHandlerContext>> modules)
     {
-        _modules = modules.ToArray();
+        var previous = _modules;
+        var next = modules.ToArray();
+        _modules = next;
         InvalidatePipelineCache();
+
+        if (!_lifecycleAwareModulesInitialized)
+            return;
+
+        var retained = new HashSet<IEventModule<IEventHandlerContext>>(next, ReferenceEqualityComparer.Instance);
+        foreach (var old in previous)
+        {
+            if (old is ILifecycleAwareEventModule lifecycleAware && !retained.Contains(old))
+            {
+                try { lifecycleAware.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Failed to dispose removed lifecycle module {Name}.", old.Name); }
+            }
+        }
+
+        foreach (var mod in next)
+        {
+            if (mod is ILifecycleAwareEventModule lifecycleAware && !previous.Contains(mod))
+                lifecycleAware.InitializeAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
     }
 
     /// <summary>Gets all currently registered dynamic modules.</summary>

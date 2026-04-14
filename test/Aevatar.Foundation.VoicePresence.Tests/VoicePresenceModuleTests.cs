@@ -99,6 +99,153 @@ public class VoicePresenceModuleTests
         module.StateMachine.IsSafeToInject.ShouldBeTrue();
     }
 
+    [Fact]
+    public async Task Response_done_should_transition_to_audio_draining()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseDone = new VoiceResponseDone { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.State.ShouldBe(VoicePresenceState.AudioDraining);
+    }
+
+    [Fact]
+    public async Task Response_cancelled_should_return_to_idle()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseCancelled = new VoiceResponseCancelled { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public async Task Speech_stopped_should_not_change_state()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            SpeechStarted = new VoiceSpeechStarted(),
+        }), ctx, CancellationToken.None);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            SpeechStopped = new VoiceSpeechStopped(),
+        }), ctx, CancellationToken.None);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+    }
+
+    [Fact]
+    public async Task Provider_disconnected_should_reset_to_idle()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            ResponseStarted = new VoiceResponseStarted { ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            Disconnected = new VoiceProviderDisconnected { Reason = "test" },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public async Task Noop_provider_events_should_not_change_state()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            AudioReceived = new VoiceAudioReceived { Pcm16 = Google.Protobuf.ByteString.CopyFrom([1, 2]), SampleRateHz = 24000 },
+        }), ctx, CancellationToken.None);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested { CallId = "c1", ToolName = "t", ArgumentsJson = "{}", ResponseId = 1 },
+        }), ctx, CancellationToken.None);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            Error = new VoiceProviderError { ErrorCode = "e", ErrorMessage = "msg" },
+        }), ctx, CancellationToken.None);
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public async Task Null_payload_should_be_ignored()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+        }, ctx, CancellationToken.None);
+
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public void HandleAudio_wrong_link_should_throw()
+    {
+        var module = CreateModule(new RecordingVoiceProvider(), linkId: "link-a");
+
+        Should.Throw<InvalidOperationException>(() =>
+            module.HandleAudioAsync(
+                new VoiceAudioFastPathFrame("link-b", new byte[] { 1 }, DateTimeOffset.UtcNow),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public void CanHandleAudio_empty_linkId_matches_any()
+    {
+        var module = CreateModule(new RecordingVoiceProvider(), linkId: null);
+
+        module.CanHandleAudio(new VoiceAudioFastPathFrame("any-link", new byte[] { 1 }, DateTimeOffset.UtcNow))
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task DisposeAsync_should_dispose_provider()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+
+        await module.InitializeAsync(CancellationToken.None);
+        module.IsInitialized.ShouldBeTrue();
+
+        await module.DisposeAsync();
+        module.IsInitialized.ShouldBeFalse();
+        provider.Disposed.ShouldBeTrue();
+    }
+
     private static VoicePresenceModule CreateModule(RecordingVoiceProvider provider, string? linkId = null)
     {
         return new VoicePresenceModule(

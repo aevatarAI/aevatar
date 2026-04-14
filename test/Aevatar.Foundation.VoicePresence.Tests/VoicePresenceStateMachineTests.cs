@@ -112,6 +112,39 @@ public class VoicePresenceStateMachineTests
     }
 
     [Fact]
+    public void Stale_response_started_is_ignored()
+    {
+        var stateMachine = new VoicePresenceStateMachine();
+
+        stateMachine.AllocateNextResponseId();
+        stateMachine.OnResponseStarted(0);
+
+        stateMachine.CurrentResponseId.ShouldBe(1);
+        stateMachine.State.ShouldBe(VoicePresenceState.ResponseInProgress);
+    }
+
+    [Fact]
+    public void Response_done_from_idle_is_ignored()
+    {
+        var stateMachine = new VoicePresenceStateMachine();
+
+        stateMachine.OnResponseDone(999);
+
+        stateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public void Speech_stopped_is_noop()
+    {
+        var stateMachine = new VoicePresenceStateMachine();
+
+        stateMachine.OnSpeechStarted();
+        stateMachine.OnSpeechStopped();
+
+        stateMachine.State.ShouldBe(VoicePresenceState.UserSpeaking);
+    }
+
+    [Fact]
     public void Provider_disconnected_resets_to_Idle()
     {
         var stateMachine = new VoicePresenceStateMachine();
