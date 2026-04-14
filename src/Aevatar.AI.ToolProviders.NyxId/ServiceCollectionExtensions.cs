@@ -22,6 +22,7 @@ public static class ServiceCollectionExtensions
         configure(options);
         services.TryAddSingleton(options);
         services.TryAddSingleton<NyxIdApiClient>();
+        services.TryAddSingleton<IServiceDiscoveryCache, InMemoryServiceDiscoveryCache>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, NyxIdAgentToolSource>());
 

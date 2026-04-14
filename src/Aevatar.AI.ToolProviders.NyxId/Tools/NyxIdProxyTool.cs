@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.Abstractions.ToolProviders;
 using Microsoft.Extensions.Logging;
@@ -9,11 +11,13 @@ namespace Aevatar.AI.ToolProviders.NyxId.Tools;
 public sealed class NyxIdProxyTool : IAgentTool
 {
     private readonly NyxIdApiClient _client;
+    private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
 
-    public NyxIdProxyTool(NyxIdApiClient client, ILogger? logger = null)
+    public NyxIdProxyTool(NyxIdApiClient client, IServiceDiscoveryCache? cache = null, ILogger? logger = null)
     {
         _client = client;
+        _cache = cache ?? new InMemoryServiceDiscoveryCache();
         _logger = logger ?? NullLogger.Instance;
     }
 
@@ -67,6 +71,7 @@ public sealed class NyxIdProxyTool : IAgentTool
     public async Task<string> ExecuteAsync(string argumentsJson, CancellationToken ct = default)
     {
         var token = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdAccessToken);
+        var orgToken = AgentToolRequestContext.TryGet(LLMRequestMetadataKeys.NyxIdOrgToken);
         if (string.IsNullOrWhiteSpace(token))
             return """{"error":"No NyxID access token available. User must be authenticated."}""";
 
@@ -85,11 +90,11 @@ public sealed class NyxIdProxyTool : IAgentTool
         var body = args.RawOrStr("body");
         var headers = args.Headers();
 
-        // No slug → discover mode
+        // No slug → discover mode: merge services from both tokens
         if (string.IsNullOrWhiteSpace(slug))
         {
             _logger.LogInformation("[nyxid_proxy] No slug provided, returning service discovery. raw={Raw}", args.Raw);
-            return await _client.DiscoverProxyServicesAsync(token, ct);
+            return await DiscoverMergedServicesAsync(token, orgToken, ct);
         }
 
         if (string.IsNullOrWhiteSpace(path))
@@ -98,12 +103,13 @@ public sealed class NyxIdProxyTool : IAgentTool
             return $"{{\"error\":\"'path' is required when 'slug' is provided\",\"received\":{args.Raw}}}";
         }
 
-        _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} path={Path}", method, slug, path);
-        var result = await _client.ProxyRequestAsync(token, slug, path, method, body, headers, ct);
+        // Resolve which token owns the target service: user token first, fallback to org token
+        var effectiveToken = await ResolveTokenForServiceAsync(token, orgToken, slug, ct);
 
-        // Detect NyxID approval-related responses and provide actionable context to the LLM.
-        // NyxID proxy blocks the request during approval wait (up to 30s). If the user
-        // doesn't approve in time, NyxID returns an error with code 7000 or 7001.
+        _logger.LogInformation("[nyxid_proxy] {Method} slug={Slug} path={Path} tokenSource={Source}",
+            method, slug, path, effectiveToken == token ? "user" : "org");
+        var result = await _client.ProxyRequestAsync(effectiveToken, slug, path, method, body, headers, ct);
+
         if (IsApprovalError(result, out var approvalCode, out var approvalRequestId))
         {
             _logger.LogInformation(
@@ -112,6 +118,145 @@ public sealed class NyxIdProxyTool : IAgentTool
         }
 
         return result;
+    }
+
+    // ─── Dual-token service discovery + routing ───
+
+    /// <summary>
+    /// Discover services from both user and org tokens, merge into a single list.
+    /// Deduplicates by slug (user takes precedence).
+    /// </summary>
+    private async Task<string> DiscoverMergedServicesAsync(
+        string userToken, string? orgToken, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(orgToken) || orgToken == userToken)
+            return await _client.DiscoverProxyServicesAsync(userToken, ct);
+
+        var userServicesJson = await _client.DiscoverProxyServicesAsync(userToken, ct);
+        var orgServicesJson = await _client.DiscoverProxyServicesAsync(orgToken, ct);
+
+        try
+        {
+            using var userDoc = System.Text.Json.JsonDocument.Parse(userServicesJson);
+            using var orgDoc = System.Text.Json.JsonDocument.Parse(orgServicesJson);
+
+            var userSlugs = ParseServiceSlugs(userDoc);
+            var merged = new List<System.Text.Json.JsonElement>();
+
+            if (userDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var svc in userDoc.RootElement.EnumerateArray())
+                    merged.Add(svc);
+            }
+
+            // Add org services that don't collide with user services
+            if (orgDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                foreach (var svc in orgDoc.RootElement.EnumerateArray())
+                {
+                    if (svc.TryGetProperty("slug", out var slugProp))
+                    {
+                        var s = slugProp.GetString() ?? string.Empty;
+                        if (!userSlugs.Contains(s))
+                            merged.Add(svc);
+                    }
+                }
+            }
+
+            // Populate cache with both service lists
+            _cache.SetSlugs(HashToken(userToken), userSlugs);
+            _cache.SetSlugs(HashToken(orgToken), ParseServiceSlugs(orgDoc));
+
+            return System.Text.Json.JsonSerializer.Serialize(merged);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            _logger.LogWarning(ex, "[nyxid_proxy] Failed to merge service lists, returning user services only");
+            return userServicesJson;
+        }
+    }
+
+    /// <summary>
+    /// Resolve which token to use for a given service slug.
+    /// Checks user token's service list first; falls back to org token.
+    /// </summary>
+    private async Task<string> ResolveTokenForServiceAsync(
+        string userToken, string? orgToken, string slug, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(orgToken) || orgToken == userToken)
+            return userToken;
+
+        if (await ServiceExistsForTokenAsync(userToken, slug, ct))
+            return userToken;
+
+        if (await ServiceExistsForTokenAsync(orgToken, slug, ct))
+        {
+            _logger.LogInformation(
+                "[nyxid_proxy] Service {Slug} not found for user token, using org token", slug);
+            return orgToken;
+        }
+
+        // Neither has it — use user token and let NyxID return the error
+        return userToken;
+    }
+
+    /// <summary>
+    /// Check whether a given token can access a service by slug.
+    /// Uses cache first, falls back to live discovery.
+    /// </summary>
+    private async Task<bool> ServiceExistsForTokenAsync(
+        string token, string slug, CancellationToken ct)
+    {
+        var hash = HashToken(token);
+
+        // Check cache first
+        var cached = _cache.GetSlugs(hash);
+        if (cached != null)
+            return cached.Contains(slug);
+
+        // Cache miss — fetch and cache
+        try
+        {
+            var servicesJson = await _client.DiscoverProxyServicesAsync(token, ct);
+            using var doc = System.Text.Json.JsonDocument.Parse(servicesJson);
+            var slugs = ParseServiceSlugs(doc);
+            _cache.SetSlugs(hash, slugs);
+            return slugs.Contains(slug);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ─── Helpers ───
+
+    /// <summary>
+    /// Extract service slugs from a NyxID /proxy/services JSON response.
+    /// </summary>
+    internal static HashSet<string> ParseServiceSlugs(System.Text.Json.JsonDocument doc)
+    {
+        var slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return slugs;
+
+        foreach (var svc in doc.RootElement.EnumerateArray())
+        {
+            if (svc.TryGetProperty("slug", out var slugProp))
+            {
+                var s = slugProp.GetString();
+                if (!string.IsNullOrEmpty(s))
+                    slugs.Add(s);
+            }
+        }
+
+        return slugs;
+    }
+
+    private static string HashToken(string token)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        return Convert.ToHexString(bytes)[..16];
     }
 
     /// <summary>
