@@ -266,7 +266,7 @@ describe('ScriptsWorkbenchPage', () => {
 
   it('uses the latest resolved scope when saving after a scope switch', async () => {
     function Harness() {
-      const [scopeId, setScopeId] = React.useState(appContext.scopeId);
+      const [scopeId, setScopeId] = React.useState<string>(appContext.scopeId);
 
       return React.createElement(
         React.Fragment,
