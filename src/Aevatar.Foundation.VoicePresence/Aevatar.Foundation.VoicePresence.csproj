@@ -13,5 +13,6 @@
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>
