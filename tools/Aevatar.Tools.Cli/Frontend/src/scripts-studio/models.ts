@@ -130,6 +130,58 @@ export type ScopedScriptDetail = {
   source: ScopedScriptSource | null;
 };
 
+export type ScopeScriptCommandAcceptedHandle = {
+  actorId: string;
+  commandId: string;
+  correlationId: string;
+};
+
+export type ScopeScriptAcceptedSummary = {
+  scopeId: string;
+  scriptId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  revisionId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type AppScopeScriptSaveAcceptedResponse = {
+  acceptedScript: ScopeScriptAcceptedSummary;
+  submittedSource: ScopedScriptSource;
+  definitionCommand: ScopeScriptCommandAcceptedHandle;
+  catalogCommand: ScopeScriptCommandAcceptedHandle;
+  scopeId: string;
+  scriptId: string;
+  revisionId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type AppScopeScriptSaveObservationRequest = {
+  revisionId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+  acceptedAt: string;
+};
+
+export type AppScopeScriptSaveObservationResult = {
+  scopeId: string;
+  scriptId: string;
+  status: 'pending' | 'applied' | 'rejected';
+  message: string;
+  currentScript: ScopedScriptSummary | null;
+  isTerminal: boolean;
+};
+
 export type ScriptPromotionDecision = {
   accepted: boolean;
   proposalId: string;

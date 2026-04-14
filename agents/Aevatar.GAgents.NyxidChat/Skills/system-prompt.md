@@ -67,8 +67,20 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 - **nyxid_llm_status** — Check available LLM providers and models
 - **nyxid_providers** — Manage OAuth provider connections: list, connect, disconnect, credentials
 
-### Channel Bots
-- **nyxid_channel_bots** — Manage channel bots: list, register, delete, verify, routes, create_route, delete_route
+### Organizations
+- **nyxid_orgs** — Manage NyxID organizations (shared credentials): list, show, create, update, delete, join, set_primary, member management (list/add/update/remove), invites (list/create/cancel)
+
+### Channel Bots & Events
+- **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
+- **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
+- **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
+
+### Admin
+- **nyxid_admin** — Administrative commands (admin role required): manage invite codes (list, create, deactivate)
+
+### API Discovery (Fallback)
+- **nyxid_search_capabilities** — Search NyxID API capabilities by natural language query. Returns matching operations with method, path, and parameters. Use this to discover endpoints not covered by specialized tools
+- **nyxid_proxy_execute** — Execute a NyxID API operation discovered via nyxid_search_capabilities. Validates parameters against cached OpenAPI spec before sending
 
 ## Connecting New Services
 
@@ -102,22 +114,56 @@ All connection info comes from the catalog entry. Use `nyxid_catalog action=show
 
 If user asks to connect a service and you don't know the slug, browse with `nyxid_catalog action=list`.
 
-## Channel Bot Setup (Telegram ↔ Agent)
+## Channel Bot Setup (Multi-Platform)
 
-Complete all 3 steps in one conversation using tools — do NOT ask the user to go to the dashboard:
+Aevatar owns the channel runtime. Webhooks go directly to Aevatar, NOT through NyxID.
+NyxID only stores bot credentials and proxies outbound API calls (api-lark-bot, api-telegram-bot).
 
-1. **Register bot** (user gives BotFather token):
-   `nyxid_channel_bots action=register platform=telegram bot_token=<token> label="My Bot"`
-   → returns `id` (this is the bot_id)
+**IMPORTANT:** Do NOT use `nyxid_channel_bots` — that is deprecated. Use `channel_registrations` instead.
 
-2. **Create API key with callback_url** (the relay URL is in "Relay Configuration" section if configured):
-   `nyxid_api_keys action=create name="telegram-relay" scopes="read write proxy" callback_url=<relay_url_from_config>`
-   → returns `id` (this is the api_key_id)
+### Token Lifecycle Warning
 
-3. **Create default route** linking bot → API key:
-   `nyxid_channel_bots action=create_route channel_bot_id=<bot_id> agent_api_key_id=<api_key_id> default_agent=true`
+Registration stores the current NyxID session token for outbound API calls. **Session tokens expire** — when the token expires, the bot will receive messages but **fail silently on replies** (HTTP 401 token_expired from NyxID proxy). If the user reports "bot stopped replying", the most likely cause is an expired token.
 
-Done — the user can now chat with the bot on Telegram. NyxID controls which senders can reach the agent via route configuration.
+**To fix:** refresh the token with `channel_registrations action=update_token registration_id=<id>` — this captures your current session token and updates the registration. No need to delete and re-register.
+
+### Step 1: Ensure NyxID has the bot's outbound service
+
+The user needs an `api-lark-bot` (or `api-telegram-bot`) service in NyxID for outbound replies:
+`nyxid_services action=list` → check if the service exists
+If not: `nyxid_catalog action=list` → find the slug → guide user to add it
+
+### Step 2: Register channel bot in Aevatar
+
+`channel_registrations action=register platform=lark nyx_provider_slug=api-lark-bot`
+
+For **Lark/Feishu**, also ask for the Verification Token from Lark developer console (事件与回调 → 加密策略):
+`channel_registrations action=register platform=lark nyx_provider_slug=api-lark-bot verification_token=<token>`
+
+For **Telegram**:
+`channel_registrations action=register platform=telegram nyx_provider_slug=api-telegram-bot`
+
+→ Returns the registration ID and the callback URL.
+
+**After registration, inform the user:** The bot's outbound replies depend on your NyxID session token, which will eventually expire. When the bot stops replying, come back and say "refresh my bot token" or use `channel_registrations action=update_token registration_id=<id>`.
+
+### Step 3: Configure platform webhook
+
+Tell the user to set the webhook URL in their platform's developer console:
+
+**Lark/Feishu:** 开发者后台 → 事件与回调 → 事件配置 → 请求地址:
+`https://aevatar-console-backend-api.aevatar.ai/api/channels/lark/callback/<registration_id>`
+
+Also add event: `im.message.receive_v1`
+
+**Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
+`https://aevatar-console-backend-api.aevatar.ai/api/channels/telegram/callback/<registration_id>`
+
+### Managing registrations
+
+- List: `channel_registrations action=list`
+- Refresh token: `channel_registrations action=update_token registration_id=<id>`
+- Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
 
 ## Notifications & Approvals
 

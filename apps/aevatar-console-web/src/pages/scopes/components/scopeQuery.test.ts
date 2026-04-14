@@ -24,10 +24,10 @@ describe('scopeQuery', () => {
   it('builds scope routes with preserved scope and selection context', () => {
     expect(
       buildScopeHref(
-        '/scopes/workflows',
+        '/scopes/assets',
         { scopeId: 'scope-alpha' },
-        { workflowId: 'wf-1' },
+        { tab: 'workflows', workflowId: 'wf-1' },
       ),
-    ).toBe('/scopes/workflows?scopeId=scope-alpha&workflowId=wf-1');
+    ).toBe('/scopes/assets?scopeId=scope-alpha&tab=workflows&workflowId=wf-1');
   });
 });

@@ -24,17 +24,37 @@ import {
   AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
 
-function readActorSelection(): string {
+type ExplorerRouteSelection = {
+  actorId: string;
+  runId: string;
+  scopeId: string;
+  serviceId: string;
+};
+
+function readExplorerSelection(): ExplorerRouteSelection {
   if (typeof window === "undefined") {
-    return "";
+    return {
+      actorId: "",
+      runId: "",
+      scopeId: "",
+      serviceId: "",
+    };
   }
 
-  return new URLSearchParams(window.location.search).get("actorId")?.trim() ?? "";
+  const searchParams = new URLSearchParams(window.location.search);
+  return {
+    actorId: searchParams.get("actorId")?.trim() ?? "",
+    runId: searchParams.get("runId")?.trim() ?? "",
+    scopeId: searchParams.get("scopeId")?.trim() ?? "",
+    serviceId: searchParams.get("serviceId")?.trim() ?? "",
+  };
 }
 
 const ActorsPage: React.FC = () => {
   const [actorKeyword, setActorKeyword] = useState("");
-  const [selectedActorId, setSelectedActorId] = useState(readActorSelection());
+  const [selectedActorId, setSelectedActorId] = useState(
+    readExplorerSelection().actorId,
+  );
 
   const actorsQuery = useQuery({
     queryKey: ["runtime-agents"],
@@ -61,9 +81,16 @@ const ActorsPage: React.FC = () => {
   });
 
   useEffect(() => {
+    const routeSelection = readExplorerSelection();
     history.replace(
       buildRuntimeExplorerHref({
         actorId: selectedActorId || undefined,
+        runId:
+          routeSelection.actorId && routeSelection.actorId === selectedActorId
+            ? routeSelection.runId || undefined
+            : undefined,
+        scopeId: routeSelection.scopeId || undefined,
+        serviceId: routeSelection.serviceId || undefined,
       }),
     );
   }, [selectedActorId]);

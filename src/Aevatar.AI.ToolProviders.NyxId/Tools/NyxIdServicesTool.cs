@@ -57,6 +57,10 @@ public sealed class NyxIdServicesTool : IAgentTool
             "direct": {
               "type": "boolean",
               "description": "Use direct routing (for route)"
+            },
+            "org": {
+              "type": "string",
+              "description": "Create this service under the given org ID (for create)"
             }
           }
         }
@@ -107,6 +111,8 @@ public sealed class NyxIdServicesTool : IAgentTool
         };
         var url = args.Str("endpoint_url");
         if (!string.IsNullOrWhiteSpace(url)) payload["endpoint_url"] = url;
+        var org = args.Str("org");
+        if (!string.IsNullOrWhiteSpace(org)) payload["target_org_id"] = org;
 
         return await _client.CreateServiceAsync(token, JsonSerializer.Serialize(payload), ct);
     }

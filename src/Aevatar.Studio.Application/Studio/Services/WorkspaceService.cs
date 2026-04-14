@@ -123,6 +123,7 @@ public sealed class WorkspaceService
         var normalizedName = string.IsNullOrWhiteSpace(request.WorkflowName)
             ? "workflow"
             : request.WorkflowName.Trim();
+        var normalizedYaml = AlignWorkflowYamlName(request.Yaml, normalizedName);
 
         var normalizedFileName = EnsureYamlExtension(string.IsNullOrWhiteSpace(request.FileName)
             ? normalizedName
@@ -140,12 +141,30 @@ public sealed class WorkspaceService
                 FilePath: filePath,
                 DirectoryId: directory.DirectoryId,
                 DirectoryLabel: directory.Label,
-                Yaml: request.Yaml,
+                Yaml: normalizedYaml,
                 Layout: request.Layout,
                 UpdatedAtUtc: DateTimeOffset.UtcNow),
             cancellationToken);
 
         return ToWorkflowFileResponse(stored);
+    }
+
+    private string AlignWorkflowYamlName(string yaml, string workflowName)
+    {
+        if (string.IsNullOrWhiteSpace(yaml) || string.IsNullOrWhiteSpace(workflowName))
+            return yaml;
+
+        var parsed = _yamlDocumentService.Parse(yaml);
+        if (parsed.Document == null)
+            return yaml;
+
+        if (string.Equals(parsed.Document.Name?.Trim(), workflowName, StringComparison.Ordinal))
+            return yaml;
+
+        return _yamlDocumentService.Serialize(parsed.Document with
+        {
+            Name = workflowName,
+        });
     }
 
     private WorkflowFileResponse ToWorkflowFileResponse(StoredWorkflowFile file)

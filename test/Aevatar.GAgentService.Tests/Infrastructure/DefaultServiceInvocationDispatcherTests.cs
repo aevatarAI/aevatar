@@ -121,7 +121,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
     }
 
     [Fact]
-    public async Task DispatchAsync_ShouldResolveScopeIdFromRequestScopeBeforeMetadataFallbacks()
+    public async Task DispatchAsync_ShouldPreferIdentityTenantIdOverPayloadScope()
     {
         var workflowPort = new RecordingWorkflowRunActorPort();
         var dispatcher = new DefaultServiceInvocationDispatcher(
@@ -140,6 +140,45 @@ public sealed class DefaultServiceInvocationDispatcherTests
         var request = new ServiceInvocationRequest
         {
             Identity = GAgentServiceTestKit.CreateIdentity(),
+            EndpointId = "chat",
+            Payload = Any.Pack(new ChatRequestEvent
+            {
+                Prompt = "hello",
+                ScopeId = "payload-scope",
+                Metadata =
+                {
+                    [WorkflowRunCommandMetadataKeys.ScopeId] = "workflow-metadata-scope",
+                    ["scope_id"] = "legacy-scope",
+                },
+            }),
+        };
+
+        await dispatcher.DispatchAsync(target, request);
+
+        workflowPort.CreateRunCalls.Should().ContainSingle();
+        workflowPort.CreateRunCalls[0].ScopeId.Should().Be("tenant");
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ShouldResolveScopeIdFromRequestScopeBeforeMetadataFallbacks()
+    {
+        var workflowPort = new RecordingWorkflowRunActorPort();
+        var dispatcher = new DefaultServiceInvocationDispatcher(
+            new RecordingDispatchPort(),
+            new RecordingScriptRuntimeCommandPort(),
+            workflowPort);
+        var target = CreateTarget(
+            ServiceImplementationKind.Workflow,
+            endpointId: "chat",
+            requestTypeUrl: Any.Pack(new ChatRequestEvent()).TypeUrl);
+        target.Artifact.DeploymentPlan.WorkflowPlan = new WorkflowServiceDeploymentPlan
+        {
+            WorkflowName = "wf",
+            WorkflowYaml = "name: wf",
+        };
+        var request = new ServiceInvocationRequest
+        {
+            Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
             Payload = Any.Pack(new ChatRequestEvent
             {
@@ -179,7 +218,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
         {
-            Identity = GAgentServiceTestKit.CreateIdentity(),
+            Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
             Payload = Any.Pack(new ChatRequestEvent
             {
@@ -216,7 +255,7 @@ public sealed class DefaultServiceInvocationDispatcherTests
 
         await dispatcher.DispatchAsync(target, new ServiceInvocationRequest
         {
-            Identity = GAgentServiceTestKit.CreateIdentity(),
+            Identity = new ServiceIdentity { TenantId = "", AppId = "app", Namespace = "default", ServiceId = "svc" },
             EndpointId = "chat",
             Payload = Any.Pack(new ChatRequestEvent
             {
