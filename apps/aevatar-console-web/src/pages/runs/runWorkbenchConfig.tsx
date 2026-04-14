@@ -505,6 +505,21 @@ export const workbenchTraceTabsStyle = {
   minHeight: 0,
 } as const;
 
+export const workbenchTraceTabsStyles = {
+  content: {
+    display: "flex",
+    flex: 1,
+    minHeight: 0,
+    overflow: "hidden",
+  },
+  root: {
+    display: "flex",
+    flex: 1,
+    flexDirection: "column",
+    minHeight: 0,
+  },
+} as const;
+
 export const workbenchConsoleSurfaceStyle = {
   background:
     "linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%)",
