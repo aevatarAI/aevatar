@@ -3,11 +3,16 @@ using Aevatar.Foundation.Abstractions.EventModules;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Events;
 using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.Foundation.VoicePresence.Modules;
 
 /// <summary>
-/// EventModule skeleton for phase-1 voice presence state management.
+/// EventModule for voice presence. Bridges user-side <see cref="IVoiceTransport"/>
+/// with <see cref="IRealtimeVoiceProvider"/>. Audio flows directly between the two
+/// transports without entering the grain inbox or event pipeline. Only control events
+/// (state transitions, tool calls, drain ack) are dispatched as actor events.
 /// </summary>
 public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFastPath
 {
@@ -15,17 +20,26 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private readonly VoiceProviderConfig _providerConfig;
     private readonly VoiceSessionConfig? _sessionConfig;
     private readonly VoicePresenceModuleOptions _options;
+    private readonly ILogger _logger;
+
+    private IVoiceTransport? _userTransport;
+    private Func<VoiceProviderEvent, CancellationToken, Task>? _controlEventDispatcher;
+    private CancellationTokenSource? _relayCts;
+    private Task? _userToProviderRelay;
+    private Task? _providerToUserRelay;
 
     public VoicePresenceModule(
         IRealtimeVoiceProvider provider,
         VoiceProviderConfig providerConfig,
         VoiceSessionConfig? sessionConfig = null,
-        VoicePresenceModuleOptions? options = null)
+        VoicePresenceModuleOptions? options = null,
+        ILogger? logger = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _providerConfig = providerConfig?.Clone() ?? throw new ArgumentNullException(nameof(providerConfig));
         _sessionConfig = sessionConfig?.Clone();
         _options = options ?? new VoicePresenceModuleOptions();
+        _logger = logger ?? NullLogger.Instance;
         StateMachine = new VoicePresenceStateMachine();
         EventPolicy = new VoicePresenceEventPolicy
         {
@@ -43,6 +57,10 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     public VoicePresenceEventPolicy EventPolicy { get; }
 
     public bool IsInitialized { get; private set; }
+
+    public bool IsTransportAttached => _userTransport != null;
+
+    // ── IEventModule ──────────────────────────────────────────
 
     public bool CanHandle(EventEnvelope envelope) =>
         envelope.Payload?.Is(VoiceProviderEvent.Descriptor) == true ||
@@ -64,6 +82,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             HandleControlFrame(envelope.Payload.Unpack<VoiceControlFrame>());
     }
 
+    // ── ILifecycleAwareEventModule ────────────────────────────
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         if (IsInitialized)
@@ -79,8 +99,18 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     public async ValueTask DisposeAsync()
     {
         IsInitialized = false;
+        await StopRelayAsync();
+
+        if (_userTransport != null)
+        {
+            await _userTransport.DisposeAsync();
+            _userTransport = null;
+        }
+
         await _provider.DisposeAsync();
     }
+
+    // ── IAudioFastPath (Phase 1 legacy, still usable for non-transport callers) ──
 
     public bool CanHandleAudio(VoiceAudioFastPathFrame frame) =>
         string.IsNullOrWhiteSpace(_options.LinkId) || string.Equals(_options.LinkId, frame.LinkId, StringComparison.Ordinal);
@@ -96,7 +126,134 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         return _provider.SendAudioAsync(frame.Pcm16, ct);
     }
 
-    private async Task HandleProviderEventAsync(VoiceProviderEvent providerEvent, CancellationToken ct)
+    // ── Phase 3: Transport attachment + bidirectional relay ──
+
+    /// <summary>
+    /// Attaches a user-side voice transport and starts bidirectional audio relay.
+    /// Audio flows directly between transport and provider (no grain inbox).
+    /// Control events are dispatched to the grain inbox via <paramref name="controlEventDispatcher"/>.
+    /// </summary>
+    public void AttachTransport(
+        IVoiceTransport userTransport,
+        Func<VoiceProviderEvent, CancellationToken, Task> controlEventDispatcher)
+    {
+        ArgumentNullException.ThrowIfNull(userTransport);
+        ArgumentNullException.ThrowIfNull(controlEventDispatcher);
+
+        if (_userTransport != null)
+            throw new InvalidOperationException("A voice transport is already attached.");
+
+        _userTransport = userTransport;
+        _controlEventDispatcher = controlEventDispatcher;
+        _relayCts = new CancellationTokenSource();
+
+        _provider.OnEvent = OnProviderEventAsync;
+        _userToProviderRelay = RunUserToProviderRelayAsync(_relayCts.Token);
+        _providerToUserRelay = Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Detaches the current transport and stops the relay loops.
+    /// </summary>
+    public async Task DetachTransportAsync()
+    {
+        await StopRelayAsync();
+
+        if (_userTransport != null)
+        {
+            await _userTransport.DisposeAsync();
+            _userTransport = null;
+        }
+
+        _controlEventDispatcher = null;
+    }
+
+    private async Task RunUserToProviderRelayAsync(CancellationToken ct)
+    {
+        var transport = _userTransport;
+        if (transport == null) return;
+
+        try
+        {
+            await foreach (var frame in transport.ReceiveFramesAsync(ct))
+            {
+                if (frame.IsAudio)
+                {
+                    if (!frame.AudioPcm16.IsEmpty)
+                        await _provider.SendAudioAsync(frame.AudioPcm16, ct);
+                }
+                else if (frame.Control != null)
+                {
+                    HandleControlFrame(frame.Control);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "User-to-provider relay terminated unexpectedly.");
+        }
+    }
+
+    private async Task OnProviderEventAsync(VoiceProviderEvent evt, CancellationToken ct)
+    {
+        if (evt.EventCase == VoiceProviderEvent.EventOneofCase.AudioReceived &&
+            _userTransport != null)
+        {
+            try
+            {
+                await _userTransport.SendAudioAsync(evt.AudioReceived.Pcm16.Memory, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send audio to user transport.");
+            }
+
+            return;
+        }
+
+        var dispatcher = _controlEventDispatcher;
+        if (dispatcher != null)
+        {
+            try
+            {
+                await dispatcher(evt, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to dispatch provider control event {EventCase}.", evt.EventCase);
+            }
+        }
+    }
+
+    private async Task StopRelayAsync()
+    {
+        var cts = _relayCts;
+        _relayCts = null;
+        cts?.Cancel();
+
+        if (_userToProviderRelay != null)
+        {
+            try { await _userToProviderRelay; }
+            catch (OperationCanceledException) { }
+        }
+
+        if (_providerToUserRelay != null)
+        {
+            try { await _providerToUserRelay; }
+            catch (OperationCanceledException) { }
+        }
+
+        _userToProviderRelay = null;
+        _providerToUserRelay = null;
+        cts?.Dispose();
+    }
+
+    // ── State machine dispatch (used by both event pipeline and relay) ──
+
+    internal async Task HandleProviderEventAsync(VoiceProviderEvent providerEvent, CancellationToken ct)
     {
         switch (providerEvent.EventCase)
         {
