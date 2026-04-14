@@ -497,6 +497,7 @@ docs/agents-working-space/*
 
 # Docs triage working directory
 docs/.triage/
+.gstack/
 
 # MemPalace
 mempalace.yaml

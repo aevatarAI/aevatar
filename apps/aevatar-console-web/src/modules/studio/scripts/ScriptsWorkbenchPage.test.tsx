@@ -499,14 +499,14 @@ public sealed class DraftBehavior : ScriptBehavior<AppScriptReadModel, AppScript
 
     expect(
       await screen.findByText(
-        'Review the active binding, revision rollout, and saved script assets from the scope views.',
+        'Review the active binding, revision rollout, and saved script assets from the team views.',
       ),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Scope Scripts' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Team Assets' }));
 
     expect(mockedHistory.push).toHaveBeenCalledWith(
-      '/scopes/scripts?scopeId=scope-1&scriptId=script-1',
+      '/scopes/assets?scopeId=scope-1&tab=scripts&scriptId=script-1',
     );
   });
 
