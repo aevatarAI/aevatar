@@ -127,6 +127,8 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         };
         await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
 
+        await _localWorkspaceStore.SaveRoleDraftAsync(draft, cancellationToken);
+
         return new StoredRoleDraft(
             HomeDirectory: ActorHomeDirectory,
             FilePath: ActorFilePath + "/draft",
@@ -139,6 +141,8 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     {
         var actor = await EnsureWriteActorAsync(cancellationToken);
         await ActorCommandDispatcher.SendAsync(actor, new RoleDraftDeletedEvent(), cancellationToken);
+
+        await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
 
     // ── Read write actor state directly ──
