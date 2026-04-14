@@ -67,4 +67,56 @@ public class NyxIdServiceApiHintsTests
         var section = NyxIdServiceApiHints.BuildHintsSection([]);
         section.Should().BeEmpty();
     }
+
+    [Fact]
+    public void BuildHintFromOperations_GeneratesFormattedHint()
+    {
+        var operations = new[]
+        {
+            new OperationCard("test", "list_items", "GET", "/items", "List all items", null, null),
+            new OperationCard("test", "create_item", "POST", "/items", "Create an item", null, null),
+        };
+
+        var hint = NyxIdServiceApiHints.BuildHintFromOperations("TestService", operations);
+
+        hint.Should().Contain("### TestService API");
+        hint.Should().Contain("2 endpoints");
+        hint.Should().Contain("GET /items — List all items");
+        hint.Should().Contain("POST /items — Create an item");
+    }
+
+    [Fact]
+    public void BuildHintFromOperations_TruncatesAtMax()
+    {
+        var operations = Enumerable.Range(0, 20)
+            .Select(i => new OperationCard("svc", $"op_{i}", "GET", $"/path/{i}", $"Op {i}", null, null))
+            .ToArray();
+
+        var hint = NyxIdServiceApiHints.BuildHintFromOperations("BigService", operations, maxEndpoints: 5);
+
+        hint.Should().Contain("20 endpoints");
+        hint.Should().Contain("... and 15 more");
+        hint.Should().Contain("nyxid_search_capabilities");
+    }
+
+    [Fact]
+    public void BuildHintFromOperations_EmptyOperations_ReturnsEmpty()
+    {
+        var hint = NyxIdServiceApiHints.BuildHintFromOperations("Empty", []);
+        hint.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void BuildHintFromOperations_OmitsSummaryWhenEmpty()
+    {
+        var operations = new[]
+        {
+            new OperationCard("test", "op1", "GET", "/path", "", null, null),
+        };
+
+        var hint = NyxIdServiceApiHints.BuildHintFromOperations("Svc", operations);
+
+        hint.Should().Contain("GET /path");
+        hint.Should().NotContain(" — ");
+    }
 }
