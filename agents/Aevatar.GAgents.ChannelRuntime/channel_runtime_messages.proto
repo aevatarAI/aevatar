@@ -388,6 +388,12 @@ message ChannelInboundDispatchedEvent {
   string message_id = 2;
 }
 
+// Domain event: inbound message was handled synchronously by the channel actor
+// (for example deterministic card/tool flows) and can be durably deduplicated.
+message ChannelInboundHandledEvent {
+  string message_id = 1;
+}
+
 // Domain event: chat session completed (reply sent or timed out)
 message ChannelChatCompletedEvent {
   string session_id = 1;
@@ -411,4 +417,5 @@ message ChannelInboundEvent {
   string registration_token = 9;      // fallback token from registration
   string registration_scope_id = 10;
   string nyx_provider_slug = 11;
+  map<string, string> extra = 12;
 }

@@ -221,6 +221,8 @@ public static class ChannelCallbackEndpoints
             RegistrationScopeId = registration.ScopeId,
             NyxProviderSlug = registration.NyxProviderSlug,
         };
+        foreach (var pair in inbound.Extra)
+            inboundEvent.Extra[pair.Key] = pair.Value;
 
         var envelope = new EventEnvelope
         {

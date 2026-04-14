@@ -1,5 +1,7 @@
 using System.Reflection;
+using System.Text.Json;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.AI.ToolProviders.NyxId;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Persistence;
@@ -7,6 +9,7 @@ using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Foundation.Core;
 using Aevatar.Foundation.Core.EventSourcing;
+using Aevatar.GAgents.ChannelRuntime.Adapters;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -14,6 +17,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 using Xunit;
 
 namespace Aevatar.GAgents.ChannelRuntime.Tests;
@@ -317,6 +321,133 @@ public class ChannelUserGAgentContinuationTests
         diagnostics.GetRecent().Select(entry => entry.Stage).Should().Contain("Reply:done");
     }
 
+    [Fact]
+    public async Task HandleInbound_DailyReportIntent_ShouldSendInteractiveBuilderCard()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/daily-report";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Create Daily Report Agent");
+
+        agent.State.PendingSessions.Should().BeEmpty();
+        agent.State.ProcessedMessageIds.Should().Contain("om_msg_1");
+    }
+
+    [Fact]
+    public async Task HandleInbound_CreateDailyReportCardAction_ShouldExecuteAgentBuilder()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetStateVersionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<long?>(null), Task.FromResult<long?>(1));
+        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = callInfo.ArgAt<string>(0),
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync(Arg.Any<string>()).Returns(Task.FromResult<IActor?>(null));
+        actorRuntime.CreateAsync<SkillRunnerGAgent>(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IActor>(skillRunnerActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+        handler.Add(HttpMethod.Get, "/api/v1/proxy/services", """
+            [
+              {"id":"svc-github","slug":"api-github"},
+              {"id":"svc-lark","slug":"api-lark-bot"}
+            ]
+            """);
+        handler.Add(HttpMethod.Post, "/api/v1/api-keys", """{"id":"key-1","full_key":"full-key-1"}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"create_daily_report"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_card_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "create_daily_report" },
+                { "github_username", "alice" },
+                { "repositories", "aevatarAI/aevatar" },
+                { "schedule_time", "09:00" },
+                { "schedule_timezone", "UTC" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        adapter.Replies[0].ReplyText.Should().StartWith("Daily report agent created: skill-runner-");
+        adapter.Replies[0].ReplyText.Should().Contain("Next scheduled run:");
+        agent.State.PendingSessions.Should().BeEmpty();
+        agent.State.ProcessedMessageIds.Should().Contain("evt_card_1");
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(InitializeSkillRunnerCommand.Descriptor) &&
+                e.Payload.Unpack<InitializeSkillRunnerCommand>().TemplateName == "daily_report" &&
+                e.Payload.Unpack<InitializeSkillRunnerCommand>().OutboundConfig.ConversationId == "oc_chat_1"),
+            Arg.Any<CancellationToken>());
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "create_agent"),
+            Arg.Any<CancellationToken>());
+    }
+
     // ─── Durable Dedup Tests ───
 
     [Fact]
@@ -592,14 +723,15 @@ public class ChannelUserGAgentContinuationTests
     }
 
     private static ServiceProvider BuildServices(
-        RecordingActorRuntime runtime,
+        IActorRuntime runtime,
         RecordingStreamProvider streams,
         RecordingCallbackScheduler scheduler,
         RecordingPlatformAdapter adapter,
         IEventStore eventStore,
-        IChannelRuntimeDiagnostics? diagnostics = null)
+        IChannelRuntimeDiagnostics? diagnostics = null,
+        Action<IServiceCollection>? configure = null)
     {
-        return new ServiceCollection()
+        var services = new ServiceCollection()
             .AddSingleton(eventStore)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>))
@@ -609,8 +741,9 @@ public class ChannelUserGAgentContinuationTests
             .AddSingleton<IMemoryCache, MemoryCache>(_ => new MemoryCache(new MemoryCacheOptions()))
             .AddSingleton<IChannelRuntimeDiagnostics>(diagnostics ?? new InMemoryChannelRuntimeDiagnostics())
             .AddSingleton(new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://example.com" }))
-            .AddSingleton<IPlatformAdapter>(adapter)
-            .BuildServiceProvider();
+            .AddSingleton<IPlatformAdapter>(adapter);
+        configure?.Invoke(services);
+        return services.BuildServiceProvider();
     }
 
     private static ChannelUserGAgent CreateAgent(IServiceProvider services, string actorId)
@@ -916,5 +1049,36 @@ public class ChannelUserGAgentContinuationTests
             stream.RemoveAll(x => x.Version <= toVersion);
             return Task.FromResult((long)(before - stream.Count));
         }
+    }
+
+    private sealed class RoutingJsonHandler : HttpMessageHandler
+    {
+        private readonly Dictionary<string, string> _responses = new(StringComparer.Ordinal);
+
+        public void Add(HttpMethod method, string path, string body)
+        {
+            _responses[BuildKey(method, path)] = body;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var key = BuildKey(request.Method, request.RequestUri?.PathAndQuery ?? string.Empty);
+            if (!_responses.TryGetValue(key, out var body))
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent("""{"error":"not_found"}"""),
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(body),
+            });
+        }
+
+        private static string BuildKey(HttpMethod method, string path) => $"{method.Method} {path}";
     }
 }
