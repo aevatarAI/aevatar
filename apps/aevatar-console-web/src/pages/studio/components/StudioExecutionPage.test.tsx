@@ -58,6 +58,7 @@ function createBaseProps(overrides = {}) {
     savePending: false,
     canSaveWorkflow: true,
     runPending: false,
+    canOpenRunWorkflow: true,
     canRunWorkflow: true,
     executionCanStop: true,
     executionStopPending: false,
@@ -78,6 +79,19 @@ function createBaseProps(overrides = {}) {
 }
 
 describe('StudioExecutionPage', () => {
+  it('reuses the shared workflow header chrome on the runs view', () => {
+    render(
+      React.createElement(StudioExecutionPage, createBaseProps() as any),
+    );
+
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Runs' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('workspace-demo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
+  });
+
   it('shows the selected execution actor id and lets users copy it', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {

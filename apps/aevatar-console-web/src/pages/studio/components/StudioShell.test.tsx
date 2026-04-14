@@ -46,7 +46,17 @@ describe("StudioShell", () => {
       flex: "1",
       minHeight: "0",
     });
-    expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+    const contentBody = screen.getByText("Studio content").parentElement;
+    const contentShell = contentBody?.parentElement;
+
+    expect(contentBody).toHaveStyle({
+      display: "flex",
+      flex: "1",
+      flexDirection: "column",
+      minHeight: "0",
+      overflow: "hidden",
+    });
+    expect(contentShell).toHaveStyle({
       flex: "1",
       minHeight: "0",
       overflowX: "hidden",
@@ -90,7 +100,7 @@ describe("StudioShell", () => {
       })
     );
 
-    expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+    expect(screen.getByText("Studio content").parentElement?.parentElement).toHaveStyle({
       overflowY: "hidden",
     });
   });

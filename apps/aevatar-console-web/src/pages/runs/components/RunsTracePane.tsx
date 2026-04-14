@@ -9,7 +9,6 @@ import {
   workbenchConsoleViewportStyle,
   workbenchTraceTabPanelStyle,
   workbenchTraceTabsStyle,
-  workbenchTraceTabsStyles,
 } from "../runWorkbenchConfig";
 
 const runsTraceTabsClassName = "runs-trace-tabs";
@@ -21,10 +20,25 @@ const runsTraceTabsCss = `
   min-height: 0;
 }
 
-.${runsTraceTabsClassName} .ant-tabs-content-holder,
-.${runsTraceTabsClassName} .ant-tabs-content,
-.${runsTraceTabsClassName} .ant-tabs-tabpane-active {
+.${runsTraceTabsClassName} .ant-tabs-content-holder {
   display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.${runsTraceTabsClassName} .ant-tabs-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.${runsTraceTabsClassName} .ant-tabs-tabpane-hidden {
+  display: none !important;
+}
+
+.${runsTraceTabsClassName} .ant-tabs-tabpane-active {
+  display: flex !important;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -76,6 +90,7 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
       <style>{runsTraceTabsCss}</style>
       <Tabs
         activeKey={consoleView}
+        animated={false}
         className={runsTraceTabsClassName}
         destroyOnHidden
         style={workbenchTraceTabsStyle}
@@ -100,7 +115,6 @@ const RunsTracePane: React.FC<RunsTracePaneProps> = ({
             ),
           },
         ]}
-        styles={workbenchTraceTabsStyles}
         onChange={(key) => onConsoleViewChange(key as ConsoleViewKey)}
       />
     </div>
