@@ -13,17 +13,20 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
 {
     private readonly NyxIdToolOptions _options;
     private readonly NyxIdApiClient _client;
+    private readonly NyxIdSpecCatalog _specCatalog;
     private readonly IServiceDiscoveryCache _cache;
     private readonly ILogger _logger;
 
     public NyxIdAgentToolSource(
         NyxIdToolOptions options,
         NyxIdApiClient client,
+        NyxIdSpecCatalog specCatalog,
         IServiceDiscoveryCache? cache = null,
         ILogger<NyxIdAgentToolSource>? logger = null)
     {
         _options = options;
         _client = client;
+        _specCatalog = specCatalog;
         _cache = cache ?? new InMemoryServiceDiscoveryCache();
         _logger = logger ?? NullLogger<NyxIdAgentToolSource>.Instance;
     }
@@ -59,6 +62,8 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdOrgTool(_client),
             new NyxIdChannelEventsTool(_client),
             new NyxIdAdminTool(_client),
+            new NyxIdSearchCapabilitiesTool(_specCatalog),
+            new NyxIdProxyExecuteTool(_specCatalog, _client, _logger as ILogger<NyxIdProxyExecuteTool>),
         ];
 
         _logger.LogInformation(

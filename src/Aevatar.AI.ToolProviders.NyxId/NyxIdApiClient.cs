@@ -386,7 +386,7 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
+    internal async Task<string> PostAsync(string token, string path, string body, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
@@ -395,7 +395,7 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> PatchAsync(string token, string path, string body, CancellationToken ct)
+    internal async Task<string> PatchAsync(string token, string path, string body, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Patch, url);
@@ -404,7 +404,7 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
+    internal async Task<string> PutAsync(string token, string path, string body, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Put, url);
@@ -413,7 +413,7 @@ public sealed class NyxIdApiClient
         return await SendAsync(request, ct);
     }
 
-    private async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
+    internal async Task<string> DeleteAsync(string token, string path, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Delete, url);
