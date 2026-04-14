@@ -632,6 +632,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "approve?",
                     ["timeout"] = "90",
+                    ["delivery_target_id"] = "agent-approval-1",
                 },
             }),
             ctx,
@@ -640,6 +641,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.StepId.Should().Be("approval-1");
         suspended.SuspensionType.Should().Be("human_approval");
+        suspended.Content.Should().Be("original");
+        suspended.DeliveryTargetId.Should().Be("agent-approval-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -800,6 +803,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "please type",
                     ["variable"] = "answer",
+                    ["deliveryTargetId"] = "agent-input-1",
                 },
             }),
             ctx,
@@ -807,6 +811,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
 
         var suspended = ctx.Published.Select(x => x.evt).OfType<WorkflowSuspendedEvent>().Single();
         suspended.VariableName.Should().Be("answer");
+        suspended.Content.Should().Be("fallback");
+        suspended.DeliveryTargetId.Should().Be("agent-input-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -992,6 +998,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 {
                     ["prompt"] = "provide secret",
                     ["variable"] = "api_key",
+                    ["delivery_target_id"] = "agent-secure-1",
                 },
             }),
             ctx,
@@ -1001,6 +1008,8 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         suspended.SuspensionType.Should().Be("secure_input");
         suspended.Metadata["secure"].Should().Be("true");
         suspended.Metadata["variable"].Should().Be("api_key");
+        suspended.Content.Should().BeEmpty();
+        suspended.DeliveryTargetId.Should().Be("agent-secure-1");
         ctx.Published.Clear();
 
         var persistedState = ctx.LoadState<SecureInputModuleState>(SecureInputStateAccess.ModuleStateKey);

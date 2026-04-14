@@ -171,6 +171,60 @@ message ChannelBotRegistrationDocument {
   string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
 }
 
+// ─── Agent Registry (actor-backed delivery target store) ───
+
+message AgentRegistryEntry {
+  string agent_id = 1;
+  string platform = 2;
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  string owner_nyx_user_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  bool tombstoned = 9;
+}
+
+message AgentRegistryState {
+  repeated AgentRegistryEntry entries = 1;
+}
+
+message AgentRegistryUpsertCommand {
+  string agent_id = 1;
+  string platform = 2;
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  string owner_nyx_user_id = 6;
+}
+
+message AgentRegistryTombstoneCommand {
+  string agent_id = 1;
+}
+
+message AgentRegistryUpsertedEvent {
+  AgentRegistryEntry entry = 1;
+}
+
+message AgentRegistryTombstonedEvent {
+  string agent_id = 1;
+}
+
+message AgentRegistryDocument {
+  string id = 1;
+  string platform = 2;
+  string conversation_id = 3;
+  string nyx_provider_slug = 4;
+  string nyx_api_key = 5;
+  string owner_nyx_user_id = 6;
+  bool tombstoned = 7;
+  int64 state_version = 8;
+  string last_event_id = 9;
+  google.protobuf.Timestamp updated_at_utc = 10;
+  string actor_id = 11;
+  google.protobuf.Timestamp created_at_utc = 12;
+}
+
 // ─── Channel Chat Lifecycle (continuation pattern) ───
 
 // Domain event: chat session requested — carries full replay context

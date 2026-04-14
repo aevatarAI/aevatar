@@ -66,14 +66,18 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 "HumanApproval: run={RunId} step={StepId} suspended, prompt=\"{Prompt}\", timeout={Timeout}s",
                 runId, request.StepId, prompt, timeoutSeconds);
 
-            await ctx.PublishAsync(new WorkflowSuspendedEvent
+            var suspended = new WorkflowSuspendedEvent
             {
                 RunId = runId,
                 StepId = request.StepId,
                 SuspensionType = "human_approval",
                 Prompt = prompt,
                 TimeoutSeconds = timeoutSeconds,
-            }, TopologyAudience.ParentAndChildren, ct);
+            };
+            WorkflowSuspensionRequestSupport.ApplyContent(suspended, request.Input);
+            WorkflowSuspensionRequestSupport.ApplyDeliveryTarget(suspended, request);
+
+            await ctx.PublishAsync(suspended, TopologyAudience.ParentAndChildren, ct);
             return;
         }
 

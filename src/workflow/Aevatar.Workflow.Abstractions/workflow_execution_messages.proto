@@ -159,6 +159,8 @@ message WorkflowSuspendedEvent
   int32 timeout_seconds = 5;
   string variable_name = 6;
   map<string, string> metadata = 7;
+  string content = 8;
+  string delivery_target_id = 9;
 }
 message WorkflowResumedEvent   { string run_id = 1; string step_id = 2; bool approved = 3; string user_input = 4; map<string, string> metadata = 5; }
 message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }

@@ -7,6 +7,7 @@ using Aevatar.CQRS.Projection.Providers.InMemory.DependencyInjection;
 using Aevatar.CQRS.Projection.Runtime.DependencyInjection;
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.GAgents.ChannelRuntime.Adapters;
+using Aevatar.Foundation.Abstractions.HumanInteraction;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -100,9 +101,45 @@ public static class ServiceCollectionExtensions
                 static doc => doc.Id, static key => key);
         }
 
+        // ─── Agent Registry projection pipeline ───
+        services.AddProjectionMaterializationRuntimeCore<
+            AgentRegistryMaterializationContext,
+            AgentRegistryMaterializationRuntimeLease,
+            ProjectionMaterializationScopeGAgent<AgentRegistryMaterializationContext>>(
+            static scopeKey => new AgentRegistryMaterializationContext
+            {
+                RootActorId = scopeKey.RootActorId,
+                ProjectionKind = scopeKey.ProjectionKind,
+            },
+            static context => new AgentRegistryMaterializationRuntimeLease(context));
+        services.AddCurrentStateProjectionMaterializer<
+            AgentRegistryMaterializationContext,
+            AgentRegistryProjector>();
+        services.TryAddSingleton<IProjectionDocumentMetadataProvider<AgentRegistryDocument>,
+            AgentRegistryDocumentMetadataProvider>();
+        services.TryAddSingleton<IAgentRegistryQueryPort, AgentRegistryQueryPort>();
+        services.TryAddSingleton<AgentRegistryProjectionPort>();
+        services.AddHostedService<AgentRegistryStartupService>();
+
+        if (useElasticsearch)
+        {
+            services.AddElasticsearchDocumentProjectionStore<AgentRegistryDocument, string>(
+                optionsFactory: _ => BuildElasticsearchOptions(configuration!),
+                metadataFactory: sp => sp.GetRequiredService<IProjectionDocumentMetadataProvider<AgentRegistryDocument>>().Metadata,
+                keySelector: static doc => doc.Id,
+                keyFormatter: static key => key);
+        }
+        else
+        {
+            services.AddInMemoryDocumentProjectionStore<AgentRegistryDocument, string>(
+                static doc => doc.Id, static key => key);
+        }
+
         // Register platform adapters
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, LarkPlatformAdapter>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IPlatformAdapter, TelegramPlatformAdapter>());
+
+        services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
 
         // channel_registrations tool
         services.TryAddEnumerable(
