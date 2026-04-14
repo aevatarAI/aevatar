@@ -1,6 +1,20 @@
-import { PlusOutlined } from "@ant-design/icons";
+import {
+  AppstoreOutlined,
+  BarsOutlined,
+  MoreOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space, Typography, theme } from "antd";
+import {
+  Alert,
+  Button,
+  Dropdown,
+  Empty,
+  Space,
+  Tooltip,
+  Typography,
+  theme,
+} from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -40,6 +54,7 @@ import {
 const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
+const compactTeamRosterThreshold = 6;
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
@@ -172,19 +187,20 @@ const SummaryStatCard: React.FC<{
       style={{
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 24,
+        borderRadius: 22,
         boxShadow: token.boxShadowTertiary,
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        minHeight: 128,
-        padding: 22,
+        gap: 8,
+        minHeight: 104,
+        padding: 18,
       }}
     >
       <Typography.Title
         level={2}
         style={{
           color: accent ? token.colorPrimary : token.colorText,
+          fontSize: 24,
           margin: 0,
         }}
       >
@@ -193,7 +209,7 @@ const SummaryStatCard: React.FC<{
       <Typography.Text
         style={{
           color: token.colorTextSecondary,
-          fontSize: 15,
+          fontSize: 14,
         }}
       >
         {label}
@@ -215,10 +231,10 @@ const EvidencePill: React.FC<{
         borderRadius: 999,
         color: token.colorInfo,
         display: "inline-flex",
-        fontSize: 13,
+        fontSize: 12,
         fontWeight: 500,
         lineHeight: 1,
-        padding: "9px 12px",
+        padding: "7px 10px",
       }}
     >
       {text}
@@ -234,28 +250,34 @@ const TeamFact: React.FC<{
     style={{
       display: "flex",
       flexDirection: "column",
-      gap: 6,
+      gap: 4,
       minWidth: 0,
     }}
   >
-    <Typography.Title
-      level={4}
+    <Typography.Text
+      strong
       style={{
+        fontSize: 16,
         margin: 0,
         overflowWrap: "anywhere",
       }}
     >
       {value}
-    </Typography.Title>
-    <Typography.Text type="secondary">{label}</Typography.Text>
+    </Typography.Text>
+    <Typography.Text style={{ fontSize: 13 }} type="secondary">
+      {label}
+    </Typography.Text>
   </div>
 );
 
-const WorkflowTeamCard: React.FC<{
-  readonly scopeId: string;
-  readonly unit: WorkflowOperationalUnit;
-}> = ({ scopeId, unit }) => {
-  const { token } = theme.useToken();
+function buildWorkflowTeamActions(
+  scopeId: string,
+  unit: WorkflowOperationalUnit,
+): {
+  readonly builderHref: string;
+  readonly detailHref: string;
+  readonly moreActions: Array<{ key: string; label: string; onClick: () => void }>;
+} {
   const detailHref = buildTeamDetailHref({
     scopeId,
     workflowId: unit.workflow.workflowId,
@@ -274,6 +296,64 @@ const WorkflowTeamCard: React.FC<{
         serviceId: unit.matchedService.serviceId,
       })
     : "";
+  const moreActions: Array<{ key: string; label: string; onClick: () => void }> = [];
+  if (runtimeHref) {
+    moreActions.push({
+      key: "runtime",
+      label: "查看运行",
+      onClick: () => history.push(runtimeHref),
+    });
+  }
+  moreActions.push({
+    key: "builder",
+    label: "进入 Builder",
+    onClick: () => history.push(builderHref),
+  });
+
+  return {
+    builderHref,
+    detailHref,
+    moreActions,
+  };
+}
+
+const MoreActionsButton: React.FC<{
+  readonly actions: Array<{ key: string; label: string; onClick: () => void }>;
+}> = ({ actions }) => (
+  <Dropdown
+    menu={{
+      items: actions.map((action) => ({
+        key: action.key,
+        label: action.label,
+      })),
+      onClick: ({ key, domEvent }) => {
+        domEvent.stopPropagation();
+        const matchedAction = actions.find((action) => action.key === key);
+        if (!matchedAction) {
+          return;
+        }
+
+        matchedAction.onClick();
+      },
+    }}
+    trigger={["click"]}
+  >
+    <Button
+      icon={<MoreOutlined />}
+      onClick={(event) => event.stopPropagation()}
+      size="large"
+    >
+      更多
+    </Button>
+  </Dropdown>
+);
+
+const WorkflowTeamCard: React.FC<{
+  readonly scopeId: string;
+  readonly unit: WorkflowOperationalUnit;
+}> = ({ scopeId, unit }) => {
+  const { token } = theme.useToken();
+  const { detailHref, moreActions } = buildWorkflowTeamActions(scopeId, unit);
   const description = formatCardDescription(unit);
   const factChips = [
     trimOptional(unit.workflow.workflowName),
@@ -294,14 +374,14 @@ const WorkflowTeamCard: React.FC<{
       style={{
         background: token.colorBgContainer,
         border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 28,
+        borderRadius: 24,
         boxShadow: token.boxShadowTertiary,
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
-        gap: 18,
+        gap: 14,
         minWidth: 0,
-        padding: 22,
+        padding: 18,
       }}
       tabIndex={0}
     >
@@ -317,6 +397,7 @@ const WorkflowTeamCard: React.FC<{
           <Typography.Title
             level={3}
             style={{
+              fontSize: 22,
               margin: 0,
               overflowWrap: "anywhere",
             }}
@@ -324,10 +405,12 @@ const WorkflowTeamCard: React.FC<{
             {unit.workflow.displayName || unit.workflow.workflowId}
           </Typography.Title>
           <Typography.Paragraph
+            ellipsis={{ rows: 1, tooltip: description }}
             style={{
               color: token.colorTextSecondary,
+              fontSize: 14,
               marginBottom: 0,
-              marginTop: 8,
+              marginTop: 6,
             }}
           >
             {description}
@@ -338,10 +421,10 @@ const WorkflowTeamCard: React.FC<{
             ...resolveAttentionPillStyle(token, unit.attention),
             borderRadius: 999,
             display: "inline-flex",
-            fontSize: 13,
+            fontSize: 12,
             fontWeight: 600,
             lineHeight: 1,
-            padding: "10px 14px",
+            padding: "8px 12px",
             whiteSpace: "nowrap",
           }}
         >
@@ -359,18 +442,14 @@ const WorkflowTeamCard: React.FC<{
         style={{
           borderTop: `1px solid ${token.colorBorderSecondary}`,
           display: "grid",
-          gap: 18,
-          gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-          paddingTop: 18,
+          gap: 14,
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          paddingTop: 14,
         }}
       >
         <TeamFact
-          label="最近步骤"
-          value={unit.latestRun?.totalSteps ?? "--"}
-        />
-        <TeamFact
-          label="角色响应"
-          value={unit.latestRun?.roleReplyCount ?? "--"}
+          label="当前状态"
+          value={formatRunStatusLabel(unit.latestRun?.completionStatus)}
         />
         <TeamFact
           label="最近更新"
@@ -385,18 +464,121 @@ const WorkflowTeamCard: React.FC<{
       <Space wrap>
         <Button
           onClick={stopEvent(() => history.push(detailHref))}
+          size="large"
           type="primary"
         >
           查看团队
         </Button>
-        {runtimeHref ? (
-          <Button onClick={stopEvent(() => history.push(runtimeHref))}>
-            查看运行
-          </Button>
+        <MoreActionsButton actions={moreActions} />
+      </Space>
+    </div>
+  );
+};
+
+const WorkflowTeamRow: React.FC<{
+  readonly scopeId: string;
+  readonly unit: WorkflowOperationalUnit;
+}> = ({ scopeId, unit }) => {
+  const { token } = theme.useToken();
+  const { detailHref, moreActions } = buildWorkflowTeamActions(scopeId, unit);
+  const description = formatCardDescription(unit);
+  const factChips = [
+    trimOptional(unit.workflow.workflowName),
+    unit.matchedService?.displayName || "",
+  ].filter(Boolean);
+
+  return (
+    <div
+      onClick={() => history.push(detailHref)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          history.push(detailHref);
+        }
+      }}
+      role="button"
+      style={{
+        alignItems: "center",
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: 20,
+        boxShadow: token.boxShadowTertiary,
+        cursor: "pointer",
+        display: "grid",
+        gap: 16,
+        gridTemplateColumns: "minmax(0, 1.8fr) repeat(3, minmax(88px, 120px)) auto",
+        minWidth: 0,
+        padding: 16,
+      }}
+      tabIndex={0}
+    >
+      <div style={{ minWidth: 0 }}>
+        <Space size={[8, 8]} wrap style={{ marginBottom: 6 }}>
+          <Typography.Title
+            level={4}
+            style={{
+              margin: 0,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {unit.workflow.displayName || unit.workflow.workflowId}
+          </Typography.Title>
+          <span
+            style={{
+              ...resolveAttentionPillStyle(token, unit.attention),
+              borderRadius: 999,
+              display: "inline-flex",
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1,
+              padding: "7px 10px",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {formatAttentionLabel(unit.attention)}
+          </span>
+        </Space>
+        <Typography.Paragraph
+          ellipsis={{ rows: 1, tooltip: description }}
+          style={{
+            color: token.colorTextSecondary,
+            fontSize: 13,
+            marginBottom: 0,
+            marginTop: 0,
+          }}
+        >
+          {description}
+        </Typography.Paragraph>
+        {factChips.length > 0 ? (
+          <Space size={[8, 8]} style={{ marginTop: 10 }} wrap>
+            {factChips.map((chip) => (
+              <EvidencePill key={chip} text={chip} />
+            ))}
+          </Space>
         ) : null}
-        <Button onClick={stopEvent(() => history.push(builderHref))}>
-          高级编辑
+      </div>
+
+      <TeamFact
+        label="状态"
+        value={formatRunStatusLabel(unit.latestRun?.completionStatus)}
+      />
+      <TeamFact
+        label="更新"
+        value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
+      />
+      <TeamFact
+        label="服务"
+        value={unit.matchedService?.serviceId || "未发布"}
+      />
+
+      <Space wrap>
+        <Button
+          onClick={stopEvent(() => history.push(detailHref))}
+          type="primary"
+        >
+          查看团队
         </Button>
+        <MoreActionsButton actions={moreActions} />
       </Space>
     </div>
   );
@@ -406,6 +588,9 @@ const ScopeOverviewPage: React.FC = () => {
   const { token } = theme.useToken();
   const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const [manualRosterView, setManualRosterView] = React.useState<
+    "cards" | "list" | null
+  >(null);
   const [showDrafts, setShowDrafts] = React.useState(false);
   const [showScopePicker, setShowScopePicker] = React.useState(false);
 
@@ -541,6 +726,10 @@ const ScopeOverviewPage: React.FC = () => {
   const visibleUnits = showDrafts
     ? units
     : units.filter((unit) => !unit.isDraftOnly);
+  const resolvedRosterView =
+    manualRosterView ??
+    (visibleUnits.length >= compactTeamRosterThreshold ? "list" : "cards");
+  const useCompactRoster = resolvedRosterView === "list";
   const activeUnits = units.filter((unit) => !unit.isDraftOnly);
   const healthyUnits = activeUnits.filter((unit) => unit.attention === "healthy");
   const runningMembers = new Set(
@@ -679,7 +868,7 @@ const ScopeOverviewPage: React.FC = () => {
               style={{
                 display: "grid",
                 gap: 16,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
               }}
             >
               <SummaryStatCard label="活跃团队" value={activeUnits.length} />
@@ -697,21 +886,73 @@ const ScopeOverviewPage: React.FC = () => {
                 type="error"
               />
             ) : visibleUnits.length > 0 ? (
-              <div
-                style={{
-                  display: "grid",
-                  gap: 18,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-                }}
-              >
-                {visibleUnits.map((unit) => (
-                  <WorkflowTeamCard
-                    key={unit.workflow.workflowId}
-                    scopeId={scopeId}
-                    unit={unit}
-                  />
-                ))}
-              </div>
+              <>
+                <div
+                  style={{
+                    alignItems: "center",
+                    display: "flex",
+                    gap: 12,
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <Typography.Text type="secondary">
+                    {visibleUnits.length} 支团队
+                  </Typography.Text>
+                  <Space.Compact>
+                    <Tooltip title="卡片视图">
+                      <Button
+                        aria-label="切换到卡片视图"
+                        icon={<AppstoreOutlined />}
+                        onClick={() => setManualRosterView("cards")}
+                        type={resolvedRosterView === "cards" ? "primary" : "default"}
+                      />
+                    </Tooltip>
+                    <Tooltip title="列表视图">
+                      <Button
+                        aria-label="切换到列表视图"
+                        icon={<BarsOutlined />}
+                        onClick={() => setManualRosterView("list")}
+                        type={resolvedRosterView === "list" ? "primary" : "default"}
+                      />
+                    </Tooltip>
+                  </Space.Compact>
+                </div>
+                {useCompactRoster ? (
+                  <div
+                    aria-label="团队紧凑视图"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 14,
+                    }}
+                  >
+                    {visibleUnits.map((unit) => (
+                      <WorkflowTeamRow
+                        key={unit.workflow.workflowId}
+                        scopeId={scopeId}
+                        unit={unit}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div
+                    aria-label="团队卡片视图"
+                    style={{
+                      display: "grid",
+                      gap: 16,
+                      gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+                    }}
+                  >
+                    {visibleUnits.map((unit) => (
+                      <WorkflowTeamCard
+                        key={unit.workflow.workflowId}
+                        scopeId={scopeId}
+                        unit={unit}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             ) : (
               <Empty
                 description="当前 Scope 里还没有可展示的团队。"
