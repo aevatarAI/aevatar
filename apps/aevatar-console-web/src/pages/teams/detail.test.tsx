@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { studioApi } from "@/shared/studio/api";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
@@ -513,6 +514,65 @@ describe("TeamDetailPage", () => {
     expect(screen.getByRole("button", { name: "运行记录" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Team Builder" })).toBeTruthy();
+  });
+
+  it("shows full raw identifiers inside overview tooltips", async () => {
+    const longRevisionId =
+      "rev-20260414154556-4d89bc2a3bf347f8b3bde41d716964f3";
+
+    (studioApi.getScopeBinding as jest.Mock).mockResolvedValueOnce({
+      available: true,
+      scopeId: "scope-1",
+      serviceId: "default",
+      displayName: "Support Escalation Triage",
+      serviceKey: "scope-1:default",
+      defaultServingRevisionId: longRevisionId,
+      activeServingRevisionId: longRevisionId,
+      deploymentId: "dep-2",
+      deploymentStatus: "Active",
+      primaryActorId: "actor-intake",
+      updatedAt: "2026-04-09T09:00:00Z",
+      revisions: [
+        {
+          revisionId: longRevisionId,
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-2",
+          failureReason: "",
+          isDefaultServing: true,
+          isActiveServing: true,
+          isServingTarget: true,
+          allocationWeight: 100,
+          servingState: "Active",
+          deploymentId: "dep-2",
+          primaryActorId: "actor-intake",
+          createdAt: "2026-04-09T08:00:00Z",
+          preparedAt: "2026-04-09T08:01:00Z",
+          publishedAt: "2026-04-09T08:02:00Z",
+          retiredAt: null,
+          workflowName: "support-triage",
+          workflowDefinitionActorId: "definition://support-triage",
+          inlineWorkflowCount: 1,
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
+        },
+      ],
+    });
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByText("运行摘要");
+
+    const revisionNote = await screen.findByText((_, node) => {
+      return node?.tagName === "SPAN" && (node.textContent || "").includes("revisionId ·");
+    });
+
+    fireEvent.mouseEnter(revisionNote);
+
+    expect(await screen.findByText(`revisionId · ${longRevisionId}`)).toBeTruthy();
   });
 
   it("returns to the teams list when clicking the breadcrumb teams link", async () => {

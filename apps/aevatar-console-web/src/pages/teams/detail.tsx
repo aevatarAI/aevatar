@@ -819,10 +819,11 @@ function createObservedPlaybackEvents(
 const SignalCard: React.FC<{
   caption?: React.ReactNode;
   captionMonospace?: boolean;
+  captionTooltip?: React.ReactNode;
   icon?: React.ReactNode;
   label: React.ReactNode;
   value: React.ReactNode;
-}> = ({ caption, captionMonospace = false, icon, label, value }) => {
+}> = ({ caption, captionMonospace = false, captionTooltip, icon, label, value }) => {
   const { token } = theme.useToken();
 
   return (
@@ -849,7 +850,10 @@ const SignalCard: React.FC<{
         {value}
       </Typography.Title>
       {typeof caption === "string" ? (
-        <Tooltip placement="topLeft" title={caption}>
+        <Tooltip
+          placement="topLeft"
+          title={typeof captionTooltip === "string" ? captionTooltip : caption}
+        >
           <Typography.Text
             ellipsis
             style={{
@@ -901,11 +905,12 @@ const FactLine: React.FC<{
   rows?: number;
   secondary?: boolean;
   text: string;
-}> = ({ monospace = true, rows = 1, secondary = false, text }) => {
+  tooltipText?: string;
+}> = ({ monospace = true, rows = 1, secondary = false, text, tooltipText }) => {
   const normalized = text || "--";
 
   return (
-    <Tooltip placement="topLeft" title={normalized}>
+    <Tooltip placement="topLeft" title={tooltipText || normalized}>
       <Typography.Text
         strong={!secondary}
         style={{
@@ -1479,13 +1484,24 @@ const TeamDetailPage: React.FC = () => {
   const currentRunPillText = activeRunId
     ? `运行 · ${currentRunFriendly}`
     : "暂无近期运行";
+  const currentServiceReference =
+    trimText(runtimeServiceId) ||
+    (currentServiceKey !== "--" ? currentServiceKey : "");
   const currentServiceCardCaption = runtimeServiceId
     ? `serviceId · ${runtimeServiceId}`
     : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
       ? `serviceKey · ${compactId(currentServiceKey)}`
       : "当前还没有更多服务标识";
+  const currentServiceCardTooltip = runtimeServiceId
+    ? `serviceId · ${runtimeServiceId}`
+    : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
+      ? `serviceKey · ${currentServiceKey}`
+      : "当前还没有更多服务标识";
   const currentRunCardCaption = activeRunId
     ? `runId · ${compactId(activeRunId)}`
+    : "当前还没有可见 run";
+  const currentRunCardTooltip = activeRunId
+    ? `runId · ${activeRunId}`
     : "当前还没有可见 run";
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
@@ -2326,6 +2342,10 @@ const TeamDetailPage: React.FC = () => {
           ? `revisionId · ${compactId(currentRevisionId)}`
           : "当前还没有可见版本标识",
       noteMonospace: false,
+      noteTooltip:
+        currentRevisionId !== "--"
+          ? `revisionId · ${currentRevisionId}`
+          : "当前还没有可见版本标识",
       value: currentRevisionFriendly,
     },
     {
@@ -2333,11 +2353,13 @@ const TeamDetailPage: React.FC = () => {
       badgeColor: runtimeServiceId ? "success" : undefined,
       key: "serviceKey",
       label: "主服务",
-      note:
-        runtimeServiceId || currentServiceKey !== "--"
-          ? `serviceId · ${compactId(runtimeServiceId || currentServiceKey || "--")}`
-          : "当前还没有主服务标识",
+      note: currentServiceReference
+        ? `serviceId · ${compactId(currentServiceReference)}`
+        : "当前还没有主服务标识",
       noteMonospace: false,
+      noteTooltip: currentServiceReference
+        ? `serviceId · ${currentServiceReference}`
+        : "当前还没有主服务标识",
       value: currentServiceFriendly,
     },
     {
@@ -2351,6 +2373,11 @@ const TeamDetailPage: React.FC = () => {
           ? `actorId · ${compactId(currentActorId)}`
           : "当前还没有可见运行身份",
       noteMonospace: false,
+      noteTooltip: activeRunId
+        ? `runId · ${activeRunId}`
+        : currentActorId !== "--"
+          ? `actorId · ${currentActorId}`
+          : "当前还没有可见运行身份",
       value: currentRunFriendly,
     },
     {
@@ -2719,11 +2746,13 @@ const TeamDetailPage: React.FC = () => {
               label="当前服务"
               value={currentServiceFriendly}
               caption={currentServiceCardCaption}
+              captionTooltip={currentServiceCardTooltip}
             />
             <SignalCard
               label="最近运行"
               value={currentRunFriendly}
               caption={currentRunCardCaption}
+              captionTooltip={currentRunCardTooltip}
             />
             <SignalCard
               label="最近一次更新"
@@ -2830,6 +2859,9 @@ const TeamDetailPage: React.FC = () => {
                     rows={3}
                     secondary
                     text={String(row.note)}
+                    tooltipText={
+                      typeof row.noteTooltip === "string" ? row.noteTooltip : undefined
+                    }
                   />
                 </div>
                 <div
