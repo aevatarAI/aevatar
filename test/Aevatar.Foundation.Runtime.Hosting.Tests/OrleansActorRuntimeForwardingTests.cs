@@ -58,6 +58,22 @@ public sealed class OrleansActorRuntimeForwardingTests
     }
 
     [Fact]
+    public async Task UnlinkAsync_ShouldCreateCallChainReentrancyScope_ForGrainCalls()
+    {
+        RequestContext.Clear();
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.LinkAsync("parent", "child");
+        grains["parent"].ObservedReentrancyIds.Clear();
+        grains["child"].ObservedReentrancyIds.Clear();
+
+        await runtime.UnlinkAsync("child");
+
+        grains["parent"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["child"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        RequestContext.ReentrancyId.Should().Be(Guid.Empty);
+    }
+
+    [Fact]
     public async Task DestroyAsync_ShouldCleanupIncomingAndOutgoingForwardingBindings()
     {
         var runtime = CreateRuntime(out var registry, out var grains, out _);
@@ -128,6 +144,25 @@ public sealed class OrleansActorRuntimeForwardingTests
         await runtime.DestroyAsync("actor-1");
 
         callbackSchedulerGrains["actor-1"].PurgeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DestroyAsync_ShouldCreateCallChainReentrancyScope_ForGrainCalls()
+    {
+        RequestContext.Clear();
+        var runtime = CreateRuntime(out _, out var grains, out _);
+        await runtime.LinkAsync("parent", "middle");
+        await runtime.LinkAsync("middle", "child");
+        grains["parent"].ObservedReentrancyIds.Clear();
+        grains["middle"].ObservedReentrancyIds.Clear();
+        grains["child"].ObservedReentrancyIds.Clear();
+
+        await runtime.DestroyAsync("middle");
+
+        grains["parent"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["middle"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        grains["child"].ObservedReentrancyIds.Should().Contain(id => id != Guid.Empty);
+        RequestContext.ReentrancyId.Should().Be(Guid.Empty);
     }
 
     private static OrleansActorRuntime CreateRuntime(

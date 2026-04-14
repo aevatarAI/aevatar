@@ -16,7 +16,10 @@ public static class ScopeScriptEndpoints
     {
         var group = app.MapGroup("/api/scopes").WithTags("ScopeScripts");
         group.MapPut("/{scopeId}/scripts/{scriptId}", HandleUpsertScriptAsync)
-            .Produces<ScopeScriptUpsertResult>(StatusCodes.Status200OK)
+            .Produces<ScopeScriptUpsertResult>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest);
+        group.MapPost("/{scopeId}/scripts/{scriptId}/save-observation", HandleObserveSaveAsync)
+            .Produces<ScopeScriptSaveObservationResult>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status400BadRequest);
         group.MapGet("/{scopeId}/scripts", HandleListScriptsAsync)
             .Produces(StatusCodes.Status200OK)
@@ -52,7 +55,30 @@ public static class ScopeScriptEndpoints
                     request.RevisionId,
                     request.ExpectedBaseRevision),
                 ct);
-            return Results.Ok(result);
+            return Results.Accepted(
+                uri: $"/api/scopes/{Uri.EscapeDataString(result.ScopeId)}/scripts/{Uri.EscapeDataString(result.ScriptId)}/save-observation",
+                value: result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    internal static async Task<IResult> HandleObserveSaveAsync(
+        string scopeId,
+        string scriptId,
+        ScopeScriptSaveObservationRequest request,
+        [FromServices] IScopeScriptSaveObservationPort observationPort,
+        CancellationToken ct)
+    {
+        try
+        {
+            return Results.Ok(await observationPort.ObserveAsync(scopeId, scriptId, request, ct));
         }
         catch (InvalidOperationException ex)
         {

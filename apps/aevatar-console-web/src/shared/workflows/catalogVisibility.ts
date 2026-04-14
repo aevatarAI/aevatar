@@ -48,12 +48,24 @@ export function buildWorkflowCatalogOptions(
     label: `${item.name} · ${item.groupLabel}`,
     value: item.name,
   }));
+  const normalizedCurrentWorkflowName = trimOptional(currentWorkflowName);
   const currentItem = findWorkflowCatalogItem(items, currentWorkflowName);
 
-  if (
-    !currentItem ||
-    visibleItems.some((item) => item.name === currentItem.name)
-  ) {
+  if (!currentItem) {
+    if (!normalizedCurrentWorkflowName) {
+      return options;
+    }
+
+    return [
+      {
+        label: `${normalizedCurrentWorkflowName} · Unavailable in catalog`,
+        value: normalizedCurrentWorkflowName,
+      },
+      ...options,
+    ];
+  }
+
+  if (visibleItems.some((item) => item.name === currentItem.name)) {
     return options;
   }
 

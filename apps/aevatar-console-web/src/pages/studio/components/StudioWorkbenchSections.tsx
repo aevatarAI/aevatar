@@ -158,6 +158,70 @@ type StudioSelectedGraphEdge = {
   readonly implicit: boolean;
 };
 
+function readWorkflowSortTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function compareWorkflowSummaryPriority(
+  left: StudioWorkflowSummary,
+  right: StudioWorkflowSummary,
+  selectedWorkflowId = '',
+): number {
+  const leftSelected = left.workflowId === selectedWorkflowId;
+  const rightSelected = right.workflowId === selectedWorkflowId;
+  if (leftSelected !== rightSelected) {
+    return leftSelected ? -1 : 1;
+  }
+
+  const updatedDelta =
+    readWorkflowSortTimestamp(right.updatedAtUtc) -
+    readWorkflowSortTimestamp(left.updatedAtUtc);
+  if (updatedDelta !== 0) {
+    return updatedDelta;
+  }
+
+  if (left.stepCount !== right.stepCount) {
+    return right.stepCount - left.stepCount;
+  }
+
+  const leftDescriptionLength = left.description.trim().length;
+  const rightDescriptionLength = right.description.trim().length;
+  if (leftDescriptionLength !== rightDescriptionLength) {
+    return rightDescriptionLength - leftDescriptionLength;
+  }
+
+  return left.workflowId.localeCompare(right.workflowId);
+}
+
+export function dedupeStudioWorkflowSummaries(
+  workflows: readonly StudioWorkflowSummary[],
+  selectedWorkflowId = '',
+): StudioWorkflowSummary[] {
+  const dedupedWorkflows = new Map<string, StudioWorkflowSummary>();
+
+  for (const workflow of workflows) {
+    const key =
+      workflow.name.trim().toLowerCase() ||
+      workflow.workflowId.trim().toLowerCase();
+    const current = dedupedWorkflows.get(key);
+    if (!current) {
+      dedupedWorkflows.set(key, workflow);
+      continue;
+    }
+
+    if (
+      compareWorkflowSummaryPriority(workflow, current, selectedWorkflowId) < 0
+    ) {
+      dedupedWorkflows.set(key, workflow);
+    }
+  }
+
+  return Array.from(dedupedWorkflows.values()).sort((left, right) =>
+    compareWorkflowSummaryPriority(left, right, selectedWorkflowId),
+  );
+}
+
 const DEFAULT_GAGENT_REQUEST_TYPE_URL =
   'type.googleapis.com/google.protobuf.StringValue';
 
@@ -215,6 +279,12 @@ const workflowWorkspaceRowStyle: React.CSSProperties = {
 const workflowSidebarStackStyle: React.CSSProperties = {
   ...cardStackStyle,
   flex: 1,
+  minHeight: 0,
+};
+
+const workflowColumnStretchStyle: React.CSSProperties = {
+  ...stretchColumnStyle,
+  flexDirection: 'column',
   minHeight: 0,
 };
 
@@ -1803,11 +1873,16 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
 }) => {
   const directories = workspaceSettings.data?.directories ?? [];
   const isScopeMode = workflowStorageMode === 'scope';
+  const visibleWorkflows = React.useMemo(
+    () =>
+      dedupeStudioWorkflowSummaries(workflows.data ?? [], selectedWorkflowId),
+    [selectedWorkflowId, workflows.data],
+  );
   const activeDirectory =
     directories.find((directory) => directory.directoryId === selectedDirectoryId) ||
     directories[0] ||
     null;
-  const filteredWorkflows = (workflows.data ?? []).filter((workflow) => {
+  const filteredWorkflows = visibleWorkflows.filter((workflow) => {
     const keyword = workflowSearch.trim().toLowerCase();
     if (!keyword) {
       return true;
@@ -1821,6 +1896,23 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     ].some((value) => value.toLowerCase().includes(keyword));
   });
   const workflowViewportMaxWidth = isScopeMode ? undefined : 1080;
+  const resolvedWorkspaceRowStyle: React.CSSProperties = isScopeMode
+    ? { width: '100%' }
+    : workflowWorkspaceRowStyle;
+  const resolvedWorkflowBrowserStyle: React.CSSProperties = isScopeMode
+    ? {
+        ...workflowBrowserStyle,
+        flex: '0 0 auto',
+        height: 'auto',
+      }
+    : workflowBrowserStyle;
+  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = isScopeMode
+    ? {
+        ...workflowResultsBodyStyle,
+        flex: '0 0 auto',
+        overflowY: 'visible',
+      }
+    : workflowResultsBodyStyle;
 
   const scopeSummaryDescription = workspaceSettings.isLoading
     ? 'Resolving the current scope.'
@@ -1831,9 +1923,9 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     activeWorkflowDescription || 'Open the selected workflow or start a blank draft.';
 
   return (
-    <Row gutter={[16, 16]} align="stretch" style={workflowWorkspaceRowStyle}>
+    <Row gutter={[16, 16]} align="stretch" style={resolvedWorkspaceRowStyle}>
       {!isScopeMode ? (
-        <Col xs={24} xl={8} xxl={7} style={stretchColumnStyle}>
+        <Col xs={24} xl={8} xxl={7} style={workflowColumnStretchStyle}>
           <div style={workflowSidebarStackStyle}>
             <section
               style={{
@@ -2026,9 +2118,9 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
         xs={24}
         xl={isScopeMode ? 24 : 16}
         xxl={isScopeMode ? 24 : 17}
-        style={stretchColumnStyle}
+        style={workflowColumnStretchStyle}
       >
-        <section style={workflowBrowserStyle}>
+        <section style={resolvedWorkflowBrowserStyle}>
           <input
             ref={workflowImportInputRef}
             hidden
@@ -2147,7 +2239,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
             </div>
           </div>
 
-          <div style={workflowResultsBodyStyle}>
+          <div style={resolvedWorkflowResultsBodyStyle}>
             {workflows.isLoading ? (
               <Typography.Text type="secondary">
                 Loading workflows...
@@ -4050,7 +4142,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
         key="recommended-run-step"
         type="success"
         title="Next step: Run draft"
-        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the project so Project Invoke can use the published entrypoint."
+        description="Use Run draft to verify the inline workflow bundle first. After the draft run looks right, bind the team entry so Invoke Lab can use the published entrypoint."
         compact
         action={
           <Space wrap>
@@ -4066,7 +4158,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               loading={publishPending}
               disabled={!canPublishWorkflow}
             >
-              Bind project
+              Bind team entry
             </Button>
           </Space>
         }
@@ -4077,8 +4169,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-bind-step"
         type="warning"
-        title="Next step: Bind project"
-        description="The workflow asset is ready, but Project Invoke still has no active default project binding. Bind this workflow when you want the published project path to use it."
+        title="Next step: Bind team entry"
+        description="The workflow asset is ready, but the current team still has no active default binding. Bind this workflow when you want the published team entrypoint to use it."
         compact
         action={
           <Space wrap>
@@ -4088,9 +4180,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               loading={publishPending}
               disabled={!canPublishWorkflow}
             >
-              Bind project
+              Bind team entry
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
+            <Button onClick={onOpenProjectOverview}>Open Team Home</Button>
           </Space>
         }
       />,
@@ -4100,15 +4192,15 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       <StudioNoticeCard
         key="recommended-invoke-step"
         type="success"
-        title="Next step: Open Project Invoke"
-        description="The default project binding is already active. Move to Project Invoke to test the published entrypoint, then continue in Runs for the full event trace."
+        title="Next step: Open Legacy Invoke Lab"
+        description="The default team binding is already active. Move to the legacy invoke lab to test the published entrypoint, then continue in Runs for the full event trace."
         compact
         action={
           <Space wrap>
             <Button type="primary" onClick={onOpenProjectInvoke}>
-              Open Project Invoke
+              Open Legacy Invoke Lab
             </Button>
-            <Button onClick={onOpenProjectOverview}>Open Project Overview</Button>
+            <Button onClick={onOpenProjectOverview}>Open Team Home</Button>
             <Button
               onClick={onRunInConsole}
               disabled={!canOpenRunWorkflow}
@@ -4368,7 +4460,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   disabled={!canPublishWorkflow}
                   onClick={onPublishWorkflow}
                 >
-                  Bind project
+                  Bind team entry
                 </Button>
                 <Button
                   type="text"

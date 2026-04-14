@@ -34,15 +34,15 @@ describe("PrimitivesPage", () => {
       React.createElement(PrimitivesPage),
     );
 
-    expect(container.textContent).toContain("Primitive Library");
+    expect(container.textContent).toContain("连接器目录");
     expect(
       screen.queryByText(
         "Primitive definitions are now managed as a runtime library workbench. The main stage stays dedicated to discovery while parameter contracts and example workflows live in the inspector.",
       ),
     ).toBeNull();
     expect(screen.getAllByRole("button", { name: "Show help" }).length).toBeGreaterThan(0);
-    expect(container.textContent).toContain("Runtime Primitives");
-    expect(container.textContent).toContain("Filter Library");
+    expect(container.textContent).toContain("可用连接器");
+    expect(container.textContent).toContain("筛选连接器");
     expect(container.textContent).not.toContain("Legacy draft");
     expect(container.textContent).not.toContain("Studio");
 
@@ -56,7 +56,7 @@ describe("PrimitivesPage", () => {
       React.createElement(PrimitivesPage),
     );
 
-    expect(await screen.findByText("Library Digest")).toBeTruthy();
+    expect(await screen.findByText("目录摘要")).toBeTruthy();
     expect(container.querySelector(".ant-select")).toHaveStyle({ width: "100%" });
   });
 
@@ -64,13 +64,13 @@ describe("PrimitivesPage", () => {
     renderWithQueryClient(React.createElement(PrimitivesPage));
 
     expect(await screen.findByText("Ready")).toBeTruthy();
-    expect(screen.getByText("Category")).toBeTruthy();
-    expect(screen.getByText("Parameters")).toBeTruthy();
-    expect(screen.getByText("Examples")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Example workflow" })).toBeTruthy();
+    expect(screen.getByText("分类")).toBeTruthy();
+    expect(screen.getByText("参数")).toBeTruthy();
+    expect(screen.getByText("示例")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "示例行为定义" })).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Inspect primitive human_input" }),
+      screen.getByRole("button", { name: "查看连接器 human_input" }),
     ).toHaveStyle({
       width: "100%",
     });
@@ -80,9 +80,9 @@ describe("PrimitivesPage", () => {
     renderWithQueryClient(React.createElement(PrimitivesPage));
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Inspect primitive human_input" }),
+      await screen.findByRole("button", { name: "查看连接器 human_input" }),
     );
 
-    expect(await screen.findByText("Primitive contract")).toBeTruthy();
+    expect(await screen.findByText("连接器契约")).toBeTruthy();
   });
 });

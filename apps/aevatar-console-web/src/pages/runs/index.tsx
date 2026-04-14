@@ -21,6 +21,8 @@ import {
 } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { history } from "@/shared/navigation/history";
+import { sanitizeReturnTo } from "@/shared/auth/session";
+import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
 import {
   buildRuntimeExplorerHref,
   buildRuntimeWorkflowsHref,
@@ -90,6 +92,7 @@ import RunsTimelineView from "./components/RunsTimelineView";
 import {
   buildTimelineGroups,
   buildEventRows,
+  resolveRunMessageFallback,
   isHumanApprovalSuspension,
   type RunEventRow,
   type RunTimelineGroup,
@@ -130,6 +133,8 @@ import {
   workbenchEventRowStyle,
   workbenchMessageListStyle,
   workbenchOverviewGridStyle,
+  workbenchTraceTabsStyle,
+  workbenchTraceTabsStyles,
 } from "./runWorkbenchConfig";
 
 const runsWorkbenchHeaderBarStyle: React.CSSProperties = {
@@ -159,6 +164,25 @@ const runsWorkbenchHeaderActionStyle: React.CSSProperties = {
   justifyContent: "flex-end",
 };
 
+const runsWorkspaceTabsClassName = "runs-workspace-tabs";
+const runsWorkspaceTabsCss = `
+.${runsWorkspaceTabsClassName} {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.${runsWorkspaceTabsClassName} .ant-tabs-content-holder,
+.${runsWorkspaceTabsClassName} .ant-tabs-content,
+.${runsWorkspaceTabsClassName} .ant-tabs-tabpane-active {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+`;
+
 function resolveRequestedServiceId(
   request: Pick<
     RunFormValues,
@@ -183,6 +207,15 @@ function resolveRequestedServiceId(
   return normalizedServiceOverrideId || trimOptional(request.routeName) || "";
 }
 
+function extractMissingServiceId(messageText: string): string {
+  const match = messageText.match(/Service '([^']+)' was not found/i);
+  return match?.[1]?.trim() ?? "";
+}
+
+function isMissingScopeServiceError(messageText: string): boolean {
+  return extractMissingServiceId(messageText).length > 0;
+}
+
 const RunsPage: React.FC = () => {
   const [messageApi, messageContextHolder] = message.useMessage();
   const urlInitialFormValues = useMemo(() => readInitialRunFormValues(), []);
@@ -192,6 +225,14 @@ const RunsPage: React.FC = () => {
     }
 
     return new URLSearchParams(window.location.search).get("draftKey") ?? "";
+  }, []);
+  const requestedReturnTo = useMemo(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+    return returnTo ? sanitizeReturnTo(returnTo) : "";
   }, []);
   const draftRunPayload = useMemo(
     () => loadQueuedDraftRunPayload(draftRunKey),
@@ -430,145 +471,224 @@ const RunsPage: React.FC = () => {
       scopeId: string,
       request: RunFormValues
     ) => {
-      const normalizedScopeId = scopeId.trim();
-      const normalizedEndpointKind = normalizeRunEndpointKind(
-        request.endpointKind,
-        request.endpointId
-      );
-      const normalizedEndpointId = resolveStoredRunEndpointId(
-        normalizedEndpointKind,
-        request.endpointId
-      );
-      const resolvedServiceId = resolveRequestedServiceId(
-        request,
-        Boolean(scopeDraftPayload)
-      );
-      const requestedPayloadTypeUrl = request.payloadTypeUrl?.trim() ?? "";
-      const requestedPayloadBase64 = request.payloadBase64?.trim() ?? "";
-      if (!normalizedScopeId) {
-        throw new Error("Scope ID is required.");
-      }
-      if (normalizedEndpointKind === "command" && !normalizedEndpointId) {
-        throw new Error("Endpoint ID is required for command invokes.");
-      }
-      if (
-        requestedPayloadTypeUrl &&
-        !requestedPayloadBase64 &&
-        !isAutoEncodableTextPayloadTypeUrl(requestedPayloadTypeUrl)
-      ) {
-        throw new Error(
-          `payloadBase64 is required for payloadTypeUrl '${requestedPayloadTypeUrl}'.`
+      const runAttempt = async (
+        requestedRun: RunFormValues,
+        allowMissingServiceRecovery: boolean
+      ): Promise<void> => {
+        const normalizedScopeId = scopeId.trim();
+        const normalizedEndpointKind = normalizeRunEndpointKind(
+          requestedRun.endpointKind,
+          requestedRun.endpointId
         );
-      }
+        const normalizedEndpointId = resolveStoredRunEndpointId(
+          normalizedEndpointKind,
+          requestedRun.endpointId
+        );
+        const resolvedServiceId = resolveRequestedServiceId(
+          requestedRun,
+          Boolean(scopeDraftPayload)
+        );
+        const requestedPayloadTypeUrl =
+          requestedRun.payloadTypeUrl?.trim() ?? "";
+        const requestedPayloadBase64 =
+          requestedRun.payloadBase64?.trim() ?? "";
 
-      abortRun();
-      reset();
-      setTransportIssue(undefined);
-      setActiveTransport(request.transport);
-      setActiveScopeId(normalizedScopeId);
-      setActiveServiceOverrideId(resolvedServiceId);
-      setActiveEndpointKind(normalizedEndpointKind);
-      setActiveEndpointId(normalizedEndpointId);
-      setRunStartedAtMs(Date.now());
-      setStreaming(true);
+        if (!normalizedScopeId) {
+          throw new Error("Scope ID is required.");
+        }
+        if (normalizedEndpointKind === "command" && !normalizedEndpointId) {
+          throw new Error("Endpoint ID is required for command invokes.");
+        }
+        if (
+          requestedPayloadTypeUrl &&
+          !requestedPayloadBase64 &&
+          !isAutoEncodableTextPayloadTypeUrl(requestedPayloadTypeUrl)
+        ) {
+          throw new Error(
+            `payloadBase64 is required for payloadTypeUrl '${requestedPayloadTypeUrl}'.`
+          );
+        }
 
-      try {
-        const controller = new AbortController();
-        stopActiveRunRef.current = () => controller.abort();
+        abortRun();
+        reset();
+        setTransportIssue(undefined);
+        setActiveTransport(requestedRun.transport);
+        setActiveScopeId(normalizedScopeId);
+        setActiveServiceOverrideId(resolvedServiceId);
+        setActiveEndpointKind(normalizedEndpointKind);
+        setActiveEndpointId(normalizedEndpointId);
+        setRunStartedAtMs(Date.now());
+        setStreaming(true);
 
-        const response = scopeDraftPayload
-          ? await runtimeRunsApi.streamDraftRun(
-              normalizedScopeId,
-              {
-                prompt: request.prompt,
-                workflowYamls: scopeDraftPayload.bundleYamls,
-              },
-              controller.signal
-            )
-          : normalizedEndpointKind === "chat" &&
-              !request.payloadTypeUrl?.trim() &&
-              !request.payloadBase64?.trim()
-            ? await runtimeRunsApi.streamChat(
+        try {
+          const controller = new AbortController();
+          stopActiveRunRef.current = () => controller.abort();
+
+          const response = scopeDraftPayload
+            ? await runtimeRunsApi.streamDraftRun(
                 normalizedScopeId,
                 {
-                  prompt: request.prompt,
-                  metadata: undefined,
+                  prompt: requestedRun.prompt,
+                  workflowYamls: scopeDraftPayload.bundleYamls,
                 },
-                controller.signal,
-                {
-                  serviceId: resolvedServiceId || undefined,
-                }
+                controller.signal
               )
-            : null;
+            : normalizedEndpointKind === "chat" &&
+                !requestedRun.payloadTypeUrl?.trim() &&
+                !requestedRun.payloadBase64?.trim()
+              ? await runtimeRunsApi.streamChat(
+                  normalizedScopeId,
+                  {
+                    prompt: requestedRun.prompt,
+                    metadata: undefined,
+                  },
+                  controller.signal,
+                  {
+                    serviceId: resolvedServiceId || undefined,
+                  }
+                )
+              : null;
 
-        if (response) {
-          for await (const event of parseBackendSSEStream(response, {
-            signal: controller.signal,
-          })) {
-            if (controller.signal.aborted) {
-              break;
-            }
+          if (response) {
+            for await (const event of parseBackendSSEStream(response, {
+              signal: controller.signal,
+            })) {
+              if (controller.signal.aborted) {
+                break;
+              }
 
-            dispatch(event);
-          }
-        } else {
-          const receipt = await runtimeRunsApi.invokeEndpoint(
-            normalizedScopeId,
-            {
-              endpointId: normalizedEndpointId,
-              prompt: request.prompt,
-              commandId: undefined,
-              payloadTypeUrl: request.payloadTypeUrl || undefined,
-              payloadBase64: request.payloadBase64 || undefined,
-            },
-            {
-              serviceId: resolvedServiceId || undefined,
+              if (
+                allowMissingServiceRecovery &&
+                normalizedEndpointKind === "chat" &&
+                resolvedServiceId &&
+                event.type === AGUIEventType.RUN_ERROR &&
+                isMissingScopeServiceError(event.message ?? "")
+              ) {
+                composerFormRef.current?.setFieldsValue({
+                  routeName: undefined,
+                  serviceOverrideId: undefined,
+                });
+                setSelectedRouteName("");
+                setActiveServiceOverrideId("");
+                messageApi.warning(
+                  `Selected service '${extractMissingServiceId(
+                    event.message ?? ""
+                  )}' is no longer available. Retrying with the scope default binding.`
+                );
+                await runAttempt(
+                  {
+                    ...requestedRun,
+                    routeName: undefined,
+                    serviceOverrideId: undefined,
+                  },
+                  false
+                );
+                return;
+              }
+
+              dispatch(event);
             }
-          );
-          const receiptRunId =
-            String(receipt.request_id ?? receipt.requestId ?? receipt.commandId ?? "").trim() ||
-            `${normalizedEndpointId}-${Date.now().toString(36)}`;
-          const receiptActorId =
-            String(
-              receipt.target_actor_id ?? receipt.targetActorId ?? receipt.actorId ?? ""
+          } else {
+            const receipt = await runtimeRunsApi.invokeEndpoint(
+              normalizedScopeId,
+              {
+                endpointId: normalizedEndpointId,
+                prompt: requestedRun.prompt,
+                commandId: undefined,
+                payloadTypeUrl: requestedRun.payloadTypeUrl || undefined,
+                payloadBase64: requestedRun.payloadBase64 || undefined,
+              },
+              {
+                serviceId: resolvedServiceId || undefined,
+              }
+            );
+            const receiptRunId =
+              String(
+                receipt.request_id ??
+                  receipt.requestId ??
+                  receipt.commandId ??
+                  ""
+              ).trim() || `${normalizedEndpointId}-${Date.now().toString(36)}`;
+            const receiptActorId = String(
+              receipt.target_actor_id ??
+                receipt.targetActorId ??
+                receipt.actorId ??
+                ""
             ).trim();
-          const receiptCorrelationId =
-            String(receipt.correlation_id ?? receipt.correlationId ?? receiptRunId).trim() ||
-            receiptRunId;
+            const receiptCorrelationId =
+              String(
+                receipt.correlation_id ??
+                  receipt.correlationId ??
+                  receiptRunId
+              ).trim() || receiptRunId;
 
-          dispatch({
-            type: AGUIEventType.RUN_STARTED,
-            threadId: receiptCorrelationId,
-            runId: receiptRunId,
-          });
-          dispatch({
-            type: AGUIEventType.CUSTOM,
-            name: CustomEventName.RunContext,
-            value: {
-              actorId: receiptActorId || undefined,
-              workflowName: normalizedEndpointId,
-              commandId:
-                String(receipt.command_id ?? receipt.commandId ?? "").trim() || undefined,
-            },
-          });
-          messageApi.success(
-            `Endpoint ${normalizedEndpointId} accepted with request ${receiptRunId}.`
-          );
-        }
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          return;
-        }
+            dispatch({
+              type: AGUIEventType.RUN_STARTED,
+              threadId: receiptCorrelationId,
+              runId: receiptRunId,
+            });
+            dispatch({
+              type: AGUIEventType.CUSTOM,
+              name: CustomEventName.RunContext,
+              value: {
+                actorId: receiptActorId || undefined,
+                workflowName: normalizedEndpointId,
+                commandId:
+                  String(
+                    receipt.command_id ?? receipt.commandId ?? ""
+                  ).trim() || undefined,
+              },
+            });
+            messageApi.success(
+              `Endpoint ${normalizedEndpointId} accepted with request ${receiptRunId}.`
+            );
+          }
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") {
+            return;
+          }
 
-        const text = error instanceof Error ? error.message : String(error);
-        reportTransportError(text);
-      } finally {
-        stopActiveRunRef.current = undefined;
-        setStreaming(false);
-      }
+          const text = error instanceof Error ? error.message : String(error);
+          if (
+            allowMissingServiceRecovery &&
+            normalizedEndpointKind === "chat" &&
+            resolvedServiceId &&
+            isMissingScopeServiceError(text)
+          ) {
+            composerFormRef.current?.setFieldsValue({
+              routeName: undefined,
+              serviceOverrideId: undefined,
+            });
+            setSelectedRouteName("");
+            setActiveServiceOverrideId("");
+            messageApi.warning(
+              `Selected service '${extractMissingServiceId(
+                text
+              )}' is no longer available. Retrying with the scope default binding.`
+            );
+            await runAttempt(
+              {
+                ...requestedRun,
+                routeName: undefined,
+                serviceOverrideId: undefined,
+              },
+              false
+            );
+            return;
+          }
+
+          reportTransportError(text);
+        } finally {
+          stopActiveRunRef.current = undefined;
+          setStreaming(false);
+        }
+      };
+
+      await runAttempt(request, true);
     },
     [
       abortRun,
+      composerFormRef,
       dispatch,
       messageApi,
       reportTransportError,
@@ -584,6 +704,23 @@ const RunsPage: React.FC = () => {
       ""
     );
   }, [activeScopeId]);
+
+  const teamAdvancedHref = useMemo(() => {
+    if (requestedReturnTo) {
+      return requestedReturnTo;
+    }
+
+    const scopeId = resolveRunScopeId();
+    if (!scopeId) {
+      return "";
+    }
+
+    return buildTeamDetailHref({
+      scopeId,
+      tab: "advanced",
+      runId: session.runId || undefined,
+    });
+  }, [requestedReturnTo, resolveRunScopeId, session.runId]);
 
   const resolveRunServiceOverrideId = useCallback(() => {
     return (
@@ -946,12 +1083,56 @@ const RunsPage: React.FC = () => {
     return builtInPresets.filter((preset) => available.has(preset.routeName));
   }, [workflowCatalogQuery.data]);
 
+  const snapshotMessageFallback = useMemo(() => {
+    const snapshot = actorSnapshotQuery.data;
+    if (!snapshot || session.status !== "finished") {
+      return "";
+    }
+
+    const snapshotCommandId = snapshot.lastCommandId?.trim() ?? "";
+    if (commandId && snapshotCommandId && snapshotCommandId !== commandId) {
+      return "";
+    }
+
+    return snapshot.lastOutput?.trim() ?? "";
+  }, [actorSnapshotQuery.data, commandId, session.status]);
+
+  const displayedMessages = useMemo(() => {
+    if (session.messages.length > 0) {
+      return session.messages;
+    }
+
+    const fallbackContent = resolveRunMessageFallback(
+      session.events,
+      snapshotMessageFallback
+    );
+    if (!fallbackContent) {
+      return session.messages;
+    }
+
+    return [
+      {
+        messageId: `final-output:${session.runId || commandId || actorId || "latest"}`,
+        role: "assistant",
+        content: fallbackContent,
+        complete: true,
+      },
+    ] as typeof session.messages;
+  }, [
+    actorId,
+    commandId,
+    session.events,
+    session.messages,
+    session.runId,
+    snapshotMessageFallback,
+  ]);
+
   const latestMessagePreview = useMemo(() => {
-    const lastWithContent = [...session.messages]
+    const lastWithContent = [...displayedMessages]
       .reverse()
       .find((item) => item.content?.trim());
     return lastWithContent?.content?.trim() ?? "";
-  }, [session.messages]);
+  }, [displayedMessages]);
 
   const recentRunRows = useMemo<RecentRunTableRow[]>(
     () =>
@@ -1256,7 +1437,7 @@ const RunsPage: React.FC = () => {
       focusStatus: runFocus.status,
       focusLabel: runFocus.label,
       lastEventAt,
-      messageCount: session.messages.length,
+      messageCount: displayedMessages.length,
       eventCount: session.events.length,
       activeSteps: [...session.activeSteps],
     }),
@@ -1269,7 +1450,7 @@ const RunsPage: React.FC = () => {
       runFocus.status,
       session.activeSteps,
       session.events.length,
-      session.messages.length,
+      displayedMessages.length,
       session.runId,
       session.status,
       endpointKind,
@@ -1398,9 +1579,9 @@ const RunsPage: React.FC = () => {
         Message stream
       </div>
       <div style={workbenchConsoleScrollStyle}>
-        {session.messages.length > 0 ? (
+        {displayedMessages.length > 0 ? (
           <div style={workbenchMessageListStyle}>
-            {session.messages.map((record) => (
+            {displayedMessages.map((record) => (
               <div
                 key={record.messageId}
                 style={{
@@ -1574,6 +1755,14 @@ const RunsPage: React.FC = () => {
             </Popover>
           </div>
           <div style={runsWorkbenchHeaderActionStyle}>
+            {teamAdvancedHref ? (
+              <Button
+                size="small"
+                onClick={() => history.push(teamAdvancedHref)}
+              >
+                返回团队高级编辑
+              </Button>
+            ) : null}
             <Button
               size="small"
               onClick={() => history.push(buildRuntimeWorkflowsHref())}
@@ -1603,7 +1792,7 @@ const RunsPage: React.FC = () => {
           eventCount={session.events.length}
           hasPendingInteraction={hasPendingInteraction}
           isRunLive={isRunLive}
-          messageCount={session.messages.length}
+          messageCount={displayedMessages.length}
           onAbort={handleAbortRun}
           onOpenInspector={() => setIsInspectorDrawerOpen(true)}
           runId={session.runId || commandId || "Not started"}
@@ -1723,8 +1912,11 @@ const RunsPage: React.FC = () => {
           </button>
           <div style={runsWorkbenchMonitorStyle}>
             <div style={workbenchOverviewGridStyle}>
+              <style>{runsWorkspaceTabsCss}</style>
               <Tabs
                 activeKey="trace-layout"
+                className={runsWorkspaceTabsClassName}
+                style={workbenchTraceTabsStyle}
                 items={[
                   {
                     key: "trace-layout",
@@ -1737,7 +1929,7 @@ const RunsPage: React.FC = () => {
                           eventCount={eventRows.length}
                           hasPendingInteraction={hasPendingInteraction}
                           messageConsoleView={messageConsoleView}
-                          messageCount={session.messages.length}
+                          messageCount={displayedMessages.length}
                           onConsoleViewChange={setConsoleView}
                           timelineView={
                             <RunsTimelineView
@@ -1754,175 +1946,190 @@ const RunsPage: React.FC = () => {
                     ),
                   },
                 ]}
+                styles={workbenchTraceTabsStyles}
               />
             </div>
           </div>
         </div>
 
-        <Drawer
-          destroyOnHidden
-          mask={false}
-          open={isInspectorDrawerOpen}
-          styles={{ body: drawerBodyStyle }}
-          title={hasPendingInteraction ? "Inspector · interaction pending" : "Inspector"}
-          size={520}
-          onClose={() => setIsInspectorDrawerOpen(false)}
-        >
-          <div style={drawerScrollStyle}>
-            <div style={cardStackStyle}>
-            <RunsInspectorPane
-              actorSnapshot={actorSnapshotQuery.data}
-              actorSnapshotLoading={
-                actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
-              }
-              humanInputRecord={humanInputRecord}
-              latestMessagePreview={latestMessagePreview}
-              runFocus={runFocus}
-              runSummaryRecord={runSummaryRecord}
-              selectedTraceItem={selectedTraceItem}
-              selectedRoutePrimitives={
-                selectedRouteDetails?.primitives ?? []
-              }
-              selectedRouteRecord={selectedRouteRecord}
-              showInteractionAction={false}
-              variant="plain"
-              waitingSignalRecord={waitingSignalRecord}
-            />
-            {humanInputRecord ? (
-              <div style={embeddedPanelStyle}>
-                <Space direction="vertical" style={{ width: "100%" }} size={16}>
-                  <ProDescriptions<HumanInputRecord>
-                    column={1}
-                    dataSource={humanInputRecord}
-                    columns={humanInputColumns}
-                  />
-                  <ProForm<ResumeFormValues>
-                    key={`${humanInputRecord.runId}-${humanInputRecord.stepId}`}
-                    formRef={resumeFormRef}
-                    layout="vertical"
-                    initialValues={{ approved: true, userInput: "" }}
-                    onFinish={async (values) => {
-                      if (
-                        !actorId ||
-                        !humanInputRecord.runId ||
-                        !humanInputRecord.stepId
-                      ) {
-                        return false;
-                      }
+        {isInspectorDrawerOpen ? (
+          <Drawer
+            destroyOnHidden
+            mask={false}
+            open
+            styles={{ body: drawerBodyStyle }}
+            title={
+              hasPendingInteraction
+                ? "Inspector · interaction pending"
+                : "Inspector"
+            }
+            size={520}
+            onClose={() => setIsInspectorDrawerOpen(false)}
+          >
+            <div style={drawerScrollStyle}>
+              <div style={cardStackStyle}>
+                <RunsInspectorPane
+                  actorSnapshot={actorSnapshotQuery.data}
+                  actorSnapshotLoading={
+                    actorSnapshotQuery.isLoading || actorSnapshotQuery.isFetching
+                  }
+                  humanInputRecord={humanInputRecord}
+                  latestMessagePreview={latestMessagePreview}
+                  runFocus={runFocus}
+                  runSummaryRecord={runSummaryRecord}
+                  selectedTraceItem={selectedTraceItem}
+                  selectedRoutePrimitives={
+                    selectedRouteDetails?.primitives ?? []
+                  }
+                  selectedRouteRecord={selectedRouteRecord}
+                  showInteractionAction={false}
+                  variant="plain"
+                  waitingSignalRecord={waitingSignalRecord}
+                />
+                {humanInputRecord ? (
+                  <div style={embeddedPanelStyle}>
+                    <Space
+                      direction="vertical"
+                      style={{ width: "100%" }}
+                      size={16}
+                    >
+                      <ProDescriptions<HumanInputRecord>
+                        column={1}
+                        dataSource={humanInputRecord}
+                        columns={humanInputColumns}
+                      />
+                      <ProForm<ResumeFormValues>
+                        key={`${humanInputRecord.runId}-${humanInputRecord.stepId}`}
+                        formRef={resumeFormRef}
+                        layout="vertical"
+                        initialValues={{ approved: true, userInput: "" }}
+                        onFinish={async (values) => {
+                          if (
+                            !actorId ||
+                            !humanInputRecord.runId ||
+                            !humanInputRecord.stepId
+                          ) {
+                            return false;
+                          }
 
-                      await resume({
-                        actorId,
-                        runId: humanInputRecord.runId,
-                        stepId: humanInputRecord.stepId,
-                        approved: values.approved,
-                        userInput: values.userInput || undefined,
-                        commandId,
-                      });
+                          await resume({
+                            actorId,
+                            runId: humanInputRecord.runId,
+                            stepId: humanInputRecord.stepId,
+                            approved: values.approved,
+                            userInput: values.userInput || undefined,
+                            commandId,
+                          });
 
-                      messageApi.success("Resume request accepted.");
-                      resumeFormRef.current?.setFieldsValue({
-                        approved: true,
-                        userInput: "",
-                      });
-                      return true;
-                    }}
-                    submitter={{
-                      render: (props) => (
-                        <Space wrap>
-                          <Button
-                            type="primary"
-                            loading={resuming}
-                            onClick={() => props.form?.submit?.()}
-                          >
-                            Submit resume
-                          </Button>
-                        </Space>
-                      ),
-                    }}
-                  >
-                    <ProFormSwitch
-                      name="approved"
-                      label={
-                        isHumanApprovalSuspension(
-                          humanInputRecord.suspensionType
-                        )
-                          ? "Approved"
-                          : "Continue run"
-                      }
-                    />
-                    <ProFormTextArea
-                      name="userInput"
-                      label="Operator response"
-                      fieldProps={{ rows: 4 }}
-                      placeholder="Optional human response"
-                    />
-                  </ProForm>
-                </Space>
+                          messageApi.success("Resume request accepted.");
+                          resumeFormRef.current?.setFieldsValue({
+                            approved: true,
+                            userInput: "",
+                          });
+                          return true;
+                        }}
+                        submitter={{
+                          render: (props) => (
+                            <Space wrap>
+                              <Button
+                                type="primary"
+                                loading={resuming}
+                                onClick={() => props.form?.submit?.()}
+                              >
+                                Submit resume
+                              </Button>
+                            </Space>
+                          ),
+                        }}
+                      >
+                        <ProFormSwitch
+                          name="approved"
+                          label={
+                            isHumanApprovalSuspension(
+                              humanInputRecord.suspensionType
+                            )
+                              ? "Approved"
+                              : "Continue run"
+                          }
+                        />
+                        <ProFormTextArea
+                          name="userInput"
+                          label="Operator response"
+                          fieldProps={{ rows: 4 }}
+                          placeholder="Optional human response"
+                        />
+                      </ProForm>
+                    </Space>
+                  </div>
+                ) : null}
+
+                {waitingSignalRecord ? (
+                  <div style={embeddedPanelStyle}>
+                    <Space
+                      direction="vertical"
+                      style={{ width: "100%" }}
+                      size={16}
+                    >
+                      <ProDescriptions<WaitingSignalRecord>
+                        column={1}
+                        dataSource={waitingSignalRecord}
+                        columns={waitingSignalColumns}
+                      />
+                      <ProForm<SignalFormValues>
+                        key={`${waitingSignalRecord.runId}-${waitingSignalRecord.stepId}`}
+                        formRef={signalFormRef}
+                        layout="vertical"
+                        initialValues={{ payload: "" }}
+                        onFinish={async (values) => {
+                          if (
+                            !actorId ||
+                            !waitingSignal?.runId ||
+                            !waitingSignal.signalName
+                          ) {
+                            return false;
+                          }
+
+                          await signal({
+                            actorId,
+                            runId: waitingSignal.runId,
+                            stepId: waitingSignal.stepId,
+                            signalName: waitingSignal.signalName,
+                            payload: values.payload || undefined,
+                            commandId,
+                          });
+
+                          messageApi.success("Signal accepted.");
+                          signalFormRef.current?.setFieldsValue({ payload: "" });
+                          return true;
+                        }}
+                        submitter={{
+                          render: (props) => (
+                            <Space wrap>
+                              <Button
+                                type="primary"
+                                loading={signaling}
+                                onClick={() => props.form?.submit?.()}
+                              >
+                                Send signal
+                              </Button>
+                            </Space>
+                          ),
+                        }}
+                      >
+                        <ProFormTextArea
+                          name="payload"
+                          label="Signal payload"
+                          fieldProps={{ rows: 4 }}
+                          placeholder="Optional signal payload"
+                        />
+                      </ProForm>
+                    </Space>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-
-            {waitingSignalRecord ? (
-              <div style={embeddedPanelStyle}>
-                <Space direction="vertical" style={{ width: "100%" }} size={16}>
-                  <ProDescriptions<WaitingSignalRecord>
-                    column={1}
-                    dataSource={waitingSignalRecord}
-                    columns={waitingSignalColumns}
-                  />
-                  <ProForm<SignalFormValues>
-                    key={`${waitingSignalRecord.runId}-${waitingSignalRecord.stepId}`}
-                    formRef={signalFormRef}
-                    layout="vertical"
-                    initialValues={{ payload: "" }}
-                    onFinish={async (values) => {
-                      if (
-                        !actorId ||
-                        !waitingSignal?.runId ||
-                        !waitingSignal.signalName
-                      ) {
-                        return false;
-                      }
-
-                      await signal({
-                        actorId,
-                        runId: waitingSignal.runId,
-                        stepId: waitingSignal.stepId,
-                        signalName: waitingSignal.signalName,
-                        payload: values.payload || undefined,
-                        commandId,
-                      });
-
-                      messageApi.success("Signal accepted.");
-                      signalFormRef.current?.setFieldsValue({ payload: "" });
-                      return true;
-                    }}
-                    submitter={{
-                      render: (props) => (
-                        <Space wrap>
-                          <Button
-                            type="primary"
-                            loading={signaling}
-                            onClick={() => props.form?.submit?.()}
-                          >
-                            Send signal
-                          </Button>
-                        </Space>
-                      ),
-                    }}
-                  >
-                    <ProFormTextArea
-                      name="payload"
-                      label="Signal payload"
-                      fieldProps={{ rows: 4 }}
-                      placeholder="Optional signal payload"
-                    />
-                  </ProForm>
-                </Space>
-              </div>
-            ) : null}
             </div>
-          </div>
-        </Drawer>
+          </Drawer>
+        ) : null}
       </div>
     </PageContainer>
   );
