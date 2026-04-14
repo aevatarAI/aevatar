@@ -145,16 +145,18 @@ public class VoicePresenceStateMachineTests
     }
 
     [Fact]
-    public void Provider_disconnected_resets_to_Idle()
+    public void Provider_disconnected_resets_to_Idle_and_opens_fence()
     {
         var stateMachine = new VoicePresenceStateMachine();
 
         stateMachine.AllocateNextResponseId();
         stateMachine.State.ShouldBe(VoicePresenceState.ResponseInProgress);
+        stateMachine.IsSafeToInject.ShouldBeFalse();
 
         stateMachine.OnProviderDisconnected();
 
         stateMachine.State.ShouldBe(VoicePresenceState.Idle);
+        stateMachine.IsSafeToInject.ShouldBeTrue();
     }
 
     [Fact]

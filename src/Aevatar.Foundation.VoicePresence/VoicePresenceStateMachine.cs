@@ -69,7 +69,11 @@ public sealed class VoicePresenceStateMachine
             State = VoicePresenceState.Idle;
     }
 
-    public void OnProviderDisconnected() => State = VoicePresenceState.Idle;
+    public void OnProviderDisconnected()
+    {
+        LastDrainAckResponseId = CurrentResponseId;
+        State = VoicePresenceState.Idle;
+    }
 
     public bool IsSafeToInject =>
         State == VoicePresenceState.Idle &&

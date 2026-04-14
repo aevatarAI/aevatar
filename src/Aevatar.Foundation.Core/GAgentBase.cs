@@ -416,12 +416,25 @@ public abstract class GAgentBase : IAgent
             return;
 
         var initialized = new HashSet<ILifecycleAwareEventModule>(ReferenceEqualityComparer.Instance);
-        foreach (var module in _modules)
+        try
         {
-            if (module is not ILifecycleAwareEventModule lifecycleAware || !initialized.Add(lifecycleAware))
-                continue;
+            foreach (var module in _modules)
+            {
+                if (module is not ILifecycleAwareEventModule lifecycleAware || !initialized.Add(lifecycleAware))
+                    continue;
 
-            await lifecycleAware.InitializeAsync(ct);
+                await lifecycleAware.InitializeAsync(ct);
+            }
+        }
+        catch
+        {
+            foreach (var started in initialized)
+            {
+                try { await started.DisposeAsync(); }
+                catch (Exception ex) { Logger.LogWarning(ex, "Failed to dispose module during init rollback."); }
+            }
+
+            throw;
         }
 
         _lifecycleAwareModulesInitialized = true;

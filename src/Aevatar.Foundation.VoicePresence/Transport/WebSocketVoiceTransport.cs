@@ -34,7 +34,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(frame);
         var bytes = frame.ToByteArray();
-        await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
+        await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Binary, endOfMessage: true, ct);
     }
 
     public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
@@ -49,7 +49,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
 
             try
             {
-                (result, totalBytes) = await ReceiveFullMessageAsync(buffer, ct);
+                (result, totalBytes, buffer) = await ReceiveFullMessageAsync(buffer, ct);
             }
             catch (WebSocketException)
             {
@@ -99,7 +99,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         _ws.Dispose();
     }
 
-    private async Task<(WebSocketReceiveResult Result, int TotalBytes)> ReceiveFullMessageAsync(
+    private async Task<(WebSocketReceiveResult Result, int TotalBytes, byte[] Buffer)> ReceiveFullMessageAsync(
         byte[] buffer, CancellationToken ct)
     {
         var totalBytes = 0;
@@ -115,7 +115,7 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
             totalBytes += result.Count;
         } while (!result.EndOfMessage);
 
-        return (result, totalBytes);
+        return (result, totalBytes, buffer);
     }
 
     private static VoiceControlFrame? TryParseControlFrame(ReadOnlySpan<byte> utf8Bytes)

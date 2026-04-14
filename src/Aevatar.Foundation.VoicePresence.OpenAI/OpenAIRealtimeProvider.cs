@@ -67,7 +67,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             FullMode = BoundedChannelFullMode.DropOldest,
             AllowSynchronousContinuations = false,
         });
-        _lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _lifetimeCts = new CancellationTokenSource();
         _receiveLoop = RunReceiveLoopAsync(_session, _eventChannel.Writer, _lifetimeCts.Token);
         _dispatchLoop = RunDispatchLoopAsync(_eventChannel.Reader, _lifetimeCts.Token);
     }
