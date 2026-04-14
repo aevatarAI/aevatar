@@ -679,7 +679,7 @@ const ScopeOverviewPage: React.FC = () => {
               style={{
                 display: "grid",
                 gap: 16,
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
               <SummaryStatCard label="活跃团队" value={activeUnits.length} />

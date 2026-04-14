@@ -76,6 +76,17 @@ type TopologyEntitySummary = {
   title: string;
 };
 
+type TopologyDetailRow = {
+  badge: string;
+  label: string;
+  note: string;
+  noteMonospace?: boolean;
+  noteRows?: number;
+  value: string;
+  valueMonospace?: boolean;
+  valueRows?: number;
+};
+
 type MemberLike = {
   actorId: string;
   actorType: string;
@@ -92,7 +103,10 @@ function compactId(value: string | null | undefined): string {
   }
 
   const segment = normalized.split("/").pop() || normalized;
-  return segment.split(":").pop() || segment;
+  const compacted = segment.split(":").pop() || segment;
+  return compacted.length > 24
+    ? `${compacted.slice(0, 12)}…${compacted.slice(-8)}`
+    : compacted;
 }
 
 function formatTeamTabLabel(tab: TeamDetailTab): string {
@@ -282,6 +296,20 @@ function formatTopologyFocusReason(reason: string): string {
       return "当前运行信号不足，先落在当前可见的第一位团队成员。";
     case "No actor focus is available yet.":
       return "当前还没有可用的团队成员焦点。";
+    default:
+      return normalized;
+  }
+}
+
+function formatPlaybackSummary(summary: string): string {
+  const normalized = trimText(summary);
+  switch (normalized) {
+    case "No run audit is available for the current team activity.":
+      return "当前还没有可见的运行审计记录。";
+    case "No event timeline is available for the current team activity.":
+      return "当前还没有可见的事件时间线。";
+    case "Timeline reconstructed from the latest visible run steps.":
+      return "当前事件流是根据最近一次可见运行步骤整理的。";
     default:
       return normalized;
   }
@@ -806,8 +834,8 @@ const SignalCard: React.FC<{
         boxShadow: token.boxShadowSecondary,
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        minHeight: 120,
+        gap: 8,
+        minHeight: 108,
         padding: 18,
       }}
     >
@@ -869,10 +897,11 @@ const factValueFontFamily =
   '"SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
 const FactLine: React.FC<{
+  monospace?: boolean;
   rows?: number;
   secondary?: boolean;
   text: string;
-}> = ({ rows = 1, secondary = false, text }) => {
+}> = ({ monospace = true, rows = 1, secondary = false, text }) => {
   const normalized = text || "--";
 
   return (
@@ -881,13 +910,14 @@ const FactLine: React.FC<{
         strong={!secondary}
         style={{
           display: "-webkit-box",
-          fontFamily: factValueFontFamily,
+          fontFamily: monospace ? factValueFontFamily : undefined,
           overflow: "hidden",
-          overflowWrap: "anywhere",
+          overflowWrap: rows === 1 ? "normal" : "anywhere",
           textOverflow: "ellipsis",
           WebkitBoxOrient: "vertical",
           WebkitLineClamp: rows,
-          wordBreak: "break-word",
+          whiteSpace: rows === 1 ? "nowrap" : undefined,
+          wordBreak: rows === 1 ? "normal" : "break-word",
         }}
         type={secondary ? "secondary" : undefined}
       >
@@ -1449,6 +1479,14 @@ const TeamDetailPage: React.FC = () => {
   const currentRunPillText = activeRunId
     ? `运行 · ${currentRunFriendly}`
     : "暂无近期运行";
+  const currentServiceCardCaption = runtimeServiceId
+    ? `serviceId · ${runtimeServiceId}`
+    : currentServiceKey !== "--" && currentServiceKey !== currentServiceFriendly
+      ? `serviceKey · ${compactId(currentServiceKey)}`
+      : "当前还没有更多服务标识";
+  const currentRunCardCaption = activeRunId
+    ? `runId · ${compactId(activeRunId)}`
+    : "当前还没有可见 run";
   const workflowNameValue =
     trimText(activeWorkflowSummary?.workflowName) ||
     trimText(lens.activeRevision?.workflowName) ||
@@ -1593,6 +1631,51 @@ const TeamDetailPage: React.FC = () => {
       integrations.linkedConnectorCount,
       lens.activeRevision?.implementationKind,
       runtimeServiceId,
+      teamTitle,
+      workflowNameValue,
+    ],
+  );
+  const configurationAdjustmentRows = React.useMemo(
+    () => [
+      {
+        badge: formatCompositionKind(lens.activeRevision?.implementationKind || "runtime"),
+        label: "流程定义",
+        note: activeWorkflowId ? `workflowId: ${activeWorkflowId}` : "当前还没有 workflowId",
+        value: workflowNameValue !== "--" ? workflowNameValue : teamTitle,
+      },
+      {
+        badge: currentDeploymentFriendly,
+        label: "服务映射",
+        note:
+          currentVersionFriendly !== "--"
+            ? `${currentVersionFriendly} · ${currentServiceFriendly}`
+            : currentServiceFriendly,
+        value: currentServiceFriendly,
+      },
+      {
+        badge:
+          integrations.linkedConnectorCount > 0
+            ? `${integrations.linkedConnectorCount} 个已引用`
+            : "未显式引用",
+        label: "连接器引用",
+        note:
+          connectorHighlights.length > 0
+            ? connectorHighlights.join("、")
+            : "当前 workflow 还没有显式引用连接器",
+        value:
+          integrations.linkedConnectorCount > 0
+            ? `${integrations.linkedConnectorCount} 个连接器`
+            : "当前没有显式连接器引用",
+      },
+    ],
+    [
+      activeWorkflowId,
+      connectorHighlights,
+      currentDeploymentFriendly,
+      currentServiceFriendly,
+      currentVersionFriendly,
+      integrations.linkedConnectorCount,
+      lens.activeRevision?.implementationKind,
       teamTitle,
       workflowNameValue,
     ],
@@ -2038,7 +2121,7 @@ const TeamDetailPage: React.FC = () => {
         .filter(Boolean)
         .join(" · ")
     : selectedTopologyEvent?.message || "当前还没有更多节点运行细节。";
-  const selectedTopologyRows = React.useMemo(() => {
+  const selectedTopologyRows = React.useMemo<TopologyDetailRow[]>(() => {
     if (!selectedTopologyEntity) {
       return [];
     }
@@ -2048,32 +2131,41 @@ const TeamDetailPage: React.FC = () => {
         {
           badge: "服务",
           label: "主服务",
-          note: currentServiceKey,
+          note: runtimeServiceId || currentServiceKey || "--",
+          noteMonospace: true,
+          noteRows: 1,
           value: currentServiceFriendly,
+          valueMonospace: false,
         },
         {
           badge: "部署",
           label: "部署状态",
           note: currentDeploymentId,
+          noteMonospace: true,
+          noteRows: 1,
           value: currentDeploymentFriendly,
+          valueMonospace: false,
         },
         {
           badge: `${currentEndpointCount} 个入口`,
           label: "服务能力",
           note: `${currentPolicyCount} 条策略`,
-          value: runtimeServiceId || "--",
+          value: `${currentEndpointCount} 个入口`,
+          valueMonospace: false,
         },
         {
           badge: `${selectedTopologyInboundCount} 条入边`,
           label: "上游来自",
           note: `当前深度 ${selectedTopologyDepth} · 出边 ${selectedTopologyOutboundCount}`,
           value: selectedTopologyInboundSummary,
+          valueMonospace: false,
         },
         {
           badge: `${selectedTopologyOutboundCount} 条出边`,
           label: "下游连接",
           note: "当前团队通过这个入口继续流向工具或下游能力",
           value: selectedTopologyOutboundSummary,
+          valueMonospace: false,
         },
       ];
     }
@@ -2088,6 +2180,7 @@ const TeamDetailPage: React.FC = () => {
           label: "连接器",
           note: connector?.summary || "--",
           value: connector?.name || selectedTopologyEntity.title,
+          valueMonospace: false,
         },
         {
           badge: formatConnectorEnabledLabel(Boolean(connector?.enabled)),
@@ -2097,18 +2190,21 @@ const TeamDetailPage: React.FC = () => {
             connector?.usedByRoles.length
               ? `${connector.usedByRoles.length} 个角色`
               : "0 个角色",
+          valueMonospace: false,
         },
         {
           badge: `${selectedTopologyInboundCount} 条入边`,
           label: "上游来自",
           note: `当前深度 ${selectedTopologyDepth} · 出边 ${selectedTopologyOutboundCount}`,
           value: selectedTopologyInboundSummary,
+          valueMonospace: false,
         },
         {
           badge: `${selectedTopologyOutboundCount} 条出边`,
           label: "下游连接",
           note: "当前节点来自团队配置推导，不直接代表一次实时运行",
           value: selectedTopologyOutboundSummary,
+          valueMonospace: false,
         },
       ];
     }
@@ -2118,7 +2214,10 @@ const TeamDetailPage: React.FC = () => {
         badge: formatTopologyNodeKindLabel(selectedTopologyEntity.kind),
         label: "角色定位",
         note: selectedTopologyEntity.id,
+        noteMonospace: true,
+        noteRows: 1,
         value: selectedTopologyEntity.title,
+        valueMonospace: false,
       },
       {
         badge: selectedTopologyStep
@@ -2127,6 +2226,7 @@ const TeamDetailPage: React.FC = () => {
         label: "最近一步",
         note: selectedTopologyLatestStepNote,
         value: selectedTopologyLatestStepLabel,
+        valueMonospace: false,
       },
       {
         badge: selectedTopologyStep
@@ -2138,12 +2238,14 @@ const TeamDetailPage: React.FC = () => {
           selectedTopologyEntity.note ||
           "当前还没有更多节点运行细节。",
         value: selectedTopologyEntity.summary,
+        valueMonospace: false,
       },
       {
         badge: `${selectedTopologyInboundCount} 条入边`,
         label: "上游来自",
         note: `当前深度 ${selectedTopologyDepth} · 出边 ${selectedTopologyOutboundCount}`,
         value: selectedTopologyInboundSummary,
+        valueMonospace: false,
       },
       {
         badge: `${selectedTopologyOutboundCount} 条出边`,
@@ -2153,6 +2255,7 @@ const TeamDetailPage: React.FC = () => {
             ? "这是当前焦点路径的起点"
             : "这是围绕当前焦点展开的协作节点",
         value: selectedTopologyOutboundSummary,
+        valueMonospace: false,
       },
     ];
   }, [
@@ -2214,34 +2317,48 @@ const TeamDetailPage: React.FC = () => {
   ]);
   const runtimeSummaryRows = [
     {
-      badge: currentRevisionStatus,
+      badge: currentRevisionFriendly,
       badgeColor: currentRevisionStatus === "Active" ? "success" : undefined,
       key: "revisionId",
       label: "当前版本",
-      note: `revisionId: ${currentRevisionId}`,
+      note:
+        currentRevisionId !== "--"
+          ? `revisionId · ${compactId(currentRevisionId)}`
+          : "当前还没有可见版本标识",
+      noteMonospace: false,
       value: currentRevisionFriendly,
     },
     {
-      badge: runtimeServiceId || "--",
+      badge: currentServiceFriendly,
       badgeColor: runtimeServiceId ? "success" : undefined,
       key: "serviceKey",
       label: "主服务",
-      note: `serviceId: ${runtimeServiceId || "--"}`,
+      note:
+        runtimeServiceId || currentServiceKey !== "--"
+          ? `serviceId · ${compactId(runtimeServiceId || currentServiceKey || "--")}`
+          : "当前还没有主服务标识",
+      noteMonospace: false,
       value: currentServiceFriendly,
     },
     {
-      badge: currentRunStatus,
+      badge: currentRunFriendly,
       badgeColor: currentRunStatus !== "--" ? "success" : undefined,
       key: "runId",
       label: "最近状态",
-      note: activeRunId ? `runId: ${activeRunId}` : `actorId: ${currentActorId}`,
+      note: activeRunId
+        ? `runId · ${compactId(activeRunId)}`
+        : currentActorId !== "--"
+          ? `actorId · ${compactId(currentActorId)}`
+          : "当前还没有可见运行身份",
+      noteMonospace: false,
       value: currentRunFriendly,
     },
     {
       badge: currentStateVersion !== "--" ? `v${currentStateVersion}` : "--",
       key: "lastUpdatedAt",
       label: "最近更新时间",
-      note: `lastEventId: ${currentLastEventId}`,
+      note: latestVisibleUpdateNote,
+      noteMonospace: false,
       value: latestVisibleUpdate ? formatCompactTimestamp(latestVisibleUpdate) : "--",
     },
     {
@@ -2253,6 +2370,7 @@ const TeamDetailPage: React.FC = () => {
         connectorHighlights.length > 0
           ? connectorHighlights.join("、")
           : `catalog: ${integrations.items.length}`,
+      noteMonospace: false,
       value:
         integrations.linkedConnectorCount > 0
           ? `${integrations.linkedConnectorCount} 个已绑定`
@@ -2514,6 +2632,9 @@ const TeamDetailPage: React.FC = () => {
     runtimeServiceId,
     scopeId,
   ]);
+  const conversationActionLabel = lens.playback.currentRunId ? "本次对话" : "运行记录";
+  const serviceMappingActionLabel = "服务映射";
+  const teamBuilderActionLabel = "Team Builder";
 
   const handleOpenServiceMapping = React.useCallback(() => {
     handleOpenPlaybackActor(
@@ -2595,15 +2716,14 @@ const TeamDetailPage: React.FC = () => {
             }}
           >
             <SignalCard
-              label="这支团队现在服务于"
-              captionMonospace
+              label="当前服务"
               value={currentServiceFriendly}
-              caption={currentServiceKey}
+              caption={currentServiceCardCaption}
             />
             <SignalCard
-              label="当前运行状态"
+              label="最近运行"
               value={currentRunFriendly}
-              caption={activeRunId || "--"}
+              caption={currentRunCardCaption}
             />
             <SignalCard
               label="最近一次更新"
@@ -2705,7 +2825,12 @@ const TeamDetailPage: React.FC = () => {
                 </Typography.Text>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
                   <FactLine rows={2} text={String(row.value)} />
-                  <FactLine rows={3} secondary text={String(row.note)} />
+                  <FactLine
+                    monospace={row.noteMonospace ?? false}
+                    rows={3}
+                    secondary
+                    text={String(row.note)}
+                  />
                 </div>
                 <div
                   style={{
@@ -2944,8 +3069,17 @@ const TeamDetailPage: React.FC = () => {
                           {row.label}
                         </Typography.Text>
                         <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                          <FactLine rows={2} text={String(row.value)} />
-                          <FactLine rows={2} secondary text={String(row.note)} />
+                          <FactLine
+                            monospace={row.valueMonospace ?? false}
+                            rows={row.valueRows ?? 2}
+                            text={String(row.value)}
+                          />
+                          <FactLine
+                            monospace={row.noteMonospace ?? false}
+                            rows={row.noteRows ?? 2}
+                            secondary
+                            text={String(row.note)}
+                          />
                         </div>
                         <DetailPill
                           compact
@@ -3023,7 +3157,7 @@ const TeamDetailPage: React.FC = () => {
                     ) : null}
                   </Space>
                   <Typography.Text type="secondary">
-                    {lens.playback.summary}
+                    {formatPlaybackSummary(lens.playback.summary)}
                   </Typography.Text>
                   {runSwitchOptions.length > 1 ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -3062,25 +3196,18 @@ const TeamDetailPage: React.FC = () => {
                     </div>
                   ) : null}
                 </div>
-                <Space wrap>
-                  <Button
-                    disabled={!activeRunId}
-                    onClick={() => handleOpenPlaybackActor(lens.currentRun?.actorId, activeRunId)}
-                    style={resolveActionButtonStyle(token)}
-                  >
-                    打开完整审计
-                  </Button>
-                  <Button onClick={handleOpenConversation} style={resolveActionButtonStyle(token)}>
-                    进入 Chat
-                  </Button>
-                  <Button
-                    onClick={handleOpenServiceMapping}
-                    style={resolveActionButtonStyle(token, "primary")}
-                    type="primary"
-                  >
-                    查看服务映射
-                  </Button>
-                </Space>
+                {activeRunId ? (
+                  <Space wrap>
+                    <Button
+                      onClick={() =>
+                        handleOpenPlaybackActor(lens.currentRun?.actorId, activeRunId)
+                      }
+                      style={resolveActionButtonStyle(token)}
+                    >
+                      打开完整审计
+                    </Button>
+                  </Space>
+                ) : null}
               </div>
               {eventStreamRows.length > 0 ? (
                 <div
@@ -3243,6 +3370,7 @@ const TeamDetailPage: React.FC = () => {
             </div>
           ) : (
             <AevatarInspectorEmpty
+              compact
               title="当前 run 还没有命中可见成员"
               description="等这支团队产生运行步骤或事件后，这里才会显示本次 run 的参与成员。"
             />
@@ -3253,6 +3381,48 @@ const TeamDetailPage: React.FC = () => {
   };
 
   const renderMembersTab = () => {
+    const showMembersOverviewEmpty =
+      teamCompositionRows.length === 0 && runtimeIdentityRows.length === 0;
+
+    if (showMembersOverviewEmpty) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <AevatarPanel
+            title="成员视图"
+            extra={
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                结构 · 运行时身份
+              </Typography.Text>
+            }
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                }}
+              >
+                <SignalCard
+                  label="团队结构"
+                  value="暂无角色定义"
+                  caption="当前还没有 workflow 角色定义或可见的团队结构信息。"
+                />
+                <SignalCard
+                  label="运行时身份"
+                  value="暂无可见 Actor"
+                  caption="当前还没有观察到这支团队的运行时实体身份。"
+                />
+              </div>
+              <Typography.Text style={{ fontSize: 13 }} type="secondary">
+                等团队开始运行后，这里会自动出现角色结构和可见 Actor。
+              </Typography.Text>
+            </div>
+          </AevatarPanel>
+        </div>
+      );
+    }
+
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <AevatarPanel
@@ -3319,6 +3489,7 @@ const TeamDetailPage: React.FC = () => {
             </div>
           ) : (
             <AevatarInspectorEmpty
+              compact
               title="暂时还没有团队结构"
               description="当前还没有 workflow 角色定义或可见的团队结构信息。"
             />
@@ -3377,6 +3548,7 @@ const TeamDetailPage: React.FC = () => {
             </div>
           ) : (
             <AevatarInspectorEmpty
+              compact
               title="暂时还没有可见 Actor"
               description="当前还没有观察到这支团队的运行时实体身份。"
             />
@@ -3403,7 +3575,7 @@ const TeamDetailPage: React.FC = () => {
             style={{
               display: "grid",
               gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             }}
           >
             <SignalCard
@@ -3577,6 +3749,7 @@ const TeamDetailPage: React.FC = () => {
                 </div>
               ) : (
                 <AevatarInspectorEmpty
+                  compact
                   title="请选择一个连接器"
                   description="点击左侧卡片，查看它在这支团队里的接入方式。"
                 />
@@ -3584,11 +3757,37 @@ const TeamDetailPage: React.FC = () => {
             </AevatarPanel>
           </div>
         ) : (
-          <AevatarPanel title="连接器目录">
-            <AevatarInspectorEmpty
-              title="暂无连接器"
-              description="当前工作区还没有可见的连接器定义。"
-            />
+          <AevatarPanel
+            title="连接器视图"
+            extra={
+              <Typography.Text style={{ fontSize: 12 }} type="secondary">
+                目录 · 团队引用
+              </Typography.Text>
+            }
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gap: 12,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                }}
+              >
+                <SignalCard
+                  label="工作区目录"
+                  value="暂无连接器"
+                  caption="当前工作区还没有可见的连接器定义。"
+                />
+                <SignalCard
+                  label="团队引用"
+                  value="未显式引用"
+                  caption="等 workflow 开始绑定工具后，这里会显示团队实际会用到的连接器。"
+                />
+              </div>
+              <Typography.Text style={{ fontSize: 13 }} type="secondary">
+                连接器一旦出现在工作区或被团队引用，这里会自动展开成目录和选中详情。
+              </Typography.Text>
+            </div>
           </AevatarPanel>
         )}
       </div>
@@ -3603,7 +3802,7 @@ const TeamDetailPage: React.FC = () => {
             style={{
               display: "grid",
               gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             }}
           >
             <SignalCard
@@ -3696,34 +3895,38 @@ const TeamDetailPage: React.FC = () => {
               </div>
               <div
                 style={{
-                  display: "grid",
-                  gap: 10,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: 18,
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden",
                 }}
               >
-                <SignalCard
-                  label="发布状态"
-                  value={currentDeploymentFriendly}
-                  caption={currentDeploymentStatus}
-                />
-                <SignalCard
-                  label="服务能力"
-                  value={`${currentEndpointCount} 个入口`}
-                  caption={`${currentPolicyCount} 条策略`}
-                />
-                <SignalCard
-                  label="连接器绑定"
-                  value={
-                    integrations.linkedConnectorCount > 0
-                      ? `${integrations.linkedConnectorCount} 个`
-                      : "未显式绑定"
-                  }
-                  caption={
-                    connectorHighlights.length > 0
-                      ? connectorHighlights.join("、")
-                      : "当前 workflow 还没有显式引用连接器"
-                  }
-                />
+                {configurationAdjustmentRows.map((row, index) => (
+                  <div
+                    key={row.label}
+                    style={{
+                      alignItems: "start",
+                      borderTop:
+                        index === 0 ? "none" : `1px solid ${token.colorBorderSecondary}`,
+                      display: "grid",
+                      gap: 12,
+                      gridTemplateColumns: "minmax(84px, 108px) minmax(0, 1fr) max-content",
+                      padding: "14px 16px",
+                    }}
+                  >
+                    <Typography.Text type="secondary">{row.label}</Typography.Text>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                      <Typography.Text strong>{row.value}</Typography.Text>
+                      <FactLine monospace={false} rows={2} secondary text={row.note} />
+                    </div>
+                    <DetailPill
+                      compact
+                      style={resolveTonePillStyle(token, "neutral")}
+                      text={row.badge}
+                    />
+                  </div>
+                ))}
               </div>
               <Space wrap>
                 <Button
@@ -3731,16 +3934,16 @@ const TeamDetailPage: React.FC = () => {
                   style={resolveActionButtonStyle(token, "primary")}
                   type="primary"
                 >
-                  查看服务映射
+                  {serviceMappingActionLabel}
                 </Button>
                 <Button
                   onClick={() => history.push(teamBuilderRoute)}
                   style={resolveActionButtonStyle(token)}
                 >
-                  打开 Team Builder
+                  {teamBuilderActionLabel}
                 </Button>
                 <Button onClick={handleOpenConversation} style={resolveActionButtonStyle(token)}>
-                  进入 Chat
+                  {conversationActionLabel}
                 </Button>
               </Space>
             </div>
@@ -3847,19 +4050,19 @@ const TeamDetailPage: React.FC = () => {
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
             type="primary"
           >
-            查看服务映射
+            {serviceMappingActionLabel}
           </Button>
           <Button
             onClick={handleOpenConversation}
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
           >
-            进入 Chat
+            {conversationActionLabel}
           </Button>
           <Button
             onClick={() => history.push(teamBuilderRoute)}
             style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
           >
-            进入 Team Builder
+            {teamBuilderActionLabel}
           </Button>
         </Space>
       }

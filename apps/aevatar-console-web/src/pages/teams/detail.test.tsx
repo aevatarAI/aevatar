@@ -510,9 +510,9 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("运行摘要")).toBeTruthy();
     expect(screen.getByText("当前态势")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "进入 Chat" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看服务映射" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "进入 Team Builder" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "运行记录" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "服务映射" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Team Builder" })).toBeTruthy();
   });
 
   it("returns to the teams list when clicking the breadcrumb teams link", async () => {
@@ -563,7 +563,7 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("继续调整这支团队")).toBeTruthy();
     expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
     expect(screen.getAllByText("连接器引用").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "打开 Team Builder" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Team Builder" }).length).toBeGreaterThan(0);
   });
 
   it("shows a readable team members view", async () => {
@@ -587,7 +587,7 @@ describe("TeamDetailPage", () => {
     expect(await screen.findByText("当前任务事件流")).toBeTruthy();
     expect(screen.getByText("本次 Run 成员映射")).toBeTruthy();
     expect(await screen.findByText("切换 Run")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "进入 Chat" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "运行记录" }).length).toBeGreaterThan(0);
     expect((await screen.findAllByText(/risk_review/)).length).toBeGreaterThan(0);
   });
 
@@ -627,7 +627,7 @@ describe("TeamDetailPage", () => {
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
     await screen.findAllByText(/risk_review/);
-    fireEvent.click(screen.getAllByRole("button", { name: "进入 Chat" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "本次对话" })[0]);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/runs");
@@ -651,7 +651,7 @@ describe("TeamDetailPage", () => {
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
     await screen.findByText("团队事件路径");
-    fireEvent.click(screen.getAllByRole("button", { name: "查看服务映射" })[0]);
+    fireEvent.click(screen.getAllByRole("button", { name: "服务映射" })[0]);
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/explorer");
@@ -667,7 +667,7 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "进入 Team Builder" }));
+    fireEvent.click(screen.getByRole("button", { name: "Team Builder" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");

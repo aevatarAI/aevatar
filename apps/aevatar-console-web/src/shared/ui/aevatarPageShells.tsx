@@ -409,7 +409,7 @@ export const AevatarPanel: React.FC<AevatarPanelProps> = ({
         {title || description || extra ? (
           <div style={sectionHeaderStyle}>
             <Space
-              direction="vertical"
+              orientation="vertical"
               size={4}
               style={{ flex: 1, minWidth: 0 }}
             >
@@ -468,7 +468,7 @@ export const AevatarContextDrawer: React.FC<AevatarContextDrawerProps> = ({
       }
       styles={{ body: aevatarDrawerBodyStyle }}
       title={
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Typography.Text strong>{title}</Typography.Text>
           {subtitle ? (
             <Typography.Text style={{ color: token.colorTextSecondary }}>
@@ -506,22 +506,35 @@ export const AevatarStatusTag: React.FC<AevatarStatusTagProps> = ({
 };
 
 export const AevatarInspectorEmpty: React.FC<{
+  compact?: boolean;
   description: React.ReactNode;
   title?: React.ReactNode;
-}> = ({ description, title = 'Select an item' }) => {
+}> = ({ compact = false, description, title = 'Select an item' }) => {
   const { token } = theme.useToken();
+  const emptyStyles = compact
+    ? {
+        image: { height: 32, marginBottom: 4 },
+        root: { marginBlock: 4 },
+      }
+    : undefined;
 
   return (
     <Empty
       description={
-        <Space direction="vertical" size={4}>
+        <Space orientation="vertical" size={compact ? 2 : 4}>
           <Typography.Text strong>{title}</Typography.Text>
-          <Typography.Text style={{ color: token.colorTextSecondary }}>
+          <Typography.Text
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: compact ? 13 : undefined,
+            }}
+          >
             {description}
           </Typography.Text>
         </Space>
       }
       image={Empty.PRESENTED_IMAGE_SIMPLE}
+      styles={emptyStyles}
     />
   );
 };
