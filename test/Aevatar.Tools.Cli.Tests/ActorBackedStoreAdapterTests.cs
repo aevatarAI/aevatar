@@ -654,6 +654,203 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     // ════════════════════════════════════════════════════════════
+    // ChatHistoryStore: GetMessagesAsync read mapping
+    // ════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task ChatHistoryStore_GetMessages_MapsStateCorrectly()
+    {
+        var runtime = new FakeActorRuntime();
+        var state = new ChatConversationState();
+        state.Messages.Add(new StoredChatMessageProto
+        {
+            Id = "msg-1",
+            Role = "user",
+            Content = "Hello",
+            Timestamp = 1700000000000,
+            Status = "sent",
+            Error = "",
+            Thinking = "reasoning...",
+        });
+        state.Messages.Add(new StoredChatMessageProto
+        {
+            Id = "msg-2",
+            Role = "assistant",
+            Content = "Hi there!",
+            Timestamp = 1700000001000,
+            Status = "sent",
+        });
+        runtime.RegisterActor("chat-scope-1-conv-1",
+            new FakeAgent<ChatConversationState>("chat-scope-1-conv-1", state));
+        var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
+        var store = new ActorBackedChatHistoryStore(runtime, logger);
+
+        var messages = await store.GetMessagesAsync("scope-1", "conv-1");
+
+        messages.Should().HaveCount(2);
+        messages[0].Id.Should().Be("msg-1");
+        messages[0].Role.Should().Be("user");
+        messages[0].Content.Should().Be("Hello");
+        messages[0].Thinking.Should().Be("reasoning...");
+        messages[1].Id.Should().Be("msg-2");
+        messages[1].Role.Should().Be("assistant");
+        messages[1].Error.Should().BeNull("empty proto string maps to null");
+    }
+
+    [Fact]
+    public async Task ChatHistoryStore_GetMessages_NoActor_ReturnsEmpty()
+    {
+        var runtime = new FakeActorRuntime();
+        var logger = NullLogger<ActorBackedChatHistoryStore>.Instance;
+        var store = new ActorBackedChatHistoryStore(runtime, logger);
+
+        var messages = await store.GetMessagesAsync("scope-1", "conv-1");
+
+        messages.Should().BeEmpty();
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // RoleCatalogStore: SaveDraft workspace sync + read mapping
+    // ════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task RoleCatalogStore_SaveDraft_SyncsToWorkspace()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            runtime, scopeResolver, workspaceStore, logger);
+
+        var draft = new StoredRoleDraft(
+            HomeDirectory: "test",
+            FilePath: "test/draft",
+            FileExists: true,
+            UpdatedAtUtc: DateTimeOffset.UtcNow,
+            Draft: new StoredRoleDefinition("r1", "My Role", "prompt",
+                "anthropic", "claude-opus", []));
+
+        await store.SaveRoleDraftAsync(draft);
+
+        workspaceStore.LastSavedRoleDraft.Should().NotBeNull();
+        workspaceStore.LastSavedRoleDraft!.Draft!.Name.Should().Be("My Role");
+    }
+
+    [Fact]
+    public async Task RoleCatalogStore_DeleteDraft_SendsEventAndSyncsWorkspace()
+    {
+        var runtime = new FakeActorRuntime();
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            runtime, scopeResolver, workspaceStore, logger);
+
+        await store.DeleteRoleDraftAsync();
+
+        var actorId = "role-catalog-scope-1";
+        runtime.Actors.Should().ContainKey(actorId);
+        var actor = runtime.Actors[actorId];
+        actor.ReceivedEnvelopes.Should().HaveCount(1);
+        actor.ReceivedEnvelopes[0].Payload.Is(RoleDraftDeletedEvent.Descriptor).Should().BeTrue();
+        workspaceStore.RoleDraftDeleted.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RoleCatalogStore_GetCatalog_MapsStateCorrectly()
+    {
+        var runtime = new FakeActorRuntime();
+        var state = new RoleCatalogState();
+        state.Roles.Add(new RoleDefinitionEntry
+        {
+            Id = "role-1",
+            Name = "Assistant",
+            SystemPrompt = "You are helpful",
+            Provider = "anthropic",
+            Model = "claude-opus",
+        });
+        runtime.RegisterActor("role-catalog-scope-1",
+            new FakeAgent<RoleCatalogState>("role-catalog-scope-1", state));
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedRoleCatalogStore>.Instance;
+        var store = new ActorBackedRoleCatalogStore(
+            runtime, scopeResolver, workspaceStore, logger);
+
+        var catalog = await store.GetRoleCatalogAsync();
+
+        catalog.FileExists.Should().BeTrue();
+        catalog.Roles.Should().HaveCount(1);
+        catalog.Roles[0].Id.Should().Be("role-1");
+        catalog.Roles[0].Name.Should().Be("Assistant");
+        catalog.Roles[0].Provider.Should().Be("anthropic");
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // ConnectorCatalogStore: read mapping
+    // ════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task ConnectorCatalogStore_GetCatalog_MapsStateCorrectly()
+    {
+        var runtime = new FakeActorRuntime();
+        var state = new ConnectorCatalogState();
+        state.Connectors.Add(new ConnectorDefinitionEntry
+        {
+            Name = "web-search",
+            Type = "http",
+            Enabled = true,
+            TimeoutMs = 30000,
+            Retry = 3,
+            Http = new HttpConnectorConfigEntry
+            {
+                BaseUrl = "https://api.search.example.com",
+            },
+        });
+        runtime.RegisterActor("connector-catalog-scope-1",
+            new FakeAgent<ConnectorCatalogState>("connector-catalog-scope-1", state));
+        var scopeResolver = new FakeScopeResolver { ScopeIdToReturn = "scope-1" };
+        var workspaceStore = new StubWorkspaceStore();
+        var logger = NullLogger<ActorBackedConnectorCatalogStore>.Instance;
+        var store = new ActorBackedConnectorCatalogStore(
+            runtime, scopeResolver, workspaceStore, logger);
+
+        var catalog = await store.GetConnectorCatalogAsync();
+
+        catalog.FileExists.Should().BeTrue();
+        catalog.Connectors.Should().HaveCount(1);
+        catalog.Connectors[0].Name.Should().Be("web-search");
+        catalog.Connectors[0].Type.Should().Be("http");
+        catalog.Connectors[0].Http.BaseUrl.Should().Be("https://api.search.example.com");
+        catalog.Connectors[0].TimeoutMs.Should().Be(30000);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // Scope isolation: two scopes don't share actors
+    // ════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task GAgentActorStore_DifferentScopes_UseDifferentActors()
+    {
+        var runtime = new FakeActorRuntime();
+        var logger = NullLogger<ActorBackedGAgentActorStore>.Instance;
+
+        var scopeA = new FakeScopeResolver { ScopeIdToReturn = "scope-a" };
+        var storeA = new ActorBackedGAgentActorStore(runtime, scopeA, logger);
+        await storeA.AddActorAsync("MyAgent", "actor-1");
+
+        var scopeB = new FakeScopeResolver { ScopeIdToReturn = "scope-b" };
+        var storeB = new ActorBackedGAgentActorStore(runtime, scopeB, logger);
+        await storeB.AddActorAsync("MyAgent", "actor-2");
+
+        runtime.Actors.Should().ContainKey("gagent-registry-scope-a");
+        runtime.Actors.Should().ContainKey("gagent-registry-scope-b");
+        runtime.Actors["gagent-registry-scope-a"].ReceivedEnvelopes.Should().HaveCount(1);
+        runtime.Actors["gagent-registry-scope-b"].ReceivedEnvelopes.Should().HaveCount(1);
+    }
+
+    // ════════════════════════════════════════════════════════════
     // Helper: stub IStudioWorkspaceStore for catalog tests
     // ════════════════════════════════════════════════════════════
 
@@ -661,6 +858,8 @@ public sealed class ActorBackedStoreAdapterTests
     {
         public bool RoleDraftDeleted { get; private set; }
         public bool ConnectorDraftDeleted { get; private set; }
+        public StoredRoleDraft? LastSavedRoleDraft { get; private set; }
+        public StoredConnectorDraft? LastSavedConnectorDraft { get; private set; }
 
         public Task<StudioWorkspaceSettings> GetSettingsAsync(CancellationToken ct = default) =>
             Task.FromResult(new StudioWorkspaceSettings("", [], "", ""));
@@ -684,8 +883,11 @@ public sealed class ActorBackedStoreAdapterTests
             Task.FromResult(c);
         public Task<StoredConnectorDraft> GetConnectorDraftAsync(CancellationToken ct = default) =>
             Task.FromResult(new StoredConnectorDraft("", "", false, null, null));
-        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft d, CancellationToken ct = default) =>
-            Task.FromResult(d);
+        public Task<StoredConnectorDraft> SaveConnectorDraftAsync(StoredConnectorDraft d, CancellationToken ct = default)
+        {
+            LastSavedConnectorDraft = d;
+            return Task.FromResult(d);
+        }
         public Task DeleteConnectorDraftAsync(CancellationToken ct = default)
         {
             ConnectorDraftDeleted = true;
@@ -697,8 +899,11 @@ public sealed class ActorBackedStoreAdapterTests
             Task.FromResult(c);
         public Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken ct = default) =>
             Task.FromResult(new StoredRoleDraft("", "", false, null, null));
-        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft d, CancellationToken ct = default) =>
-            Task.FromResult(d);
+        public Task<StoredRoleDraft> SaveRoleDraftAsync(StoredRoleDraft d, CancellationToken ct = default)
+        {
+            LastSavedRoleDraft = d;
+            return Task.FromResult(d);
+        }
         public Task DeleteRoleDraftAsync(CancellationToken ct = default)
         {
             RoleDraftDeleted = true;
