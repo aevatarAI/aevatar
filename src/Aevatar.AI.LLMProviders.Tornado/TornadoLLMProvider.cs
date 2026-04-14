@@ -131,6 +131,7 @@ public sealed class TornadoLLMProvider : ILLMProvider
                 Model = request.Model,
                 Temperature = request.Temperature,
                 MaxTokens = request.MaxTokens,
+                ResponseFormat = request.ResponseFormat,
             };
         }
 
