@@ -38,6 +38,7 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { servicesApi } from '@/shared/api/servicesApi';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
   buildRuntimeGAgentsHref,
   buildRuntimeRunsHref,
@@ -53,6 +54,7 @@ import {
   describeStudioScopeBindingRevisionTarget,
   getStudioScopeBindingCurrentRevision,
 } from '@/shared/studio/models';
+import { buildStudioWorkflowWorkspaceRoute } from '@/shared/studio/navigation';
 import {
   AevatarContextDrawer,
   AevatarHelpTooltip,
@@ -143,15 +145,16 @@ const pageHeaderStyle: React.CSSProperties = {
 };
 const workspaceViewportStyle: React.CSSProperties = {
   display: 'flex',
-  flex: '1 0 auto',
+  flex: '1 1 auto',
   minHeight: 0,
-  overflow: 'visible',
+  overflow: 'hidden',
 };
 const workspaceGridStyle: React.CSSProperties = {
-  alignItems: 'start',
+  alignItems: 'stretch',
   display: 'grid',
   gap: 12,
   gridTemplateColumns: '250px minmax(0, 1fr) 300px',
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
   width: '100%',
@@ -281,7 +284,7 @@ const playgroundChatComposerStyle: React.CSSProperties = {
   background: '#ffffff',
   borderTop: '1px solid #e7e5e4',
   flexShrink: 0,
-  padding: '14px 20px',
+  padding: '14px 20px 18px',
 };
 const consoleShellStyle: React.CSSProperties = {
   background: 'var(--ant-color-bg-container)',
@@ -328,20 +331,63 @@ function createClientId(): string {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function buildServiceOptions(
+function compareServicePriority(
+  left: ServiceCatalogSnapshot,
+  right: ServiceCatalogSnapshot,
+  defaultServiceId?: string,
+): number {
+  const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
+  const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+
+  if (leftIsDefault !== rightIsDefault) {
+    return rightIsDefault - leftIsDefault;
+  }
+
+  const endpointDelta = right.endpoints.length - left.endpoints.length;
+  if (endpointDelta !== 0) {
+    return endpointDelta;
+  }
+
+  const leftHasDisplayName = left.displayName.trim() ? 1 : 0;
+  const rightHasDisplayName = right.displayName.trim() ? 1 : 0;
+  if (leftHasDisplayName !== rightHasDisplayName) {
+    return rightHasDisplayName - leftHasDisplayName;
+  }
+
+  const updatedAtDelta = right.updatedAt.localeCompare(left.updatedAt);
+  if (updatedAtDelta !== 0) {
+    return updatedAtDelta;
+  }
+
+  const serviceIdDelta = left.serviceId.localeCompare(right.serviceId);
+  if (serviceIdDelta !== 0) {
+    return serviceIdDelta;
+  }
+
+  return left.serviceKey.localeCompare(right.serviceKey);
+}
+
+export function buildServiceOptions(
   services: readonly ServiceCatalogSnapshot[],
   defaultServiceId?: string,
 ): ServiceCatalogSnapshot[] {
-  return [...services].sort((left, right) => {
-    const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
-    const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+  const deduped = new Map<string, ServiceCatalogSnapshot>();
 
-    if (leftIsDefault !== rightIsDefault) {
-      return rightIsDefault - leftIsDefault;
+  services.forEach((service) => {
+    const current = deduped.get(service.serviceId);
+    if (!current) {
+      deduped.set(service.serviceId, service);
+      return;
     }
 
-    return left.serviceId.localeCompare(right.serviceId);
+    if (compareServicePriority(service, current, defaultServiceId) < 0) {
+      deduped.set(service.serviceId, service);
+    }
   });
+
+  return [...deduped.values()].sort((left, right) =>
+    compareServicePriority(left, right, defaultServiceId),
+  );
 }
 
 function isChatEndpoint(
@@ -984,29 +1030,25 @@ const ScopeInvokePage: React.FC = () => {
   };
 
   const recommendedNextStep = !scopeId
-    ? {
-        action: () => history.push('/scopes/overview'),
-        actionLabel: 'Open projects',
+      ? {
+        action: () => history.push(buildTeamWorkspaceRoute('')),
+        actionLabel: 'Open Team Home',
         description:
-          'Invoke Lab only becomes useful after you anchor the console to a scope.',
-        title: 'Load a project first',
+          'This legacy lab only becomes useful after you anchor the console to a team.',
+        title: 'Load a team first',
       }
     : services.length === 0
       ? {
           action: () =>
             history.push(
-              buildRuntimeGAgentsHref({
+              buildStudioWorkflowWorkspaceRoute({
                 scopeId,
-                actorId:
-                  currentBindingRevision?.primaryActorId || undefined,
-                actorTypeName:
-                  currentBindingRevision?.staticActorTypeName || undefined,
               }),
             ),
-          actionLabel: 'Open GAgents',
+          actionLabel: 'Open Team Builder',
           description:
-            'No published scope services were discovered. Manage the current binding before invoking.',
-          title: 'Publish or switch the default binding',
+            'No published team services were discovered. Switch the live team setup before you keep probing this legacy lab.',
+          title: 'Fix the live team setup',
         }
       : invokeResult.status === 'success'
         ? {
@@ -1044,7 +1086,7 @@ const ScopeInvokePage: React.FC = () => {
     (bindingQuery.data?.available ? 'ready' : 'missing');
 
   return (
-    <AevatarPageShell pageHeaderRender={false} title="Invoke Lab">
+    <AevatarPageShell pageHeaderRender={false} title="Legacy Invoke Lab">
       <div style={viewportShellStyle}>
         <style>
           {`
@@ -1065,12 +1107,10 @@ const ScopeInvokePage: React.FC = () => {
           <Space size={12}>
             <Button
               icon={<ArrowLeftOutlined />}
-              onClick={() =>
-                history.push(buildScopeHref('/scopes/overview', activeDraft))
-              }
+              onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
               type="text"
             >
-              Back
+              Team Home
             </Button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
@@ -1083,9 +1123,9 @@ const ScopeInvokePage: React.FC = () => {
                 }}
               >
                 <Typography.Text strong style={{ fontSize: 16 }}>
-                  Invoke Lab
+                  Legacy Invoke Lab
                 </Typography.Text>
-                <AevatarHelpTooltip content="IDE-style runtime playground with a fixed console and inspector." />
+                <AevatarHelpTooltip content="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows." />
               </div>
             </div>
           </Space>
@@ -1096,6 +1136,20 @@ const ScopeInvokePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
             ) : null}
+            <Button onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}>
+              Open Team Home
+            </Button>
+            <Button
+              onClick={() =>
+                history.push(
+                  buildStudioWorkflowWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  }),
+                )
+              }
+            >
+              Open Team Builder
+            </Button>
             <Button onClick={() => setContextSurface('service')}>
               Browse services
             </Button>
@@ -1107,9 +1161,16 @@ const ScopeInvokePage: React.FC = () => {
           </Space>
         </div>
 
-        <div style={workspaceViewportStyle}>
-          <div style={workspaceGridStyle}>
+        <div data-testid="invoke-lab-workspace-viewport" style={workspaceViewportStyle}>
+          <div data-testid="invoke-lab-workspace-grid" style={workspaceGridStyle}>
             <div style={columnStyle}>
+              {scopeId ? (
+                <Alert
+                  description="Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links."
+                  showIcon
+                  type="warning"
+                />
+              ) : null}
               <ProCard
                 bodyStyle={viewportCardBodyStyle}
                 boxShadow={false}
@@ -1118,19 +1179,19 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<DeploymentUnitOutlined />}
-                    subtitle="Scope selector and reset controls."
-                    title="Invocation Controls"
+                    subtitle="Team selector and reset controls for the legacy lab."
+                    title="Legacy Lab Controls"
                   />
                 }
               >
                 <div style={scrollColumnStyle}>
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Scope ID
+                      Team ID
                     </Typography.Text>
                     <Input
                       allowClear
-                      placeholder="Enter project scopeId"
+                      placeholder="Enter team ID"
                       value={draft.scopeId}
                       onChange={(event) =>
                         setDraft({
@@ -1141,7 +1202,7 @@ const ScopeInvokePage: React.FC = () => {
                     />
                     <Space size={[8, 8]} wrap>
                       <Button type="primary" onClick={handleLoad}>
-                        Load invoke lab
+                        Load legacy lab
                       </Button>
                       <Button onClick={handleReset}>Reset</Button>
                     </Space>
@@ -1149,7 +1210,7 @@ const ScopeInvokePage: React.FC = () => {
 
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Resolved project
+                      Resolved team
                     </Typography.Text>
                     {resolvedScope?.scopeId ? (
                       <>
@@ -1163,14 +1224,14 @@ const ScopeInvokePage: React.FC = () => {
                         {draft.scopeId.trim() !== resolvedScope.scopeId ? (
                           <div>
                             <Button size="small" onClick={handleUseResolvedScope}>
-                              Use resolved project
+                              Use resolved team
                             </Button>
                           </div>
                         ) : null}
                       </>
                     ) : (
                       <Typography.Text type="secondary">
-                        No project scope was resolved from the current session.
+                        No team context was resolved from the current session.
                       </Typography.Text>
                     )}
                   </div>
@@ -1193,7 +1254,7 @@ const ScopeInvokePage: React.FC = () => {
                 {!bindingQuery.data?.available || !currentBindingRevision ? (
                   <Alert
                     showIcon
-                    title="No published default binding is active for this project yet."
+                    title="No published default binding is active for this team yet."
                     type="info"
                   />
                 ) : (
@@ -1244,7 +1305,7 @@ const ScopeInvokePage: React.FC = () => {
                           )
                         }
                       >
-                        Manage in GAgents
+                        Open Member Runtime
                       </Button>
                     </div>
                   </div>
@@ -1303,7 +1364,7 @@ const ScopeInvokePage: React.FC = () => {
                           {!scopeId ? (
                             <Alert
                               showIcon
-                              title="Select a project to start chatting with a published service."
+                              title="Select a team to start chatting with a published service."
                               type="info"
                             />
                           ) : !selectedService || !selectedEndpoint ? (
@@ -1314,7 +1375,7 @@ const ScopeInvokePage: React.FC = () => {
                             />
                           ) : chatMessages.length === 0 ? (
                             <EmptyChatState
-                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through Invoke Lab while keeping raw runtime observation close by.`}
+                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through the legacy lab while keeping raw runtime observation close by.`}
                               title={
                                 selectedService.displayName ||
                                 selectedService.serviceId
@@ -1503,13 +1564,13 @@ const ScopeInvokePage: React.FC = () => {
                   {!scopeId ? (
                     <Alert
                       showIcon
-                      title="Select a project to load its published services."
+                      title="Select a team to load its published services."
                       type="info"
                     />
                   ) : !selectedService ? (
                     <Alert
                       showIcon
-                      title="No published project service is selected yet."
+                      title="No published team service is selected yet."
                       type="warning"
                     />
                   ) : (

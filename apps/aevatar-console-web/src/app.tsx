@@ -4,12 +4,8 @@ import {
   ProConfigProvider,
 } from "@ant-design/pro-components";
 import {
-  AppstoreOutlined,
-  DashboardOutlined,
   DownOutlined,
   LogoutOutlined,
-  MessageOutlined,
-  SafetyCertificateOutlined,
   SettingOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -35,6 +31,12 @@ import {
   loadStoredAuthSession,
   sanitizeReturnTo,
 } from "./shared/auth/session";
+import { ProtectedRouteRedirectGate } from "./shared/auth/ProtectedRouteRedirectGate";
+import {
+  getNavigationGroupOrder,
+  type NavigationGroup,
+} from "./shared/navigation/navigationGroups";
+import { getNavigationSelectedKeys } from "./shared/navigation/navigationMenuSelection";
 import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
 import { buildMissionSnapshotFromRuntime } from "@/pages/MissionControl/runtimeAdapter";
@@ -98,6 +100,8 @@ type LiveOpsAttentionCandidate = {
 
 type NavigationMenuItem = {
   children?: NavigationMenuItem[];
+  className?: string;
+  disabled?: boolean;
   icon?: React.ReactNode;
   menuBadgeKey?: string;
   menuGroupKey?: string;
@@ -105,13 +109,6 @@ type NavigationMenuItem = {
   path?: string;
   key?: React.Key;
   [key: string]: unknown;
-};
-
-type NavigationGroup = {
-  flattenSingleItem?: boolean;
-  icon: React.ReactNode;
-  key: string;
-  label: string;
 };
 
 type AuthSessionBootstrapProps = {
@@ -123,34 +120,7 @@ const LIVE_OPS_ATTENTION_BADGE_KEY = "live.attention";
 const LIVE_OPS_ATTENTION_MAX_CANDIDATES = 6;
 const LIVE_OPS_ATTENTION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const LIVE_OPS_ATTENTION_REFRESH_MS = 30_000;
-const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = [
-  {
-    icon: <AppstoreOutlined />,
-    key: "build",
-    label: "Build / Studio",
-  },
-  {
-    flattenSingleItem: true,
-    icon: <MessageOutlined />,
-    key: "chat",
-    label: "Chat",
-  },
-  {
-    icon: <DashboardOutlined />,
-    key: "live",
-    label: "Live Ops",
-  },
-  {
-    icon: <SafetyCertificateOutlined />,
-    key: "governance",
-    label: "Governance",
-  },
-  {
-    icon: <SettingOutlined />,
-    key: "settings",
-    label: "Settings",
-  },
-] as const;
+const NAVIGATION_GROUP_ORDER: readonly NavigationGroup[] = getNavigationGroupOrder();
 const LIVE_OPS_DEFAULT_ATTENTION_SNAPSHOT: LiveOpsAttentionSnapshot = {
   hasPendingAttention: false,
   pendingCount: 0,
@@ -478,32 +448,35 @@ function groupNavigationMenuItems(items: NavigationMenuItem[]): NavigationMenuIt
     grouped.set(groupKey, [item]);
   }
 
-  const menuGroups = NAVIGATION_GROUP_ORDER.flatMap((group) => {
-    const children = grouped.get(group.key);
-    if (!children || children.length === 0) {
-      return [];
-    }
+  const menuGroups = NAVIGATION_GROUP_ORDER.reduce<NavigationMenuItem[]>(
+    (result, group) => {
+      const children = grouped.get(group.key);
+      if (!children || children.length === 0) {
+        return result;
+      }
 
-    if (group.flattenSingleItem && children.length === 1) {
-      return [
-        {
+      if (group.flattenSingleItem && children.length === 1) {
+        result.push({
           ...children[0],
           icon: children[0].icon ?? group.icon,
           menuGroupKey: group.key,
-        },
-      ];
-    }
+        });
+        return result;
+      }
 
-    return [
-      {
-        children,
-        icon: group.icon,
+      result.push({
+        children: children.map((child) => ({
+          ...child,
+          menuGroupKey: group.key,
+        })),
         key: `menu-group:${group.key}`,
         menuGroupKey: group.key,
         name: group.label,
-      },
-    ];
-  });
+      });
+      return result;
+    },
+    []
+  );
 
   return [...menuGroups, ...ungrouped];
 }
@@ -651,7 +624,6 @@ const AuthSessionBootstrap: React.FC<AuthSessionBootstrapProps> = ({
 
   return <>{children}</>;
 };
-
 // ProLayout 支持的api https://procomponents.ant.design/components/layout
 export const layout = ({
   initialState,
@@ -667,17 +639,24 @@ export const layout = ({
         return;
       }
 
-      if (!hasRestorableAuthSession()) {
-        history.replace(buildLoginRoute(getCurrentReturnTo(pathname)));
-        return;
-      }
-
       if (pathname === "/") {
         history.replace(DEFAULT_PROTECTED_ROUTE);
       }
     },
     postMenuData: (menuData: NavigationMenuItem[]) =>
       decorateNavigationMenuItems(menuData),
+    menuRender: (_: unknown, defaultDom: React.ReactNode) => {
+      if (!React.isValidElement(defaultDom)) {
+        return defaultDom;
+      }
+
+      return React.cloneElement(
+        defaultDom as React.ReactElement<{ selectedKeys?: string[] }>,
+        {
+          selectedKeys: getNavigationSelectedKeys(window.location.pathname),
+        },
+      );
+    },
     actionsRender: () => {
       const session = loadRestorableAuthSession();
       if (!session) {
@@ -770,18 +749,15 @@ export const layout = ({
           const isPublicRoute = PUBLIC_ROUTES.has(pathname);
           const isStudioRoute = isStudioHostRoute(pathname);
           const liveSession = loadStoredAuthSession();
-          if (
+          const needsProtectedRouteRedirect =
             !isPublicRoute &&
             !isStudioRoute &&
             !liveSession &&
-            !hasRestorableAuthSession()
-          ) {
-            history.replace(buildLoginRoute(getCurrentReturnTo(pathname)));
-            return <PageLoading fullscreen />;
-          }
+            !hasRestorableAuthSession();
 
-          const content =
-            !isPublicRoute && !isStudioRoute && !liveSession ? (
+          const content = needsProtectedRouteRedirect ? (
+            <ProtectedRouteRedirectGate pathname={pathname} />
+          ) : !isPublicRoute && !isStudioRoute && !liveSession ? (
               <AuthSessionBootstrap pathname={pathname}>
                 {children}
               </AuthSessionBootstrap>
@@ -808,6 +784,10 @@ export const layout = ({
         <PageLoading fullscreen />
       ),
     ...initialState?.settings,
+    menu: {
+      ...(initialState?.settings.menu as Record<string, unknown> | undefined),
+      type: "group",
+    },
     contentStyle: {
       background: "transparent",
       display: "flex",

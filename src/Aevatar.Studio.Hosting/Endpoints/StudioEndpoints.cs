@@ -94,6 +94,13 @@ internal static class StudioEndpoints
             IServiceProvider services,
             CancellationToken ct) =>
             HandleGetScopedScriptCatalogAsync(http, scriptId, services, ct));
+        app.MapPost("/api/app/scripts/{scriptId}/save-observation", (
+            HttpContext http,
+            string scriptId,
+            AppScopeScriptSaveObservationRequest request,
+            IServiceProvider services,
+            CancellationToken ct) =>
+            HandleObserveScopedScriptSaveAsync(http, scriptId, request, services, ct));
         app.MapPost("/api/app/scripts", (
             HttpContext http,
             AppScopeScriptSaveRequest request,
@@ -581,7 +588,55 @@ internal static class StudioEndpoints
 
         try
         {
-            return Results.Ok(await service.SaveAsync(scopeContext.ScopeId, request, ct));
+            var accepted = await service.SaveAsync(scopeContext.ScopeId, request, ct);
+            return Results.Accepted(
+                uri: $"/api/app/scripts/{Uri.EscapeDataString(accepted.ScriptId)}/save-observation",
+                value: accepted);
+        }
+        catch (AppApiException ex)
+        {
+            return AppApiErrors.ToResult(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.BadRequest(new
+            {
+                code = "INVALID_SCOPE_SCRIPT_REQUEST",
+                message = ex.Message,
+            });
+        }
+    }
+
+    private static async Task<IResult> HandleObserveScopedScriptSaveAsync(
+        HttpContext http,
+        string scriptId,
+        AppScopeScriptSaveObservationRequest request,
+        IServiceProvider services,
+        CancellationToken ct)
+    {
+        var scopeContext = services.GetService<IAppScopeResolver>()?.Resolve(http);
+        if (scopeContext == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "APP_SCOPE_REQUIRED",
+                message = "Script management requires a resolved scope id.",
+            });
+        }
+
+        var service = services.GetService<AppScopedScriptService>();
+        if (service == null)
+        {
+            return Results.BadRequest(new
+            {
+                code = "SCRIPT_SCOPE_SERVICE_UNAVAILABLE",
+                message = "Scoped script services are not available in the current host.",
+            });
+        }
+
+        try
+        {
+            return Results.Ok(await service.ObserveSaveAsync(scopeContext.ScopeId, scriptId, request, ct));
         }
         catch (AppApiException ex)
         {

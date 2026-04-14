@@ -18,8 +18,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     {
         var definitionPort = new RecordingDefinitionCommandPort();
         var catalogPort = new RecordingCatalogCommandPort();
-        var queryPort = new RecordingQueryPort();
-        var service = BuildService(definitionPort, catalogPort, queryPort);
+        var service = BuildService(definitionPort, catalogPort);
 
         var request = new ScopeScriptUpsertRequest("scope-1", "my-script", "print('hello')");
 
@@ -41,8 +40,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     {
         var definitionPort = new RecordingDefinitionCommandPort();
         var catalogPort = new RecordingCatalogCommandPort();
-        var queryPort = new RecordingQueryPort();
-        var service = BuildService(definitionPort, catalogPort, queryPort);
+        var service = BuildService(definitionPort, catalogPort);
 
         var request = new ScopeScriptUpsertRequest("scope-1", "my-script", "hello");
 
@@ -60,8 +58,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     {
         var definitionPort = new RecordingDefinitionCommandPort();
         var catalogPort = new RecordingCatalogCommandPort();
-        var queryPort = new RecordingQueryPort();
-        var service = BuildService(definitionPort, catalogPort, queryPort);
+        var service = BuildService(definitionPort, catalogPort);
 
         var request = new ScopeScriptUpsertRequest("scope-1", "my-script", "source");
 
@@ -72,21 +69,40 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     }
 
     [Fact]
-    public async Task UpsertAsync_ShouldReturnFallbackSummary_WhenQueryReturnsNull()
+    public async Task UpsertAsync_ShouldReturnAcceptedSummary()
     {
         var definitionPort = new RecordingDefinitionCommandPort();
         var catalogPort = new RecordingCatalogCommandPort();
-        var queryPort = new RecordingQueryPort { GetByScriptIdResult = null };
-        var service = BuildService(definitionPort, catalogPort, queryPort);
+        var service = BuildService(definitionPort, catalogPort);
 
         var request = new ScopeScriptUpsertRequest("scope-1", "my-script", "source");
 
         var result = await service.UpsertAsync(request);
 
-        result.Script.Should().NotBeNull();
-        result.Script.ScopeId.Should().Be("scope-1");
-        result.Script.ScriptId.Should().Be("my-script");
-        result.Script.DefinitionActorId.Should().Be(definitionPort.ResultActorId);
+        result.AcceptedScript.ScopeId.Should().Be("scope-1");
+        result.AcceptedScript.ScriptId.Should().Be("my-script");
+        result.AcceptedScript.DefinitionActorId.Should().Be(definitionPort.ResultActorId);
+        result.AcceptedScript.AcceptedAt.Should().Be(catalogPort.AcceptedAt);
+        result.DefinitionCommand.CommandId.Should().Be("definition-command-1");
+        result.CatalogCommand.CommandId.Should().Be("catalog-command-1");
+    }
+
+    [Fact]
+    public async Task UpsertAsync_ShouldGenerateUniqueProposalId_ForRepeatedSameRevisionSaves()
+    {
+        var definitionPort = new RecordingDefinitionCommandPort();
+        var catalogPort = new RecordingCatalogCommandPort();
+        var service = BuildService(definitionPort, catalogPort);
+        var request = new ScopeScriptUpsertRequest("scope-1", "my-script", "source", "rev-1");
+
+        var first = await service.UpsertAsync(request);
+        var second = await service.UpsertAsync(request);
+
+        first.AcceptedScript.ProposalId.Should().StartWith("scope-1:my-script:rev-1:");
+        second.AcceptedScript.ProposalId.Should().StartWith("scope-1:my-script:rev-1:");
+        first.AcceptedScript.ProposalId.Should().NotBe(second.AcceptedScript.ProposalId);
+        catalogPort.Calls[0].proposalId.Should().Be(first.AcceptedScript.ProposalId);
+        catalogPort.Calls[1].proposalId.Should().Be(second.AcceptedScript.ProposalId);
     }
 
     [Fact]
@@ -94,8 +110,7 @@ public sealed class ScopeScriptCommandApplicationServiceTests
     {
         var definitionPort = new RecordingDefinitionCommandPort();
         var catalogPort = new RecordingCatalogCommandPort();
-        var queryPort = new RecordingQueryPort();
-        var service = BuildService(definitionPort, catalogPort, queryPort);
+        var service = BuildService(definitionPort, catalogPort);
 
         var request = new ScopeScriptUpsertRequest("scope-1", "my-script", "");
 
@@ -106,12 +121,10 @@ public sealed class ScopeScriptCommandApplicationServiceTests
 
     private static ScopeScriptCommandApplicationService BuildService(
         IScriptDefinitionCommandPort definitionPort,
-        IScriptCatalogCommandPort catalogPort,
-        IScopeScriptQueryPort queryPort) =>
+        IScriptCatalogCommandPort catalogPort) =>
         new(
             definitionPort,
             catalogPort,
-            queryPort,
             Options.Create(DefaultOptions));
 
     private sealed class RecordingDefinitionCommandPort : IScriptDefinitionCommandPort
@@ -133,7 +146,8 @@ public sealed class ScopeScriptCommandApplicationServiceTests
                 ResultActorId,
                 new ScriptDefinitionSnapshot(
                     scriptId, scriptRevision, sourceText, sourceHash,
-                    string.Empty, string.Empty, string.Empty, string.Empty)));
+                    string.Empty, string.Empty, string.Empty, string.Empty),
+                new ScriptingCommandAcceptedReceipt(ResultActorId, "definition-command-1", "definition-correlation-1")));
         }
 
         public Task<ScriptDefinitionUpsertResult> UpsertDefinitionWithSnapshotAsync(
@@ -151,15 +165,18 @@ public sealed class ScopeScriptCommandApplicationServiceTests
                 new ScriptDefinitionSnapshot(
                     scriptId, scriptRevision, sourceText, sourceHash,
                     string.Empty, string.Empty, string.Empty, string.Empty,
-                    ScopeId: scopeId ?? string.Empty)));
+                    ScopeId: scopeId ?? string.Empty),
+                new ScriptingCommandAcceptedReceipt(ResultActorId, "definition-command-1", "definition-correlation-1")));
         }
     }
 
     private sealed class RecordingCatalogCommandPort : IScriptCatalogCommandPort
     {
+        public DateTimeOffset AcceptedAt { get; } = new(2026, 4, 13, 9, 0, 0, TimeSpan.Zero);
+
         public List<(string? catalogActorId, string scriptId, string expectedBaseRevision, string revision, string definitionActorId, string sourceHash, string proposalId, string? scopeId)> Calls { get; } = [];
 
-        public Task PromoteCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
@@ -170,10 +187,14 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             CancellationToken ct)
         {
             Calls.Add((catalogActorId, scriptId, expectedBaseRevision, revision, definitionActorId, sourceHash, proposalId, null));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-actor-1",
+                "catalog-command-1",
+                proposalId,
+                AcceptedAt));
         }
 
-        public Task PromoteCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> PromoteCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string expectedBaseRevision,
@@ -185,10 +206,14 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             CancellationToken ct)
         {
             Calls.Add((catalogActorId, scriptId, expectedBaseRevision, revision, definitionActorId, sourceHash, proposalId, scopeId));
-            return Task.CompletedTask;
+            return Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-actor-1",
+                "catalog-command-1",
+                proposalId,
+                AcceptedAt));
         }
 
-        public Task RollbackCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string targetRevision,
@@ -196,9 +221,13 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             string proposalId,
             string expectedCurrentRevision,
             CancellationToken ct) =>
-            Task.CompletedTask;
+            Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-actor-1",
+                "catalog-rollback-command-1",
+                proposalId,
+                AcceptedAt));
 
-        public Task RollbackCatalogRevisionAsync(
+        public Task<ScriptingCommandAcceptedReceipt> RollbackCatalogRevisionAsync(
             string? catalogActorId,
             string scriptId,
             string targetRevision,
@@ -207,22 +236,10 @@ public sealed class ScopeScriptCommandApplicationServiceTests
             string expectedCurrentRevision,
             string? scopeId,
             CancellationToken ct) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class RecordingQueryPort : IScopeScriptQueryPort
-    {
-        public ScopeScriptSummary? GetByScriptIdResult { get; init; }
-
-        public Task<ScopeScriptSummary?> GetByScriptIdAsync(
-            string scopeId,
-            string scriptId,
-            CancellationToken ct = default) =>
-            Task.FromResult(GetByScriptIdResult);
-
-        public Task<IReadOnlyList<ScopeScriptSummary>> ListAsync(
-            string scopeId,
-            CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<ScopeScriptSummary>>([]);
+            Task.FromResult(new ScriptingCommandAcceptedReceipt(
+                catalogActorId ?? "catalog-actor-1",
+                "catalog-rollback-command-1",
+                proposalId,
+                AcceptedAt));
     }
 }

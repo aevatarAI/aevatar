@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import RunsTracePane from "./RunsTracePane";
 
@@ -30,5 +30,38 @@ describe("RunsTracePane", () => {
       minHeight: "0",
       overflow: "hidden",
     });
+  });
+
+  it("shows only the active trace pane when switching tabs", () => {
+    const Harness = () => {
+      const [view, setView] = React.useState<"timeline" | "messages" | "events">(
+        "timeline"
+      );
+
+      return (
+        <RunsTracePane
+          consoleView={view}
+          eventConsoleView={<div>events panel</div>}
+          eventCount={3}
+          hasPendingInteraction={false}
+          messageConsoleView={<div>messages panel</div>}
+          messageCount={2}
+          onConsoleViewChange={(key) => setView(key)}
+          timelineView={<div>timeline panel</div>}
+        />
+      );
+    };
+
+    const { queryByText } = render(<Harness />);
+
+    expect(screen.getByText("timeline panel")).toBeTruthy();
+    expect(queryByText("messages panel")).toBeNull();
+    expect(queryByText("events panel")).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Messages" }));
+
+    expect(screen.getByText("messages panel")).toBeTruthy();
+    expect(queryByText("timeline panel")).toBeNull();
+    expect(queryByText("events panel")).toBeNull();
   });
 });

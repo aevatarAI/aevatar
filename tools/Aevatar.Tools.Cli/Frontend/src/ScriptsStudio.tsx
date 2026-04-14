@@ -23,6 +23,9 @@ import { PackageFileTree } from './scripts-studio/components/PackageFileTree';
 import { ResourceRail } from './scripts-studio/components/ResourceRail';
 import { EmptyState, ScriptsStudioModal, StudioResultCard } from './scripts-studio/components/StudioChrome';
 import type {
+  AppScopeScriptSaveAcceptedResponse,
+  AppScopeScriptSaveObservationRequest,
+  AppScopeScriptSaveObservationResult,
   ScriptCatalogSnapshot,
   DraftRunResult,
   ScriptPackage,
@@ -220,6 +223,32 @@ function getNextCandidateRevision(baseRevision: string): string {
     return `${match[1]}${Number(match[2]) + 1}`;
   }
   return `${baseRevision}_new`;
+}
+
+function catalogMatchesPromotion(
+  catalog: ScriptCatalogSnapshot | null | undefined,
+  decision: ScriptPromotionDecision,
+): boolean {
+  if (!catalog || !decision.accepted) {
+    return false;
+  }
+
+  if (catalog.activeRevision !== decision.candidateRevision) {
+    return false;
+  }
+
+  if (
+    decision.definitionActorId &&
+    catalog.activeDefinitionActorId !== decision.definitionActorId
+  ) {
+    return false;
+  }
+
+  if (decision.proposalId && catalog.lastProposalId !== decision.proposalId) {
+    return false;
+  }
+
+  return true;
 }
 
 function createDraft(index: number, seed: Partial<ScriptDraft> = {}): ScriptDraft {
@@ -436,6 +465,19 @@ function hydrateDraftFromScopeDetail(detail: ScopedScriptDetail, index: number, 
     lastPromotion: existing?.lastPromotion || null,
     scopeDetail: detail,
   });
+}
+
+function buildSaveObservationRequest(
+  accepted: AppScopeScriptSaveAcceptedResponse,
+): AppScopeScriptSaveObservationRequest {
+  return {
+    revisionId: accepted.revisionId,
+    definitionActorId: accepted.definitionActorId,
+    sourceHash: accepted.sourceHash,
+    proposalId: accepted.proposalId,
+    expectedBaseRevision: accepted.expectedBaseRevision,
+    acceptedAt: accepted.acceptedAt,
+  };
 }
 
 function wait(ms: number) {
@@ -1262,7 +1304,12 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       return;
     }
 
-    if (selectedDraft.lastPromotion?.status === 'promoted') {
+    const activeRevision =
+      activeCatalog?.activeRevision ||
+      selectedDraft.scopeDetail?.script?.activeRevision ||
+      '';
+    const currentDraftRevision = (selectedDraft.baseRevision || selectedDraft.revision || '').trim();
+    if (activeRevision && currentDraftRevision && activeRevision === currentDraftRevision) {
       setBindModalOpen(true);
       return;
     }
@@ -1296,32 +1343,73 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
     setSavePending(true);
     try {
-      const detail = await api.app.saveScript({
+      const accepted = await api.app.saveScript({
         scriptId,
         revisionId: revision,
         expectedBaseRevision,
         package: selectedDraft.package,
-      }) as ScopedScriptDetail;
-
-      const savedPackage = normalizeDraftPackageForAppRuntime(null, detail.source?.sourceText || persistedSource).package;
-      const savedEntry = getSelectedPackageEntry(savedPackage, selectedDraft.selectedFilePath);
-
+      }) as AppScopeScriptSaveAcceptedResponse;
       updateDraft(selectedDraft.key, draft => ({
         ...draft,
-        scriptId: detail.script?.scriptId || scriptId,
-        revision: detail.script?.activeRevision || detail.source?.revision || revision,
-        baseRevision: detail.script?.activeRevision || detail.source?.revision || revision,
-        package: savedPackage,
-        selectedFilePath: savedEntry?.path || draft.selectedFilePath,
-        definitionActorId: detail.script?.definitionActorId || detail.source?.definitionActorId || draft.definitionActorId,
-        lastSourceHash: detail.source?.sourceHash || detail.script?.activeSourceHash || draft.lastSourceHash,
-        scopeDetail: detail,
+        scriptId: accepted.scriptId || scriptId,
+        definitionActorId: accepted.definitionActorId || draft.definitionActorId,
+        lastSourceHash: accepted.sourceHash || draft.lastSourceHash,
       }));
+      onFlash(`Save accepted for ${accepted.scriptId}. Waiting for the scope catalog to catch up.`, 'info');
+
+      const observationRequest = buildSaveObservationRequest(accepted);
+      let observation: AppScopeScriptSaveObservationResult | null = null;
+      let observationError: unknown = null;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        try {
+          observation = await api.app.observeScriptSave(accepted.scriptId, observationRequest) as AppScopeScriptSaveObservationResult;
+          observationError = null;
+          if (observation.isTerminal) {
+            break;
+          }
+        } catch (error) {
+          observationError = error;
+        }
+
+        await wait(250);
+      }
+
+      if (!observation && observationError) {
+        throw observationError;
+      }
+
+      await loadScopeScripts(true);
+      if (observation?.status === 'rejected') {
+        throw new Error(observation.message);
+      }
+
+      if (observation?.status === 'applied') {
+        const detail = await api.app.getScript(accepted.scriptId) as ScopedScriptDetail;
+        const savedPackage = normalizeDraftPackageForAppRuntime(null, detail.source?.sourceText || persistedSource).package;
+        const savedEntry = getSelectedPackageEntry(savedPackage, selectedDraft.selectedFilePath);
+
+        updateDraft(selectedDraft.key, draft => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || scriptId,
+          revision: detail.script?.activeRevision || detail.source?.revision || revision,
+          baseRevision: detail.script?.activeRevision || detail.source?.revision || revision,
+          package: savedPackage,
+          selectedFilePath: savedEntry?.path || draft.selectedFilePath,
+          definitionActorId: detail.script?.definitionActorId || detail.source?.definitionActorId || draft.definitionActorId,
+          lastSourceHash: detail.source?.sourceHash || detail.script?.activeSourceHash || draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
+
       setResultView('save');
       openWorkspaceSection('activity');
       setSelectedProposalId('');
-      await loadScopeScripts(true);
-      onFlash('Script saved to the current scope', 'success');
+      onFlash(
+        observation?.status === 'applied'
+          ? 'Script saved to the current scope'
+          : observation?.message || 'Save request is still waiting to appear in the scope catalog',
+        observation?.status === 'applied' ? 'success' : 'info',
+      );
     } catch (error: any) {
       onFlash(error?.message || 'Failed to save script', 'error');
     } finally {
@@ -1521,7 +1609,6 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
         ...draft,
         scriptId,
         revision: candidateRevision,
-        baseRevision: decision?.accepted ? candidateRevision : draft.baseRevision,
         lastPromotion: decision,
       }));
       setProposalDecisionsById(prev => ({
@@ -1533,12 +1620,50 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
       setPromotionModalOpen(false);
       setResultView('promotion');
       openWorkspaceSection('activity');
+      let observedCatalog: ScriptCatalogSnapshot | null = null;
+      if (decision?.accepted && scopeBacked) {
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          try {
+            const catalog = await api.app.getScriptCatalog(scriptId) as ScriptCatalogSnapshot;
+            if (catalogMatchesPromotion(catalog, decision)) {
+              observedCatalog = catalog;
+              break;
+            }
+          } catch {
+            // Ignore transient query failures while the catalog is catching up.
+          }
+
+          await wait(250);
+        }
+      }
+
       if (scopeBacked) {
         await loadScopeScripts(true);
       }
+      if (observedCatalog) {
+        const detail = await api.app.getScript(scriptId) as ScopedScriptDetail;
+        updateDraft(selectedDraft.key, draft => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || scriptId,
+          revision: detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision: detail.script?.activeRevision || detail.source?.revision || draft.baseRevision,
+          definitionActorId: detail.script?.definitionActorId || detail.source?.definitionActorId || decision.definitionActorId || draft.definitionActorId,
+          lastSourceHash: detail.source?.sourceHash || detail.script?.activeSourceHash || draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
+
       onFlash(
-        decision?.accepted ? 'Promotion accepted' : (decision?.failureReason || 'Promotion rejected'),
-        decision?.accepted ? 'success' : 'error',
+        decision?.accepted
+          ? observedCatalog
+            ? 'Promotion applied to the catalog'
+            : 'Promotion accepted. Catalog read model is catching up.'
+          : (decision?.failureReason || 'Promotion rejected'),
+        decision?.accepted
+          ? observedCatalog
+            ? 'success'
+            : 'info'
+          : 'error',
       );
     } catch (error: any) {
       onFlash(error?.message || 'Promotion failed', 'error');
