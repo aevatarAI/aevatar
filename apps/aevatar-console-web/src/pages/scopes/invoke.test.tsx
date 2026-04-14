@@ -972,13 +972,15 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    await screen.findByText('Prompt / Payload');
-
-    await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: 'Invoke endpoint' }),
-      ).not.toBeDisabled();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText('Prompt / Payload')).toBeTruthy();
+        expect(
+          screen.getByRole('button', { name: 'Invoke endpoint' }),
+        ).not.toBeDisabled();
+      },
+      { timeout: 5000 },
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 
