@@ -55,9 +55,12 @@ import type {
   ScriptPackage,
   ScriptPromotionDecision,
   ScriptReadModelSnapshot,
+  ScopeScriptSaveObservationRequest,
+  ScopeScriptSaveObservationResult,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
   ScopedScriptDetail,
+  ScopeScriptUpsertAcceptedResponse,
 } from '@/shared/studio/scriptsModels';
 import {
   ScriptsStudioEmptyState,
@@ -654,6 +657,49 @@ function hydrateDraftFromScopeDetail(
     lastPromotion: existing?.lastPromotion || null,
     scopeDetail: detail,
   });
+}
+
+function buildSaveObservationRequest(
+  accepted: ScopeScriptUpsertAcceptedResponse,
+): ScopeScriptSaveObservationRequest {
+  return {
+    revisionId: accepted.acceptedScript.revisionId,
+    definitionActorId: accepted.acceptedScript.definitionActorId,
+    sourceHash: accepted.acceptedScript.sourceHash,
+    proposalId: accepted.acceptedScript.proposalId,
+    expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
+    acceptedAt: accepted.acceptedScript.acceptedAt,
+  };
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function catalogMatchesPromotion(
+  catalog: ScriptCatalogSnapshot | null | undefined,
+  decision: ScriptPromotionDecision,
+): boolean {
+  if (!catalog || !decision.accepted) {
+    return false;
+  }
+
+  if (catalog.activeRevision !== decision.candidateRevision) {
+    return false;
+  }
+
+  if (
+    decision.definitionActorId &&
+    catalog.activeDefinitionActorId !== decision.definitionActorId
+  ) {
+    return false;
+  }
+
+  if (decision.proposalId && catalog.lastProposalId !== decision.proposalId) {
+    return false;
+  }
+
+  return true;
 }
 
 function compactScriptIdList(details: ScopedScriptDetail[] | undefined): string[] {
@@ -1551,46 +1597,142 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       throw new Error('Save is only available after Studio resolves the current scope.');
     }
 
-    const response = await scriptsApi.saveScript(resolvedScopeId, {
+    const persistedSource = serializePersistedSource(selectedDraft.package);
+    const accepted = await scriptsApi.saveScript(resolvedScopeId, {
       scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
       revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
       expectedBaseRevision: selectedDraft.baseRevision || undefined,
-      sourceText: serializePersistedSource(selectedDraft.package),
+      sourceText: persistedSource,
     });
 
     updateSelectedDraft((draft) => ({
       ...draft,
-      scriptId: response.script?.scriptId || draft.scriptId,
-      revision:
-        response.script?.activeRevision || response.source?.revision || draft.revision,
-      baseRevision:
-        response.script?.activeRevision || response.source?.revision || draft.baseRevision,
+      scriptId: accepted.acceptedScript.scriptId || draft.scriptId,
       definitionActorId:
-        response.script?.definitionActorId ||
-        response.source?.definitionActorId ||
-        draft.definitionActorId,
-      lastSourceHash:
-        response.source?.sourceHash ||
-        response.script?.activeSourceHash ||
-        draft.lastSourceHash,
-      scopeDetail: response,
+        accepted.acceptedScript.definitionActorId || draft.definitionActorId,
+      lastSourceHash: accepted.acceptedScript.sourceHash || draft.lastSourceHash,
     }));
-    onSelectScriptId?.(response.script?.scriptId || selectedDraft.scriptId);
+    onSelectScriptId?.(accepted.acceptedScript.scriptId || selectedDraft.scriptId);
 
-    return response;
-  }, [onSelectScriptId, scopeBacked, selectedDraft, updateSelectedDraft]);
+    return accepted;
+  }, [onSelectScriptId, resolvedScopeId, scopeBacked, selectedDraft, updateSelectedDraft]);
+
+  const observeAcceptedSave = React.useCallback(async (
+    accepted: ScopeScriptUpsertAcceptedResponse,
+  ): Promise<ScopeScriptSaveObservationResult> => {
+    const request = buildSaveObservationRequest(accepted);
+    let lastObservation: ScopeScriptSaveObservationResult | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const observation = await scriptsApi.observeSaveScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+          request,
+        );
+        lastObservation = observation;
+        lastError = null;
+        if (observation.isTerminal) {
+          return observation;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+
+      await wait(250);
+    }
+
+    if (lastObservation != null) {
+      return lastObservation;
+    }
+
+    if (lastError != null) {
+      throw lastError;
+    }
+
+    return lastObservation ?? {
+      scopeId: accepted.acceptedScript.scopeId,
+      scriptId: accepted.acceptedScript.scriptId,
+      status: 'pending',
+      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the scope catalog.`,
+      currentScript: null,
+      isTerminal: false,
+    };
+  }, [resolvedScopeId]);
+
+  const waitForPromotionCatalog = React.useCallback(async (
+    decision: ScriptPromotionDecision,
+  ): Promise<ScriptCatalogSnapshot | null> => {
+    if (!decision.accepted) {
+      return null;
+    }
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const catalog = await scriptsApi.getScriptCatalog(
+          resolvedScopeId,
+          decision.scriptId,
+        );
+        if (catalogMatchesPromotion(catalog, decision)) {
+          return catalog;
+        }
+      } catch {
+        // Ignore transient query failures while the catalog is catching up.
+      }
+
+      await wait(250);
+    }
+
+    return null;
+  }, [resolvedScopeId]);
 
   const handleSave = React.useCallback(async () => {
     setSavePending(true);
     setNotice(null);
     try {
-      const response = await saveCurrentDraftToScope();
+      const accepted = await saveCurrentDraftToScope();
+      setNotice({
+        type: 'info',
+        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the scope catalog to catch up.`,
+      });
+      const observation = await observeAcceptedSave(accepted);
       await refreshScopeScripts();
+      if (observation.status === 'rejected') {
+        throw new Error(observation.message);
+      }
+
+      if (observation.status === 'applied') {
+        const detail = await scriptsApi.getScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+        );
+        updateSelectedDraft((draft) => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || draft.scriptId,
+          revision:
+            detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision:
+            detail.script?.activeRevision || detail.source?.revision || draft.baseRevision,
+          definitionActorId:
+            detail.script?.definitionActorId ||
+            detail.source?.definitionActorId ||
+            draft.definitionActorId,
+          lastSourceHash:
+            detail.source?.sourceHash ||
+            detail.script?.activeSourceHash ||
+            draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
+
       setActiveResultTab('save');
       openWorkspaceSection('activity');
       setNotice({
-        type: 'success',
-        message: `Saved ${response.script?.scriptId || selectedDraft?.scriptId || 'script'} into current scope ${response.scopeId}.`,
+        type: observation.status === 'applied' ? 'success' : 'warning',
+        message: observation.status === 'applied'
+          ? `Saved ${accepted.acceptedScript.scriptId} into current scope ${accepted.acceptedScript.scopeId}.`
+          : observation.message,
       });
     } catch (error) {
       setNotice({
@@ -1600,7 +1742,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     } finally {
       setSavePending(false);
     }
-  }, [openWorkspaceSection, refreshScopeScripts, saveCurrentDraftToScope, selectedDraft?.scriptId]);
+  }, [observeAcceptedSave, openWorkspaceSection, refreshScopeScripts, resolvedScopeId, saveCurrentDraftToScope, updateSelectedDraft]);
 
   const handleOpenBindScope = React.useCallback(() => {
     const scopeScript = selectedDraft?.scopeDetail?.script;
@@ -1810,14 +1952,49 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setPromotionModalOpen(false);
       setActiveResultTab('promotion');
       openWorkspaceSection('activity');
+      const observedCatalog = response.accepted
+        ? await waitForPromotionCatalog(response)
+        : null;
+      if (observedCatalog) {
+        const detail = await scriptsApi.getScript(
+          resolvedScopeId,
+          response.scriptId,
+        );
+        updateSelectedDraft((draft) => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || draft.scriptId,
+          revision:
+            detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision:
+            detail.script?.activeRevision ||
+            detail.source?.revision ||
+            draft.baseRevision,
+          definitionActorId:
+            detail.script?.definitionActorId ||
+            detail.source?.definitionActorId ||
+            response.definitionActorId ||
+            draft.definitionActorId,
+          lastSourceHash:
+            detail.source?.sourceHash ||
+            detail.script?.activeSourceHash ||
+            draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
       await refreshScopeScripts();
       await queryClient.invalidateQueries({
         queryKey: ['studio-scripts-proposals'],
       });
       setNotice({
-        type: response.accepted ? 'success' : 'warning',
+        type: response.accepted
+          ? observedCatalog
+            ? 'success'
+            : 'info'
+          : 'warning',
         message: response.accepted
-          ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
+          ? observedCatalog
+            ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
+            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Waiting for the catalog read model to catch up.`
           : response.failureReason || 'Promotion proposal was rejected.',
       });
     } catch (error) {
@@ -1836,9 +2013,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     queryClient,
     openWorkspaceSection,
     refreshScopeScripts,
+    resolvedScopeId,
     scopeBacked,
     selectedDraft,
     updateSelectedDraft,
+    waitForPromotionCatalog,
   ]);
 
   const resetAskAiOutput = React.useCallback(() => {
