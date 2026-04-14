@@ -1,229 +1,279 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import React from 'react';
-import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import ScopeOverviewPage from './overview';
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import React from "react";
+import { scopesApi } from "@/shared/api/scopesApi";
+import { servicesApi } from "@/shared/api/servicesApi";
+import { history } from "@/shared/navigation/history";
+import { buildTeamDetailHref } from "@/shared/navigation/teamRoutes";
+import { studioApi } from "@/shared/studio/api";
+import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
+import ScopeOverviewPage from "./overview";
 
-jest.mock('@/shared/api/scopesApi', () => ({
+jest.mock("@/shared/api/scopesApi", () => ({
   scopesApi: {
-    listWorkflows: jest.fn(async () => [
-      {
-        scopeId: 'scope-a',
-        workflowId: 'workflow-alpha',
-        displayName: 'Workflow Alpha',
-        serviceKey: 'scope-a/default',
-        workflowName: 'direct_chat',
-        actorId: 'actor://workflow-alpha',
-        activeRevisionId: 'rev-2',
-        deploymentStatus: 'Published',
-        deploymentId: 'deploy-1',
-        updatedAt: '2026-03-25T10:00:00Z',
-      },
-    ]),
-    listScripts: jest.fn(async () => [
-      {
-        scopeId: 'scope-a',
-        scriptId: 'script-alpha',
-        catalogActorId: 'catalog://script-alpha',
-        definitionActorId: 'definition://script-alpha',
-        activeRevision: 'script-rev-1',
-        activeSourceHash: 'hash-1',
-        updatedAt: '2026-03-25T10:05:00Z',
-      },
-    ]),
-    getWorkflowDetail: jest.fn(async () => ({
-      available: true,
-      scopeId: 'scope-a',
-      workflow: {
-        scopeId: 'scope-a',
-        workflowId: 'workflow-alpha',
-        displayName: 'Workflow Alpha',
-        serviceKey: 'scope-a/default',
-        workflowName: 'direct_chat',
-        actorId: 'actor://workflow-alpha',
-        activeRevisionId: 'rev-2',
-        deploymentStatus: 'Published',
-        deploymentId: 'deploy-1',
-        updatedAt: '2026-03-25T10:00:00Z',
-      },
-      source: {
-        workflowYaml: 'name: workflow-alpha',
-        definitionActorId: 'definition://workflow-alpha',
-        inlineWorkflowYamls: null,
-      },
-    })),
-    getScriptDetail: jest.fn(async () => ({
-      available: true,
-      scopeId: 'scope-a',
-      script: {
-        scopeId: 'scope-a',
-        scriptId: 'script-alpha',
-        catalogActorId: 'catalog://script-alpha',
-        definitionActorId: 'definition://script-alpha',
-        activeRevision: 'script-rev-1',
-        activeSourceHash: 'hash-1',
-        updatedAt: '2026-03-25T10:05:00Z',
-      },
-      source: {
-        sourceText: 'print(\"hello\")',
-        definitionActorId: 'definition://script-alpha',
-        revision: 'script-rev-1',
-        sourceHash: 'hash-1',
-      },
-    })),
+    listWorkflows: jest.fn(),
+    listScripts: jest.fn(),
+    getWorkflowDetail: jest.fn(),
+    getScriptDetail: jest.fn(),
   },
 }));
 
-jest.mock('@/shared/studio/api', () => ({
+jest.mock("@/shared/api/servicesApi", () => ({
+  servicesApi: {
+    listServices: jest.fn(),
+  },
+}));
+
+jest.mock("@/shared/studio/api", () => ({
   studioApi: {
-    getAuthSession: jest.fn(async () => ({
-      enabled: false,
-      scopeId: 'scope-a',
-      scopeSource: 'nyxid',
-    })),
-    getScopeBinding: jest.fn(async () => ({
-      available: true,
-      scopeId: 'scope-a',
-      serviceId: 'default',
-      displayName: 'Workspace Demo',
-      serviceKey: 'scope-a:default',
-      defaultServingRevisionId: 'rev-2',
-      activeServingRevisionId: 'rev-2',
-      deploymentId: 'deploy-2',
-      deploymentStatus: 'Active',
-      primaryActorId: 'actor://scope-a/default',
-      updatedAt: '2026-03-26T08:00:00Z',
-      revisions: [
-        {
-          revisionId: 'rev-2',
-          implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'hash-2',
-          failureReason: '',
-          isDefaultServing: true,
-          isActiveServing: true,
-          isServingTarget: true,
-          allocationWeight: 100,
-          servingState: 'Active',
-          deploymentId: 'deploy-2',
-          primaryActorId: 'actor://scope-a/default',
-          createdAt: '2026-03-26T07:00:00Z',
-          preparedAt: '2026-03-26T07:01:00Z',
-          publishedAt: '2026-03-26T07:02:00Z',
-          retiredAt: null,
-          workflowName: 'Workspace Demo',
-          workflowDefinitionActorId: 'definition://workflow/workspace-demo',
-          inlineWorkflowCount: 1,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
-        },
-        {
-          revisionId: 'rev-1',
-          implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'hash-1',
-          failureReason: '',
-          isDefaultServing: false,
-          isActiveServing: false,
-          isServingTarget: false,
-          allocationWeight: 0,
-          servingState: 'Inactive',
-          deploymentId: '',
-          primaryActorId: '',
-          createdAt: '2026-03-25T07:00:00Z',
-          preparedAt: '2026-03-25T07:01:00Z',
-          publishedAt: '2026-03-25T07:02:00Z',
-          retiredAt: null,
-          workflowName: 'Workspace Demo v1',
-          workflowDefinitionActorId: 'definition://workflow/workspace-demo-v1',
-          inlineWorkflowCount: 1,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
-        },
-      ],
-    })),
-    activateScopeBindingRevision: jest.fn(async () => ({
-      scopeId: 'scope-a',
-      serviceId: 'default',
-      displayName: 'Workspace Demo',
-      revisionId: 'rev-1',
-    })),
-    retireScopeBindingRevision: jest.fn(async () => ({
-      scopeId: 'scope-a',
-      serviceId: 'default',
-      revisionId: 'rev-1',
-      status: 'Retiring',
-    })),
+    getAuthSession: jest.fn(),
+    getScopeBinding: jest.fn(),
+    activateScopeBindingRevision: jest.fn(),
+    retireScopeBindingRevision: jest.fn(),
   },
 }));
 
-import { studioApi } from '@/shared/studio/api';
+type Deferred<T> = {
+  promise: Promise<T>;
+  reject: (error?: unknown) => void;
+  resolve: (value: T) => void;
+};
 
-describe('ScopeOverviewPage', () => {
+const mockedScopesApi = scopesApi as {
+  getScriptDetail: jest.Mock;
+  getWorkflowDetail: jest.Mock;
+  listScripts: jest.Mock;
+  listWorkflows: jest.Mock;
+};
+const mockedServicesApi = servicesApi as {
+  listServices: jest.Mock;
+};
+const mockedStudioApi = studioApi as {
+  activateScopeBindingRevision: jest.Mock;
+  getAuthSession: jest.Mock;
+  getScopeBinding: jest.Mock;
+  retireScopeBindingRevision: jest.Mock;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return { promise, reject, resolve };
+}
+
+function createAuthSession(overrides = {}) {
+  return {
+    authenticated: true,
+    email: "alpha@example.com",
+    enabled: true,
+    name: "Alpha User",
+    scopeId: "scope-a",
+    scopeSource: "nyxid",
+    ...overrides,
+  };
+}
+
+function createBinding(
+  scopeId = "scope-a",
+  overrides = {},
+) {
+  return {
+    activeServingRevisionId: "rev-1",
+    available: true,
+    defaultServingRevisionId: "rev-1",
+    deploymentId: "deploy-1",
+    deploymentStatus: "Ready",
+    displayName: `Team ${scopeId}`,
+    primaryActorId: `actor://${scopeId}/default`,
+    revisions: [
+      {
+        allocationWeight: 100,
+        artifactHash: "hash-1",
+        createdAt: "2026-04-09T07:00:00Z",
+        deploymentId: "deploy-1",
+        failureReason: "",
+        implementationKind: "workflow",
+        inlineWorkflowCount: 1,
+        isActiveServing: true,
+        isDefaultServing: true,
+        isServingTarget: true,
+        preparedAt: "2026-04-09T07:05:00Z",
+        primaryActorId: `actor://${scopeId}/default`,
+        publishedAt: "2026-04-09T07:10:00Z",
+        retiredAt: null,
+        revisionId: "rev-1",
+        scriptDefinitionActorId: "",
+        scriptId: "",
+        scriptRevision: "",
+        scriptSourceHash: "",
+        servingState: "Ready",
+        staticActorTypeName: "",
+        status: "Published",
+        workflowDefinitionActorId: `definition://${scopeId}/workflow`,
+        workflowName: `${scopeId}-workflow`,
+      },
+    ],
+    scopeId,
+    serviceId: "service-alpha",
+    serviceKey: `${scopeId}:default`,
+    updatedAt: "2026-04-09T08:00:00Z",
+    ...overrides,
+  };
+}
+
+function renderPage(route = "/teams") {
+  window.history.replaceState({}, "", route);
+  return renderWithQueryClient(React.createElement(ScopeOverviewPage));
+}
+
+async function waitForScopeQueries(scopeId: string) {
+  await waitFor(() => {
+    expect(mockedStudioApi.getScopeBinding).toHaveBeenCalledWith(scopeId);
+    expect(mockedScopesApi.listWorkflows).toHaveBeenCalledWith(scopeId);
+    expect(mockedScopesApi.listScripts).toHaveBeenCalledWith(scopeId);
+    expect(mockedServicesApi.listServices).toHaveBeenCalledWith({
+      appId: "default",
+      namespace: "default",
+      tenantId: scopeId,
+    });
+  });
+}
+
+describe("ScopeOverviewPage", () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/scopes/overview?scopeId=scope-a');
     jest.clearAllMocks();
+
+    mockedStudioApi.getAuthSession.mockResolvedValue(createAuthSession());
+    mockedStudioApi.getScopeBinding.mockResolvedValue(createBinding());
+    mockedStudioApi.activateScopeBindingRevision.mockResolvedValue({
+      revisionId: "rev-1",
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+    });
+    mockedStudioApi.retireScopeBindingRevision.mockResolvedValue({
+      revisionId: "rev-1",
+      scopeId: "scope-a",
+      status: "Retiring",
+      serviceId: "service-alpha",
+    });
+    mockedScopesApi.listWorkflows.mockResolvedValue([]);
+    mockedScopesApi.listScripts.mockResolvedValue([]);
+    mockedScopesApi.getWorkflowDetail.mockResolvedValue({
+      available: false,
+      scopeId: "scope-a",
+      source: null,
+      workflow: null,
+    });
+    mockedScopesApi.getScriptDetail.mockResolvedValue({
+      available: false,
+      scopeId: "scope-a",
+      script: null,
+      source: null,
+    });
+    mockedServicesApi.listServices.mockResolvedValue([]);
   });
 
-  it('renders the scope status board and asset summaries', async () => {
-    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
-    expect(await screen.findByText('团队状态')).toBeTruthy();
+  it("auto-loads the resolved team from the current session", async () => {
+    renderPage("/teams");
+
+    await waitForScopeQueries("scope-a");
+
+    expect(await screen.findByDisplayValue("scope-a")).toBeTruthy();
+    expect(screen.getByText("已解析团队")).toBeTruthy();
+    expect(screen.getByText("当前会话已通过 nyxid 解析出这个团队")).toBeTruthy();
+    expect(screen.getAllByText("Team scope-a").length).toBeGreaterThan(0);
+  });
+
+  it("shows auth and binding loading/error states while team context is resolving", async () => {
+    const authSessionDeferred = createDeferred<any>();
+    const bindingDeferred = createDeferred<any>();
+    const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    mockedStudioApi.getAuthSession.mockReturnValue(authSessionDeferred.promise);
+    mockedStudioApi.getScopeBinding.mockReturnValue(bindingDeferred.promise);
+
+    renderPage("/teams");
+
     expect(
-      screen.queryByText(
-        'Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage.',
-      ),
-    ).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
-    expect(await screen.findByText('当前默认成员')).toBeTruthy();
-    expect(await screen.findByText('版本发布')).toBeTruthy();
-    expect(screen.getByText('版本发布')).toBeTruthy();
-    expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
-    expect(await screen.findByText('script-alpha')).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: '打开行为定义' })
+      await screen.findByText("正在解析当前会话的团队上下文。"),
     ).toBeTruthy();
-    expect(screen.getByRole('button', { name: '打开团队资产' })).toBeTruthy();
-    expect(screen.getAllByRole('button', { name: '打开测试入口' }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
-  });
+    expect(mockedStudioApi.getScopeBinding).not.toHaveBeenCalled();
 
-  it('activates a historical revision from the overview page', async () => {
-    renderWithQueryClient(React.createElement(ScopeOverviewPage));
-
-    expect(await screen.findByText('版本发布')).toBeTruthy();
-    const activateButtons = await screen.findAllByRole('button', {
-      name: 'Activate',
-    });
-    fireEvent.click(activateButtons[1]);
+    authSessionDeferred.resolve(createAuthSession());
 
     await waitFor(() => {
-      expect(studioApi.activateScopeBindingRevision).toHaveBeenCalledWith({
-        scopeId: 'scope-a',
-        revisionId: 'rev-1',
-      });
+      expect(mockedStudioApi.getScopeBinding).toHaveBeenCalledWith("scope-a");
     });
-  });
+    expect(await screen.findByText("正在加载团队状态。")).toBeTruthy();
 
-  it('retires a historical revision from the overview page', async () => {
-    renderWithQueryClient(React.createElement(ScopeOverviewPage));
-
-    expect(await screen.findByText('版本发布')).toBeTruthy();
-    const retireButtons = await screen.findAllByRole('button', {
-      name: 'Retire',
-    });
-    fireEvent.click(retireButtons[1]);
+    bindingDeferred.reject(new Error("Binding load failed"));
 
     await waitFor(() => {
-      expect(studioApi.retireScopeBindingRevision).toHaveBeenCalledWith({
-        scopeId: 'scope-a',
-        revisionId: 'rev-1',
-      });
+      expect(screen.getByText("加载团队状态失败。")).toBeTruthy();
+      expect(screen.getByText("Binding load failed")).toBeTruthy();
     });
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("falls back to manual scope input when no team is resolved from the session", async () => {
+    mockedStudioApi.getAuthSession.mockResolvedValue(
+      createAuthSession({
+        scopeId: null,
+        scopeSource: null,
+      }),
+    );
+    mockedStudioApi.getScopeBinding.mockImplementation(async (scopeId) =>
+      createBinding(scopeId),
+    );
+
+    renderPage("/teams");
+
+    expect(
+      await screen.findByText("当前会话里没有自动解析出团队。请手动输入一个 scopeId。"),
+    ).toBeTruthy();
+    expect(mockedStudioApi.getScopeBinding).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByPlaceholderText("输入团队 scopeId"), {
+      target: { value: "scope-manual" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "加载团队状态" }));
+
+    await waitForScopeQueries("scope-manual");
+
+    expect(await screen.findByDisplayValue("scope-manual")).toBeTruthy();
+    expect(screen.getAllByText("Team scope-manual").length).toBeGreaterThan(0);
+  });
+
+  it("navigates team CTAs with buildTeamDetailHref", async () => {
+    const pushSpy = jest.spyOn(history, "push").mockImplementation(() => {});
+
+    renderPage("/teams");
+    await waitForScopeQueries("scope-a");
+
+    fireEvent.click(await screen.findByRole("button", { name: "打开团队详情" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开高级编辑" }));
+
+    expect(pushSpy).toHaveBeenNthCalledWith(
+      1,
+      buildTeamDetailHref({
+        scopeId: "scope-a",
+      }),
+    );
+    expect(pushSpy).toHaveBeenNthCalledWith(
+      2,
+      buildTeamDetailHref({
+        scopeId: "scope-a",
+        tab: "advanced",
+      }),
+    );
   });
 });

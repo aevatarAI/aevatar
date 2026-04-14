@@ -379,6 +379,27 @@ const ScopeOverviewPage: React.FC = () => {
               />
             </AevatarPanel>
 
+            {authSessionQuery.isLoading ? (
+              <Alert
+                showIcon
+                title="正在解析当前会话的团队上下文。"
+                type="info"
+              />
+            ) : null}
+
+            {authSessionQuery.isError ? (
+              <Alert
+                description={
+                  authSessionQuery.error instanceof Error
+                    ? authSessionQuery.error.message
+                    : "当前会话团队解析失败。"
+                }
+                showIcon
+                title="当前会话团队解析失败，仍可手动输入 scopeId。"
+                type="warning"
+              />
+            ) : null}
+
             <AevatarPanel title="团队操作">
               <Space direction="vertical" size={8} style={{ width: "100%" }}>
                 <Button
@@ -466,6 +487,27 @@ const ScopeOverviewPage: React.FC = () => {
                 title="选择一个团队以查看当前默认成员、版本发布和已拥有资产。"
                 showIcon
                 type="info"
+              />
+            ) : null}
+
+            {scopeId && bindingQuery.isLoading ? (
+              <Alert
+                showIcon
+                title="正在加载团队状态。"
+                type="info"
+              />
+            ) : null}
+
+            {scopeId && bindingQuery.isError ? (
+              <Alert
+                description={
+                  bindingQuery.error instanceof Error
+                    ? bindingQuery.error.message
+                    : "加载团队绑定失败。"
+                }
+                showIcon
+                title="加载团队状态失败。"
+                type="error"
               />
             ) : null}
 
