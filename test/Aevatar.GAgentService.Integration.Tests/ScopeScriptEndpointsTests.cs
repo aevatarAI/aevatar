@@ -159,16 +159,14 @@ public sealed class ScopeScriptEndpointsTests
     }
 
     [Fact]
-    public async Task HandleUpsertScriptAsync_ShouldReturnOk_WhenCommandSucceeds()
+    public async Task HandleUpsertScriptAsync_ShouldReturnAcceptedWithLocation_WhenCommandSucceeds()
     {
-        var updatedAt = DateTimeOffset.UtcNow;
         var commandPort = new AcceptingScopeScriptCommandPort
         {
             Result = new ScopeScriptUpsertResult(
-                new ScopeScriptSummary("user-1", "script-1", "catalog-1", "definition-1", "rev-1", "hash-1", updatedAt),
-                "rev-1",
-                "catalog-1",
-                "definition-1"),
+                new ScopeScriptAcceptedSummary("user-1", "script-1", "catalog-1", "definition-1", "rev-1", "hash-1", DateTimeOffset.UtcNow, "user-1:script-1:rev-1", "rev-0"),
+                new ScopeScriptCommandAcceptedHandle("definition-1", "definition-command-1", "definition-correlation-1"),
+                new ScopeScriptCommandAcceptedHandle("catalog-1", "catalog-command-1", "catalog-correlation-1")),
         };
 
         var result = await ScopeScriptEndpoints.HandleUpsertScriptAsync(
@@ -182,9 +180,56 @@ public sealed class ScopeScriptEndpointsTests
         await result.ExecuteAsync(http);
         var body = await ReadBodyAsync(http.Response);
 
-        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        http.Response.StatusCode.Should().Be(StatusCodes.Status202Accepted);
+        http.Response.Headers.Location.ToString().Should().Be("/api/scopes/user-1/scripts/script-1/save-observation");
         body.Should().Contain("\"scriptId\":\"script-1\"");
         body.Should().Contain("\"revisionId\":\"rev-1\"");
+    }
+
+    [Fact]
+    public async Task HandleObserveSaveAsync_ShouldReturnObservationResult()
+    {
+        var observationPort = new RecordingScopeScriptSaveObservationPort
+        {
+            Result = new ScopeScriptSaveObservationResult(
+                "user-1",
+                "script-1",
+                ScopeScriptSaveObservationStatuses.Applied,
+                "Revision 'rev-1' is now active.",
+                new ScopeScriptSummary(
+                    "user-1",
+                    "script-1",
+                    "catalog-1",
+                    "definition-1",
+                    "rev-1",
+                    "hash-1",
+                    DateTimeOffset.UtcNow)),
+        };
+
+        var result = await ScopeScriptEndpoints.HandleObserveSaveAsync(
+            "user-1",
+            "script-1",
+            new ScopeScriptSaveObservationRequest(
+                RevisionId: "rev-1",
+                DefinitionActorId: "definition-1",
+                SourceHash: "hash-1",
+                ProposalId: "user-1:script-1:rev-1",
+                ExpectedBaseRevision: "rev-0",
+                AcceptedAt: DateTimeOffset.UtcNow.AddSeconds(-1)),
+            observationPort,
+            CancellationToken.None);
+
+        var http = CreateHttpContext();
+        await result.ExecuteAsync(http);
+        var body = await ReadBodyAsync(http.Response);
+
+        http.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        body.Should().Contain("\"status\":\"applied\"");
+        body.Should().Contain("\"currentScript\"");
+        observationPort.LastRequest.Should().NotBeNull();
+        observationPort.LastRequest!.ScopeId.Should().Be("user-1");
+        observationPort.LastRequest.ScriptId.Should().Be("script-1");
+        observationPort.LastRequest.Request.RevisionId.Should().Be("rev-1");
     }
 
     [Fact]
@@ -383,6 +428,34 @@ public sealed class ScopeScriptEndpointsTests
 
         public Task<IReadOnlyList<ScriptCatalogEntrySnapshot>> ListCatalogEntriesAsync(string? catalogActorId, int take, CancellationToken ct) =>
             Task.FromResult<IReadOnlyList<ScriptCatalogEntrySnapshot>>([]);
+    }
+
+    private sealed class RecordingScopeScriptSaveObservationPort : IScopeScriptSaveObservationPort
+    {
+        public ObservationCall? LastRequest { get; private set; }
+
+        public ScopeScriptSaveObservationResult Result { get; set; } = new(
+            "user-1",
+            "script-1",
+            ScopeScriptSaveObservationStatuses.Pending,
+            "pending",
+            null);
+
+        public Task<ScopeScriptSaveObservationResult> ObserveAsync(
+            string scopeId,
+            string scriptId,
+            ScopeScriptSaveObservationRequest request,
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            LastRequest = new ObservationCall(scopeId, scriptId, request);
+            return Task.FromResult(Result);
+        }
+
+        public sealed record ObservationCall(
+            string ScopeId,
+            string ScriptId,
+            ScopeScriptSaveObservationRequest Request);
     }
 
     private sealed class FakeScriptingActorAddressResolver : IScriptingActorAddressResolver

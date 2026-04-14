@@ -905,13 +905,14 @@ jest.mock("./components/StudioBootstrapGate", () => ({
 
 jest.mock("./components/StudioShell", () => ({
   __esModule: true,
-  default: ({ children, navItems = [], onSelectPage }: any) => {
+  default: ({ alerts, children, navItems = [], onSelectPage }: any) => {
     const React = require("react");
     return React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "workbench" }, "Workbench"),
+        alerts ? React.createElement("div", { key: "alerts" }, alerts) : null,
         ...navItems.map((item: any) =>
           React.createElement(
             "button",
@@ -931,6 +932,52 @@ jest.mock("./components/StudioShell", () => ({
 
 jest.mock("./components/StudioWorkbenchSections", () => {
   const React = require("react");
+
+  const dedupeStudioWorkflowSummaries = (
+    workflows: readonly any[],
+    selectedWorkflowId = ""
+  ) => {
+    const deduped = new Map<string, any>();
+
+    const readTimestamp = (value: string) => {
+      const timestamp = Date.parse(value);
+      return Number.isFinite(timestamp) ? timestamp : 0;
+    };
+
+    const comparePriority = (left: any, right: any) => {
+      const leftSelected = left.workflowId === selectedWorkflowId;
+      const rightSelected = right.workflowId === selectedWorkflowId;
+      if (leftSelected !== rightSelected) {
+        return leftSelected ? -1 : 1;
+      }
+
+      const updatedDelta =
+        readTimestamp(right.updatedAtUtc) - readTimestamp(left.updatedAtUtc);
+      if (updatedDelta !== 0) {
+        return updatedDelta;
+      }
+
+      if (left.stepCount !== right.stepCount) {
+        return right.stepCount - left.stepCount;
+      }
+
+      return String(left.workflowId ?? "").localeCompare(
+        String(right.workflowId ?? "")
+      );
+    };
+
+    for (const workflow of workflows) {
+      const key =
+        String(workflow.name ?? "").trim().toLowerCase() ||
+        String(workflow.workflowId ?? "").trim().toLowerCase();
+      const current = deduped.get(key);
+      if (!current || comparePriority(workflow, current) < 0) {
+        deduped.set(key, workflow);
+      }
+    }
+
+    return Array.from(deduped.values()).sort(comparePriority);
+  };
 
   const renderNoticeTitle = (
     key: string,
@@ -1483,6 +1530,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
 
   return {
     __esModule: true,
+    dedupeStudioWorkflowSummaries,
     StudioConnectorsPage,
     StudioEditorPage,
     StudioExecutionPage,
@@ -1567,10 +1615,35 @@ describe("StudioPage", () => {
     expect(screen.getByPlaceholderText("Search workflows")).toBeTruthy();
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
-      flex: "1",
       flexDirection: "column",
-      minHeight: "0",
-      overflow: "hidden",
+      minWidth: "0",
+    });
+  });
+
+  it("keeps team context visible and preserved in the Studio route", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
+    );
+
+    expect(await screen.findByText("团队构建器上下文")).toBeTruthy();
+    expect(screen.getByText("团队 A / 成员 Alpha")).toBeTruthy();
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+    });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("scopeId")).toBe("scope-a");
+    expect(searchParams.get("scopeLabel")).toBe("团队 A");
+    expect(searchParams.get("memberId")).toBe("service-alpha");
+    expect(searchParams.get("memberLabel")).toBe("成员 Alpha");
+    expect(searchParams.get("workflow")).toBe("workflow-1");
+    expect(searchParams.get("tab")).toBe("studio");
+
+    fireEvent.click(screen.getByRole("button", { name: "查看行为定义" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
     });
   });
 
@@ -1740,7 +1813,7 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?tab=scripts");
 
     await screen.findByLabelText("Script ID");
-    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
 
     expect(await screen.findByText("Leave Scripts Studio?")).toBeTruthy();
     expect(
@@ -1755,7 +1828,7 @@ describe("StudioPage", () => {
     });
     expect(screen.getByLabelText("Script ID")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
     fireEvent.click(await screen.findByRole("button", { name: "Leave page" }));
 
     expect(await screen.findByText("Current draft")).toBeTruthy();
@@ -1791,6 +1864,37 @@ describe("StudioPage", () => {
     renderStudioPage("/studio?draft=new");
 
     expect(await screen.findByText("Blank Studio draft")).toBeTruthy();
+    expect(
+      (await screen.findByLabelText("Workflow name")) as HTMLInputElement
+    ).toHaveValue("draft");
+    expect(
+      (await screen.findByLabelText("Workflow YAML")) as HTMLTextAreaElement
+    ).toHaveValue("name: draft\nsteps: []\n");
+  });
+
+  it("recovers to a blank draft when the route points at a missing workflow", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+      workflowStorageMode: "scope",
+    });
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValueOnce([]);
+    (studioApi.getWorkflow as jest.Mock).mockRejectedValueOnce(
+      new Error("Not Found")
+    );
+
+    renderStudioPage("/studio?scopeId=scope-1&workflow=draft&tab=studio");
+
+    await waitFor(() => {
+      expect(studioApi.getWorkflow).toHaveBeenCalledWith("draft");
+    });
+
+    await waitFor(() => {
+      expect(window.location.search).toContain("draft=new");
+      expect(window.location.search).not.toContain("workflow=draft");
+    });
+
     expect(
       (await screen.findByLabelText("Workflow name")) as HTMLInputElement
     ).toHaveValue("draft");
@@ -1989,7 +2093,7 @@ describe("StudioPage", () => {
     });
   });
 
-  it("loads discovered GAgent types and the resolved scope binding", async () => {
+  it("loads discovered GAgent types for the resolved scope context", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",

@@ -2,7 +2,8 @@ namespace Aevatar.Scripting.Core.Ports;
 
 public sealed record ScriptDefinitionUpsertResult(
     string ActorId,
-    ScriptDefinitionSnapshot Snapshot);
+    ScriptDefinitionSnapshot Snapshot,
+    ScriptingCommandAcceptedReceipt AcceptedReceipt);
 
 public interface IScriptDefinitionCommandPort
 {

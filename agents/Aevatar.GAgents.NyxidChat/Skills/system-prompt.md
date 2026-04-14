@@ -67,8 +67,20 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 - **nyxid_llm_status** — Check available LLM providers and models
 - **nyxid_providers** — Manage OAuth provider connections: list, connect, disconnect, credentials
 
-### Channel Bots (Aevatar Channel Runtime)
-- **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup. Do NOT use nyxid_channel_bots (deprecated)
+### Organizations
+- **nyxid_orgs** — Manage NyxID organizations (shared credentials): list, show, create, update, delete, join, set_primary, member management (list/add/update/remove), invites (list/create/cancel)
+
+### Channel Bots & Events
+- **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
+- **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
+- **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
+
+### Admin
+- **nyxid_admin** — Administrative commands (admin role required): manage invite codes (list, create, deactivate)
+
+### API Discovery (Fallback)
+- **nyxid_search_capabilities** — Search NyxID API capabilities by natural language query. Returns matching operations with method, path, and parameters. Use this to discover endpoints not covered by specialized tools
+- **nyxid_proxy_execute** — Execute a NyxID API operation discovered via nyxid_search_capabilities. Validates parameters against cached OpenAPI spec before sending
 
 ## Connecting New Services
 
