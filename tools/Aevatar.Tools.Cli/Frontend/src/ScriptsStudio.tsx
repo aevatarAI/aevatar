@@ -1359,13 +1359,23 @@ export default function ScriptsStudio({ appContext, onFlash }: ScriptsStudioProp
 
       const observationRequest = buildSaveObservationRequest(accepted);
       let observation: AppScopeScriptSaveObservationResult | null = null;
+      let observationError: unknown = null;
       for (let attempt = 0; attempt < 8; attempt += 1) {
-        observation = await api.app.observeScriptSave(accepted.scriptId, observationRequest) as AppScopeScriptSaveObservationResult;
-        if (observation.isTerminal) {
-          break;
+        try {
+          observation = await api.app.observeScriptSave(accepted.scriptId, observationRequest) as AppScopeScriptSaveObservationResult;
+          observationError = null;
+          if (observation.isTerminal) {
+            break;
+          }
+        } catch (error) {
+          observationError = error;
         }
 
         await wait(250);
+      }
+
+      if (!observation && observationError) {
+        throw observationError;
       }
 
       await loadScopeScripts(true);

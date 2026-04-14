@@ -264,6 +264,80 @@ describe('ScriptsWorkbenchPage', () => {
     });
   });
 
+  it('uses the latest resolved scope when saving after a scope switch', async () => {
+    function Harness() {
+      const [scopeId, setScopeId] = React.useState(appContext.scopeId);
+
+      return React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            onClick: () => setScopeId('scope-2'),
+          },
+          'Switch scope',
+        ),
+        React.createElement(ScriptsWorkbenchPage, {
+          appContext: {
+            ...appContext,
+            scopeId,
+          },
+        }),
+      );
+    }
+
+    renderWithQueryClient(React.createElement(Harness));
+
+    await screen.findByLabelText('Script ID');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch scope' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.saveScript).toHaveBeenCalledWith(
+        'scope-2',
+        expect.objectContaining({
+          scriptId: expect.any(String),
+        }),
+      );
+    });
+  });
+
+  it('retries transient save-observation failures before surfacing an error', async () => {
+    mockedScriptsApi.observeSaveScript
+      .mockRejectedValueOnce(new Error('temporary timeout'))
+      .mockResolvedValueOnce({
+        scopeId: 'scope-1',
+        scriptId: 'script-1',
+        status: 'applied',
+        message: 'Revision active.',
+        currentScript: {
+          scopeId: 'scope-1',
+          scriptId: 'script-1',
+          catalogActorId: 'catalog-1',
+          definitionActorId: 'definition-1',
+          activeRevision: 'rev-1',
+          activeSourceHash: 'hash-1',
+          updatedAt: '2026-03-24T00:00:00Z',
+        },
+        isTerminal: true,
+      });
+
+    renderPage();
+
+    await screen.findByLabelText('Script ID');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(mockedScriptsApi.observeSaveScript).toHaveBeenCalledTimes(2);
+    });
+    expect(
+      await screen.findByText('Saved script-1 into current scope scope-1.'),
+    ).toBeTruthy();
+  });
+
   it('boots a fresh draft with the app script starter contract', async () => {
     renderPage();
 

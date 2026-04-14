@@ -1615,26 +1615,40 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     onSelectScriptId?.(accepted.acceptedScript.scriptId || selectedDraft.scriptId);
 
     return accepted;
-  }, [onSelectScriptId, scopeBacked, selectedDraft, updateSelectedDraft]);
+  }, [onSelectScriptId, resolvedScopeId, scopeBacked, selectedDraft, updateSelectedDraft]);
 
   const observeAcceptedSave = React.useCallback(async (
     accepted: ScopeScriptUpsertAcceptedResponse,
   ): Promise<ScopeScriptSaveObservationResult> => {
     const request = buildSaveObservationRequest(accepted);
     let lastObservation: ScopeScriptSaveObservationResult | null = null;
+    let lastError: unknown = null;
 
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const observation = await scriptsApi.observeSaveScript(
-        resolvedScopeId,
-        accepted.acceptedScript.scriptId,
-        request,
-      );
-      lastObservation = observation;
-      if (observation.isTerminal) {
-        return observation;
+      try {
+        const observation = await scriptsApi.observeSaveScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+          request,
+        );
+        lastObservation = observation;
+        lastError = null;
+        if (observation.isTerminal) {
+          return observation;
+        }
+      } catch (error) {
+        lastError = error;
       }
 
       await wait(250);
+    }
+
+    if (lastObservation != null) {
+      return lastObservation;
+    }
+
+    if (lastError != null) {
+      throw lastError;
     }
 
     return lastObservation ?? {
