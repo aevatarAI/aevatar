@@ -11,7 +11,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 /// Actor-backed implementation of <see cref="IRoleCatalogStore"/>.
 /// Reads the write actor's state directly.
 /// Writes send commands to the Write GAgent.
-/// Local workspace operations (ImportLocalCatalogAsync) delegate to
+/// Local workspace operations (import, draft backup) delegate to
 /// <see cref="IStudioWorkspaceStore"/>.
 /// Per-scope isolation: each scope gets its own <c>role-catalog-{scopeId}</c> actor.
 /// </summary>
