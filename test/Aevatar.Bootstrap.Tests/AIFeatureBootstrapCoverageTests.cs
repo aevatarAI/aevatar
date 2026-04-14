@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
 using Aevatar.AI.Abstractions.ToolProviders;
@@ -159,6 +160,8 @@ public class AIFeatureBootstrapCoverageTests
         var factory = provider.GetServices<IEventModuleFactory<IEventHandlerContext>>()
             .OfType<VoicePresenceModuleFactory>()
             .Single();
+        provider.GetRequiredService<IVoiceToolCatalog>()
+            .Should().BeOfType<AgentToolVoiceCatalog>();
         provider.GetRequiredService<IVoicePresenceSessionResolver>()
             .Should().BeOfType<InProcessActorVoicePresenceSessionResolver>();
 

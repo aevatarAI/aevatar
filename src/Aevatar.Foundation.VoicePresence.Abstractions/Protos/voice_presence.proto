@@ -18,6 +18,13 @@ message VoiceSessionConfig {
   string instructions = 2;
   int32 sample_rate_hz = 3;
   repeated string tool_names = 4;
+  repeated VoiceToolDefinition tool_definitions = 5;
+}
+
+message VoiceToolDefinition {
+  string name = 1;
+  string description = 2;
+  string parameters_schema = 3;
 }
 
 message VoiceConversationEventInjection {

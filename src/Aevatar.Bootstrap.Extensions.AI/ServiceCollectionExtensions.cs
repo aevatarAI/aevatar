@@ -83,6 +83,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
         services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
+        services.TryAddSingleton<IVoiceToolCatalog, AgentToolVoiceCatalog>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(
@@ -171,6 +172,7 @@ public static class ServiceCollectionExtensions
                     BuildOpenAIVoiceSessionConfig(configuration, options),
                     CloneVoicePresenceModuleOptions(voiceOptions.Module),
                     serviceProvider.GetService<IVoiceToolInvoker>(),
+                    serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>())));
         }
 
@@ -189,6 +191,7 @@ public static class ServiceCollectionExtensions
                     BuildMiniCpmVoiceSessionConfig(configuration, options),
                     CloneVoicePresenceModuleOptions(voiceOptions.Module),
                     serviceProvider.GetService<IVoiceToolInvoker>(),
+                    serviceProvider.GetService<IVoiceToolCatalog>(),
                     serviceProvider.GetService<ILogger<VoicePresenceModule>>())));
         }
 

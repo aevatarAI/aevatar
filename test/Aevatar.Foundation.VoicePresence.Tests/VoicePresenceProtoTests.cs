@@ -51,6 +51,12 @@ public class VoicePresenceProtoTests
             SampleRateHz = 24000,
         };
         sessionConfig.ToolNames.Add("doorbell.open");
+        sessionConfig.ToolDefinitions.Add(new VoiceToolDefinition
+        {
+            Name = "door.close",
+            Description = "close the front door",
+            ParametersSchema = """{"type":"object"}""",
+        });
 
         var parsedControl = VoiceControlFrame.Parser.ParseFrom(controlFrame.ToByteArray());
         parsedControl.ShouldBe(controlFrame);
@@ -63,5 +69,7 @@ public class VoicePresenceProtoTests
             .ShouldContain(nameof(VoiceProviderEvent));
         VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
             .ShouldContain(nameof(VoiceControlFrame));
+        VoicePresenceReflection.Descriptor.MessageTypes.Select(x => x.Name)
+            .ShouldContain(nameof(VoiceToolDefinition));
     }
 }

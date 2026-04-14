@@ -171,7 +171,7 @@ public sealed class MiniCPMRealtimeProvider : IRealtimeVoiceProvider
             _logger.LogInformation("MiniCPM voice provider ignores voice selection '{Voice}'.", session.Voice);
         if (!string.IsNullOrWhiteSpace(session.Instructions))
             _logger.LogInformation("MiniCPM voice provider ignores session instructions.");
-        if (session.ToolNames.Count > 0)
+        if (session.ToolNames.Count > 0 || session.ToolDefinitions.Count > 0)
             _logger.LogInformation("MiniCPM voice provider does not expose provider-side tool registration.");
 
         return Task.CompletedTask;

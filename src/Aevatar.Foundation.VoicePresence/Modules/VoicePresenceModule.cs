@@ -29,6 +29,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private readonly VoiceSessionConfig? _sessionConfig;
     private readonly VoicePresenceModuleOptions _options;
     private readonly IVoiceToolInvoker? _toolInvoker;
+    private readonly IVoiceToolCatalog? _toolCatalog;
     private readonly ILogger _logger;
     private readonly Queue<VoiceConversationEventInjection> _pendingInjections = [];
 
@@ -45,6 +46,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         VoiceSessionConfig? sessionConfig = null,
         VoicePresenceModuleOptions? options = null,
         IVoiceToolInvoker? toolInvoker = null,
+        IVoiceToolCatalog? toolCatalog = null,
         ILogger? logger = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
@@ -52,6 +54,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         _sessionConfig = sessionConfig?.Clone();
         _options = options ?? new VoicePresenceModuleOptions();
         _toolInvoker = toolInvoker;
+        _toolCatalog = toolCatalog;
         _logger = logger ?? NullLogger.Instance;
         StateMachine = new VoicePresenceStateMachine();
         EventPolicy = new VoicePresenceEventPolicy
@@ -118,8 +121,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return;
 
         await _provider.ConnectAsync(_providerConfig, ct);
-        if (_sessionConfig != null)
-            await _provider.UpdateSessionAsync(_sessionConfig, ct);
+        var effectiveSessionConfig = await BuildEffectiveSessionConfigAsync(ct);
+        if (effectiveSessionConfig != null)
+            await _provider.UpdateSessionAsync(effectiveSessionConfig, ct);
 
         IsInitialized = true;
         await FlushPendingEventInjectionsAsync(ct);
@@ -391,6 +395,56 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
 
         await _provider.SendToolResultAsync(request.CallId, resultJson, ct);
+    }
+
+    private async Task<VoiceSessionConfig?> BuildEffectiveSessionConfigAsync(CancellationToken ct)
+    {
+        var effectiveSession = _sessionConfig?.Clone();
+        if (_toolCatalog == null)
+            return effectiveSession;
+
+        IReadOnlyList<VoiceToolDefinition> discoveredTools;
+        try
+        {
+            discoveredTools = await _toolCatalog.DiscoverAsync(ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Voice tool discovery failed during session initialization.");
+            return effectiveSession;
+        }
+
+        if (discoveredTools.Count == 0)
+            return effectiveSession;
+
+        effectiveSession ??= new VoiceSessionConfig();
+        var knownNames = new HashSet<string>(
+            effectiveSession.ToolDefinitions
+                .Select(static definition => definition.Name)
+                .Where(static name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var discoveredTool in discoveredTools)
+        {
+            var toolName = discoveredTool.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(toolName) || !knownNames.Add(toolName))
+                continue;
+
+            effectiveSession.ToolDefinitions.Add(new VoiceToolDefinition
+            {
+                Name = toolName,
+                Description = discoveredTool.Description ?? string.Empty,
+                ParametersSchema = string.IsNullOrWhiteSpace(discoveredTool.ParametersSchema)
+                    ? "{}"
+                    : discoveredTool.ParametersSchema,
+            });
+        }
+
+        return effectiveSession;
     }
 
     private static string BuildToolErrorJson(string message) =>

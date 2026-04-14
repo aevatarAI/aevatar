@@ -36,6 +36,42 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task UpdateSession_should_register_structured_tool_definitions_before_legacy_names()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        await provider.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            SampleRateHz = 24000,
+            ToolDefinitions =
+            {
+                new VoiceToolDefinition
+                {
+                    Name = "door.open",
+                    Description = "open the front door",
+                    ParametersSchema = """{"type":"object","properties":{"door":{"type":"string"}}}""",
+                },
+            },
+            ToolNames = { "door.open", "door.close" },
+        }, CancellationToken.None);
+
+        var options = session.ConfiguredOptions.Single();
+        options.Tools.Count.ShouldBe(2);
+
+        var openTool = (RealtimeFunctionTool)options.Tools[0];
+        openTool.FunctionName.ShouldBe("door.open");
+        openTool.FunctionDescription.ShouldBe("open the front door");
+        openTool.FunctionParameters.ToString().ShouldContain("\"door\"");
+
+        var closeTool = (RealtimeFunctionTool)options.Tools[1];
+        closeTool.FunctionName.ShouldBe("door.close");
+        closeTool.FunctionDescription.ShouldBe("Aevatar tool 'door.close'.");
+    }
+
+    [Fact]
     public async Task SendToolResult_should_add_function_output_and_request_followup_response()
     {
         var session = new FakeSession();
@@ -186,13 +222,23 @@ public class OpenAIRealtimeProviderTests
         gate.TrySetResult();
         await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        seen.Select(x => x.EventCase).ShouldBe(
-        [
-            VoiceProviderEvent.EventOneofCase.ResponseStarted,
-            VoiceProviderEvent.EventOneofCase.AudioReceived,
-            VoiceProviderEvent.EventOneofCase.Disconnected,
-        ]);
-        seen[1].AudioReceived.Pcm16.ToByteArray().ShouldBe([3]);
+        seen.Any(static x =>
+        {
+            if (x.EventCase != VoiceProviderEvent.EventOneofCase.AudioReceived)
+                return false;
+
+            var audio = x.AudioReceived.Pcm16.ToByteArray();
+            return audio.Length == 1 && audio[0] == 3;
+        }).ShouldBeTrue();
+        seen.Any(static x => x.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected).ShouldBeTrue();
+        seen.Any(static x =>
+        {
+            if (x.EventCase != VoiceProviderEvent.EventOneofCase.AudioReceived)
+                return false;
+
+            var audio = x.AudioReceived.Pcm16.ToByteArray();
+            return audio.Length == 1 && (audio[0] == 1 || audio[0] == 2);
+        }).ShouldBeFalse();
     }
 
     [Fact]

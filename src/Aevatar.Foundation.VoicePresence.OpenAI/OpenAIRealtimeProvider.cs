@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using System.Text.Json;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.OpenAI.Internal;
 using Google.Protobuf;
@@ -293,13 +294,29 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         };
         options.OutputModalities.Add(RealtimeOutputModality.Audio);
 
+        var registeredNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var definition in session.ToolDefinitions)
+        {
+            var toolName = definition.Name?.Trim();
+            if (string.IsNullOrWhiteSpace(toolName) || !registeredNames.Add(toolName))
+                continue;
+
+            options.Tools.Add(new RealtimeFunctionTool(toolName)
+            {
+                FunctionDescription = string.IsNullOrWhiteSpace(definition.Description)
+                    ? $"Aevatar tool '{toolName}'."
+                    : definition.Description.Trim(),
+                FunctionParameters = BuildToolParameters(definition.ParametersSchema, toolName),
+            });
+        }
+
         for (var i = 0; i < session.ToolNames.Count; i++)
         {
             var toolName = session.ToolNames[i].Trim();
-            if (string.IsNullOrWhiteSpace(toolName))
+            if (string.IsNullOrWhiteSpace(toolName) || !registeredNames.Add(toolName))
                 continue;
 
-            // Phase 2 only needs provider-side tool registration. Tool execution wiring lands in phase 4.
             options.Tools.Add(new RealtimeFunctionTool(toolName)
             {
                 FunctionDescription = $"Aevatar tool '{toolName}'.",
@@ -311,6 +328,23 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
             options.ToolChoice = new RealtimeToolChoice(RealtimeDefaultToolChoice.Auto);
 
         return options;
+    }
+
+    private BinaryData BuildToolParameters(string? parametersSchema, string toolName)
+    {
+        if (string.IsNullOrWhiteSpace(parametersSchema))
+            return PermissiveToolSchema;
+
+        try
+        {
+            using var _ = JsonDocument.Parse(parametersSchema);
+            return BinaryData.FromString(parametersSchema);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Voice tool schema for {ToolName} is invalid JSON. Falling back to permissive schema.", toolName);
+            return PermissiveToolSchema;
+        }
     }
 
     private RealtimeConversationSessionInputAudioOptions BuildInputAudioOptions()

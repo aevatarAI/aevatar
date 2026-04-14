@@ -337,10 +337,34 @@ public class VoicePresenceModuleTests
         provider.Disposed.ShouldBeTrue();
     }
 
+    [Fact]
+    public async Task InitializeAsync_should_merge_discovered_tool_definitions_into_session()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(
+            provider,
+            toolCatalog: new StaticVoiceToolCatalog(
+            [
+                new VoiceToolDefinition
+                {
+                    Name = "door.close",
+                    Description = "close the front door",
+                    ParametersSchema = """{"type":"object"}""",
+                },
+            ]));
+
+        await module.InitializeAsync(CancellationToken.None);
+
+        provider.LastSession.ShouldNotBeNull();
+        provider.LastSession.ToolNames.ShouldContain("doorbell.open");
+        provider.LastSession.ToolDefinitions.Select(static x => x.Name).ShouldContain("door.close");
+    }
+
     private static VoicePresenceModule CreateModule(
         RecordingVoiceProvider provider,
         string? linkId = null,
         IVoiceToolInvoker? toolInvoker = null,
+        IVoiceToolCatalog? toolCatalog = null,
         VoicePresenceModuleOptions? options = null)
     {
         return new VoicePresenceModule(
@@ -363,7 +387,8 @@ public class VoicePresenceModuleTests
             {
                 LinkId = linkId,
             },
-            toolInvoker);
+            toolInvoker,
+            toolCatalog);
     }
 
     private static EventEnvelope CreateEnvelope(IMessage payload)
@@ -386,6 +411,7 @@ public class VoicePresenceModuleTests
         public int CancelCalls { get; private set; }
 
         public bool Disposed { get; private set; }
+        public VoiceSessionConfig? LastSession { get; private set; }
 
         public List<byte[]> AudioFrames { get; } = [];
         public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
@@ -431,9 +457,9 @@ public class VoicePresenceModuleTests
 
         public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct)
         {
-            _ = session;
             _ = ct;
             UpdateSessionCalls++;
+            LastSession = session.Clone();
             return Task.CompletedTask;
         }
 
@@ -441,6 +467,15 @@ public class VoicePresenceModuleTests
         {
             Disposed = true;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class StaticVoiceToolCatalog(IReadOnlyList<VoiceToolDefinition> tools) : IVoiceToolCatalog
+    {
+        public Task<IReadOnlyList<VoiceToolDefinition>> DiscoverAsync(CancellationToken ct = default)
+        {
+            _ = ct;
+            return Task.FromResult(tools);
         }
     }
 
