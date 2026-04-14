@@ -304,12 +304,81 @@ public sealed class NyxIdApiClient
     public Task<string> DeleteConversationRouteAsync(string token, string id, CancellationToken ct) =>
         DeleteAsync(token, $"/api/v1/channel-conversations/{Uri.EscapeDataString(id)}", ct);
 
+    // ─── Organizations ───
+
+    public Task<string> ListOrgsAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/orgs", ct);
+
+    public Task<string> GetOrgAsync(string token, string id, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> CreateOrgAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/orgs", body, ct);
+
+    public Task<string> UpdateOrgAsync(string token, string id, string body, CancellationToken ct) =>
+        PatchAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(id)}", body, ct);
+
+    public Task<string> DeleteOrgAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(id)}", ct);
+
+    public Task<string> JoinOrgAsync(string token, string nonce, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/orgs/join/{Uri.EscapeDataString(nonce)}", "{}", ct);
+
+    public Task<string> SetPrimaryOrgAsync(string token, string body, CancellationToken ct) =>
+        PatchAsync(token, "/api/v1/users/me/primary-org", body, ct);
+
+    // ─── Org Members ───
+
+    public Task<string> ListOrgMembersAsync(string token, string orgId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members", ct);
+
+    public Task<string> AddOrgMemberAsync(string token, string orgId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members", body, ct);
+
+    public Task<string> UpdateOrgMemberAsync(string token, string orgId, string memberId, string body, CancellationToken ct) =>
+        PatchAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members/{Uri.EscapeDataString(memberId)}", body, ct);
+
+    public Task<string> RemoveOrgMemberAsync(string token, string orgId, string memberId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/members/{Uri.EscapeDataString(memberId)}", ct);
+
+    // ─── Org Invites ───
+
+    public Task<string> ListOrgInvitesAsync(string token, string orgId, CancellationToken ct) =>
+        GetAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/invites", ct);
+
+    public Task<string> CreateOrgInviteAsync(string token, string orgId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/invites", body, ct);
+
+    public Task<string> CancelOrgInviteAsync(string token, string orgId, string inviteId, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/orgs/{Uri.EscapeDataString(orgId)}/invites/{Uri.EscapeDataString(inviteId)}", ct);
+
+    // ─── Channel Events ───
+
+    public Task<string> PushChannelEventAsync(string token, string conversationId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/channel-events/{Uri.EscapeDataString(conversationId)}", body, ct);
+
+    // ─── Admin Invite Codes ───
+
+    public Task<string> ListInviteCodesAsync(string token, CancellationToken ct) =>
+        GetAsync(token, "/api/v1/admin/invite-codes", ct);
+
+    public Task<string> CreateInviteCodeAsync(string token, string body, CancellationToken ct) =>
+        PostAsync(token, "/api/v1/admin/invite-codes", body, ct);
+
+    public Task<string> DeactivateInviteCodeAsync(string token, string id, CancellationToken ct) =>
+        DeleteAsync(token, $"/api/v1/admin/invite-codes/{Uri.EscapeDataString(id)}", ct);
+
+    // ─── API Key Bindings ───
+
+    public Task<string> BindApiKeyAsync(string token, string keyId, string body, CancellationToken ct) =>
+        PostAsync(token, $"/api/v1/api-keys/{Uri.EscapeDataString(keyId)}/bindings", body, ct);
+
     // ─── HTTP helpers ───
 
     private string GetBaseUrl() =>
         _options.BaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("NyxID base URL is not configured.");
 
-    private async Task<string> GetAsync(string token, string path, CancellationToken ct)
+    internal async Task<string> GetAsync(string token, string path, CancellationToken ct)
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -321,6 +390,15 @@ public sealed class NyxIdApiClient
     {
         var url = $"{GetBaseUrl()}{path}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await SendAsync(request, ct);
+    }
+
+    private async Task<string> PatchAsync(string token, string path, string body, CancellationToken ct)
+    {
+        var url = $"{GetBaseUrl()}{path}";
+        using var request = new HttpRequestMessage(HttpMethod.Patch, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         return await SendAsync(request, ct);

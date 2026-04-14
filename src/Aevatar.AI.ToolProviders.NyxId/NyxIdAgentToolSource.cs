@@ -55,7 +55,10 @@ public sealed class NyxIdAgentToolSource : IAgentToolSource
             new NyxIdNotificationsTool(_client),
             new NyxIdLlmStatusTool(_client),
             new NyxIdProvidersTool(_client),
-            new NyxIdChannelBotsDeprecatedStub(),
+            new NyxIdChannelBotsTool(_client),
+            new NyxIdOrgTool(_client),
+            new NyxIdChannelEventsTool(_client),
+            new NyxIdAdminTool(_client),
         ];
 
         _logger.LogInformation(
