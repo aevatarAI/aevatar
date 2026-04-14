@@ -25,7 +25,10 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
+    // Activation-local snapshot cache for the current runtime capability instance.
+    // This cache is non-durable and only short-circuits immediate follow-up calls
+    // that already carry write-side authority facts in the same interaction.
+    private readonly Dictionary<string, ScriptDefinitionSnapshot> _activationLocalDefinitionSnapshots =
         new(StringComparer.Ordinal);
     private readonly string _scopeId;
     private readonly string _runId;
@@ -239,7 +242,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         var decision = await _proposalPort.ProposeAsync(proposal, ct);
         if (decision.Accepted && decision.DefinitionSnapshot != null)
         {
-            RememberDefinitionSnapshot(
+            RememberTransientDefinitionSnapshot(
                 decision.DefinitionActorId,
                 decision.CandidateRevision,
                 decision.DefinitionSnapshot.ToSnapshot());
@@ -264,26 +267,28 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             definitionActorId,
             _scopeId,
             ct);
-        RememberDefinitionSnapshot(result.ActorId, result.Snapshot.Revision, result.Snapshot);
+        RememberTransientDefinitionSnapshot(result.ActorId, result.Snapshot.Revision, result.Snapshot);
         return result.ActorId;
     }
 
-    private void RememberDefinitionSnapshot(
+    private void RememberTransientDefinitionSnapshot(
         string definitionActorId,
         string scriptRevision,
         ScriptDefinitionSnapshot? snapshot)
     {
+        // This cache is bounded to the capability lifetime and must not be treated
+        // as cross-request or cross-node authority state.
         if (snapshot == null || string.IsNullOrWhiteSpace(definitionActorId))
             return;
 
-        _definitionSnapshots[BuildDefinitionSnapshotKey(definitionActorId, scriptRevision)] = snapshot;
+        _activationLocalDefinitionSnapshots[BuildDefinitionSnapshotKey(definitionActorId, scriptRevision)] = snapshot;
     }
 
-    private ScriptDefinitionSnapshot? ResolveDefinitionSnapshot(
+    private ScriptDefinitionSnapshot? TryGetTransientDefinitionSnapshot(
         string definitionActorId,
         string scriptRevision)
     {
-        _definitionSnapshots.TryGetValue(
+        _activationLocalDefinitionSnapshots.TryGetValue(
             BuildDefinitionSnapshotKey(definitionActorId, scriptRevision),
             out var snapshot);
         return snapshot;
@@ -302,12 +307,12 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string scriptRevision,
         CancellationToken ct)
     {
-        var snapshot = ResolveDefinitionSnapshot(definitionActorId, scriptRevision);
+        var snapshot = TryGetTransientDefinitionSnapshot(definitionActorId, scriptRevision);
         if (snapshot != null)
             return snapshot;
 
         snapshot = await _definitionSnapshotPort.GetRequiredAsync(definitionActorId, scriptRevision, ct);
-        RememberDefinitionSnapshot(definitionActorId, snapshot.Revision, snapshot);
+        RememberTransientDefinitionSnapshot(definitionActorId, snapshot.Revision, snapshot);
         return snapshot;
     }
 }

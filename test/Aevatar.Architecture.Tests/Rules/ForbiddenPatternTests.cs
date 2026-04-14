@@ -13,8 +13,8 @@ public class ForbiddenPatternTests
     {
         // Application/Projection middle layers must not maintain entity/actor/run/session ID
         // to context or fact-state in-process mappings. This is a simplified version that
-        // checks for ConcurrentDictionary field declarations in middle-layer types
-        // that are not InMemory infrastructure.
+        // checks field type + field name together in middle-layer types that are not
+        // InMemory infrastructure.
         var middleLayerNamespacePatterns = new[]
         {
             @"Aevatar\.CQRS\.Projection\.Core(\..+)?",
@@ -32,7 +32,8 @@ public class ForbiddenPatternTests
                 .AreDeclaredIn(
                     Types().That().ResideInNamespaceMatching(pattern)
                         .And().DoNotHaveNameContaining("InMemory"))
-                .And().HaveNameContaining("ConcurrentDictionary")
+                .And().HaveFullNameMatching(@".*(ConcurrentDictionary|Dictionary|HashSet|Queue)<.*")
+                .And().HaveNameMatching(".*(?i)(actor|entity|run|session).*")
                 .Should().NotExist()
                 .Because($"middle-layer ID-mapping in-memory state is forbidden in {pattern}");
             rule.Check(Arch);
