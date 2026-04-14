@@ -156,6 +156,30 @@ public class BuildConnectedServicesContextTests
         handler.LastRequestUri.Should().Be("https://nyx.test/api/v1/proxy/services/my-api/openapi.json");
     }
 
+    [Fact]
+    public async Task BuildContext_DeduplicatesHardcodedHints_ForSamePattern()
+    {
+        var handler = new FakeHttpHandler(statusCode: HttpStatusCode.NotFound);
+        var http = new HttpClient(handler);
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var specCache = new ConnectedServiceSpecCache(options, http);
+
+        var servicesJson = """
+            {
+              "services": [
+                { "slug": "bot-telegram-one", "name": "Telegram Bot 1" },
+                { "slug": "bot-telegram-two", "name": "Telegram Bot 2" }
+              ]
+            }
+            """;
+
+        var context = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            servicesJson, specCache, "token", CancellationToken.None);
+
+        var count = context.Split("### Telegram Bot").Length - 1;
+        count.Should().Be(1, "duplicate hints for same pattern should be deduplicated");
+    }
+
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
         private readonly string? _responseBody;

@@ -160,11 +160,12 @@ Use the code_execute tool for a simpler interface.
         CancellationToken ct = default)
     {
         var sb = new StringBuilder();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var svc in services)
         {
-            if (!seen.Add(svc.Slug)) continue;
+            if (!seenSlugs.Add(svc.Slug)) continue;
 
             string? hint = null;
 
@@ -178,6 +179,10 @@ Use the code_execute tool for a simpler interface.
             hint ??= GetHint(svc.Slug);
 
             if (hint is null) continue;
+
+            // Deduplicate by title (e.g., multiple telegram bots share the same hardcoded hint)
+            var title = hint.Split('\n', 2)[0].Trim();
+            if (!seenTitles.Add(title)) continue;
 
             sb.Append(hint.TrimEnd());
             sb.AppendLine();

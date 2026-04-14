@@ -68,7 +68,7 @@ public class ConnectedServiceSpecCacheTests
     }
 
     [Fact]
-    public async Task GetOrFetchAsync_SendsBearerToken()
+    public async Task GetOrFetchAsync_SendsBearerToken_ToTrustedHost()
     {
         var handler = new FakeHttpHandler(GithubSpec);
         var http = new HttpClient(handler);
@@ -78,6 +78,46 @@ public class ConnectedServiceSpecCacheTests
         await cache.GetOrFetchAsync("github", null, "my-secret-token");
 
         handler.LastAuthHeader.Should().Be("Bearer my-secret-token");
+    }
+
+    [Fact]
+    public async Task GetOrFetchAsync_OmitsBearerToken_ForUntrustedHost()
+    {
+        var handler = new FakeHttpHandler(GithubSpec);
+        var http = new HttpClient(handler);
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var cache = new ConnectedServiceSpecCache(options, http);
+
+        await cache.GetOrFetchAsync("github", "https://evil.test/spec.json", "my-secret-token");
+
+        handler.LastAuthHeader.Should().BeNull("token must not be sent to untrusted hosts");
+    }
+
+    [Fact]
+    public async Task GetOrFetchAsync_DifferentSpecUrls_CacheSeparately()
+    {
+        var handler = new FakeHttpHandler(GithubSpec);
+        var http = new HttpClient(handler);
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var cache = new ConnectedServiceSpecCache(options, http);
+
+        await cache.GetOrFetchAsync("github", "https://nyx.test/v1/spec.json", "token");
+        handler.RequestCount.Should().Be(1);
+
+        await cache.GetOrFetchAsync("github", "https://nyx.test/v2/spec.json", "token");
+        handler.RequestCount.Should().Be(2, "different spec URLs must not share cache entry");
+    }
+
+    [Fact]
+    public void IsTrustedHost_MatchesBaseUrl()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test:443" };
+        using var cache = new ConnectedServiceSpecCache(options);
+
+        cache.IsTrustedHost("https://nyx.test:443/api/v1/spec.json").Should().BeTrue();
+        cache.IsTrustedHost("https://nyx.test/api/v1/spec.json").Should().BeTrue();
+        cache.IsTrustedHost("https://evil.test/api/v1/spec.json").Should().BeFalse();
+        cache.IsTrustedHost("http://nyx.test/api/v1/spec.json").Should().BeFalse("scheme mismatch");
     }
 
     [Fact]

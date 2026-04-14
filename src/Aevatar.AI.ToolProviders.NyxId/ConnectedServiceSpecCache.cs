@@ -34,12 +34,13 @@ public sealed class ConnectedServiceSpecCache : IDisposable
         if (string.IsNullOrWhiteSpace(slug))
             return null;
 
-        if (_cache.TryGetValue(slug, out var entry) && !entry.IsExpired)
-            return entry.Operations;
-
         var url = ResolveSpecUrl(slug, specUrl);
         if (url is null)
             return null;
+
+        var cacheKey = $"{slug}|{url}";
+        if (_cache.TryGetValue(cacheKey, out var entry) && !entry.IsExpired)
+            return entry.Operations;
 
         try
         {
@@ -47,7 +48,10 @@ public sealed class ConnectedServiceSpecCache : IDisposable
             cts.CancelAfter(FetchTimeout);
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            // Only attach bearer token to URLs on the NyxID host to prevent token leakage
+            if (IsTrustedHost(url))
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
             using var response = await _http.SendAsync(request, cts.Token);
             if (!response.IsSuccessStatusCode)
@@ -61,7 +65,7 @@ public sealed class ConnectedServiceSpecCache : IDisposable
             var json = await response.Content.ReadAsStringAsync(cts.Token);
             var operations = OpenApiSpecParser.ParseSpec(json, slug);
 
-            _cache[slug] = new CacheEntry(operations, DateTime.UtcNow + CacheTtl);
+            _cache[cacheKey] = new CacheEntry(operations, DateTime.UtcNow + CacheTtl);
             _logger.LogInformation(
                 "ConnectedServiceSpecCache: cached {Count} operations for '{Slug}'",
                 operations.Length, slug);
@@ -78,6 +82,20 @@ public sealed class ConnectedServiceSpecCache : IDisposable
             _logger.LogDebug(ex, "ConnectedServiceSpecCache: spec fetch for '{Slug}' failed", slug);
             return null;
         }
+    }
+
+    internal bool IsTrustedHost(string url)
+    {
+        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+            return false;
+
+        var baseUri = new Uri(_options.BaseUrl.TrimEnd('/'));
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var targetUri))
+            return false;
+
+        return string.Equals(baseUri.Host, targetUri.Host, StringComparison.OrdinalIgnoreCase)
+               && baseUri.Port == targetUri.Port
+               && string.Equals(baseUri.Scheme, targetUri.Scheme, StringComparison.OrdinalIgnoreCase);
     }
 
     private string? ResolveSpecUrl(string slug, string? specUrl)
