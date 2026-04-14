@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { loadDraftRunPayload } from '@/shared/runs/draftRunSession';
 import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import ScopeInvokePage from './invoke';
+import ScopeInvokePage, { buildServiceOptions } from './invoke';
 
 jest.mock('@ant-design/pro-components', () => {
   const mockReact = require('react');
@@ -408,6 +408,80 @@ describe('ScopeInvokePage', () => {
     });
   });
 
+  it('deduplicates repeated service ids before building picker options', () => {
+    expect(
+      buildServiceOptions(
+        [
+          {
+            serviceKey: 'scope-a:default:default:hello-chat:older',
+            tenantId: 'scope-a',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'hello-chat',
+            displayName: 'hello-chat',
+            defaultServingRevisionId: 'rev-1',
+            activeServingRevisionId: 'rev-1',
+            deploymentId: 'deploy-1',
+            primaryActorId: 'actor://scope-a/hello-chat/1',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'chat',
+                kind: 'chat',
+                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+                description: 'Chat endpoint.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-04-09T09:00:00Z',
+          },
+          {
+            serviceKey: 'scope-a:default:default:hello-chat:newer',
+            tenantId: 'scope-a',
+            appId: 'default',
+            namespace: 'default',
+            serviceId: 'hello-chat',
+            displayName: 'hello-chat',
+            defaultServingRevisionId: 'rev-2',
+            activeServingRevisionId: 'rev-2',
+            deploymentId: 'deploy-2',
+            primaryActorId: 'actor://scope-a/hello-chat/2',
+            deploymentStatus: 'Active',
+            endpoints: [
+              {
+                endpointId: 'chat',
+                displayName: 'chat',
+                kind: 'chat',
+                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+                description: 'Chat endpoint.',
+              },
+              {
+                endpointId: 'health',
+                displayName: 'health',
+                kind: 'command',
+                requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
+                responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+                description: 'Health endpoint.',
+              },
+            ],
+            policyIds: [],
+            updatedAt: '2026-04-09T09:30:00Z',
+          },
+        ],
+        'hello-chat',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        serviceId: 'hello-chat',
+        serviceKey: 'scope-a:default:default:hello-chat:newer',
+        activeServingRevisionId: 'rev-2',
+      }),
+    ]);
+  });
+
   it('invokes a non-chat endpoint for the selected scope service', async () => {
     (servicesApi.listServices as jest.Mock).mockResolvedValue([
       {
@@ -451,7 +525,12 @@ describe('ScopeInvokePage', () => {
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
-    expect(await screen.findByText('Invoke Lab')).toBeTruthy();
+    expect(await screen.findByText('Legacy Invoke Lab')).toBeTruthy();
+    expect(
+      await screen.findByText(
+        'Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links.',
+      ),
+    ).toBeTruthy();
     expect(
       screen.queryByText(
         'Invoke Lab keeps parameters on the left, execution on the main stage, and deeper context in the drawer or lab console.',
@@ -625,6 +704,57 @@ describe('ScopeInvokePage', () => {
     );
   });
 
+  it('keeps the invoke lab workspace constrained so the chat composer stays visible', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([
+      {
+        serviceKey: 'scope-a:default:default:default',
+        tenantId: 'scope-a',
+        appId: 'default',
+        namespace: 'default',
+        serviceId: 'default',
+        displayName: 'Workspace Demo',
+        defaultServingRevisionId: 'rev-2',
+        activeServingRevisionId: 'rev-2',
+        deploymentId: 'deploy-2',
+        primaryActorId: 'actor://scope-a/default',
+        deploymentStatus: 'Active',
+        endpoints: [
+          {
+            endpointId: 'chat',
+            displayName: 'chat',
+            kind: 'chat',
+            requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+            responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+            description: 'Chat with the published scope service.',
+          },
+        ],
+        policyIds: [],
+        updatedAt: '2026-03-26T08:00:00Z',
+      },
+    ]);
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    const viewport = await screen.findByTestId('invoke-lab-workspace-viewport');
+    const grid = await screen.findByTestId('invoke-lab-workspace-grid');
+
+    expect(viewport).toHaveStyle({
+      flex: '1 1 auto',
+      minHeight: '0',
+      overflow: 'hidden',
+    });
+    expect(grid).toHaveStyle({
+      alignItems: 'stretch',
+      height: '100%',
+      minHeight: '0',
+    });
+    expect(
+      await screen.findByPlaceholderText(
+        'Describe the task, ask a question, or paste the next operator instruction.',
+      ),
+    ).toBeTruthy();
+  });
+
   it('renders semantic chat output for reasoning, steps, and tool activity', async () => {
     (servicesApi.listServices as jest.Mock).mockResolvedValue([
       {
@@ -785,7 +915,7 @@ describe('ScopeInvokePage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No published project service is selected yet.'),
+        screen.getByText('No published team service is selected yet.'),
       ).toBeTruthy();
     });
 
@@ -831,7 +961,7 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    expect(await screen.findByText('Invoke Lab')).toBeTruthy();
+    expect(await screen.findByText('Legacy Invoke Lab')).toBeTruthy();
     fireEvent.click(
       screen.getAllByRole('button', { name: 'Browse services' })[0],
     );

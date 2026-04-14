@@ -186,11 +186,16 @@ export function resolveAevatarSemanticTone(
       return "success";
     }
 
-    if (normalized === "delayed" || normalized === "disconnected") {
+    if (normalized === "unavailable" || normalized === "disconnected") {
       return "error";
     }
 
-    if (normalized === "snapshot_available") {
+    if (
+      normalized === "delayed" ||
+      normalized === "partial" ||
+      normalized === "seeded" ||
+      normalized === "snapshot_available"
+    ) {
       return "warning";
     }
 

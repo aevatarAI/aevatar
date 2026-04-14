@@ -194,6 +194,9 @@ public sealed class WorkflowCompatibilityProfile
                 comparer,
                 new Dictionary<string, string>(comparer)
                 {
+                    ["llm"] = "llm_call",
+                    ["chat"] = "llm_call",
+                    ["task"] = "llm_call",
                     ["loop"] = "while",
                     ["sub_workflow"] = "workflow_call",
                     ["for_each"] = "foreach",

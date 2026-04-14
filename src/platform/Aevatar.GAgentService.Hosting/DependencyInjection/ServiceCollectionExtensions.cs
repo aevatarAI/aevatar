@@ -75,6 +75,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ScopeScriptQueryApplicationService>();
         services.TryAddSingleton<IScopeScriptQueryPort>(sp => sp.GetRequiredService<ScopeScriptQueryApplicationService>());
         services.TryAddSingleton<IScopeScriptCommandPort, ScopeScriptCommandApplicationService>();
+        services.TryAddSingleton<IScopeScriptSaveObservationPort, ScopeScriptSaveObservationService>();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, GAgentServiceDemoBootstrapHostedService>());
         return services;
     }

@@ -49,6 +49,7 @@ internal static class StudioHostingServiceCollectionExtensions
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetService<IScopeScriptQueryPort>(),
             sp.GetService<IScopeScriptCommandPort>(),
+            sp.GetService<IScopeScriptSaveObservationPort>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptDefinitionSnapshotPort>(),
             sp.GetService<Aevatar.Scripting.Application.IScriptEvolutionApplicationService>(),
             sp.GetService<Aevatar.Scripting.Core.Ports.IScriptCatalogQueryPort>(),
