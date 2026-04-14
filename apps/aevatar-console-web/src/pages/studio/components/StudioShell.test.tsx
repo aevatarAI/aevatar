@@ -1,107 +1,87 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import React from "react";
-import StudioShell, { type StudioShellNavItem } from "./StudioShell";
+import { fireEvent, render, screen } from '@testing-library/react';
+import React from 'react';
+import StudioShell, { type StudioShellNavItem } from './StudioShell';
 
-describe("StudioShell", () => {
+describe('StudioShell', () => {
   const navItems: readonly StudioShellNavItem[] = [
     {
-      key: "workflows",
-      label: "Workflows",
-      description: "Browse workspace workflows and start new drafts.",
+      key: 'workflows',
+      label: '行为定义',
+      description: 'Browse workspace workflows and start new drafts.',
       count: 3,
     },
     {
-      key: "studio",
-      label: "Studio",
-      description: "Edit the active draft and inspect execution runs.",
+      key: 'studio',
+      label: '团队构建器',
+      description: 'Edit the active draft and inspect execution runs.',
       count: 0,
     },
     {
-      key: "roles",
-      label: "Roles",
-      description: "Edit, import, and save workflow role definitions.",
+      key: 'execution',
+      label: '测试运行',
+      description: 'Inspect active workflow runs.',
+    },
+    {
+      key: 'roles',
+      label: 'Agent 角色',
+      description: 'Edit, import, and save workflow role definitions.',
     },
   ];
 
-  it("renders a collapsible icon rail and forwards selection", () => {
+  it('renders the fixed icon rail and forwards navigation selection', () => {
     const handleSelectPage = jest.fn();
 
     const { container } = render(
       React.createElement(StudioShell, {
-        currentPage: "workflows",
+        currentPage: 'workflows',
         navItems,
         onSelectPage: handleSelectPage,
-        pageTitle: "Studio page",
-        children: React.createElement("div", null, "Studio content"),
-      })
+        pageTitle: 'Studio page',
+        children: React.createElement('div', null, 'Studio content'),
+      }),
     );
 
     expect(container.firstChild).toHaveStyle({
-      flex: "1",
-      height: "100%",
-      minHeight: "0",
-      overflow: "hidden",
+      flex: '1',
+      height: '100%',
+      minHeight: '0',
+      overflow: 'hidden',
     });
-    expect(container.querySelector(".ant-row")).toHaveStyle({
-      flex: "1",
-      minHeight: "0",
-    });
-    const contentBody = screen.getByText("Studio content").parentElement;
-    const contentShell = contentBody?.parentElement;
-
-    expect(contentBody).toHaveStyle({
-      display: "flex",
-      flex: "1",
-      flexDirection: "column",
-      minHeight: "0",
-      overflow: "hidden",
-    });
-    expect(contentShell).toHaveStyle({
-      flex: "1",
-      minHeight: "0",
-      overflowX: "hidden",
-      overflowY: "auto",
-    });
-
-    expect(screen.getByLabelText("Workbench")).toHaveStyle({ width: "64px" });
-    expect(screen.getByLabelText("Workbench navigation")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /workflows/i })).toHaveAttribute(
-      "aria-current",
-      "page"
-    );
+    expect(screen.getByLabelText('Workbench')).toHaveStyle({ width: '56px' });
+    expect(screen.getByLabelText('Workbench navigation')).toBeInTheDocument();
     expect(
-      screen.queryByText("Browse workspace workflows and start new drafts.")
-    ).toBeNull();
-    expect(screen.queryByText("Workflows")).toBeNull();
+      screen.getByRole('button', { name: '行为定义' }),
+    ).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByText('Browse workspace workflows and start new drafts.')).toBeNull();
+    expect(screen.queryByText('行为定义')).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /studio/i }));
+    fireEvent.click(screen.getByRole('button', { name: '团队构建器' }));
+    fireEvent.click(screen.getByRole('button', { name: '编辑器设置' }));
 
-    expect(handleSelectPage).toHaveBeenCalledWith("studio");
-
-    fireEvent.click(screen.getByRole("button", { name: "Expand workbench" }));
-
-    expect(screen.getByLabelText("Workbench")).toHaveStyle({ width: "160px" });
-    expect(screen.getByText("Workflows")).toBeTruthy();
-    expect(screen.getByText("Collapse")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Collapse workbench" })
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(handleSelectPage).toHaveBeenNthCalledWith(1, 'studio');
+    expect(handleSelectPage).toHaveBeenNthCalledWith(2, 'settings');
   });
 
-  it("allows callers to hand scroll ownership to the page content", () => {
+  it('keeps the content body scroll ownership configurable', () => {
     render(
       React.createElement(StudioShell, {
-        contentOverflow: "hidden",
-        currentPage: "workflows",
+        contentOverflow: 'hidden',
+        currentPage: 'workflows',
         navItems,
         onSelectPage: jest.fn(),
-        pageTitle: "Studio page",
-        children: React.createElement("div", null, "Studio content"),
-      })
+        pageTitle: 'Studio page',
+        children: React.createElement('div', null, 'Studio content'),
+      }),
     );
 
-    expect(screen.getByText("Studio content").parentElement?.parentElement).toHaveStyle({
-      overflowY: "hidden",
+    expect(screen.getByText('Studio content').parentElement).toHaveStyle({
+      display: 'flex',
+      flex: '1',
+      flexDirection: 'column',
+      minHeight: '0',
+      overflowX: 'hidden',
+      overflowY: 'hidden',
+      padding: '16px',
     });
   });
 });
