@@ -5,5 +5,5 @@ namespace Aevatar.Foundation.VoicePresence.Hosting;
 /// </summary>
 public interface IVoicePresenceSessionResolver
 {
-    Task<VoicePresenceSession?> ResolveAsync(string actorId, CancellationToken ct = default);
+    Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default);
 }

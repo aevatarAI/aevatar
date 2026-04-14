@@ -20,8 +20,11 @@ public sealed class InProcessActorVoicePresenceSessionResolver : IVoicePresenceS
         _services = services ?? throw new ArgumentNullException(nameof(services));
     }
 
-    public async Task<VoicePresenceSession?> ResolveAsync(string actorId, CancellationToken ct = default)
+    public async Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var actorId = request.ActorId;
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ct.ThrowIfCancellationRequested();
 
@@ -33,7 +36,7 @@ public sealed class InProcessActorVoicePresenceSessionResolver : IVoicePresenceS
         if (actor?.Agent is not IEventModuleContainer<IEventHandlerContext> moduleContainer)
             return null;
 
-        var module = ResolveVoiceModule(moduleContainer.GetModules());
+        var module = ResolveVoiceModule(moduleContainer.GetModules(), request.ModuleName);
         if (module == null)
             return null;
 
@@ -65,11 +68,23 @@ public sealed class InProcessActorVoicePresenceSessionResolver : IVoicePresenceS
         };
 
     private static VoicePresenceModule? ResolveVoiceModule(
-        IReadOnlyList<IEventModule<IEventHandlerContext>> modules)
+        IReadOnlyList<IEventModule<IEventHandlerContext>> modules,
+        string? requestedModuleName)
     {
         var voiceModules = modules.OfType<VoicePresenceModule>().ToList();
         if (voiceModules.Count == 0)
             return null;
+
+        if (!string.IsNullOrWhiteSpace(requestedModuleName))
+        {
+            var requestedMatches = voiceModules
+                .Where(module => string.Equals(module.Name, requestedModuleName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            return requestedMatches.Count == 1
+                ? requestedMatches[0]
+                : null;
+        }
 
         if (voiceModules.Count == 1)
             return voiceModules[0];

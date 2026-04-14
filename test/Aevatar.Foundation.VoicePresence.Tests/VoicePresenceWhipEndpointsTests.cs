@@ -41,6 +41,7 @@ public class VoicePresenceWhipEndpointsTests
         await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
 
         resolver.RequestedActorIds.ShouldContain("agent-1");
+        resolver.Requests.ShouldContain(static request => string.Equals(request.ModuleName, null, StringComparison.Ordinal));
 
         completion.SetResult();
         await transport.DisposedTask.Task;
@@ -56,6 +57,31 @@ public class VoicePresenceWhipEndpointsTests
 
         context.Response.StatusCode.ShouldBe(StatusCodes.Status400BadRequest);
         (await ReadBodyAsync(context)).ShouldContain("actorId is required.");
+    }
+
+    [Fact]
+    public async Task Post_should_pass_module_query_to_registered_service_resolver()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+
+        var transport = new StubVoiceTransport();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "answer", completion.Task));
+        using var app = CreateApp(resolver, factory);
+        var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
+        context.Request.RouteValues["actorId"] = "agent-1";
+        context.Request.QueryString = new QueryString("?module=voice_presence_minicpm");
+
+        await GetWhipEndpoint(app, HttpMethods.Post).RequestDelegate!(context);
+
+        resolver.Requests.ShouldContain(request =>
+            string.Equals(request.ActorId, "agent-1", StringComparison.Ordinal) &&
+            string.Equals(request.ModuleName, "voice_presence_minicpm", StringComparison.Ordinal));
+
+        completion.SetResult();
+        await transport.DisposedTask.Task;
     }
 
     [Fact]
@@ -294,11 +320,15 @@ public class VoicePresenceWhipEndpointsTests
 
     private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
     {
+        public List<VoicePresenceSessionRequest> Requests { get; } = [];
+
         public List<string> RequestedActorIds { get; } = [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(string actorId, CancellationToken ct = default)
+        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
         {
-            RequestedActorIds.Add(actorId);
+            _ = ct;
+            Requests.Add(request);
+            RequestedActorIds.Add(request.ActorId);
             return Task.FromResult(session);
         }
     }

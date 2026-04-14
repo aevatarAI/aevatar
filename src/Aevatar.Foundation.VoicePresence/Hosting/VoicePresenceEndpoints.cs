@@ -235,7 +235,24 @@ public static class VoicePresenceEndpoints
         string actorId)
     {
         var resolver = ctx.RequestServices.GetRequiredService<IVoicePresenceSessionResolver>();
-        return resolver.ResolveAsync(actorId, ctx.RequestAborted);
+        return resolver.ResolveAsync(CreateSessionRequest(ctx, actorId), ctx.RequestAborted);
+    }
+
+    private static VoicePresenceSessionRequest CreateSessionRequest(HttpContext ctx, string actorId) =>
+        new(
+            actorId,
+            ResolveRequestedModuleName(ctx));
+
+    private static string? ResolveRequestedModuleName(HttpContext ctx)
+    {
+        var routeModuleName = ctx.GetRouteValue("moduleName")?.ToString();
+        if (!string.IsNullOrWhiteSpace(routeModuleName))
+            return routeModuleName;
+
+        var queryModuleName = ctx.Request.Query["module"].ToString();
+        return string.IsNullOrWhiteSpace(queryModuleName)
+            ? null
+            : queryModuleName.Trim();
     }
 
     private static async Task TryCloseConflictAsync(WebSocket ws)

@@ -45,6 +45,32 @@ public class VoicePresenceEndpointsTests
         await GetVoiceEndpoint(app).RequestDelegate!(context);
 
         resolver.RequestedActorIds.ShouldContain("agent-1");
+        resolver.Requests.ShouldContain(static request => string.Equals(request.ModuleName, null, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Request_should_pass_module_query_to_registered_service_resolver()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+
+        var resolver = new RecordingSessionResolver(new VoicePresenceSession(module, static (_, _) => Task.CompletedTask));
+        var socket = new FakeWebSocket(WebSocketState.Open, keepOpenUntilCancelledWhenEmpty: true);
+        using var app = CreateApp(resolver);
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+        context.Request.QueryString = new QueryString("?module=voice_presence_openai");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+        context.RequestAborted = cts.Token;
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        resolver.RequestedActorIds.ShouldContain("agent-1");
+        resolver.Requests.ShouldContain(request =>
+            string.Equals(request.ActorId, "agent-1", StringComparison.Ordinal) &&
+            string.Equals(request.ModuleName, "voice_presence_openai", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -303,11 +329,15 @@ public class VoicePresenceEndpointsTests
 
     private sealed class RecordingSessionResolver(VoicePresenceSession? session) : IVoicePresenceSessionResolver
     {
+        public List<VoicePresenceSessionRequest> Requests { get; } = [];
+
         public List<string> RequestedActorIds { get; } = [];
 
-        public Task<VoicePresenceSession?> ResolveAsync(string actorId, CancellationToken ct = default)
+        public Task<VoicePresenceSession?> ResolveAsync(VoicePresenceSessionRequest request, CancellationToken ct = default)
         {
-            RequestedActorIds.Add(actorId);
+            _ = ct;
+            Requests.Add(request);
+            RequestedActorIds.Add(request.ActorId);
             return Task.FromResult(session);
         }
     }

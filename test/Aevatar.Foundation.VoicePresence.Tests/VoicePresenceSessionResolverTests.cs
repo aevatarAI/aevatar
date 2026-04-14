@@ -20,7 +20,7 @@ public class VoicePresenceSessionResolverTests
         using var services = BuildServices(runtime, dispatchPort);
         var resolver = new InProcessActorVoicePresenceSessionResolver(services);
 
-        var session = await resolver.ResolveAsync("agent-1");
+        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
 
         session.ShouldNotBeNull();
         session.Module.ShouldBeSameAs(module);
@@ -52,11 +52,40 @@ public class VoicePresenceSessionResolverTests
         using var services = BuildServices(runtime, new RecordingDispatchPort());
         var resolver = new InProcessActorVoicePresenceSessionResolver(services);
 
-        var session = await resolver.ResolveAsync("agent-1");
+        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
 
         session.ShouldNotBeNull();
         session.Module.ShouldBeSameAs(defaultModule);
         session.PcmSampleRateHz.ShouldBe(24000);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_should_return_requested_voice_module_when_alias_is_provided()
+    {
+        var defaultModule = CreateModule("voice_presence", 24000);
+        var alternateModule = CreateModule("voice_presence_openai", 16000);
+        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [defaultModule, alternateModule])));
+        using var services = BuildServices(runtime, new RecordingDispatchPort());
+        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
+
+        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_openai"));
+
+        session.ShouldNotBeNull();
+        session.Module.ShouldBeSameAs(alternateModule);
+        session.PcmSampleRateHz.ShouldBe(16000);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_should_return_null_when_requested_alias_does_not_exist()
+    {
+        var defaultModule = CreateModule("voice_presence", 24000);
+        var runtime = new StubActorRuntime(new StubActor("agent-1", new TestAgent("agent-1", [defaultModule])));
+        using var services = BuildServices(runtime, new RecordingDispatchPort());
+        var resolver = new InProcessActorVoicePresenceSessionResolver(services);
+
+        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1", "voice_presence_minicpm"));
+
+        session.ShouldBeNull();
     }
 
     [Fact]
@@ -66,7 +95,7 @@ public class VoicePresenceSessionResolverTests
         using var services = BuildServices(runtime, new RecordingDispatchPort());
         var resolver = new InProcessActorVoicePresenceSessionResolver(services);
 
-        var session = await resolver.ResolveAsync("agent-1");
+        var session = await resolver.ResolveAsync(new VoicePresenceSessionRequest("agent-1"));
 
         session.ShouldBeNull();
     }
