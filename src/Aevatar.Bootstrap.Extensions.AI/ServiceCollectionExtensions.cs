@@ -21,7 +21,13 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
+using Aevatar.Foundation.Abstractions;
+using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.VoicePresence;
 using Aevatar.Foundation.VoicePresence.Abstractions;
+using Aevatar.Foundation.VoicePresence.MiniCPM;
+using Aevatar.Foundation.VoicePresence.Modules;
+using Aevatar.Foundation.VoicePresence.OpenAI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -58,6 +64,7 @@ public sealed class AevatarAIFeatureOptions
     public bool EnableWorkflowTools { get; set; }
     public bool EnableScriptingTools { get; set; }
     public bool EnableBindingTools { get; set; }
+    public VoicePresenceFeatureOptions VoicePresence { get; } = new();
 }
 
 public static class ServiceCollectionExtensions
@@ -110,7 +117,244 @@ public static class ServiceCollectionExtensions
         if (options.EnableBindingTools)
             RegisterBindingTools(services);
 
+        RegisterVoicePresenceModules(services, configuration, options);
+
         return services;
+    }
+
+    private static void RegisterVoicePresenceModules(
+        IServiceCollection services,
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var voiceOptions = options.VoicePresence;
+        if (!voiceOptions.EnableModuleFactory)
+            return;
+
+        var registrations = BuildVoicePresenceModuleRegistrations(configuration, options);
+        if (registrations.Count == 0)
+            return;
+
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
+        foreach (var registration in registrations)
+            services.AddSingleton(registration);
+    }
+
+    private static List<VoicePresenceModuleRegistration> BuildVoicePresenceModuleRegistrations(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var registrations = new List<VoicePresenceModuleRegistration>();
+        var voiceOptions = options.VoicePresence;
+        var openAIProviderConfig = BuildOpenAIVoiceProviderConfig(configuration, options);
+        var miniCpmProviderConfig = BuildMiniCpmVoiceProviderConfig(configuration, options);
+        var resolvedDefaultProvider = ResolveVoicePresenceDefaultProvider(
+            voiceOptions.DefaultProvider,
+            openAIProviderConfig,
+            miniCpmProviderConfig);
+
+        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+        {
+            registrations.Add(new VoicePresenceModuleRegistration(
+                BuildVoicePresenceModuleNames(
+                    providerName: "openai",
+                    isDefaultProvider: string.Equals(resolvedDefaultProvider, "openai", StringComparison.OrdinalIgnoreCase),
+                    providerAliases: ["voice_presence_openai"]),
+                serviceProvider => new VoicePresenceModule(
+                    new OpenAIRealtimeProvider(
+                        voiceOptions.OpenAIProviderOptions,
+                        serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
+                    openAIProviderConfig.Clone(),
+                    BuildOpenAIVoiceSessionConfig(configuration, options),
+                    CloneVoicePresenceModuleOptions(voiceOptions.Module),
+                    serviceProvider.GetService<IVoiceToolInvoker>(),
+                    serviceProvider.GetService<ILogger<VoicePresenceModule>>())));
+        }
+
+        if (IsMiniCpmVoiceConfigured(miniCpmProviderConfig))
+        {
+            registrations.Add(new VoicePresenceModuleRegistration(
+                BuildVoicePresenceModuleNames(
+                    providerName: "minicpm",
+                    isDefaultProvider: string.Equals(resolvedDefaultProvider, "minicpm", StringComparison.OrdinalIgnoreCase),
+                    providerAliases: ["voice_presence_minicpm", "voice_presence_minicpm_o"]),
+                serviceProvider => new VoicePresenceModule(
+                    new MiniCPMRealtimeProvider(
+                        voiceOptions.MiniCPMProviderOptions,
+                        serviceProvider.GetService<ILogger<MiniCPMRealtimeProvider>>()),
+                    miniCpmProviderConfig.Clone(),
+                    BuildMiniCpmVoiceSessionConfig(configuration, options),
+                    CloneVoicePresenceModuleOptions(voiceOptions.Module),
+                    serviceProvider.GetService<IVoiceToolInvoker>(),
+                    serviceProvider.GetService<ILogger<VoicePresenceModule>>())));
+        }
+
+        return registrations;
+    }
+
+    private static string? ResolveVoicePresenceDefaultProvider(
+        string? requestedProvider,
+        VoiceProviderConfig openAIProviderConfig,
+        VoiceProviderConfig miniCpmProviderConfig)
+    {
+        var normalizedRequested = NormalizeVoicePresenceProviderName(requestedProvider);
+        if (string.Equals(normalizedRequested, "openai", StringComparison.OrdinalIgnoreCase) &&
+            IsOpenAIVoiceConfigured(openAIProviderConfig))
+        {
+            return "openai";
+        }
+
+        if (string.Equals(normalizedRequested, "minicpm", StringComparison.OrdinalIgnoreCase) &&
+            IsMiniCpmVoiceConfigured(miniCpmProviderConfig))
+        {
+            return "minicpm";
+        }
+
+        if (IsOpenAIVoiceConfigured(openAIProviderConfig))
+            return "openai";
+
+        if (IsMiniCpmVoiceConfigured(miniCpmProviderConfig))
+            return "minicpm";
+
+        return null;
+    }
+
+    private static string[] BuildVoicePresenceModuleNames(
+        string providerName,
+        bool isDefaultProvider,
+        IEnumerable<string> providerAliases)
+    {
+        var names = new List<string>();
+        if (isDefaultProvider)
+            names.Add("voice_presence");
+
+        names.AddRange(providerAliases);
+        if (!names.Contains(providerName, StringComparer.OrdinalIgnoreCase))
+            names.Add(providerName == "openai" ? "voice_presence_openai" : "voice_presence_minicpm");
+
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static VoiceProviderConfig BuildOpenAIVoiceProviderConfig(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var config = options.VoicePresence.OpenAIProvider.Clone();
+        config.ProviderName = FirstNonEmpty(config.ProviderName, "openai")!;
+        AssignIfNonEmpty(config, static (target, value) => target.ApiKey = value, FirstNonEmpty(
+            config.ApiKey,
+            configuration["Aevatar:VoicePresence:OpenAI:ApiKey"],
+            Environment.GetEnvironmentVariable("OPENAI_API_KEY"),
+            options.ApiKey));
+        AssignIfNonEmpty(config, static (target, value) => target.Endpoint = value, FirstNonEmpty(
+            config.Endpoint,
+            configuration["Aevatar:VoicePresence:OpenAI:Endpoint"]));
+        config.Model = FirstNonEmpty(
+            config.Model,
+            configuration["Aevatar:VoicePresence:OpenAI:Model"],
+            OpenAIRealtimeProviderOptions.DefaultModelName)!;
+        return config;
+    }
+
+    private static VoiceSessionConfig BuildOpenAIVoiceSessionConfig(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var session = options.VoicePresence.OpenAISession.Clone();
+        session.Voice = FirstNonEmpty(session.Voice, configuration["Aevatar:VoicePresence:OpenAI:Voice"]) ?? string.Empty;
+        session.Instructions = FirstNonEmpty(
+            session.Instructions,
+            configuration["Aevatar:VoicePresence:OpenAI:Instructions"]) ?? string.Empty;
+        if (session.SampleRateHz == 0)
+            session.SampleRateHz = OpenAIRealtimeProviderOptions.DefaultSampleRateHz;
+        return session;
+    }
+
+    private static VoiceProviderConfig BuildMiniCpmVoiceProviderConfig(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var config = options.VoicePresence.MiniCPMProvider.Clone();
+        config.ProviderName = FirstNonEmpty(config.ProviderName, "minicpm")!;
+        AssignIfNonEmpty(config, static (target, value) => target.ApiKey = value, FirstNonEmpty(
+            config.ApiKey,
+            configuration["Aevatar:VoicePresence:MiniCPM:ApiKey"]));
+        AssignIfNonEmpty(config, static (target, value) => target.Endpoint = value, FirstNonEmpty(
+            config.Endpoint,
+            configuration["Aevatar:VoicePresence:MiniCPM:Endpoint"]));
+        config.Model = FirstNonEmpty(
+            config.Model,
+            configuration["Aevatar:VoicePresence:MiniCPM:Model"],
+            "minicpm-o")!;
+        return config;
+    }
+
+    private static VoiceSessionConfig BuildMiniCpmVoiceSessionConfig(
+        IConfiguration configuration,
+        AevatarAIFeatureOptions options)
+    {
+        var session = options.VoicePresence.MiniCPMSession.Clone();
+        session.Voice = FirstNonEmpty(session.Voice, configuration["Aevatar:VoicePresence:MiniCPM:Voice"]) ?? string.Empty;
+        session.Instructions = FirstNonEmpty(
+            session.Instructions,
+            configuration["Aevatar:VoicePresence:MiniCPM:Instructions"]) ?? string.Empty;
+        if (session.SampleRateHz == 0)
+            session.SampleRateHz = MiniCPMRealtimeProviderOptions.DefaultInputSampleRateHz;
+        return session;
+    }
+
+    private static VoicePresenceModuleOptions CloneVoicePresenceModuleOptions(VoicePresenceModuleOptions options) =>
+        new()
+        {
+            Name = options.Name,
+            Priority = options.Priority,
+            LinkId = options.LinkId,
+            StaleAfter = options.StaleAfter,
+            DedupeWindow = options.DedupeWindow,
+            ToolExecutionTimeout = options.ToolExecutionTimeout,
+            PendingInjectionCapacity = options.PendingInjectionCapacity,
+            TimeProvider = options.TimeProvider,
+        };
+
+    private static bool IsOpenAIVoiceConfigured(VoiceProviderConfig config) =>
+        !string.IsNullOrWhiteSpace(config.ApiKey);
+
+    private static bool IsMiniCpmVoiceConfigured(VoiceProviderConfig config) =>
+        !string.IsNullOrWhiteSpace(config.Endpoint);
+
+    private static string? NormalizeVoicePresenceProviderName(string? providerName)
+    {
+        if (string.IsNullOrWhiteSpace(providerName))
+            return null;
+
+        return providerName.Trim().ToLowerInvariant() switch
+        {
+            "minicpm" => "minicpm",
+            "minicpm-o" => "minicpm",
+            "openai" => "openai",
+            _ => null,
+        };
+    }
+
+    private static string? FirstNonEmpty(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate))
+                return candidate.Trim();
+        }
+
+        return null;
+    }
+
+    private static void AssignIfNonEmpty<T>(
+        T target,
+        Action<T, string> assign,
+        string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            assign(target, value);
     }
 
     private static void RegisterMeaiProviders(

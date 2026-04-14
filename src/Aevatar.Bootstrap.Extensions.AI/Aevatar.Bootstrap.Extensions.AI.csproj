@@ -22,7 +22,10 @@
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Web\Aevatar.AI.ToolProviders.Web.csproj" />
     <ProjectReference Include="..\Aevatar.AI.ToolProviders.Workflow\Aevatar.AI.ToolProviders.Workflow.csproj" />
     <ProjectReference Include="..\Aevatar.AI.Infrastructure.Local\Aevatar.AI.Infrastructure.Local.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.VoicePresence\Aevatar.Foundation.VoicePresence.csproj" />
     <ProjectReference Include="..\Aevatar.Foundation.VoicePresence.Abstractions\Aevatar.Foundation.VoicePresence.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.VoicePresence.OpenAI\Aevatar.Foundation.VoicePresence.OpenAI.csproj" />
+    <ProjectReference Include="..\Aevatar.Foundation.VoicePresence.MiniCPM\Aevatar.Foundation.VoicePresence.MiniCPM.csproj" />
     <ProjectReference Include="..\workflow\Aevatar.Workflow.Core\Aevatar.Workflow.Core.csproj" />
     <ProjectReference Include="..\Aevatar.Configuration\Aevatar.Configuration.csproj" />
   </ItemGroup>
