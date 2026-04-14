@@ -156,20 +156,23 @@ describe("ScopeOverviewPage", () => {
 
     expect(await screen.findByText("Aevatar / Teams")).toBeTruthy();
     expect(await screen.findByText("我的 AI 团队")).toBeTruthy();
-    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect((await screen.findAllByText("客服团队")).length).toBeGreaterThan(0);
     expect(screen.getByText("活跃团队")).toBeTruthy();
     expect(screen.getByText("运行中成员")).toBeTruthy();
-    expect(screen.getByText("健康团队率")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看运行" })).toBeTruthy();
+    expect(screen.getByText("今日处理消息")).toBeTruthy();
+    expect(screen.getByText("平均在线率")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "+ 组建新团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看详情" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "事件拓扑" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "显示草稿团队 (1)" })).toBeTruthy();
     expect(screen.queryByText("草稿团队")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "显示草稿团队 (1)" }));
 
-    expect(await screen.findByText("草稿团队")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "高级编辑" }).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("草稿团队")).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByRole("button", { name: /编\s*辑/ }).length,
+    ).toBeGreaterThan(0);
     expect(
       screen.queryByText(
         "先看到“我有哪些团队、这些团队在做什么、哪里需要我关注”，而不是先看到工程术语和底层模块。",
@@ -185,7 +188,7 @@ describe("ScopeOverviewPage", () => {
 
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect((await screen.findAllByText("客服团队")).length).toBeGreaterThan(0);
     expect(screen.getByText("部分团队信号暂时不可见")).toBeTruthy();
     expect(
       screen.queryByText("No stub for /api/scopes/scope-a/services/service-alpha/runs"),
@@ -195,7 +198,7 @@ describe("ScopeOverviewPage", () => {
   it("opens the workflow-focused team detail handoff from the primary card action", async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
+    fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/teams/scope-a");

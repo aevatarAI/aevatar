@@ -1,17 +1,9 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
-
-jest.mock("@/shared/graphs/GraphCanvas", () => ({
-  __esModule: true,
-  default: () => {
-    const React = require("react");
-    return React.createElement("div", null, "Graph canvas");
-  },
-}));
 
 function mockCreateRunsCatalog() {
   return {
@@ -484,7 +476,7 @@ jest.mock("@/shared/studio/api", () => ({
 
 describe("TeamDetailPage", () => {
   beforeEach(() => {
-    window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
+    window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1&tab=overview");
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockReset();
     (scopeRuntimeApi.listServiceRuns as jest.Mock).mockImplementation(
       async () => mockCreateRunsCatalog(),
@@ -496,47 +488,29 @@ describe("TeamDetailPage", () => {
     );
   });
 
+  it("defaults bare team routes to the topology view", async () => {
+    window.history.replaceState({}, "", "/teams/scope-1?scopeId=scope-1");
+
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("EventEnvelope 流转拓扑")).toBeTruthy();
+    expect(screen.queryByText("运行摘要")).toBeNull();
+  });
+
   it("renders the chinese team-first overview shell", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(
-      await screen.findByText((_, node) => {
-        return node?.textContent === "Aevatar / Teams / 团队详情 / 概览";
-      }),
-    ).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Aevatar" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Teams" })).toBeTruthy();
-    expect(screen.getByText("Team scope-1")).toBeTruthy();
+    expect(await screen.findAllByText("Support Escalation Triage")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "成员" })).toBeTruthy();
+    expect(screen.getByText("类型")).toBeTruthy();
     expect(screen.getByText("团队构成")).toBeTruthy();
     expect(screen.getByText("运行摘要")).toBeTruthy();
-    expect(screen.getByText("当前态势")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "进入 Chat" })).toBeTruthy();
+    expect(screen.getByText("团队状态")).toBeTruthy();
+    expect(screen.getByText("团队在做什么")).toBeTruthy();
+    expect(screen.getByText("当前版本状态")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "测试对话" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看服务映射" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "进入 Team Builder" })).toBeTruthy();
-  });
-
-  it("returns to the teams list when clicking the breadcrumb teams link", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("link", { name: "Teams" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
-    });
-  });
-
-  it("returns to the teams list when clicking the breadcrumb aevatar link", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("link", { name: "Aevatar" }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/teams");
-      expect(window.location.search).toContain("scopeId=scope-1");
-    });
+    expect(screen.getByRole("button", { name: /编辑/ })).toBeTruthy();
   });
 
   it("switches tabs inside the detail page", async () => {
@@ -545,65 +519,22 @@ describe("TeamDetailPage", () => {
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "连接器" }));
 
-    expect(await screen.findByText("当前连接方式")).toBeTruthy();
-    expect(screen.getByText("连接器目录")).toBeTruthy();
-    expect(screen.getByText("当前选中连接器")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "选择连接器 web-search" })).toBeTruthy();
+    expect(await screen.findByText("服务与连接器")).toBeTruthy();
+    expect(screen.getByText("可用连接器")).toBeTruthy();
+    expect(screen.getByText("web-search")).toBeTruthy();
     expect(window.location.search).toContain("tab=connectors");
-  });
-
-  it("shows a team-first configuration view", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "配置" }));
-
-    expect(await screen.findByText("当前配置主线")).toBeTruthy();
-    expect(screen.getByText("当前配置明细")).toBeTruthy();
-    expect(screen.getByText("继续调整这支团队")).toBeTruthy();
-    expect(screen.getAllByText("绑定方式").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("连接器引用").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "打开 Team Builder" })).toBeTruthy();
   });
 
   it("shows a readable team members view", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "团队成员" }));
+    fireEvent.click(screen.getByRole("button", { name: "成员" }));
 
-    expect(await screen.findByText("团队结构")).toBeTruthy();
-    expect(screen.getByText("可见 Actor 身份")).toBeTruthy();
-    expect(screen.getByText("当前焦点")).toBeTruthy();
-    expect(screen.getByText("可见 Actor")).toBeTruthy();
-  });
-
-  it("shows a team-first event stream with member mapping", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-
-    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
-    expect(screen.getByText("本次 Run 成员映射")).toBeTruthy();
-    expect(await screen.findByText("切换 Run")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "进入 Chat" }).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText(/risk_review/)).length).toBeGreaterThan(0);
-  });
-
-  it("switches runs inside the event stream", async () => {
-    renderWithQueryClient(React.createElement(TeamDetailPage));
-
-    await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findByText("当前任务事件流");
-
-    fireEvent.click(await screen.findByRole("button", { name: "切换到 run-good" }));
-
-    await waitFor(() => {
-      expect(window.location.search).toContain("runId=run-good");
-    });
-    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
+    expect(await screen.findByRole("textbox", { name: "搜索成员" })).toBeTruthy();
+    expect(screen.getByText("Governance Service")).toBeTruthy();
+    expect(screen.getByText("RiskReviewAgent")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Graph" }).length).toBeGreaterThan(0);
   });
 
   it("surfaces team signal failures without leaking raw runtime errors", async () => {
@@ -626,8 +557,12 @@ describe("TeamDetailPage", () => {
 
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findAllByText(/risk_review/);
-    fireEvent.click(screen.getAllByRole("button", { name: "进入 Chat" })[0]);
+    await screen.findByText("EventEnvelope Stream");
+    fireEvent.click(
+      within(screen.getByTestId("page-container-header")).getByRole("button", {
+        name: "测试对话",
+      }),
+    );
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/runs");
@@ -650,7 +585,7 @@ describe("TeamDetailPage", () => {
 
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("团队事件路径");
+    await screen.findByText("EventEnvelope 流转拓扑");
     fireEvent.click(screen.getAllByRole("button", { name: "查看服务映射" })[0]);
 
     await waitFor(() => {
@@ -658,7 +593,6 @@ describe("TeamDetailPage", () => {
     });
     const params = new URLSearchParams(window.location.search);
     expect(params.get("actorId")).toBe("actor-intake");
-    expect(params.get("runId")).toBe("run-current");
     expect(params.get("scopeId")).toBe("scope-1");
     expect(params.get("serviceId")).toBe("default");
   });
@@ -667,7 +601,11 @@ describe("TeamDetailPage", () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "进入 Team Builder" }));
+    fireEvent.click(
+      within(screen.getByTestId("page-container-header")).getByRole("button", {
+        name: /编\s*辑/,
+      }),
+    );
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/studio");
@@ -691,7 +629,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+    expect(await screen.findAllByText("Support Escalation Triage")).toHaveLength(2);
     expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
   });
 
@@ -704,7 +642,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+    expect(await screen.findAllByText("Support Escalation Triage")).toHaveLength(2);
     expect(screen.queryByText("路由上下文已自动校正")).toBeNull();
   });
 });

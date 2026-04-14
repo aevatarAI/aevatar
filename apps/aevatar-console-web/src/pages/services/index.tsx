@@ -1,11 +1,6 @@
 import {
-  ApiOutlined,
   DeploymentUnitOutlined,
-  EyeOutlined,
-  SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import type { ProListMetas } from "@ant-design/pro-components";
-import { ProList } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Empty, Space, Typography } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
@@ -21,39 +16,35 @@ import {
 import { servicesApi } from "@/shared/api/servicesApi";
 import { formatDateTime } from "@/shared/datetime/dateTime";
 import { history } from "@/shared/navigation/history";
+import { resolveStudioScopeContext } from "@/shared/scope/context";
+import { studioApi } from "@/shared/studio/api";
 import {
   buildRuntimeExplorerHref,
-  buildRuntimeRunsHref,
 } from "@/shared/navigation/runtimeRoutes";
 import type {
   ServiceCatalogSnapshot,
   ServiceDeploymentSnapshot,
   ServiceIdentityQuery,
+  ServiceEndpointSnapshot,
   ServiceRevisionSnapshot,
   ServiceTrafficEndpointSnapshot,
 } from "@/shared/models/services";
 import {
-  buildAevatarMetricCardStyle,
-  resolveAevatarMetricVisual,
-  resolveAevatarSemanticTone,
-  type AevatarThemeSurfaceToken,
-} from "@/shared/ui/aevatarWorkbench";
-import {
   AevatarContextDrawer,
   AevatarInspectorEmpty,
-  AevatarPageShell,
   AevatarPanel,
   AevatarStatusTag,
-  AevatarWorkbenchLayout,
 } from "@/shared/ui/aevatarPageShells";
-import { summaryFieldGridStyle, summaryFieldLabelStyle } from "@/shared/ui/proComponents";
-import { theme } from "antd";
-
-type SummaryMetricProps = {
-  label: string;
-  tone?: "default" | "error" | "info" | "success" | "warning";
-  value: React.ReactNode;
-};
+import ConsoleMetricCard from "@/shared/ui/ConsoleMetricCard";
+import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
+import {
+  codeBlockStyle,
+  embeddedPanelStyle,
+  summaryFieldGridStyle,
+  summaryFieldLabelStyle,
+  summaryMetricStyle,
+  summaryMetricValueStyle,
+} from "@/shared/ui/proComponents";
 
 type SummaryFieldProps = {
   label: string;
@@ -61,25 +52,11 @@ type SummaryFieldProps = {
 };
 
 const initialDraft = readServiceQueryDraft();
+const defaultScopeServiceAppId = "default";
+const defaultScopeServiceNamespace = "default";
 
 function buildServiceSubtitle(service: ServiceCatalogSnapshot): string {
   return `${service.namespace}/${service.serviceId}`;
-}
-
-function buildServiceSummary(service: ServiceCatalogSnapshot): string {
-  const segments = [
-    service.endpoints.length > 0
-      ? `${service.endpoints.length} endpoint${service.endpoints.length === 1 ? "" : "s"}`
-      : "No endpoints",
-    service.policyIds.length > 0
-      ? `${service.policyIds.length} polic${service.policyIds.length === 1 ? "y" : "ies"}`
-      : "No governance policy",
-    service.activeServingRevisionId || service.defaultServingRevisionId
-      ? `Serving ${service.activeServingRevisionId || service.defaultServingRevisionId}`
-      : "No serving revision",
-  ];
-
-  return segments.join(" · ");
 }
 
 function buildServiceDigestMetrics(services: readonly ServiceCatalogSnapshot[]) {
@@ -91,38 +68,73 @@ function buildServiceDigestMetrics(services: readonly ServiceCatalogSnapshot[]) 
   };
 }
 
-const SummaryMetric: React.FC<SummaryMetricProps> = ({
-  label,
-  tone = "default",
-  value,
-}) => {
-  const { token } = theme.useToken();
-  const visual = resolveAevatarMetricVisual(
-    token as AevatarThemeSurfaceToken,
-    tone,
-  );
-
-  return (
-    <div
-      style={buildAevatarMetricCardStyle(
-        token as AevatarThemeSurfaceToken,
-        tone,
-      )}
-    >
-      <Typography.Text style={{ ...summaryFieldLabelStyle, color: visual.labelColor }}>
-        {label}
-      </Typography.Text>
-      <Typography.Text strong style={{ color: visual.valueColor, fontSize: 18 }}>
-        {value}
-      </Typography.Text>
-    </div>
-  );
-};
-
 const SummaryField: React.FC<SummaryFieldProps> = ({ label, value }) => (
   <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
     <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
     <Typography.Text>{value}</Typography.Text>
+  </div>
+);
+
+const drawerListItemStyle: React.CSSProperties = {
+  ...embeddedPanelStyle,
+  background: "var(--ant-color-fill-quaternary)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: 12,
+};
+
+const DrawerMetric: React.FC<{
+  label: string;
+  value: React.ReactNode;
+}> = ({ label, value }) => (
+  <div style={{ ...summaryMetricStyle, gap: 6, minHeight: 0 }}>
+    <Typography.Text style={summaryFieldLabelStyle}>{label}</Typography.Text>
+    <Typography.Text
+      style={{
+        ...summaryMetricValueStyle,
+        fontSize: 14,
+        overflowWrap: "anywhere",
+        wordBreak: "break-word",
+      }}
+    >
+      {value}
+    </Typography.Text>
+  </div>
+);
+
+const EndpointRow: React.FC<{
+  endpoint: ServiceEndpointSnapshot;
+}> = ({ endpoint }) => (
+  <div style={drawerListItemStyle}>
+    <div
+      style={{
+        alignItems: "center",
+        display: "flex",
+        gap: 8,
+        justifyContent: "space-between",
+      }}
+    >
+      <Typography.Text strong>
+        {endpoint.displayName || endpoint.endpointId}
+      </Typography.Text>
+      <AevatarStatusTag
+        domain="observation"
+        label={endpoint.kind || "endpoint"}
+        status="live"
+      />
+    </div>
+    <Typography.Text
+      style={{
+        color: "var(--ant-color-text-secondary)",
+        fontFamily: '"SF Mono", monospace',
+        fontSize: 11,
+        overflowWrap: "anywhere",
+        wordBreak: "break-word",
+      }}
+    >
+      {endpoint.requestTypeUrl || endpoint.endpointId}
+    </Typography.Text>
   </div>
 );
 
@@ -134,6 +146,35 @@ const ServicesPage: React.FC = () => {
   const [selectedServiceId, setSelectedServiceId] = useState(() =>
     readServiceIdFromPathname(),
   );
+  const authSessionQuery = useQuery({
+    queryKey: ["services", "auth-session"],
+    queryFn: () => studioApi.getAuthSession(),
+    retry: false,
+  });
+  const resolvedScope = useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data],
+  );
+
+  useEffect(() => {
+    if (
+      draft.tenantId.trim() ||
+      draft.appId.trim() ||
+      draft.namespace.trim() ||
+      !resolvedScope?.scopeId?.trim()
+    ) {
+      return;
+    }
+
+    const nextDraft = {
+      ...draft,
+      appId: defaultScopeServiceAppId,
+      namespace: defaultScopeServiceNamespace,
+      tenantId: resolvedScope.scopeId.trim(),
+    };
+    setDraft(nextDraft);
+    setQuery(trimServiceQuery(nextDraft));
+  }, [draft, resolvedScope?.scopeId]);
 
   const servicesQuery = useQuery({
     queryKey: ["services", query],
@@ -189,200 +230,226 @@ const ServicesPage: React.FC = () => {
   const selectedDeployments = deploymentsQuery.data?.deployments ?? [];
   const selectedTraffic = trafficQuery.data?.endpoints ?? [];
 
-  const metas = useMemo<ProListMetas<ServiceCatalogSnapshot>>(
-    () => ({
-      actions: {
-        render: (_, service) => [
-          <Button
-            icon={<EyeOutlined />}
-            key={`${service.serviceKey}-inspect`}
-            onClick={() => setSelectedServiceId(service.serviceId)}
-            type="link"
-          >
-            Inspect
-          </Button>,
-          <Button
-            icon={<SafetyCertificateOutlined />}
-            key={`${service.serviceKey}-governance`}
-            onClick={() =>
-              history.push(
-                `/governance/bindings?tenantId=${encodeURIComponent(
-                  service.tenantId,
-                )}&appId=${encodeURIComponent(
-                  service.appId,
-                )}&namespace=${encodeURIComponent(
-                  service.namespace,
-                )}&serviceId=${encodeURIComponent(service.serviceId)}`,
-              )
-            }
-            type="link"
-          >
-            Governance
-          </Button>,
-        ],
-      },
-      avatar: {
-        render: () => <ApiOutlined style={{ fontSize: 18 }} />,
-      },
-      content: {
-        render: (_, service) => (
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", width: "100%" }}>
-            <SummaryField label="Identity" value={buildServiceSubtitle(service)} />
-            <SummaryField
-              label="Deployment"
-              value={`${service.deploymentStatus || "unknown"}${
-                service.deploymentId ? ` · ${service.deploymentId}` : ""
-              }`}
-            />
-            <SummaryField
-              label="Primary actor"
-              value={service.primaryActorId || "n/a"}
-            />
-            <SummaryField label="Updated" value={formatDateTime(service.updatedAt)} />
-          </div>
-        ),
-      },
-      description: {
-        render: (_, service) => buildServiceSummary(service),
-      },
-      subTitle: {
-        render: (_, service) => (
-          <Space size={[8, 8]} wrap>
-            <AevatarStatusTag
-              domain="governance"
-              status={service.deploymentStatus || "draft"}
-            />
-            <AevatarStatusTag
-              domain="observation"
-              label={`${service.endpoints.length} endpoints`}
-              status={service.endpoints.length > 0 ? "live" : "snapshot_available"}
-            />
-          </Space>
-        ),
-      },
-      title: {
-        render: (_, service) => service.displayName || service.serviceId,
-      },
-    }),
-    [],
-  );
-
   const latestRevision = selectedRevisions[0] ?? null;
   const activeDeployment = selectedDeployments[0] ?? null;
 
   return (
-    <AevatarPageShell
-      layoutMode="document"
+    <ConsoleMenuPageShell
+      breadcrumb="Aevatar / Platform"
       title="Services"
-      titleHelp="Services now live inside a single high-density workbench. Catalog rows stay on stage while lifecycle detail, deployment posture, and governance context move into the right-side inspector."
     >
-      <AevatarWorkbenchLayout
-        layoutMode="document"
-        rail={
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <AevatarPanel
-              layoutMode="document"
-              title="Scope"
-              titleHelp="Filter the raw tenant/app/namespace surface when you need operator-level diagnostics."
-            >
-              <ServiceQueryCard
-                draft={draft}
-                onChange={setDraft}
-                onLoad={() => setQuery(trimServiceQuery(draft))}
-                onReset={() => {
-                  const nextDraft = readServiceQueryDraft("");
-                  setDraft(nextDraft);
-                  setQuery(trimServiceQuery(nextDraft));
-                  setSelectedServiceId("");
-                }}
-              />
-            </AevatarPanel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <ServiceQueryCard
+          draft={draft}
+          onChange={setDraft}
+          onLoad={() => setQuery(trimServiceQuery(draft))}
+          onReset={() => {
+            const nextDraft = resolvedScope?.scopeId?.trim()
+              ? {
+                  ...readServiceQueryDraft(""),
+                  appId: defaultScopeServiceAppId,
+                  namespace: defaultScopeServiceNamespace,
+                  tenantId: resolvedScope.scopeId.trim(),
+                }
+              : readServiceQueryDraft("");
+            setDraft(nextDraft);
+            setQuery(trimServiceQuery(nextDraft));
+            setSelectedServiceId("");
+          }}
+        />
 
-            <AevatarPanel layoutMode="document" title="Control Digest">
-              <div
+        <div
+          style={{
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          }}
+        >
+          <ConsoleMetricCard label="服务数" value={digest.services} tone="purple" />
+          <ConsoleMetricCard
+            label="运行中部署"
+            value={digest.activeDeployments}
+          />
+          <ConsoleMetricCard label="可用入口" value={digest.endpoints} />
+          <ConsoleMetricCard
+            label="治理策略"
+            tone="green"
+            value={digest.policies}
+          />
+        </div>
+
+        <AevatarPanel
+          layoutMode="document"
+          padding={0}
+          title="Services"
+        >
+          {servicesQuery.error ? (
+            <Alert
+              title={
+                servicesQuery.error instanceof Error
+                  ? servicesQuery.error.message
+                  : "Failed to load services."
+              }
+              showIcon
+              type="error"
+            />
+          ) : null}
+
+          {servicesQuery.data?.length ? (
+            <div style={{ overflowX: "auto" }}>
+              <table
                 style={{
-                  display: "grid",
-                  gap: 12,
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                  background: "#ffffff",
+                  borderCollapse: "collapse",
+                  borderTop: "1px solid #f0f0f0",
+                  width: "100%",
                 }}
               >
-                <SummaryMetric label="Services" value={digest.services} />
-                <SummaryMetric
-                  label="Deployments"
-                  tone="success"
-                  value={digest.activeDeployments}
-                />
-                <SummaryMetric
-                  label="Endpoints"
-                  tone="info"
-                  value={digest.endpoints}
-                />
-                <SummaryMetric
-                  label="Policies"
-                  tone="warning"
-                  value={digest.policies}
-                />
-              </div>
-            </AevatarPanel>
-
-            <AevatarPanel layoutMode="document" title="Next Actions">
-              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-                <Button onClick={() => history.push("/deployments")}>
-                  Open Deployments
-                </Button>
-                <Button onClick={() => history.push("/governance")}>
-                  Open Governance
-                </Button>
-                <Button onClick={() => history.push(buildRuntimeRunsHref())}>
-                  Open Runs
-                </Button>
-              </Space>
-            </AevatarPanel>
-          </div>
-        }
-        stage={
-          <AevatarPanel
-            layoutMode="document"
-            title="Service Workbench"
-            titleHelp="The stage keeps service identity, serving posture, and operator actions visible at once. Deep lifecycle detail only appears when you explicitly inspect a service."
-          >
-            {servicesQuery.error ? (
-              <Alert
-                title={
-                  servicesQuery.error instanceof Error
-                    ? servicesQuery.error.message
-                    : "Failed to load services."
-                }
-                showIcon
-                type="error"
-              />
-            ) : null}
-
-            <ProList<ServiceCatalogSnapshot>
-              dataSource={servicesQuery.data ?? []}
-              loading={servicesQuery.isLoading}
-              metas={metas}
-              pagination={{ defaultPageSize: 8, showSizeChanger: false }}
-              rowKey="serviceKey"
-              split={false}
-              showActions="hover"
-              itemCardProps={{
-                bodyStyle: { padding: 16 },
-                style: { borderRadius: 12 },
-              }}
-              grid={{ gutter: 16, column: 1 }}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description="No services matched the current scope."
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                ),
-              }}
+                <thead>
+                  <tr>
+                    {["Status", "Name", "Identity", "Deployment", "Endpoints", "Updated", "Actions"].map(
+                      (label) => (
+                        <th
+                          key={label}
+                          style={{
+                            background: "#fafafa",
+                            borderBottom: "1px solid #f0f0f0",
+                            color: "#8c8c8c",
+                            fontSize: 11,
+                            fontWeight: 500,
+                            letterSpacing: 0.3,
+                            padding: "10px 14px",
+                            textAlign: "left",
+                            textTransform: "uppercase",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {label}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(servicesQuery.data ?? []).map((service) => (
+                    <tr key={service.serviceKey}>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                        }}
+                      >
+                        <AevatarStatusTag
+                          domain="governance"
+                          status={service.deploymentStatus || "draft"}
+                        />
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                        }}
+                      >
+                        <div
+                          style={{
+                            color: "#1d2129",
+                            fontSize: 13,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {service.displayName || service.serviceId}
+                        </div>
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          color: "#595959",
+                          fontFamily: '"SF Mono", monospace',
+                          fontSize: 11,
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                        }}
+                      >
+                        {buildServiceSubtitle(service)}
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                        }}
+                      >
+                        {service.deploymentId || "n/a"}
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                        }}
+                      >
+                        {service.endpoints.length}
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          color: "#595959",
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {formatDateTime(service.updatedAt)}
+                      </td>
+                      <td
+                        style={{
+                          borderBottom: "1px solid #f5f5f5",
+                          padding: "12px 14px",
+                          verticalAlign: "top",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <Space size={[8, 8]} wrap>
+                          <Button
+                            onClick={() => setSelectedServiceId(service.serviceId)}
+                            size="small"
+                          >
+                            Details
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              history.push(
+                                `/governance/bindings?tenantId=${encodeURIComponent(
+                                  service.tenantId,
+                                )}&appId=${encodeURIComponent(
+                                  service.appId,
+                                )}&namespace=${encodeURIComponent(
+                                  service.namespace,
+                                )}&serviceId=${encodeURIComponent(service.serviceId)}`,
+                              )
+                            }
+                            size="small"
+                          >
+                            Governance
+                          </Button>
+                        </Space>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty
+              description="No services"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              style={{ padding: 24 }}
             />
-          </AevatarPanel>
-        }
-      />
+          )}
+        </AevatarPanel>
+      </div>
 
       <AevatarContextDrawer
         extra={
@@ -421,92 +488,77 @@ const ServicesPage: React.FC = () => {
         }
         onClose={() => setSelectedServiceId("")}
         open={Boolean(selectedServiceId)}
+        width={820}
         subtitle={
           selectedService
             ? `${selectedService.namespace}/${selectedService.serviceId}`
-            : "Operator inspector"
+            : "Services"
         }
-        title={selectedService?.displayName || selectedServiceId || "Service Inspector"}
+        title={selectedService?.displayName || selectedServiceId || "Service"}
       >
         {!selectedService ? (
-          <AevatarInspectorEmpty description="Choose a service to inspect revisions, deployments, and traffic posture without leaving the catalog." />
+          <AevatarInspectorEmpty description="Select a service" />
         ) : (
           <>
-            <AevatarPanel
-              title="Lifecycle Snapshot"
-              titleHelp="Core service identity and current serving posture."
-            >
-              <div style={summaryFieldGridStyle}>
-                <SummaryField label="Service key" value={selectedService.serviceKey} />
-                <SummaryField
-                  label="Serving revision"
-                  value={
-                    selectedService.activeServingRevisionId ||
-                    selectedService.defaultServingRevisionId ||
-                    "n/a"
-                  }
-                />
-                <SummaryField
-                  label="Deployment"
-                  value={`${selectedService.deploymentStatus || "unknown"}${
-                    selectedService.deploymentId ? ` · ${selectedService.deploymentId}` : ""
-                  }`}
-                />
-                <SummaryField
-                  label="Updated"
-                  value={formatDateTime(selectedService.updatedAt)}
-                />
+            <AevatarPanel title="Summary">
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div>
+                  <Typography.Text style={summaryFieldLabelStyle}>
+                    Service key
+                  </Typography.Text>
+                  <div
+                    style={{
+                      ...codeBlockStyle,
+                      marginTop: 8,
+                      maxHeight: "none",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {selectedService.serviceKey}
+                  </div>
+                </div>
+
+                <div style={summaryFieldGridStyle}>
+                  <SummaryField
+                    label="Serving revision"
+                    value={
+                      selectedService.activeServingRevisionId ||
+                      selectedService.defaultServingRevisionId ||
+                      "n/a"
+                    }
+                  />
+                  <SummaryField
+                    label="Deployment"
+                    value={selectedService.deploymentId || "n/a"}
+                  />
+                  <SummaryField
+                    label="Primary actor"
+                    value={selectedService.primaryActorId || "n/a"}
+                  />
+                  <SummaryField
+                    label="Updated"
+                    value={formatDateTime(selectedService.updatedAt)}
+                  />
+                </div>
               </div>
             </AevatarPanel>
 
-            <AevatarPanel
-              title="Endpoints"
-              titleHelp="Endpoint surface stays compact here so the stage can focus on service cards."
-            >
+            <AevatarPanel title="Endpoints">
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {selectedService.endpoints.length > 0 ? (
                   selectedService.endpoints.map((endpoint) => (
-                    <div
-                      key={endpoint.endpointId}
-                      style={{
-                        border: "1px solid var(--ant-color-border-secondary)",
-                        borderRadius: 12,
-                        padding: 12,
-                      }}
-                    >
-                      <Space orientation="vertical" size={2}>
-                        <Space wrap size={[8, 8]}>
-                          <Typography.Text strong>
-                            {endpoint.displayName || endpoint.endpointId}
-                          </Typography.Text>
-                          <AevatarStatusTag
-                            domain="observation"
-                            label={endpoint.kind || "endpoint"}
-                            status="live"
-                          />
-                        </Space>
-                        <Typography.Text type="secondary">
-                          {endpoint.requestTypeUrl || "No request contract"}
-                        </Typography.Text>
-                        <Typography.Text type="secondary">
-                          {endpoint.description || "No endpoint description."}
-                        </Typography.Text>
-                      </Space>
-                    </div>
+                    <EndpointRow endpoint={endpoint} key={endpoint.endpointId} />
                   ))
                 ) : (
                   <Empty
-                    description="No endpoint catalog has been attached yet."
+                    description="No endpoints"
                     image={Empty.PRESENTED_IMAGE_SIMPLE}
                   />
                 )}
               </div>
             </AevatarPanel>
 
-            <AevatarPanel
-              title="Rollout Posture"
-              titleHelp="Revision, deployment, and traffic signals are grouped here instead of split across dedicated pages."
-            >
+            <AevatarPanel title="Deployments">
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <RolloutDigestSection
                   activeDeployment={activeDeployment}
@@ -527,32 +579,33 @@ const ServicesPage: React.FC = () => {
           </>
         )}
       </AevatarContextDrawer>
-    </AevatarPageShell>
+    </ConsoleMenuPageShell>
   );
 };
 
 const RevisionDigestCard: React.FC<{
   revision: ServiceRevisionSnapshot;
 }> = ({ revision }) => (
-  <div
-    style={{
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 6,
-      padding: 12,
-    }}
-  >
+  <div style={drawerListItemStyle}>
     <Space wrap size={[8, 8]}>
       <Typography.Text strong>{revision.revisionId}</Typography.Text>
       <AevatarStatusTag domain="governance" status={revision.status || "draft"} />
     </Space>
-    <Typography.Text type="secondary">
-      {revision.implementationKind || "Unknown implementation"} · {revision.artifactHash || "No artifact hash"}
+    <Typography.Text style={summaryFieldLabelStyle}>
+      {revision.implementationKind || "workflow"}
+    </Typography.Text>
+    <Typography.Text
+      style={{
+        color: "var(--ant-color-text-secondary)",
+        fontFamily: '"SF Mono", monospace',
+        fontSize: 11,
+        overflowWrap: "anywhere",
+      }}
+    >
+      {revision.artifactHash || "n/a"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Published {formatDateTime(revision.publishedAt)} · Prepared {formatDateTime(revision.preparedAt)}
+      Published {formatDateTime(revision.publishedAt)}
     </Typography.Text>
   </div>
 );
@@ -560,26 +613,20 @@ const RevisionDigestCard: React.FC<{
 const DeploymentDigestCard: React.FC<{
   deployment: ServiceDeploymentSnapshot;
 }> = ({ deployment }) => (
-  <div
-    style={{
-      border: "1px solid var(--ant-color-border-secondary)",
-      borderRadius: 12,
-      display: "flex",
-      flexDirection: "column",
-      gap: 6,
-      padding: 12,
-    }}
-  >
+  <div style={drawerListItemStyle}>
     <Space wrap size={[8, 8]}>
       <DeploymentUnitOutlined />
       <Typography.Text strong>{deployment.deploymentId}</Typography.Text>
       <AevatarStatusTag domain="governance" status={deployment.status || "pending"} />
     </Space>
     <Typography.Text type="secondary">
-      Revision {deployment.revisionId || "n/a"} · Actor {deployment.primaryActorId || "n/a"}
+      Revision {deployment.revisionId || "n/a"}
     </Typography.Text>
     <Typography.Text type="secondary">
-      Activated {formatDateTime(deployment.activatedAt)} · Updated {formatDateTime(deployment.updatedAt)}
+      Actor {deployment.primaryActorId || "n/a"}
+    </Typography.Text>
+    <Typography.Text type="secondary">
+      Activated {formatDateTime(deployment.activatedAt)}
     </Typography.Text>
   </div>
 );
@@ -602,29 +649,19 @@ const RolloutDigestSection: React.FC<{
       style={{
         display: "grid",
         gap: 12,
-        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+        gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
       }}
     >
-      <SummaryMetric
+      <DrawerMetric
         label="Active deployment"
-        tone={resolveAevatarSemanticTone("governance", activeDeployment?.status || "pending")}
         value={activeDeployment?.deploymentId || "n/a"}
       />
-      <SummaryMetric
+      <DrawerMetric
         label="Latest revision"
-        tone={resolveAevatarSemanticTone("governance", latestRevision?.status || "draft")}
         value={latestRevision?.revisionId || "n/a"}
       />
-      <SummaryMetric
-        label="Traffic endpoints"
-        tone="info"
-        value={traffic.length}
-      />
-      <SummaryMetric
-        label="Weight ceiling"
-        tone={dominantTrafficWeight >= 100 ? "success" : "warning"}
-        value={`${dominantTrafficWeight}%`}
-      />
+      <DrawerMetric label="Traffic" value={traffic.length} />
+      <DrawerMetric label="Weights" value={`${dominantTrafficWeight}%`} />
     </div>
   );
 };

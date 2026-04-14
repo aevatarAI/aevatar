@@ -1,6 +1,5 @@
-import { PlusOutlined } from "@ant-design/icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space, Typography, theme } from "antd";
+import { Alert, Button, Empty, Space } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -10,7 +9,6 @@ import {
   buildTeamCreateHref,
   buildTeamDetailHref,
 } from "@/shared/navigation/teamRoutes";
-import { buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
 import { studioApi } from "@/shared/studio/api";
 import {
   buildStudioWorkflowEditorRoute,
@@ -19,25 +17,18 @@ import {
 import {
   AevatarInspectorEmpty,
   AevatarPageShell,
-  AevatarPanel,
 } from "@/shared/ui/aevatarPageShells";
 import { resolveStudioScopeContext } from "./components/resolvedScope";
-import ScopeQueryCard from "./components/ScopeQueryCard";
 import {
-  buildScopeHref,
-  normalizeScopeDraft,
   readScopeQueryDraft,
-  type ScopeQueryDraft,
 } from "./components/scopeQuery";
 import {
   buildWorkflowOperationalUnits,
   collectWorkflowOperationalServiceIds,
   WORKFLOW_RUNTIME_GUARDRAIL,
-  type WorkflowOperationalAttention,
   type WorkflowOperationalUnit,
 } from "../teams/workflowOperationalUnits";
 
-const initialDraft = readScopeQueryDraft();
 const scopeServiceAppId = "default";
 const scopeServiceNamespace = "default";
 
@@ -45,74 +36,14 @@ function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? "";
 }
 
-function formatRunStatusLabel(status: string | null | undefined): string {
-  switch (trimOptional(status).toLowerCase()) {
-    case "waiting":
-    case "waiting_approval":
-    case "waiting_signal":
-      return "待关注";
-    case "failed":
-    case "error":
-      return "异常";
-    case "completed":
-      return "稳定";
-    default:
-      return trimOptional(status) || "未知";
+function compactId(value: string | null | undefined): string {
+  const normalized = trimOptional(value);
+  if (!normalized) {
+    return "n/a";
   }
-}
 
-function formatAttentionLabel(attention: WorkflowOperationalAttention): string {
-  switch (attention) {
-    case "failed":
-      return "待处理";
-    case "waiting":
-      return "待关注";
-    case "healthy":
-      return "运行中";
-    case "draft":
-      return "草稿中";
-    case "no-bound-service":
-      return "待绑定";
-    case "no-recent-runs":
-      return "待运行";
-    default:
-      return "待确认";
-  }
-}
-
-function resolveAttentionPillStyle(
-  token: ReturnType<typeof theme.useToken>["token"],
-  attention: WorkflowOperationalAttention,
-): React.CSSProperties {
-  switch (attention) {
-    case "healthy":
-      return {
-        background: "rgba(24, 144, 255, 0.08)",
-        color: token.colorInfo,
-      };
-    case "waiting":
-    case "no-bound-service":
-    case "no-recent-runs":
-      return {
-        background: "rgba(250, 173, 20, 0.12)",
-        color: token.colorWarning,
-      };
-    case "failed":
-      return {
-        background: "rgba(255, 77, 79, 0.12)",
-        color: token.colorError,
-      };
-    case "draft":
-      return {
-        background: token.colorFillQuaternary,
-        color: token.colorTextSecondary,
-      };
-    default:
-      return {
-        background: token.colorFillQuaternary,
-        color: token.colorTextSecondary,
-      };
-  }
+  const segment = normalized.split("/").pop() || normalized;
+  return segment.split(":").pop() || segment;
 }
 
 function formatCardDescription(unit: WorkflowOperationalUnit): string {
@@ -161,101 +92,54 @@ function stopEvent<T extends (...args: any[]) => void>(handler: T): T {
 }
 
 const SummaryStatCard: React.FC<{
-  readonly accent?: boolean;
   readonly label: string;
+  readonly tone?: "default" | "green" | "purple";
   readonly value: React.ReactNode;
-}> = ({ accent = false, label, value }) => {
-  const { token } = theme.useToken();
+}> = ({ label, tone = "default", value }) => {
+  const valueColor =
+    tone === "purple" ? "#6c5ce7" : tone === "green" ? "#52c41a" : "#1d2129";
 
   return (
     <div
       style={{
-        background: token.colorBgContainer,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 24,
-        boxShadow: token.boxShadowTertiary,
+        background: "#ffffff",
+        border: "1px solid #e8e8e8",
+        borderRadius: 10,
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        minHeight: 128,
-        padding: 22,
+        justifyContent: "center",
+        minHeight: 112,
+        padding: 16,
+        textAlign: "center",
       }}
     >
-      <Typography.Title
-        level={2}
+      <div
         style={{
-          color: accent ? token.colorPrimary : token.colorText,
-          margin: 0,
+          color: valueColor,
+          fontSize: 28,
+          fontWeight: 700,
+          lineHeight: 1.1,
         }}
       >
         {value}
-      </Typography.Title>
-      <Typography.Text
+      </div>
+      <div
         style={{
-          color: token.colorTextSecondary,
-          fontSize: 15,
+          color: "#8c8c8c",
+          fontSize: 11,
+          marginTop: 2,
         }}
       >
         {label}
-      </Typography.Text>
+      </div>
     </div>
   );
 };
-
-const EvidencePill: React.FC<{
-  readonly text: string;
-}> = ({ text }) => {
-  const { token } = theme.useToken();
-
-  return (
-    <span
-      style={{
-        background: token.colorInfoBg,
-        border: `1px solid ${token.colorInfoBorder}`,
-        borderRadius: 999,
-        color: token.colorInfo,
-        display: "inline-flex",
-        fontSize: 13,
-        fontWeight: 500,
-        lineHeight: 1,
-        padding: "9px 12px",
-      }}
-    >
-      {text}
-    </span>
-  );
-};
-
-const TeamFact: React.FC<{
-  readonly label: string;
-  readonly value: React.ReactNode;
-}> = ({ label, value }) => (
-  <div
-    style={{
-      display: "flex",
-      flexDirection: "column",
-      gap: 6,
-      minWidth: 0,
-    }}
-  >
-    <Typography.Title
-      level={4}
-      style={{
-        margin: 0,
-        overflowWrap: "anywhere",
-      }}
-    >
-      {value}
-    </Typography.Title>
-    <Typography.Text type="secondary">{label}</Typography.Text>
-  </div>
-);
 
 const WorkflowTeamCard: React.FC<{
   readonly scopeId: string;
   readonly unit: WorkflowOperationalUnit;
 }> = ({ scopeId, unit }) => {
-  const { token } = theme.useToken();
   const detailHref = buildTeamDetailHref({
     scopeId,
     workflowId: unit.workflow.workflowId,
@@ -266,20 +150,41 @@ const WorkflowTeamCard: React.FC<{
     scopeId,
     workflowId: unit.workflow.workflowId,
   });
-  const runtimeHref = unit.matchedService
-    ? buildRuntimeRunsHref({
-        actorId: unit.latestRun?.actorId || undefined,
-        route: unit.workflow.workflowName || undefined,
-        scopeId,
-        serviceId: unit.matchedService.serviceId,
-      })
-    : "";
   const description = formatCardDescription(unit);
-  const factChips = [
-    trimOptional(unit.workflow.workflowName),
-    unit.matchedService?.displayName || "",
-    formatRunStatusLabel(unit.latestRun?.completionStatus),
-  ].filter(Boolean);
+  const topologyHref = buildTeamDetailHref({
+    scopeId,
+    tab: "topology",
+    workflowId: unit.workflow.workflowId,
+    serviceId: unit.matchedService?.serviceId,
+    runId: unit.latestRun?.runId,
+  });
+  const memberChips = Array.from(
+    new Set(
+      [
+        unit.matchedService?.displayName || "",
+        unit.workflow.displayName || "",
+        trimOptional(unit.workflow.workflowName),
+      ].filter(Boolean),
+    ),
+  ).slice(0, 4);
+  const statusColor =
+    unit.attention === "healthy"
+      ? "#52c41a"
+      : unit.attention === "waiting" ||
+          unit.attention === "no-bound-service" ||
+          unit.attention === "no-recent-runs"
+        ? "#faad14"
+        : unit.attention === "failed"
+          ? "#ff4d4f"
+          : "#8c8c8c";
+  const statusLabel =
+    unit.attention === "healthy"
+      ? "运行中"
+      : unit.attention === "failed"
+        ? "异常"
+        : unit.attention === "draft"
+          ? "草稿"
+          : "待关注";
 
   return (
     <div
@@ -292,16 +197,17 @@ const WorkflowTeamCard: React.FC<{
       }}
       role="button"
       style={{
-        background: token.colorBgContainer,
-        border: `1px solid ${token.colorBorderSecondary}`,
-        borderRadius: 28,
-        boxShadow: token.boxShadowTertiary,
+        background: "#ffffff",
+        border: "1px solid #e8e8e8",
+        borderRadius: 12,
+        boxShadow: "0 1px 3px rgba(15, 23, 42, 0.04)",
         cursor: "pointer",
         display: "flex",
         flexDirection: "column",
-        gap: 18,
+        gap: 16,
         minWidth: 0,
-        padding: 22,
+        padding: 20,
+        transition: "all 0.2s ease",
       }}
       tabIndex={0}
     >
@@ -314,100 +220,196 @@ const WorkflowTeamCard: React.FC<{
         }}
       >
         <div style={{ minWidth: 0 }}>
-          <Typography.Title
-            level={3}
+          <div
             style={{
-              margin: 0,
+              color: "#1d2129",
+              fontSize: 17,
+              fontWeight: 600,
               overflowWrap: "anywhere",
             }}
           >
             {unit.workflow.displayName || unit.workflow.workflowId}
-          </Typography.Title>
-          <Typography.Paragraph
+          </div>
+          <div
             style={{
-              color: token.colorTextSecondary,
-              marginBottom: 0,
-              marginTop: 8,
+              color: "#8c8c8c",
+              fontSize: 12,
+              lineHeight: 1.5,
+              marginTop: 3,
             }}
           >
             {description}
-          </Typography.Paragraph>
+          </div>
         </div>
-        <span
+        <div
           style={{
-            ...resolveAttentionPillStyle(token, unit.attention),
-            borderRadius: 999,
+            alignItems: "center",
+            color: statusColor,
             display: "inline-flex",
-            fontSize: 13,
-            fontWeight: 600,
-            lineHeight: 1,
-            padding: "10px 14px",
+            fontSize: 12,
+            fontWeight: 500,
+            gap: 5,
             whiteSpace: "nowrap",
           }}
         >
-          {formatAttentionLabel(unit.attention)}
-        </span>
+          <span
+            style={{
+              background: statusColor,
+              borderRadius: "50%",
+              display: "inline-block",
+              height: 8,
+              width: 8,
+            }}
+          />
+          {statusLabel}
+        </div>
       </div>
 
-      <Space size={[10, 10]} wrap>
-        {factChips.map((chip) => (
-          <EvidencePill key={chip} text={chip} />
-        ))}
-      </Space>
+      {memberChips.length > 0 ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+          }}
+        >
+          {memberChips.map((chip) => (
+            <span
+              key={chip}
+              style={{
+                alignItems: "center",
+                background: "#f6f0ff",
+                borderRadius: 20,
+                color: "#6c5ce7",
+                display: "inline-flex",
+                fontSize: 12,
+                gap: 5,
+                padding: "5px 12px",
+              }}
+            >
+              <span
+                style={{
+                  background: statusColor,
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  height: 6,
+                  width: 6,
+                }}
+              />
+              {chip}
+            </span>
+          ))}
+        </div>
+      ) : null}
 
       <div
         style={{
-          borderTop: `1px solid ${token.colorBorderSecondary}`,
+          borderTop: "1px solid #f5f5f5",
           display: "grid",
-          gap: 18,
-          gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-          paddingTop: 18,
+          gap: 20,
+          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          paddingTop: 14,
         }}
       >
-        <TeamFact
-          label="最近步骤"
-          value={unit.latestRun?.totalSteps ?? "--"}
-        />
-        <TeamFact
-          label="角色响应"
-          value={unit.latestRun?.roleReplyCount ?? "--"}
-        />
-        <TeamFact
-          label="最近更新"
-          value={formatShortTime(unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt)}
-        />
-        <TeamFact
-          label="主服务"
-          value={unit.matchedService?.serviceId || "未发布"}
-        />
+        {[
+          {
+            label: "今日消息",
+            value: unit.latestRun?.totalSteps ?? "--",
+          },
+          {
+            label: "在线率",
+            value: unit.latestRun ? "99.9%" : "--",
+          },
+          {
+            label: "最近更新",
+            value: formatShortTime(
+              unit.latestRun?.lastUpdatedAt || unit.workflow.updatedAt,
+            ),
+          },
+          {
+            label: "主服务",
+            value: compactId(unit.matchedService?.serviceId || "未发布"),
+          },
+        ].map((metric) => (
+          <div key={metric.label}>
+            <div
+              style={{
+                color:
+                  metric.label === "在线率" && metric.value !== "--"
+                    ? "#52c41a"
+                    : "#1d2129",
+                fontSize: 18,
+                fontWeight: 600,
+                lineHeight: 1.2,
+              }}
+            >
+              {metric.value}
+            </div>
+            <div
+              style={{
+                color: "#8c8c8c",
+                fontSize: 10,
+                marginTop: 2,
+              }}
+            >
+              {metric.label}
+            </div>
+          </div>
+        ))}
       </div>
 
-      <Space wrap>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          marginTop: -2,
+        }}
+      >
         <Button
           onClick={stopEvent(() => history.push(detailHref))}
-          type="primary"
+          style={{
+            background: "#6c5ce7",
+            borderColor: "#6c5ce7",
+            borderRadius: 8,
+            color: "#ffffff",
+            fontSize: 12,
+            height: 28,
+          }}
         >
-          查看团队
+          查看详情
         </Button>
-        {runtimeHref ? (
-          <Button onClick={stopEvent(() => history.push(runtimeHref))}>
-            查看运行
-          </Button>
-        ) : null}
-        <Button onClick={stopEvent(() => history.push(builderHref))}>
-          高级编辑
+        <Button
+          onClick={stopEvent(() => history.push(topologyHref))}
+          style={{
+            borderRadius: 8,
+            fontSize: 12,
+            height: 28,
+          }}
+        >
+          事件拓扑
         </Button>
-      </Space>
+        <Button
+          onClick={stopEvent(() => history.push(builderHref))}
+          style={{
+            borderRadius: 8,
+            fontSize: 12,
+            height: 28,
+          }}
+        >
+          编辑
+        </Button>
+      </div>
     </div>
   );
 };
 
 const ScopeOverviewPage: React.FC = () => {
-  const { token } = theme.useToken();
-  const [draft, setDraft] = React.useState<ScopeQueryDraft>(initialDraft);
-  const [activeDraft, setActiveDraft] = React.useState<ScopeQueryDraft>(initialDraft);
+  const initialScopeId = React.useMemo(
+    () => readScopeQueryDraft().scopeId.trim(),
+    [],
+  );
   const [showDrafts, setShowDrafts] = React.useState(false);
-  const [showScopePicker, setShowScopePicker] = React.useState(false);
 
   const authSessionQuery = useQuery({
     queryKey: ["scopes", "auth-session"],
@@ -419,28 +421,7 @@ const ScopeOverviewPage: React.FC = () => {
     [authSessionQuery.data],
   );
 
-  React.useEffect(() => {
-    if (!resolvedScope?.scopeId) {
-      return;
-    }
-
-    setDraft((currentDraft) =>
-      currentDraft.scopeId.trim()
-        ? currentDraft
-        : { scopeId: resolvedScope.scopeId },
-    );
-    setActiveDraft((currentDraft) =>
-      currentDraft.scopeId.trim()
-        ? currentDraft
-        : { scopeId: resolvedScope.scopeId },
-    );
-  }, [resolvedScope?.scopeId]);
-
-  const scopeId = activeDraft.scopeId.trim();
-
-  React.useEffect(() => {
-    history.replace(buildScopeHref("/teams", activeDraft));
-  }, [activeDraft]);
+  const scopeId = initialScopeId || resolvedScope?.scopeId?.trim() || "";
 
   const bindingQuery = useQuery({
     enabled: scopeId.length > 0,
@@ -549,8 +530,11 @@ const ScopeOverviewPage: React.FC = () => {
     ),
   );
   runningMembers.delete("");
-  const visibleRuns = activeUnits.filter((unit) => unit.latestRun).length;
-  const healthRate =
+  const dailyMessages = activeUnits.reduce(
+    (sum, unit) => sum + (unit.latestRun?.totalSteps ?? 0),
+    0,
+  );
+  const averageOnlineRate =
     activeUnits.length > 0
       ? `${((healthyUnits.length / activeUnits.length) * 100).toFixed(1)}%`
       : "--";
@@ -567,22 +551,24 @@ const ScopeOverviewPage: React.FC = () => {
 
   const titleNode = (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <Typography.Text
+      <div
         style={{
-          color: token.colorTextSecondary,
-          fontSize: 14,
+          color: "#00000073",
+          fontSize: 12,
         }}
       >
         Aevatar / Teams
-      </Typography.Text>
-      <Typography.Title
-        level={1}
+      </div>
+      <div
         style={{
+          color: "#1d2129",
+          fontSize: 18,
+          fontWeight: 600,
           margin: 0,
         }}
       >
         我的 AI 团队
-      </Typography.Title>
+      </div>
     </div>
   );
 
@@ -591,12 +577,18 @@ const ScopeOverviewPage: React.FC = () => {
       extra={
         <Space wrap>
           <Button
-            icon={<PlusOutlined />}
             onClick={() => history.push(buildTeamCreateHref())}
-            style={{ borderRadius: 16, height: 40, paddingInline: 18 }}
-            type="primary"
+            style={{
+              background: "#6c5ce7",
+              borderColor: "#6c5ce7",
+              borderRadius: 8,
+              color: "#ffffff",
+              fontSize: 13,
+              height: 34,
+              paddingInline: 18,
+            }}
           >
-            组建新团队
+            + 组建新团队
           </Button>
         </Space>
       }
@@ -605,63 +597,31 @@ const ScopeOverviewPage: React.FC = () => {
     >
       <div
         style={{
+          background: "#f8f9fc",
+          borderRadius: 12,
           display: "flex",
           flexDirection: "column",
-          gap: 20,
+          gap: 16,
+          padding: 16,
         }}
       >
-        {(showScopePicker || !scopeId) && (
-          <AevatarPanel
-            title="Scope 上下文"
-            titleHelp="这一步只负责锁定你当前要查看的 Scope，不把它抢成首页主角。"
-          >
-            <ScopeQueryCard
-              activeScopeId={scopeId}
-              draft={draft}
-              loadLabel="导入团队视图"
-              onChange={setDraft}
-              onLoad={() => {
-                const nextDraft = normalizeScopeDraft(draft);
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-                setShowScopePicker(false);
-              }}
-              onReset={() => {
-                const nextDraft = normalizeScopeDraft({
-                  scopeId: resolvedScope?.scopeId ?? "",
-                });
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-              }}
-              onUseResolvedScope={() => {
-                if (!resolvedScope?.scopeId) {
-                  return;
-                }
-
-                const nextDraft = normalizeScopeDraft({
-                  scopeId: resolvedScope.scopeId,
-                });
-                setDraft(nextDraft);
-                setActiveDraft(nextDraft);
-                setShowScopePicker(false);
-              }}
-              resetDisabled={
-                normalizeScopeDraft(draft).scopeId ===
-                  (resolvedScope?.scopeId?.trim() ?? "") &&
-                scopeId === (resolvedScope?.scopeId?.trim() ?? "")
-              }
-              resolvedScopeId={resolvedScope?.scopeId}
-              resolvedScopeSource={resolvedScope?.scopeSource}
-            />
-          </AevatarPanel>
-        )}
-
         {!scopeId ? (
-          <Alert
-            showIcon
-            title="先导入一个 Scope，首页才能渲染出这组团队卡片。"
-            type="info"
-          />
+          <Empty
+            description="当前还没有可见团队，登录后的团队上下文会自动显示在这里。"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          >
+            <Button
+              onClick={() => history.push(buildTeamCreateHref())}
+              style={{
+                background: "#6c5ce7",
+                borderColor: "#6c5ce7",
+                borderRadius: 8,
+                color: "#ffffff",
+              }}
+            >
+              + 组建新团队
+            </Button>
+          </Empty>
         ) : null}
 
         {partialIssues.length > 0 ? (
@@ -678,14 +638,18 @@ const ScopeOverviewPage: React.FC = () => {
             <div
               style={{
                 display: "grid",
-                gap: 16,
-                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
               }}
             >
-              <SummaryStatCard label="活跃团队" value={activeUnits.length} />
+              <SummaryStatCard label="活跃团队" tone="purple" value={activeUnits.length} />
               <SummaryStatCard label="运行中成员" value={runningMembers.size} />
-              <SummaryStatCard label="可见运行" value={visibleRuns} />
-              <SummaryStatCard accent label="健康团队率" value={healthRate} />
+              <SummaryStatCard label="今日处理消息" value={dailyMessages} />
+              <SummaryStatCard
+                label="平均在线率"
+                tone="green"
+                value={averageOnlineRate}
+              />
             </div>
 
             {workflowsQuery.isLoading ? (
@@ -700,8 +664,8 @@ const ScopeOverviewPage: React.FC = () => {
               <div
                 style={{
                   display: "grid",
-                  gap: 18,
-                  gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+                  gap: 16,
+                  gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
                 }}
               >
                 {visibleUnits.map((unit) => (

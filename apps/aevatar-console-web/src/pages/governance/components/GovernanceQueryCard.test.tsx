@@ -31,12 +31,6 @@ describe('GovernanceQueryCard', () => {
       />,
     );
 
-    expect(
-      screen.getByText(
-        'Select a service to hydrate the identity fields for this Governance view.',
-      ),
-    ).toBeInTheDocument();
-
     await waitFor(() =>
       expect(onChange).toHaveBeenCalledWith({
         tenantId: 't1',
@@ -69,10 +63,5 @@ describe('GovernanceQueryCard', () => {
       screen.getByText('Enter tenantId and namespace first'),
     ).toBeInTheDocument();
     expect(screen.getByRole('combobox')).toBeDisabled();
-    expect(
-      screen.getByText(
-        'This Governance view needs tenantId and namespace first. Most user flows should stay on Project pages or open this page from Services.',
-      ),
-    ).toBeInTheDocument();
   });
 });

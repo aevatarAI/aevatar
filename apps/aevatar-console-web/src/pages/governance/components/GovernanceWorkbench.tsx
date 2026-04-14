@@ -7,7 +7,7 @@ import {
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import type { ProListMetas } from "@ant-design/pro-components";
-import { PageContainer, ProList } from "@ant-design/pro-components";
+import { ProList } from "@ant-design/pro-components";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -22,6 +22,8 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { governanceApi } from "@/shared/api/governanceApi";
 import { servicesApi } from "@/shared/api/servicesApi";
 import { history } from "@/shared/navigation/history";
+import { resolveStudioScopeContext } from "@/shared/scope/context";
+import { studioApi } from "@/shared/studio/api";
 import type {
   ActivationCapabilityView,
   GovernanceIdentityInput,
@@ -45,7 +47,8 @@ import {
   resolveAevatarSemanticTone,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
-import { AevatarTitleWithHelp } from "@/shared/ui/aevatarPageShells";
+import ConsoleMetricCard from "@/shared/ui/ConsoleMetricCard";
+import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import GovernanceAuditTimeline, {
   type GovernanceAuditEvent,
 } from "./GovernanceAuditTimeline";
@@ -57,6 +60,7 @@ import GovernanceQueryCard from "./GovernanceQueryCard";
 import type { GovernanceRevisionOption } from "./GovernanceQueryCard";
 import { GovernanceSelectionNotice } from "./GovernanceResultPanels";
 import {
+  applyGovernanceServiceSelection,
   buildGovernanceWorkbenchHref,
   buildGovernanceServiceOptions,
   type GovernanceWorkbenchView,
@@ -74,10 +78,12 @@ type GovernanceNotice = {
 };
 
 type GovernanceViewMeta = {
-  description: string;
   path: string;
   title: string;
 };
+
+const defaultScopeServiceAppId = "default";
+const defaultScopeServiceNamespace = "default";
 
 type GovernanceViewActionConfig = {
   label: string;
@@ -88,32 +94,22 @@ type GovernanceViewActionConfig = {
 
 const governanceViewMeta: Record<GovernanceWorkbenchView, GovernanceViewMeta> = {
   activation: {
-    description:
-      "Assemble the revision-specific governance posture before a service can safely enter production.",
     path: "/governance/activation",
     title: "Activation",
   },
   audit: {
-    description:
-      "A timeline-first control room for who changed governance, when it moved, and what service surface was affected.",
     path: "/governance",
     title: "Audit",
   },
   bindings: {
-    description:
-      "Trace dependency bindings, service edges, secrets, and retirement posture without leaving the current service.",
     path: "/governance/bindings",
     title: "Bindings",
   },
   endpoints: {
-    description:
-      "Inspect and reshape endpoint exposure so rollout policy and runtime reachability stay in sync.",
     path: "/governance/endpoints",
     title: "Endpoints",
   },
   policies: {
-    description:
-      "Manage caller policy, activation requirements, and deployment gates from a single high-density workbench.",
     path: "/governance/policies",
     title: "Policies",
   },
@@ -492,6 +488,15 @@ const GovernanceWorkbench: React.FC = () => {
   const [drawerTarget, setDrawerTarget] = useState<GovernanceInspectorTarget | null>(
     null,
   );
+  const authSessionQuery = useQuery({
+    queryKey: ["governance", "auth-session"],
+    queryFn: () => studioApi.getAuthSession(),
+    retry: false,
+  });
+  const resolvedScope = useMemo(
+    () => resolveStudioScopeContext(authSessionQuery.data),
+    [authSessionQuery.data],
+  );
 
   const serviceQuery = useMemo(() => normalizeGovernanceQuery(draft), [draft]);
   const activeQuery = useMemo(
@@ -582,6 +587,96 @@ const GovernanceWorkbench: React.FC = () => {
       })),
     [revisionsQuery.data],
   );
+
+  useEffect(() => {
+    const scopeId = resolvedScope?.scopeId?.trim();
+    if (!scopeId) {
+      return;
+    }
+
+    if (
+      draft.tenantId.trim() ||
+      draft.appId.trim() ||
+      draft.namespace.trim()
+    ) {
+      return;
+    }
+
+    const nextDraft = {
+      ...draft,
+      appId: defaultScopeServiceAppId,
+      namespace: defaultScopeServiceNamespace,
+      tenantId: scopeId,
+    };
+    setDraft(nextDraft);
+    if (
+      !activeDraft.tenantId.trim() &&
+      !activeDraft.appId.trim() &&
+      !activeDraft.namespace.trim() &&
+      !activeDraft.serviceId.trim()
+    ) {
+      setActiveDraft(nextDraft);
+    }
+  }, [activeDraft, draft, resolvedScope?.scopeId]);
+
+  useEffect(() => {
+    if (!serviceOptions.length || activeDraft.serviceId.trim()) {
+      return;
+    }
+
+    const nextDraft = applyGovernanceServiceSelection(
+      {
+        ...draft,
+        appId: draft.appId.trim() || serviceOptions[0].appId,
+        namespace: draft.namespace.trim() || serviceOptions[0].namespace,
+        tenantId: draft.tenantId.trim() || serviceOptions[0].tenantId,
+      },
+      serviceOptions[0],
+    );
+
+    setDraft((currentDraft) =>
+      currentDraft.serviceId.trim() ? currentDraft : nextDraft,
+    );
+    setActiveDraft((currentDraft) =>
+      currentDraft.serviceId.trim() ? currentDraft : nextDraft,
+    );
+    setShowContextPicker(false);
+    history.replace(buildGovernanceWorkbenchHref(nextDraft, view));
+  }, [activeDraft.serviceId, draft, serviceOptions, view]);
+
+  useEffect(() => {
+    if (
+      view !== "activation" ||
+      !preferredRevisionId.trim() ||
+      !activeDraft.serviceId.trim() ||
+      activeDraft.revisionId.trim()
+    ) {
+      return;
+    }
+
+    setDraft((currentDraft) =>
+      currentDraft.serviceId.trim() && !currentDraft.revisionId.trim()
+        ? {
+            ...currentDraft,
+            revisionId: preferredRevisionId,
+          }
+        : currentDraft,
+    );
+    setActiveDraft((currentDraft) =>
+      currentDraft.serviceId.trim() && !currentDraft.revisionId.trim()
+        ? {
+            ...currentDraft,
+            revisionId: preferredRevisionId,
+          }
+        : currentDraft,
+    );
+    setShowContextPicker(false);
+  }, [
+    activeDraft.revisionId,
+    activeDraft.serviceId,
+    preferredRevisionId,
+    view,
+  ]);
 
   useEffect(() => {
     if (view === "activation" && !activeDraft.revisionId.trim()) {
@@ -1140,7 +1235,6 @@ const GovernanceWorkbench: React.FC = () => {
     if (!hasSelectedServiceContext) {
       return (
         <GovernanceSelectionNotice
-          description="Load a service context to inspect live governance, endpoint exposure, and activation posture."
           title="Select a service"
         />
       );
@@ -1149,7 +1243,6 @@ const GovernanceWorkbench: React.FC = () => {
     if (targetView === "activation" && !activeDraft.revisionId.trim()) {
       return (
         <GovernanceSelectionNotice
-          description="Choose a revision before opening the activation diagnostic."
           title="Select a revision"
         />
       );
@@ -1184,8 +1277,8 @@ const GovernanceWorkbench: React.FC = () => {
           }}
           locale={{
             emptyText: policiesQuery.isLoading
-              ? "Loading policies..."
-              : "No governance policies have been materialized yet.",
+              ? "Loading..."
+              : "No policies",
           }}
           metas={policyListMetas}
           pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -1213,8 +1306,8 @@ const GovernanceWorkbench: React.FC = () => {
           }}
           locale={{
             emptyText: bindingsQuery.isLoading
-              ? "Loading bindings..."
-              : "No bindings were found for the current service.",
+              ? "Loading..."
+              : "No bindings",
           }}
           metas={bindingListMetas}
           pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -1242,8 +1335,8 @@ const GovernanceWorkbench: React.FC = () => {
           }}
           locale={{
             emptyText: endpointsQuery.isLoading
-              ? "Loading endpoint exposure..."
-              : "No endpoint catalog has been published for this service.",
+              ? "Loading..."
+              : "No endpoints",
           }}
           metas={endpointListMetas}
           pagination={{ pageSize: 8, showSizeChanger: false }}
@@ -1300,14 +1393,9 @@ const GovernanceWorkbench: React.FC = () => {
             boxShadow: "none",
           }}
         >
-          <Space orientation="vertical" size={10} style={{ display: "flex" }}>
+          <Space direction="vertical" size={10} style={{ display: "flex" }}>
             <Typography.Text strong>
               Revision {activationRevisionId || "unresolved"}
-            </Typography.Text>
-            <Typography.Text type="secondary">
-              Use this diagnostic before promotion to confirm that policies,
-              bindings, and endpoint exposure compose into a valid governance
-              envelope.
             </Typography.Text>
             <Space wrap size={[8, 8]}>
               <WorkbenchStatusTag
@@ -1342,7 +1430,7 @@ const GovernanceWorkbench: React.FC = () => {
               boxShadow: "none",
             }}
           >
-            <Space orientation="vertical" size={10} style={{ display: "flex" }}>
+            <Space direction="vertical" size={10} style={{ display: "flex" }}>
               <Typography.Text strong>Missing policies</Typography.Text>
               {activationQuery.data?.missingPolicyIds.length ? (
                 activationQuery.data.missingPolicyIds.map((policyId) => (
@@ -1351,9 +1439,7 @@ const GovernanceWorkbench: React.FC = () => {
                   </Tag>
                 ))
               ) : (
-                <Typography.Text type="secondary">
-                  No missing policies detected.
-                </Typography.Text>
+                <Typography.Text type="secondary">None</Typography.Text>
               )}
             </Space>
           </div>
@@ -1367,7 +1453,7 @@ const GovernanceWorkbench: React.FC = () => {
               boxShadow: "none",
             }}
           >
-            <Space orientation="vertical" size={10} style={{ display: "flex" }}>
+            <Space direction="vertical" size={10} style={{ display: "flex" }}>
               <Typography.Text strong>Bindings in scope</Typography.Text>
               {(activationQuery.data?.bindings ?? []).length > 0 ? (
                 activationQuery.data?.bindings.map((binding) => (
@@ -1392,9 +1478,7 @@ const GovernanceWorkbench: React.FC = () => {
                   </button>
                 ))
               ) : (
-                <Typography.Text type="secondary">
-                  No bound inputs were materialized.
-                </Typography.Text>
+                <Typography.Text type="secondary">None</Typography.Text>
               )}
             </Space>
           </div>
@@ -1408,7 +1492,7 @@ const GovernanceWorkbench: React.FC = () => {
               boxShadow: "none",
             }}
           >
-            <Space orientation="vertical" size={10} style={{ display: "flex" }}>
+            <Space direction="vertical" size={10} style={{ display: "flex" }}>
               <Typography.Text strong>Exposed endpoints</Typography.Text>
               {(activationQuery.data?.endpoints ?? []).length > 0 ? (
                 activationQuery.data?.endpoints.map((endpoint) => (
@@ -1433,9 +1517,7 @@ const GovernanceWorkbench: React.FC = () => {
                   </button>
                 ))
               ) : (
-                <Typography.Text type="secondary">
-                  No endpoints are exposed by this revision.
-                </Typography.Text>
+                <Typography.Text type="secondary">None</Typography.Text>
               )}
             </Space>
           </div>
@@ -1463,13 +1545,9 @@ const GovernanceWorkbench: React.FC = () => {
   ]);
 
   return (
-    <PageContainer
-      title={
-        <AevatarTitleWithHelp
-          help="Governance now follows the same focused workbench rhythm as Mission Control, Studio, and Deployments: keep the primary decision surface in the center and move heavy detail into the inspector only when it matters."
-          title="Governance"
-        />
-      }
+    <ConsoleMenuPageShell
+      breadcrumb="Aevatar / Platform"
+      title="Governance"
     >
       <div style={buildAevatarViewportStyle(surfaceToken)}>
         {notice ? (
@@ -1482,36 +1560,64 @@ const GovernanceWorkbench: React.FC = () => {
           />
         ) : null}
 
-        {showContextPicker || !hasSelectedServiceContext ? (
-          <GovernanceQueryCard
-            draft={draft}
-            includeRevision={view === "activation"}
-            loadLabel={
-              view === "activation" ? "Load activation capability" : "Load governance"
-            }
-            onChange={setDraft}
-            onLoad={() => {
-              const nextActiveDraft = normalizeGovernanceDraft(draft);
-              setDraft(nextActiveDraft);
-              setActiveDraft(nextActiveDraft);
-              setShowContextPicker(false);
-              history.replace(
-                buildGovernanceWorkbenchHref(nextActiveDraft, view),
-              );
-            }}
-            onReset={() => {
-              const nextDraft = readGovernanceDraft("");
-              setDraft(nextDraft);
-              setActiveDraft(nextDraft);
-              setShowContextPicker(true);
-              history.replace(buildGovernanceWorkbenchHref(nextDraft, view));
-            }}
-            revisionOptions={revisionOptions}
-            revisionOptionsLoading={revisionsQuery.isLoading}
-            serviceOptions={serviceOptions}
-            serviceSearchEnabled={serviceSearchEnabled}
-          />
-        ) : null}
+        <GovernanceQueryCard
+          draft={draft}
+          includeRevision={view === "activation"}
+          loadLabel={
+            view === "activation" ? "Load activation capability" : "Load governance"
+          }
+          onChange={setDraft}
+          onLoad={() => {
+            const nextActiveDraft = normalizeGovernanceDraft(draft);
+            setDraft(nextActiveDraft);
+            setActiveDraft(nextActiveDraft);
+            setShowContextPicker(false);
+            history.replace(
+              buildGovernanceWorkbenchHref(nextActiveDraft, view),
+            );
+          }}
+          onReset={() => {
+            const nextDraft = resolvedScope?.scopeId?.trim()
+              ? {
+                  ...readGovernanceDraft(""),
+                  appId: defaultScopeServiceAppId,
+                  namespace: defaultScopeServiceNamespace,
+                  tenantId: resolvedScope.scopeId.trim(),
+                }
+              : readGovernanceDraft("");
+            setDraft(nextDraft);
+            setActiveDraft(nextDraft);
+            setShowContextPicker(true);
+            history.replace(buildGovernanceWorkbenchHref(nextDraft, view));
+          }}
+          revisionOptions={revisionOptions}
+          revisionOptionsLoading={revisionsQuery.isLoading}
+          serviceOptions={serviceOptions}
+          serviceSearchEnabled={serviceSearchEnabled}
+        />
+
+        <div
+          style={{
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          }}
+        >
+          {summaryMetrics.map((metric) => (
+            <ConsoleMetricCard
+              key={metric.label}
+              label={metric.label}
+              tone={
+                metric.tone === "success"
+                  ? "green"
+                  : metric.tone === "info"
+                    ? "purple"
+                    : "default"
+              }
+              value={metric.value}
+            />
+          ))}
+        </div>
 
         <div
           style={{
@@ -1549,65 +1655,9 @@ const GovernanceWorkbench: React.FC = () => {
                   boxShadow: "none",
                 }}
               >
-                <Typography.Text strong>Service context required</Typography.Text>
-                <Typography.Paragraph style={{ margin: "8px 0 0" }} type="secondary">
-                  Governance is keyed by tenant, app, namespace, and service id.
-                  Pick a service to unlock policy, endpoint, and activation
-                  surfaces.
-                </Typography.Paragraph>
+                <Typography.Text strong>Select a service</Typography.Text>
               </div>
             )}
-
-            <div
-              style={{
-                ...buildAevatarPanelStyle(surfaceToken, {
-                  background: surfaceToken.colorBgContainer,
-                  padding: 16,
-                }),
-                boxShadow: "none",
-              }}
-            >
-              <Space orientation="vertical" size={12} style={{ display: "flex" }}>
-                <Typography.Text strong>Governance posture</Typography.Text>
-                <div
-                  style={{
-                    display: "grid",
-                    gap: 12,
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  }}
-                >
-                  {summaryMetrics.map((metric) => (
-                    <div
-                      key={metric.label}
-                      style={buildAevatarMetricCardStyle(surfaceToken, metric.tone)}
-                    >
-                      <Typography.Text
-                        style={{
-                          color: resolveAevatarMetricVisual(surfaceToken, metric.tone)
-                            .labelColor,
-                        }}
-                      >
-                        {metric.label}
-                      </Typography.Text>
-                      <Typography.Text
-                        strong
-                        style={{
-                          color: resolveAevatarMetricVisual(surfaceToken, metric.tone)
-                            .valueColor,
-                        }}
-                      >
-                        {metric.value}
-                      </Typography.Text>
-                    </div>
-                  ))}
-                </div>
-                {selectedService ? (
-                  <Typography.Text type="secondary">
-                    Service actor {selectedService.primaryActorId || "n/a"}
-                  </Typography.Text>
-                ) : null}
-              </Space>
-            </div>
           </div>
 
           <div
@@ -1644,17 +1694,12 @@ const GovernanceWorkbench: React.FC = () => {
                         minHeight: 72,
                       }}
                     >
-                      <Space orientation="vertical" size={2} style={{ minWidth: 0 }}>
+                      <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
                         <Typography.Text
                           strong
                           style={{ color: surfaceToken.colorTextHeading, fontSize: 16 }}
                         >
                           {governanceViewMeta[view].title}
-                        </Typography.Text>
-                        <Typography.Text
-                          style={{ color: surfaceToken.colorTextTertiary }}
-                        >
-                          {governanceViewMeta[view].description}
                         </Typography.Text>
                       </Space>
                       <div
@@ -1738,7 +1783,7 @@ const GovernanceWorkbench: React.FC = () => {
           target={drawerTarget}
         />
       </div>
-    </PageContainer>
+    </ConsoleMenuPageShell>
   );
 };
 
