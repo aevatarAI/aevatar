@@ -28,7 +28,7 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        var ops = await cache.GetOrFetchAsync("github", null, "token123");
+        var ops = await cache.GetOrFetchAsync("github", "svc-github", null, "token123");
 
         ops.Should().NotBeNull();
         ops.Should().HaveCount(2);
@@ -36,7 +36,7 @@ public class ConnectedServiceSpecCacheTests
         handler.RequestCount.Should().Be(1);
 
         // Second call should use cache
-        var ops2 = await cache.GetOrFetchAsync("github", null, "token123");
+        var ops2 = await cache.GetOrFetchAsync("github", "svc-github", null, "token123");
         ops2.Should().BeEquivalentTo(ops);
         handler.RequestCount.Should().Be(1, "should use cached result");
     }
@@ -49,7 +49,7 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        await cache.GetOrFetchAsync("github", "https://custom.test/spec.json", "token123");
+        await cache.GetOrFetchAsync("github", "svc-github", "https://custom.test/spec.json", "token123");
 
         handler.LastRequestUri.Should().Be("https://custom.test/spec.json");
     }
@@ -62,9 +62,9 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        await cache.GetOrFetchAsync("github", null, "token123");
+        await cache.GetOrFetchAsync("github", "svc-github", null, "token123");
 
-        handler.LastRequestUri.Should().Be("https://nyx.test/api/v1/proxy/services/github/openapi.json");
+        handler.LastRequestUri.Should().Be("https://nyx.test/api/v1/proxy/services/svc-github/openapi.json");
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        await cache.GetOrFetchAsync("github", null, "my-secret-token");
+        await cache.GetOrFetchAsync("github", "svc-github", null, "my-secret-token");
 
         handler.LastAuthHeader.Should().Be("Bearer my-secret-token");
     }
@@ -88,7 +88,7 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        await cache.GetOrFetchAsync("github", "https://evil.test/spec.json", "my-secret-token");
+        await cache.GetOrFetchAsync("github", "svc-github", "https://evil.test/spec.json", "my-secret-token");
 
         handler.LastAuthHeader.Should().BeNull("token must not be sent to untrusted hosts");
     }
@@ -101,10 +101,10 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        await cache.GetOrFetchAsync("github", "https://nyx.test/v1/spec.json", "token");
+        await cache.GetOrFetchAsync("github", "svc-github", "https://nyx.test/v1/spec.json", "token");
         handler.RequestCount.Should().Be(1);
 
-        await cache.GetOrFetchAsync("github", "https://nyx.test/v2/spec.json", "token");
+        await cache.GetOrFetchAsync("github", "svc-github", "https://nyx.test/v2/spec.json", "token");
         handler.RequestCount.Should().Be(2, "different spec URLs must not share cache entry");
     }
 
@@ -128,7 +128,7 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options, http);
 
-        var ops = await cache.GetOrFetchAsync("unknown-service", null, "token");
+        var ops = await cache.GetOrFetchAsync("unknown-service", "svc-unknown", null, "token");
 
         ops.Should().BeNull();
     }
@@ -139,7 +139,7 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
         using var cache = new ConnectedServiceSpecCache(options);
 
-        var ops = await cache.GetOrFetchAsync("", null, "token");
+        var ops = await cache.GetOrFetchAsync("", null, null, "token");
         ops.Should().BeNull();
     }
 
@@ -149,7 +149,17 @@ public class ConnectedServiceSpecCacheTests
         var options = new NyxIdToolOptions();
         using var cache = new ConnectedServiceSpecCache(options);
 
-        var ops = await cache.GetOrFetchAsync("github", null, "token");
+        var ops = await cache.GetOrFetchAsync("github", "svc-github", null, "token");
+        ops.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetOrFetchAsync_ReturnsNull_WhenNoSpecUrlAndNoServiceId()
+    {
+        var options = new NyxIdToolOptions { BaseUrl = "https://nyx.test" };
+        using var cache = new ConnectedServiceSpecCache(options);
+
+        var ops = await cache.GetOrFetchAsync("github", null, null, "token");
         ops.Should().BeNull();
     }
 

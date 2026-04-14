@@ -11,12 +11,14 @@ public class BuildConnectedServicesContextTests
         {
           "services": [
             {
+              "id": "svc-github",
               "slug": "api-github",
               "name": "GitHub",
               "endpoint_url": "https://api.github.com",
-              "openapi_url": "https://nyx.test/proxy/github/openapi.json"
+              "openapi_url": "https://nyx.test/api/v1/proxy/services/svc-github/openapi.json"
             },
             {
+              "id": "svc-custom",
               "slug": "custom-svc",
               "name": "Custom Service",
               "endpoint_url": "https://custom.test"
@@ -120,6 +122,7 @@ public class BuildConnectedServicesContextTests
             {
               "services": [
                 {
+                  "id": "svc-github",
                   "slug": "api-github",
                   "name": "GitHub",
                   "openapi_url": "https://custom.test/github-spec.json"
@@ -145,7 +148,7 @@ public class BuildConnectedServicesContextTests
         var singleServiceJson = """
             {
               "services": [
-                { "slug": "my-api", "name": "My API" }
+                { "id": "svc-my-api", "slug": "my-api", "name": "My API" }
               ]
             }
             """;
@@ -153,7 +156,7 @@ public class BuildConnectedServicesContextTests
         await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
             singleServiceJson, specCache, "token", CancellationToken.None);
 
-        handler.LastRequestUri.Should().Be("https://nyx.test/api/v1/proxy/services/my-api/openapi.json");
+        handler.LastRequestUri.Should().Be("https://nyx.test/api/v1/proxy/services/svc-my-api/openapi.json");
     }
 
     [Fact]
