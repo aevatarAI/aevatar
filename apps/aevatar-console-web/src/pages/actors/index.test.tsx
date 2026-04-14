@@ -30,6 +30,7 @@ jest.mock('@/shared/graphs/GraphCanvas', () => ({
 describe('ActorsPage', () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.history.replaceState({}, '', '/runtime/explorer');
   });
 
   it('renders the runtime explorer shell and navigation actions', async () => {
@@ -110,5 +111,25 @@ describe('ActorsPage', () => {
     expect(screen.getByText(/Last output:/i).textContent).toContain(
       'Completed successfully.',
     );
+  });
+
+  it('preserves playback explorer context from the incoming route', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/runtime/explorer?actorId=actor-route-a&runId=run-current&scopeId=scope-route-a&serviceId=default',
+    );
+
+    renderWithQueryClient(React.createElement(ActorsPage));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/runtime/explorer');
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get('actorId')).toBe('actor-route-a');
+    expect(params.get('runId')).toBe('run-current');
+    expect(params.get('scopeId')).toBe('scope-route-a');
+    expect(params.get('serviceId')).toBe('default');
   });
 });

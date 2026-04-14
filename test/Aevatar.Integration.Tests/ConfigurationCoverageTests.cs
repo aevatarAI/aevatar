@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Aevatar.Configuration;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 
 namespace Aevatar.Integration.Tests;
 
@@ -119,6 +120,180 @@ public sealed class ConfigurationCoverageTests
             if (Directory.Exists(dir))
                 Directory.Delete(dir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ListenUrlResolver_ResolveListenUrls_PrioritizesExplicitBeforeConfiguration()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Service:ListenUrls"] = "http://configured.local:1001",
+            })
+            .Build();
+
+        using var aspnetScope = new EnvironmentVariableScope("ASPNETCORE_URLS", "http://env.local:1002");
+
+        var resolved = ListenUrlResolver.ResolveListenUrls(
+            "http://explicit.local:1000",
+            config,
+            "Service:ListenUrls",
+            defaultPort: 5000);
+
+        resolved.Should().Be("http://explicit.local:1000");
+    }
+
+    [Fact]
+    public void ListenUrlResolver_ResolveListenUrls_UsesConfigurationThenAspNetThenEnvironmentThenDefault()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Service:ListenUrls"] = "http://configured.local:1001",
+            })
+            .Build();
+
+        using var envScope = new EnvironmentVariableScope("ASPNETCORE_URLS", "http://env.local:1002");
+
+        var resolvedFromConfiguration = ListenUrlResolver.ResolveListenUrls(
+            null,
+            config,
+            "Service:ListenUrls",
+            defaultPort: 5000);
+
+        resolvedFromConfiguration.Should().Be("http://configured.local:1001");
+
+        var blankConfig = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        var resolvedFromAspNet = ListenUrlResolver.ResolveListenUrls(
+            null,
+            blankConfig,
+            null,
+            defaultPort: 5000);
+
+        resolvedFromAspNet.Should().Be("http://env.local:1002");
+    }
+
+    [Fact]
+    public void ListenUrlResolver_ResolveListenUrls_FallsBackToDefaultWhenNothingConfigured()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
+
+        var resolved = ListenUrlResolver.ResolveListenUrls(
+            null,
+            config,
+            "Service:ListenUrls",
+            defaultPort: 5010);
+
+        resolved.Should().Be("http://localhost:5010");
+    }
+
+    [Fact]
+    public void ResolveBrowserUrl_ReturnsTrimmedHttpAuthorityAndFallsBackDefault()
+    {
+        var browserUrlFromCandidate = ListenUrlResolver.ResolveBrowserUrl(
+            "ftp://unsupported:9090; http://localhost:1000/path?query=1; https://127.0.0.1:2000",
+            defaultPort: 5011);
+        browserUrlFromCandidate.Should().Be("http://localhost:1000");
+
+        var browserUrlFromWildcardHost = ListenUrlResolver.ResolveBrowserUrl(
+            "http://*:7777/health; https://0.0.0.0:8888/",
+            defaultPort: 5011);
+        browserUrlFromWildcardHost.Should().Be("https://localhost:8888");
+
+        var browserUrlDefault = ListenUrlResolver.ResolveBrowserUrl(
+            "ftp://unsupported:9090;;   ",
+            defaultPort: 5011);
+        browserUrlDefault.Should().Be("http://localhost:5011");
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveSpec_ShouldSupportDefaultGatewayAndRelativePath()
+    {
+        var gatewayConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection()
+            .Build();
+
+        NyxIdLlmEndpointResolver.ResolveSpec(gatewayConfig)
+            .Should()
+            .Be(new NyxIdLlmEndpointSpec(NyxIdLlmEndpointKind.Gateway));
+
+        var relativeConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:LlmEndpoint:Kind"] = "RelativePath",
+                ["Cli:App:NyxId:LlmEndpoint:RelativePath"] = " llm/custom ",
+            })
+            .Build();
+
+        NyxIdLlmEndpointResolver.ResolveSpec(relativeConfig)
+            .Should()
+            .Be(new NyxIdLlmEndpointSpec(NyxIdLlmEndpointKind.RelativePath, " llm/custom "));
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveSpec_ShouldRejectUnsupportedKind()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:NyxId:LlmEndpoint:Kind"] = "unsupported",
+            })
+            .Build();
+
+        FluentActions.Invoking(() => NyxIdLlmEndpointResolver.ResolveSpec(config))
+            .Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*Unsupported NyxID LLM endpoint kind*");
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldNormalizeAuthorityAndGatewayPath()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cli:App:NyxId:Authority"] = " https://nyxid.local/api/v1/llm/gateway/v1/ ",
+            })
+            .Build();
+
+        var resolved = NyxIdLlmEndpointResolver.ResolveEndpoint(config);
+
+        resolved.Should().Be("https://nyxid.local/api/v1/llm/gateway/v1");
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldSupportRelativePathAndFallbackAuthorities()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Aevatar:Authentication:Authority"] = "https://auth.local/",
+                ["Aevatar:NyxId:LlmEndpoint:Kind"] = "RelativePath",
+                ["Aevatar:NyxId:LlmEndpoint:RelativePath"] = "gateway/alt",
+            })
+            .Build();
+
+        var resolved = NyxIdLlmEndpointResolver.ResolveEndpoint(config);
+
+        resolved.Should().Be("https://auth.local/gateway/alt");
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldReturnNullForInvalidAuthority()
+    {
+        NyxIdLlmEndpointResolver.ResolveEndpoint("not-a-uri", null).Should().BeNull();
+        NyxIdLlmEndpointResolver.ResolveEndpoint("   ", null).Should().BeNull();
+    }
+
+    [Fact]
+    public void NyxIdLlmEndpointResolver_ResolveEndpoint_ShouldRejectInvalidRelativePath()
+    {
+        var relativeSpec = new NyxIdLlmEndpointSpec(NyxIdLlmEndpointKind.RelativePath, "https://evil.local");
+
+        FluentActions.Invoking(() => NyxIdLlmEndpointResolver.ResolveEndpoint("https://nyxid.local", relativeSpec))
+            .Should()
+            .Throw<InvalidOperationException>()
+            .WithMessage("*must not be an absolute URL*");
     }
 
     private sealed class EnvironmentVariableScope : IDisposable

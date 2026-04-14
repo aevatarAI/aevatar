@@ -404,7 +404,7 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next: Bind project')).toBeInTheDocument();
+    expect(await screen.findByText('Next: Bind team entry')).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId('studio-guidance-floating-card')).toHaveAttribute(
         'data-guidance-updated',
@@ -467,7 +467,7 @@ describe('StudioEditorPage', () => {
     });
   });
 
-  it('guides published projects toward Project Invoke', async () => {
+  it('guides published teams toward the legacy invoke lab', async () => {
     const onOpenProjectInvoke = jest.fn();
 
     render(
@@ -494,10 +494,10 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next: Open Project Invoke')).toBeInTheDocument();
+    expect(await screen.findByText('Next: Open Legacy Invoke Lab')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand guidance' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Project Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Legacy Invoke Lab' }));
 
     expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
   });
@@ -564,10 +564,10 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next: Bind project')).toBeInTheDocument();
+    expect(await screen.findByText('Next: Bind team entry')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand guidance' }));
     expect(screen.queryByRole('button', { name: 'Open Chat' })).not.toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Bind project' }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: 'Bind team entry' }).length).toBeGreaterThan(0);
   });
 
   it('keeps published binding revision details inside the details drawer', async () => {
