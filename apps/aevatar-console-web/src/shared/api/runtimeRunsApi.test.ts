@@ -184,6 +184,30 @@ describe("runtimeRunsApi", () => {
     });
   });
 
+  it("forwards the sessionId when chat streaming resumes an existing conversation", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+    } satisfies Partial<Response>);
+
+    global.fetch = fetchMock as typeof global.fetch;
+
+    await runtimeRunsApi.streamChat(
+      "scope-1",
+      {
+        prompt: "Resume the conversation",
+        sessionId: "conversation-1",
+      } as Parameters<typeof runtimeRunsApi.streamChat>[1],
+      new AbortController().signal,
+      { serviceId: "service-1" }
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      prompt: "Resume the conversation",
+      sessionId: "conversation-1",
+    });
+  });
+
   it("routes draft runs through the scope draft endpoint", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

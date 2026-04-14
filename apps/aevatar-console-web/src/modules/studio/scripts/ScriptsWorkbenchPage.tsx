@@ -2311,7 +2311,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             title={notice.message}
             description={
               notice.description || notice.actions?.length ? (
-                <Space direction="vertical" size={12}>
+                <Space orientation="vertical" size={12}>
                   {notice.description ? <span>{notice.description}</span> : null}
                   {notice.actions?.length ? (
                     <Space wrap size={[8, 8]}>

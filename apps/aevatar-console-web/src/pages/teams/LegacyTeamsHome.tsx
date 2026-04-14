@@ -110,7 +110,7 @@ const LegacyTeamsHome: React.FC<SharedTeamsHomeProps> = ({
               title="Recent activity summary"
               titleHelp="This rail stays secondary on purpose. It explains what changed recently without taking over the team story."
             >
-              <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={12} style={{ width: "100%" }}>
                 <div>
                   <Typography.Text strong>Current run</Typography.Text>
                   <Typography.Paragraph
@@ -147,7 +147,7 @@ const LegacyTeamsHome: React.FC<SharedTeamsHomeProps> = ({
               }
               title="Current team identity"
             >
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                 <Typography.Title level={4} style={{ margin: 0 }}>
                   {lens.title}
                 </Typography.Title>

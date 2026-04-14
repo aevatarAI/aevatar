@@ -4,6 +4,7 @@ import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
 import { runtimeGAgentApi } from "@/shared/api/runtimeGAgentApi";
 import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
+import { servicesApi } from "@/shared/api/servicesApi";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { studioApi } from "@/shared/studio/api";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -288,6 +289,29 @@ jest.mock("@/shared/api/runtimeGAgentApi", () => ({
   },
 }));
 
+jest.mock("@/shared/api/servicesApi", () => ({
+  servicesApi: {
+    listServices: jest.fn(async () => [
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with the published workflow.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]),
+  },
+}));
+
 const mockEnsureActiveAuthSession =
   ensureActiveAuthSession as jest.MockedFunction<
     (_config?: unknown) => Promise<Record<string, unknown> | null>
@@ -298,6 +322,9 @@ const mockRuntimeQueryApi = runtimeQueryApi as unknown as {
 const mockRuntimeGAgentApi = runtimeGAgentApi as unknown as {
   listTypes: jest.Mock;
   listActors: jest.Mock;
+};
+const mockServicesApi = servicesApi as unknown as {
+  listServices: jest.Mock;
 };
 
 jest.mock("@/shared/studio/api", () => ({
@@ -316,6 +343,43 @@ jest.mock("@/shared/studio/api", () => ({
           label: "Workspace",
           path: "/tmp/workflows",
           isBuiltIn: false,
+        },
+      ],
+    })),
+    getUserConfig: jest.fn(async () => ({
+      defaultModel: "gpt-4.1-mini",
+      runtimeBaseUrl: "",
+    })),
+    saveUserConfig: jest.fn(async (input: { defaultModel: string; runtimeBaseUrl: string }) => input),
+    getUserConfigModels: jest.fn(async () => ({
+      providers: [
+        {
+          providerSlug: "openai",
+          providerName: "OpenAI",
+          status: "ready",
+          proxyUrl: "https://nyx-api.example/openai",
+        },
+      ],
+      gatewayUrl: "https://nyx-api.example/gateway",
+      supportedModels: ["gpt-4.1-mini", "gpt-5.4-mini"],
+    })),
+    getSkillsHealth: jest.fn(async () => ({
+      baseUrl: "https://ornn.chrono-ai.fun",
+      reachable: true,
+      message: "Connected to Ornn.",
+    })),
+    searchSkills: jest.fn(async () => ({
+      baseUrl: "https://ornn.chrono-ai.fun",
+      total: 1,
+      totalPages: 1,
+      page: 1,
+      pageSize: 100,
+      items: [
+        {
+          guid: "skill-1",
+          name: "ornn-search",
+          description: "Search Ornn for reusable skills.",
+          isPrivate: false,
         },
       ],
     })),
@@ -931,6 +995,26 @@ jest.mock("./components/StudioShell", () => ({
   },
 }));
 
+jest.mock("./components/StudioFilesPage", () => ({
+  __esModule: true,
+  default: (props: any) => {
+    const React = require("react");
+    return React.createElement("div", null, [
+      React.createElement("h2", { key: "title" }, "Files"),
+      React.createElement("div", { key: "scope" }, props.scopeId || "workspace"),
+      React.createElement(
+        "button",
+        {
+          key: "settings",
+          type: "button",
+          onClick: () => props.onOpenSettings?.(),
+        },
+        "Open Settings"
+      ),
+    ]);
+  },
+}));
+
 jest.mock("./components/StudioWorkbenchSections", () => {
   const React = require("react");
 
@@ -1175,8 +1259,22 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             type: "button",
             onClick: () => props.onPublishWorkflow?.(),
           },
-          "Bind scope"
+          "Bind team entry"
         ),
+        props.scopeBinding?.available &&
+        props.projectEntryReadyForCurrentWorkflow
+          ? React.createElement(
+              "button",
+              {
+                key: "project-entry",
+                type: "button",
+                onClick: () => props.onOpenProjectInvoke?.(),
+              },
+              props.projectEntrySurface === "chat"
+                ? "Open Chat"
+                : "Open Legacy Invoke Lab"
+            )
+          : null,
         React.createElement(
           "button",
           {
@@ -1374,32 +1472,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
       "div",
       null,
       [
-        React.createElement("input", {
-          key: "role-import",
-          "aria-label": "Import role catalog file",
-          type: "file",
-          onChange: props.onRoleImportChange,
-        }),
         React.createElement("div", { key: "label" }, "Saved roles"),
-        React.createElement("input", {
-          key: "search",
-          placeholder: "Search roles",
-          value: props.roleSearch ?? "",
-          onChange: (event: MockValueEvent) =>
-            props.onRoleSearchChange?.(event.target.value),
-        }),
-        selectedRole
-          ? React.createElement("textarea", {
-              key: "system-prompt",
-              "aria-label": "System prompt",
-              value: selectedRole.systemPrompt ?? "",
-              onChange: (event: MockValueEvent) =>
-                props.onUpdateRoleCatalog?.(selectedRole.key, (role: any) => ({
-                  ...role,
-                  systemPrompt: event.target.value,
-                })),
-            })
-          : null,
         React.createElement(
           "button",
           {
@@ -1422,110 +1495,22 @@ jest.mock("./components/StudioWorkbenchSections", () => {
     );
   };
 
-  const StudioConnectorsPage = (props: any) => {
-    const selectedConnector =
-      props.selectedConnector ?? props.connectorCatalogDraft?.[0] ?? null;
+  const StudioConnectorsPage = (_props: any) => {
     return React.createElement(
       "div",
       null,
       [
-        React.createElement("input", {
-          key: "connector-import",
-          "aria-label": "Import connector catalog file",
-          type: "file",
-          onChange: props.onConnectorImportChange,
-        }),
-        React.createElement("input", {
-          key: "search",
-          placeholder: "Search connectors",
-          value: props.connectorSearch ?? "",
-          onChange: (event: MockValueEvent) =>
-            props.onConnectorSearchChange?.(event.target.value),
-        }),
-        selectedConnector
-          ? React.createElement("input", {
-              key: "base-url",
-              "aria-label": "Base URL",
-              value: selectedConnector.http?.baseUrl ?? "",
-              onChange: (event: MockValueEvent) =>
-                props.onUpdateConnectorCatalog?.(
-                  selectedConnector.key,
-                  (connector: any) => ({
-                    ...connector,
-                    http: {
-                      ...connector.http,
-                      baseUrl: event.target.value,
-                    },
-                  })
-                ),
-            })
-          : null,
-        React.createElement(
-          "button",
-          {
-            key: "save",
-            type: "button",
-            onClick: () => props.onSaveConnectors?.(),
-          },
-          "Save"
-        ),
+        React.createElement("div", { key: "label" }, "Connectors"),
       ].filter(Boolean)
     );
   };
 
-  const StudioSettingsPage = (props: any) =>
+  const StudioSettingsPage = (_props: any) =>
     React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "label" }, "Provider settings"),
-        React.createElement(
-          "div",
-          { key: "selected-provider" },
-          `Selected provider: ${props.selectedProvider?.providerName ?? "none"}`
-        ),
-        React.createElement("input", {
-          key: "runtime-base-url",
-          "aria-label": "Studio runtime base URL",
-          value: props.settingsDraft?.runtimeBaseUrl ?? "",
-          disabled: props.hostMode !== "proxy",
-          onChange: (event: MockValueEvent) => {
-            const nextValue = event.target.value;
-            props.onSetSettingsDraft?.(
-              props.settingsDraft
-                ? {
-                    ...props.settingsDraft,
-                    runtimeBaseUrl: nextValue,
-                  }
-                : props.settingsDraft
-            );
-          },
-        }),
-        React.createElement(
-          "button",
-          {
-            key: "save",
-            type: "button",
-            disabled: !props.settingsDirty,
-            onClick: () => props.onSaveSettings?.(),
-          },
-          "Save settings"
-        ),
-        React.createElement(
-          "button",
-          {
-            key: "test-runtime",
-            type: "button",
-            onClick: () => props.onTestRuntime?.(),
-          },
-          props.hostMode === "proxy" ? "Test runtime" : "Check host runtime"
-        ),
-        renderNoticeTitle(
-          "settings-notice",
-          props.settingsNotice,
-          "Settings updated",
-          "Settings update failed"
-        ),
       ].filter(Boolean)
     );
 
@@ -1587,6 +1572,24 @@ describe("StudioPage", () => {
         actorIds: ["orders-gagent"],
       },
     ]);
+    mockServicesApi.listServices.mockResolvedValue([
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "chat",
+            displayName: "Chat",
+            kind: "chat",
+            description: "Chat with the published workflow.",
+            requestTypeUrl: "",
+            responseTypeUrl: "",
+          },
+        ],
+      },
+    ]);
     (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
       enabled: false,
       authenticated: false,
@@ -1646,6 +1649,17 @@ describe("StudioPage", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
+    });
+  });
+
+  it("falls back to behaviors when the removed files tab is requested", async () => {
+    renderStudioPage("/studio?tab=files");
+
+    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeTruthy();
+    expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
+      display: "flex",
+      flexDirection: "column",
+      minWidth: "0",
     });
   });
 
@@ -2124,7 +2138,9 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Bind scope" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Bind team entry" })
+    );
 
     await waitFor(() => {
       expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
@@ -2137,7 +2153,76 @@ describe("StudioPage", () => {
     });
   });
 
-  it("loads discovered GAgent types for the resolved scope context", async () => {
+  it("does not expose a direct chat shortcut from Studio even when the published service has a chat endpoint", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    expect(screen.queryByRole("button", { name: "Open Chat" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Open Legacy Invoke Lab" })
+    ).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "测试运行" }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not expose the legacy invoke shortcut when the published service has no chat endpoint", async () => {
+    mockServicesApi.listServices.mockResolvedValueOnce([
+      {
+        serviceId: "default",
+        displayName: "workspace-demo",
+        deploymentStatus: "Active",
+        primaryActorId: "actor-default",
+        endpoints: [
+          {
+            endpointId: "run",
+            displayName: "Run",
+            kind: "command",
+            description: "Run the published workflow.",
+            requestTypeUrl: "type.googleapis.com/google.protobuf.StringValue",
+            responseTypeUrl: "type.googleapis.com/example.RunResult",
+          },
+        ],
+      },
+    ]);
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    expect(
+      screen.queryByRole("button", { name: "Open Legacy Invoke Lab" })
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Chat" })).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "测试运行" }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not offer Chat when the selected workflow is not the active binding", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
+      ...defaultStudioAppContext,
+      scopeId: "scope-1",
+      scopeResolved: true,
+    });
+    renderStudioPage("/studio?template=published-demo&tab=studio");
+
+    expect(await screen.findByText("Published template draft")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Open Chat" })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Open Legacy Invoke Lab" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("loads discovered GAgent types and the resolved scope binding", async () => {
     (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
       ...defaultStudioAppContext,
       scopeId: "scope-1",
@@ -2351,183 +2436,6 @@ describe("StudioPage", () => {
         ).value.trim()
       ).toBe("name: ai-generated\nsteps: []");
     });
-  });
-
-  it("saves edited role catalog entries through the Studio API", async () => {
-    renderStudioPage("/studio?tab=roles");
-
-    expect(await screen.findByPlaceholderText("Search roles")).toBeTruthy();
-    expect(await screen.findByDisplayValue("Help the operator.")).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("System prompt"), {
-      target: {
-        value: "Answer carefully and keep responses concise.",
-      },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(studioApi.saveRoleCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({
-          roles: expect.arrayContaining([
-            expect.objectContaining({
-              id: "assistant",
-              systemPrompt: "Answer carefully and keep responses concise.",
-            }),
-          ]),
-        })
-      );
-    });
-  });
-
-  it("imports role catalog entries through the Studio upload API", async () => {
-    renderStudioPage("/studio?tab=roles");
-
-    const file = new File(['{"roles":[]}'], "roles-import.json", {
-      type: "application/json",
-    });
-
-    fireEvent.change(await screen.findByLabelText("Import role catalog file"), {
-      target: {
-        files: [file],
-      },
-    });
-
-    await waitFor(() => {
-      expect(studioApi.importRoleCatalog).toHaveBeenCalledWith(file);
-    });
-
-    expect(
-      await screen.findByDisplayValue(
-        "Review imported workflow outputs carefully."
-      )
-    ).toBeTruthy();
-  });
-
-  it("saves edited connector catalog entries through the Studio API", async () => {
-    renderStudioPage("/studio?tab=connectors");
-
-    expect(
-      await screen.findByPlaceholderText("Search connectors")
-    ).toBeTruthy();
-    expect(
-      await screen.findByDisplayValue("https://example.test")
-    ).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("Base URL"), {
-      target: {
-        value: "https://console.example.test",
-      },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(studioApi.saveConnectorCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({
-          connectors: expect.arrayContaining([
-            expect.objectContaining({
-              name: "web-search",
-              http: expect.objectContaining({
-                baseUrl: "https://console.example.test",
-              }),
-            }),
-          ]),
-        })
-      );
-    });
-  });
-
-  it("imports connector catalog entries through the Studio upload API", async () => {
-    renderStudioPage("/studio?tab=connectors");
-
-    const file = new File(['{"connectors":[]}'], "connectors-import.json", {
-      type: "application/json",
-    });
-
-    fireEvent.change(
-      await screen.findByLabelText("Import connector catalog file"),
-      {
-        target: {
-          files: [file],
-        },
-      }
-    );
-
-    await waitFor(() => {
-      expect(studioApi.importConnectorCatalog).toHaveBeenCalledWith(file);
-    });
-
-    expect(
-      await screen.findByDisplayValue("https://imported.example.test")
-    ).toBeTruthy();
-  });
-
-  it("saves editable Studio settings and provider configuration", async () => {
-    renderStudioPage("/studio?tab=settings");
-
-    expect(await screen.findByText("Provider settings")).toBeTruthy();
-    expect(await screen.findByText("Selected provider: tornado")).toBeTruthy();
-
-    const runtimeBaseUrlInput = await screen.findByLabelText(
-      "Studio runtime base URL"
-    );
-    fireEvent.change(runtimeBaseUrlInput, {
-      target: {
-        value: "http://127.0.0.1:5111",
-      },
-    });
-    await waitFor(() => {
-      expect(runtimeBaseUrlInput).toHaveValue("http://127.0.0.1:5111");
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-
-    await waitFor(() => {
-      expect(studioApi.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimeBaseUrl: "http://127.0.0.1:5111",
-          defaultProviderName: "tornado",
-        })
-      );
-    });
-
-    expect(await screen.findByText("Settings updated")).toBeTruthy();
-  });
-
-  it("treats runtime connection as host-managed in embedded mode", async () => {
-    (studioApi.getAppContext as jest.Mock).mockResolvedValueOnce({
-      mode: "embedded",
-      scopeId: null,
-      scopeResolved: false,
-      scopeSource: "",
-      workflowStorageMode: "workspace",
-      scriptStorageMode: "draft",
-      features: {
-        publishedWorkflows: true,
-        scripts: false,
-      },
-      scriptContract: {
-        inputType: "type.googleapis.com/example.Command",
-        readModelFields: ["input", "output"],
-      },
-    });
-
-    renderStudioPage("/studio?tab=settings");
-
-    const runtimeBaseUrlInput = await screen.findByLabelText(
-      "Studio runtime base URL"
-    );
-    expect(runtimeBaseUrlInput).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Save settings" })
-    ).toBeDisabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Save settings" }));
-
-    expect(studioApi.saveSettings).not.toHaveBeenCalled();
-
-    expect(
-      screen.getByRole("button", { name: "Check host runtime" })
-    ).toBeTruthy();
   });
 
   it("applies a saved role to the current workflow from the roles catalog", async () => {

@@ -1,0 +1,126 @@
+using System.Text.Json;
+using Aevatar.AI.ToolProviders.NyxId;
+using Aevatar.AI.ToolProviders.NyxId.Tools;
+using FluentAssertions;
+using Xunit;
+
+namespace Aevatar.GAgents.ChannelRuntime.Tests;
+
+/// <summary>
+/// Unit tests for NyxIdProxyTool dual-token routing helpers:
+/// ParseServiceSlugs, InMemoryServiceDiscoveryCache.
+/// </summary>
+public class NyxIdProxyToolDualTokenTests
+{
+    // ─── ParseServiceSlugs ───
+
+    [Fact]
+    public void ParseServiceSlugs_ArrayOfServices_ExtractsSlugs()
+    {
+        var json = """[{"slug":"api-github","name":"GitHub"},{"slug":"llm-openai","name":"OpenAI"}]""";
+        using var doc = JsonDocument.Parse(json);
+
+        var slugs = NyxIdProxyTool.ParseServiceSlugs(doc);
+
+        slugs.Should().HaveCount(2);
+        slugs.Should().Contain("api-github");
+        slugs.Should().Contain("llm-openai");
+    }
+
+    [Fact]
+    public void ParseServiceSlugs_EmptyArray_ReturnsEmpty()
+    {
+        using var doc = JsonDocument.Parse("[]");
+
+        var slugs = NyxIdProxyTool.ParseServiceSlugs(doc);
+
+        slugs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ParseServiceSlugs_NonArrayRoot_ReturnsEmpty()
+    {
+        using var doc = JsonDocument.Parse("""{"error":"unauthorized"}""");
+
+        var slugs = NyxIdProxyTool.ParseServiceSlugs(doc);
+
+        slugs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ParseServiceSlugs_MissingSlugField_SkipsEntry()
+    {
+        var json = """[{"slug":"api-github"},{"name":"no-slug-here"},{"slug":"llm-openai"}]""";
+        using var doc = JsonDocument.Parse(json);
+
+        var slugs = NyxIdProxyTool.ParseServiceSlugs(doc);
+
+        slugs.Should().HaveCount(2);
+        slugs.Should().Contain("api-github");
+        slugs.Should().Contain("llm-openai");
+    }
+
+    [Fact]
+    public void ParseServiceSlugs_CaseInsensitive()
+    {
+        var json = """[{"slug":"Api-GitHub"}]""";
+        using var doc = JsonDocument.Parse(json);
+
+        var slugs = NyxIdProxyTool.ParseServiceSlugs(doc);
+
+        slugs.Should().Contain("api-github");
+        slugs.Should().Contain("API-GITHUB");
+    }
+
+    // ─── InMemoryServiceDiscoveryCache ───
+
+    [Fact]
+    public void Cache_SetAndGet_ReturnsSlugs()
+    {
+        var cache = new InMemoryServiceDiscoveryCache();
+        var slugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "api-github", "llm-openai" };
+
+        cache.SetSlugs("token-hash-1", slugs);
+        var result = cache.GetSlugs("token-hash-1");
+
+        result.Should().NotBeNull();
+        result.Should().Contain("api-github");
+        result.Should().Contain("llm-openai");
+    }
+
+    [Fact]
+    public void Cache_Miss_ReturnsNull()
+    {
+        var cache = new InMemoryServiceDiscoveryCache();
+
+        var result = cache.GetSlugs("nonexistent");
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void Cache_OverwritesSameKey()
+    {
+        var cache = new InMemoryServiceDiscoveryCache();
+        cache.SetSlugs("hash-1", new HashSet<string> { "old-service" });
+        cache.SetSlugs("hash-1", new HashSet<string> { "new-service" });
+
+        var result = cache.GetSlugs("hash-1");
+
+        result.Should().Contain("new-service");
+        result.Should().NotContain("old-service");
+    }
+
+    [Fact]
+    public void Cache_DifferentKeys_Independent()
+    {
+        var cache = new InMemoryServiceDiscoveryCache();
+        cache.SetSlugs("user-hash", new HashSet<string> { "user-service" });
+        cache.SetSlugs("org-hash", new HashSet<string> { "org-service" });
+
+        cache.GetSlugs("user-hash").Should().Contain("user-service");
+        cache.GetSlugs("user-hash").Should().NotContain("org-service");
+        cache.GetSlugs("org-hash").Should().Contain("org-service");
+        cache.GetSlugs("org-hash").Should().NotContain("user-service");
+    }
+}

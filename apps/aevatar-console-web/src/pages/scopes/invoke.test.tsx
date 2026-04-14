@@ -86,6 +86,22 @@ jest.mock('@/shared/api/servicesApi', () => ({
 
 jest.mock('@/shared/studio/api', () => ({
   studioApi: {
+    bindScopeGAgent: jest.fn(async () => ({
+      available: true,
+      scopeId: 'scope-a',
+      serviceId: 'nyxid-chat',
+      displayName: 'NyxID Chat',
+      revisionId: 'rev-nyxid',
+      targetKind: 'gagent',
+      implementationKind: 'gagent',
+      deploymentId: 'deploy-nyxid',
+      deploymentStatus: 'Active',
+      updatedAt: '2026-03-26T08:00:00Z',
+      gAgent: {
+        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        preferredActorId: 'NyxIdChat:scope-a',
+      },
+    })),
     getAuthSession: jest.fn(async () => ({
       enabled: false,
       scopeId: 'scope-a',
@@ -217,6 +233,7 @@ import { servicesApi } from '@/shared/api/servicesApi';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { scopeRuntimeApi } from '@/shared/api/scopeRuntimeApi';
 import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
+import { studioApi } from '@/shared/studio/api';
 
 describe('ScopeInvokePage', () => {
   beforeEach(() => {
@@ -641,9 +658,7 @@ describe('ScopeInvokePage', () => {
       });
     });
     expect(await screen.findByText('Lab Console')).toBeTruthy();
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello service' },
     });
@@ -704,6 +719,78 @@ describe('ScopeInvokePage', () => {
     );
   });
 
+  it('defaults to NyxID Chat when no published service is listed for the scope', async () => {
+    (servicesApi.listServices as jest.Mock).mockResolvedValue([]);
+    (runtimeRunsApi.streamChat as jest.Mock).mockResolvedValue({ ok: true });
+    (parseBackendSSEStream as jest.Mock).mockImplementation(async function* () {
+      yield {
+        type: 'RUN_STARTED',
+        runId: 'run-nyxid',
+        threadId: 'thread-nyxid',
+        timestamp: Date.now(),
+      };
+      yield {
+        type: 'TEXT_MESSAGE_CONTENT',
+        delta: 'hello from NyxID Chat',
+        messageId: 'msg-nyxid',
+        timestamp: Date.now(),
+      };
+    });
+
+    renderWithQueryClient(React.createElement(ScopeInvokePage));
+
+    expect((await screen.findAllByText('NyxID Chat')).length).toBeGreaterThan(0);
+    expect(screen.getByText('/ Chat')).toBeTruthy();
+    expect(screen.queryByText('Prompt / Payload')).toBeNull();
+    expect(
+      screen.queryByText('No published project service is selected yet.'),
+    ).toBeNull();
+
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
+    fireEvent.change(promptInput, {
+      target: { value: 'hello nyxid' },
+    });
+    fireEvent.click(await screen.findByLabelText('Send'));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
+        actorTypeName: 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
+        displayName: 'NyxID Chat',
+        endpoints: [
+          {
+            description:
+              'Chat with NyxID about services, credentials, and configuration.',
+            displayName: 'Chat',
+            endpointId: 'chat',
+            kind: 'chat',
+            requestTypeUrl: '',
+            responseTypeUrl: '',
+          },
+        ],
+        scopeId: 'scope-a',
+        serviceId: 'nyxid-chat',
+      });
+    });
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        'scope-a',
+        {
+          prompt: 'hello nyxid',
+        },
+        expect.any(Object),
+        {
+          serviceId: 'nyxid-chat',
+        },
+      );
+    });
+
+    expect(await screen.findByText('hello from NyxID Chat')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Observed Events' }));
+    expect(await screen.findByText('Observed Events (2)')).toBeTruthy();
+    expect(await screen.findByText('Latest raw payloads')).toBeTruthy();
+  });
+
   it('keeps the invoke lab workspace constrained so the chat composer stays visible', async () => {
     (servicesApi.listServices as jest.Mock).mockResolvedValue([
       {
@@ -749,9 +836,7 @@ describe('ScopeInvokePage', () => {
       minHeight: '0',
     });
     expect(
-      await screen.findByPlaceholderText(
-        'Describe the task, ask a question, or paste the next operator instruction.',
-      ),
+      await screen.findByPlaceholderText('Send a message...'),
     ).toBeTruthy();
   });
 
@@ -849,9 +934,7 @@ describe('ScopeInvokePage', () => {
         namespace: 'default',
       });
     });
-    const promptInput = await screen.findByPlaceholderText(
-      'Describe the task, ask a question, or paste the next operator instruction.',
-    );
+    const promptInput = await screen.findByPlaceholderText('Send a message...');
     fireEvent.change(promptInput, {
       target: { value: 'hello service' },
     });
@@ -904,30 +987,19 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    const invokeButton = await screen.findByRole('button', {
-      name: 'Invoke endpoint',
-    });
     await waitFor(() => {
-      expect(invokeButton).not.toBeDisabled();
+      const search = new URLSearchParams(window.location.search);
+      expect(search.get('serviceId')).toBeTruthy();
+      expect(search.get('endpointId')).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText('No published team service is selected yet.'),
-      ).toBeTruthy();
+      const search = new URLSearchParams(window.location.search);
+      expect(search.get('serviceId')).toBeNull();
+      expect(search.get('endpointId')).toBeNull();
     });
-
-    expect(
-      screen.getByRole('button', { name: 'Invoke endpoint' }),
-    ).toBeDisabled();
-    expect(
-      new URLSearchParams(window.location.search).get('serviceId'),
-    ).toBeNull();
-    expect(
-      new URLSearchParams(window.location.search).get('endpointId'),
-    ).toBeNull();
   });
 
   it('opens the service runtime workbench with bindings, revisions, and runs', async () => {

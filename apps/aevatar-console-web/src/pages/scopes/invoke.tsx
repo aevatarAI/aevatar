@@ -44,11 +44,18 @@ import {
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
+import {
+  buildScopeConsoleServiceOptions,
+  createNyxIdChatBindingInput,
+  extractRuntimeInvokeReceipt,
+  getPreferredScopeConsoleServiceId,
+  isChatServiceEndpoint,
+  nyxIdChatServiceId,
+  scopeServiceAppId,
+  scopeServiceNamespace,
+} from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
-import type {
-  ServiceCatalogSnapshot,
-  ServiceEndpointSnapshot,
-} from '@/shared/models/services';
+import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import {
   describeStudioScopeBindingRevisionContext,
   describeStudioScopeBindingRevisionTarget,
@@ -113,8 +120,6 @@ type MonacoEditorComponentProps = {
 };
 
 const initialDraft = readScopeQueryDraft();
-const scopeServiceAppId = 'default';
-const scopeServiceNamespace = 'default';
 const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
 const viewportShellStyle: React.CSSProperties = {
@@ -390,14 +395,11 @@ export function buildServiceOptions(
   );
 }
 
-function isChatEndpoint(
-  endpoint: ServiceEndpointSnapshot | undefined,
-): boolean {
-  if (!endpoint) {
-    return false;
-  }
-
-  return endpoint.kind === 'chat' || endpoint.endpointId.trim() === 'chat';
+function buildPublishedServiceCatalog(
+  services: readonly ServiceCatalogSnapshot[],
+  defaultServiceId?: string,
+): ServiceCatalogSnapshot[] {
+  return buildServiceOptions(services, defaultServiceId);
 }
 
 function createIdleResult(): InvokeResultState {
@@ -452,12 +454,17 @@ function resolveMonacoEditorComponent(): React.ComponentType<MonacoEditorCompone
 
 const ScopeInvokePage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nyxIdChatBoundRef = useRef(false);
   const previousChatBindingKeyRef = useRef('');
+  const initialSelectedServiceId = readQueryValue('serviceId');
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const serviceSelectionSourceRef = useRef<'auto' | 'manual'>(
+    initialSelectedServiceId ? 'manual' : 'auto',
+  );
   const [draft, setDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [selectedServiceId, setSelectedServiceId] = useState(
-    readQueryValue('serviceId'),
+    initialSelectedServiceId,
   );
   const [selectedEndpointId, setSelectedEndpointId] = useState(
     readQueryValue('endpointId'),
@@ -536,9 +543,13 @@ const ScopeInvokePage: React.FC = () => {
       }),
   });
 
-  const services = useMemo(
+  useEffect(() => {
+    nyxIdChatBoundRef.current = false;
+  }, [scopeId]);
+
+  const publishedServices = useMemo(
     () =>
-      buildServiceOptions(
+      buildPublishedServiceCatalog(
         scopeServicesQuery.data ?? [],
         bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
       ),
@@ -548,32 +559,63 @@ const ScopeInvokePage: React.FC = () => {
       scopeServicesQuery.data,
     ],
   );
+  const services = useMemo(
+    () =>
+      scopeId
+        ? buildScopeConsoleServiceOptions(
+            publishedServices,
+            bindingQuery.data?.available
+              ? bindingQuery.data.serviceId
+              : undefined,
+            {
+              sortBy: 'serviceId',
+            },
+          )
+        : [],
+    [
+      bindingQuery.data?.available,
+      bindingQuery.data?.serviceId,
+      publishedServices,
+      scopeId,
+    ],
+  );
 
   useEffect(() => {
     if (!services.length) {
+      serviceSelectionSourceRef.current = 'auto';
       setSelectedServiceId('');
-      return;
-    }
-
-    if (
-      selectedServiceId &&
-      services.some((service) => service.serviceId === selectedServiceId)
-    ) {
       return;
     }
 
     if (preserveEmptySelection) {
-      setSelectedServiceId('');
+      serviceSelectionSourceRef.current = 'auto';
+      if (selectedServiceId) {
+        setSelectedServiceId('');
+      }
       return;
     }
 
-    setSelectedServiceId(
-      services.find(
-        (service) => service.serviceId === bindingQuery.data?.serviceId,
-      )?.serviceId ||
-        services[0]?.serviceId ||
-        '',
+    const preferredServiceId = getPreferredScopeConsoleServiceId(
+      services,
+      bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
     );
+    const hasSelectedService =
+      selectedServiceId &&
+      services.some((service) => service.serviceId === selectedServiceId);
+
+    if (!hasSelectedService) {
+      serviceSelectionSourceRef.current = 'auto';
+      setSelectedServiceId(preferredServiceId);
+      return;
+    }
+
+    if (
+      serviceSelectionSourceRef.current === 'auto' &&
+      preferredServiceId &&
+      selectedServiceId !== preferredServiceId
+    ) {
+      setSelectedServiceId(preferredServiceId);
+    }
   }, [
     bindingQuery.data?.serviceId,
     preserveEmptySelection,
@@ -613,7 +655,7 @@ const ScopeInvokePage: React.FC = () => {
       (endpoint) => endpoint.endpointId === selectedEndpointId,
     ) ?? null;
   const isChatPlayground = Boolean(
-    selectedEndpoint && isChatEndpoint(selectedEndpoint),
+    selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
   const currentBindingRevision = getStudioScopeBindingCurrentRevision(
     bindingQuery.data,
@@ -630,7 +672,7 @@ const ScopeInvokePage: React.FC = () => {
     '';
 
   useEffect(() => {
-    if (!selectedEndpoint || isChatEndpoint(selectedEndpoint)) {
+    if (!selectedEndpoint || isChatServiceEndpoint(selectedEndpoint)) {
       setPayloadTypeUrl('');
       setPayloadBase64('');
       return;
@@ -663,6 +705,15 @@ const ScopeInvokePage: React.FC = () => {
     label: service.displayName || service.serviceId,
     value: service.serviceId,
   }));
+
+  const ensureNyxIdChatBound = useCallback(async () => {
+    if (!scopeId || nyxIdChatBoundRef.current) {
+      return;
+    }
+
+    await studioApi.bindScopeGAgent(createNyxIdChatBindingInput(scopeId));
+    nyxIdChatBoundRef.current = true;
+  }, [scopeId]);
   const endpointOptions = (selectedService?.endpoints ?? []).map(
     (endpoint) => ({
       label: endpoint.displayName || endpoint.endpointId,
@@ -688,7 +739,7 @@ const ScopeInvokePage: React.FC = () => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
 
-    if (isChatEndpoint(selectedEndpoint)) {
+    if (isChatServiceEndpoint(selectedEndpoint)) {
       const trimmedPrompt = prompt.trim();
       const userMessageId = createClientId();
       const assistantMessageId = createClientId();
@@ -725,6 +776,10 @@ const ScopeInvokePage: React.FC = () => {
       });
 
       try {
+        if (selectedService.kind === 'nyxid-chat') {
+          await ensureNyxIdChatBound();
+        }
+
         const response = await runtimeRunsApi.streamChat(
           scopeId,
           {
@@ -880,27 +935,16 @@ const ScopeInvokePage: React.FC = () => {
           serviceId: selectedService.serviceId,
         },
       );
-      const responseRunId = String(
-        response.request_id ?? response.requestId ?? response.commandId ?? '',
-      ).trim();
-      const responseActorId = String(
-        response.target_actor_id ??
-          response.targetActorId ??
-          response.actorId ??
-          '',
-      ).trim();
-      const responseCommandId = String(
-        response.command_id ?? response.commandId ?? responseRunId,
-      ).trim();
+      const {
+        actorId: responseActorId,
+        commandId: responseCommandId,
+        correlationId: responseCorrelationId,
+        runId: responseRunId,
+      } = extractRuntimeInvokeReceipt(response);
       const events: RuntimeEvent[] = [
         {
           runId: responseRunId || undefined,
-          threadId:
-            String(
-              response.correlation_id ??
-                response.correlationId ??
-                responseRunId,
-            ).trim() || undefined,
+          threadId: responseCorrelationId || undefined,
           timestamp: Date.now(),
           type: AGUIEventType.RUN_STARTED,
         } as RuntimeEvent,
@@ -949,19 +993,19 @@ const ScopeInvokePage: React.FC = () => {
     }
 
     const observedDraftKey =
-      invokeResult.events.length > 0
+      observedEvents.length > 0
         ? saveObservedRunSessionPayload({
             actorId: invokeResult.actorId || undefined,
             commandId: invokeResult.commandId || undefined,
             endpointId:
               invokeResult.endpointId || selectedEndpoint?.endpointId || 'chat',
-            events: invokeResult.events,
+            events: observedEvents,
             payloadBase64:
-              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+              selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint)
                 ? payloadBase64 || undefined
                 : undefined,
             payloadTypeUrl:
-              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+              selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint)
                 ? payloadTypeUrl || undefined
                 : undefined,
             prompt,
@@ -977,7 +1021,7 @@ const ScopeInvokePage: React.FC = () => {
         draftKey: observedDraftKey || undefined,
         endpointId: selectedEndpoint?.endpointId,
         payloadTypeUrl:
-          selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+          selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint)
             ? payloadTypeUrl || undefined
             : undefined,
         prompt: prompt || undefined,
@@ -1080,6 +1124,24 @@ const ScopeInvokePage: React.FC = () => {
       ),
     [invokeResult.responseJson],
   );
+  const latestChatObservedEvents = useMemo(() => {
+    const latestAssistantMessage = [...chatMessages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'assistant' && (message.events?.length ?? 0) > 0,
+      );
+
+    return latestAssistantMessage?.events ?? [];
+  }, [chatMessages]);
+  const observedEvents = useMemo(
+    () =>
+      invokeResult.events.length > 0
+        ? invokeResult.events
+        : latestChatObservedEvents,
+    [invokeResult.events, latestChatObservedEvents],
+  );
+  const observedEventCount = observedEvents.length;
 
   const bindingStatus =
     bindingQuery.data?.deploymentStatus ||
@@ -1392,7 +1454,7 @@ const ScopeInvokePage: React.FC = () => {
                           <div ref={scrollAnchorRef} />
                         </div>
                       }
-                      events={invokeResult.events}
+                      events={observedEvents}
                       fillHeight
                       hasChatContent={chatMessages.length > 0}
                       onClear={handleClearConsole}
@@ -1481,7 +1543,7 @@ const ScopeInvokePage: React.FC = () => {
                     <InvokeLabConsole
                       activeTab={dockTab}
                       chatPanel={null}
-                      events={invokeResult.events}
+                      events={observedEvents}
                       hasChatContent={false}
                       onClear={handleClearConsole}
                       onTabChange={setDockTab}
@@ -1514,6 +1576,7 @@ const ScopeInvokePage: React.FC = () => {
                   <Select
                     onChange={(value) => {
                       setPreserveEmptySelection(false);
+                      serviceSelectionSourceRef.current = 'manual';
                       setSelectedServiceId(value);
                     }}
                     options={serviceOptions}
@@ -1530,7 +1593,7 @@ const ScopeInvokePage: React.FC = () => {
                     placeholder="Select endpoint"
                     value={selectedEndpointId || undefined}
                   />
-                  {selectedEndpoint && !isChatEndpoint(selectedEndpoint) ? (
+                  {selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint) ? (
                     <>
                       <Typography.Text style={fieldLabelStyle}>
                         Payload Type URL
@@ -1651,7 +1714,7 @@ const ScopeInvokePage: React.FC = () => {
                             {recommendedNextStep.actionLabel}
                           </Button>
                           <Typography.Text type="secondary">
-                            {invokeResult.eventCount} observed events
+                            {observedEventCount} observed events
                           </Typography.Text>
                         </Space>
                       </div>
@@ -1681,17 +1744,19 @@ const ScopeInvokePage: React.FC = () => {
             <ScopeServiceRuntimeWorkbench
               onSelectService={(serviceId) => {
                 setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
                 setSelectedServiceId(serviceId);
               }}
               onUseEndpoint={(serviceId, endpointId) => {
                 setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
                 setSelectedServiceId(serviceId);
                 setSelectedEndpointId(endpointId);
               }}
               scopeId={scopeId}
               selectedEndpointId={selectedEndpointId}
               selectedServiceId={selectedServiceId}
-              services={services}
+              services={publishedServices}
             />
           </AevatarContextDrawer>
         ) : null}

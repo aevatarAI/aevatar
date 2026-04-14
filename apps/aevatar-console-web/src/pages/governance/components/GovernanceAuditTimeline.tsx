@@ -124,7 +124,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
       }}
     >
       <Space
-        direction="vertical"
+        orientation="vertical"
         size={16}
         style={{ display: "flex", minHeight: 0 }}
       >
@@ -173,7 +173,7 @@ const GovernanceAuditTimeline: React.FC<GovernanceAuditTimelineProps> = ({
                   >
                     <Space
                       align="start"
-                      direction="vertical"
+                      orientation="vertical"
                       size={10}
                       style={{ display: "flex" }}
                     >
