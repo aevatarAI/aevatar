@@ -1,35 +1,38 @@
 // ─────────────────────────────────────────────────────────────
-// LLMRequest / ChatMessage / ToolCall — LLM 请求与消息模型
-// 封装 Chat API 所需的消息列表、工具、参数等
+// LLMRequest / ChatMessage / ToolCall — LLM request and message models
+// Encapsulates the message list, tools, parameters, and other data required by the Chat API
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.AI.Abstractions.ToolProviders;
 
 namespace Aevatar.AI.Abstractions.LLMProviders;
 
-/// <summary>LLM 请求 DTO。包含消息、工具、模型参数。</summary>
+/// <summary>LLM request DTO. Includes messages, tools, and model parameters.</summary>
 public sealed class LLMRequest
 {
-    /// <summary>对话消息列表，按顺序排列（system / user / assistant / tool）。</summary>
+    /// <summary>Conversation message list in order (system / user / assistant / tool).</summary>
     public required List<ChatMessage> Messages { get; init; }
 
-    /// <summary>稳定请求标识，用于 replay/dedup/outbox 等跨边界关联。</summary>
+    /// <summary>Stable request identifier used for cross-boundary correlation in replay/dedup/outbox scenarios.</summary>
     public string? RequestId { get; init; }
 
-    /// <summary>透传给 provider/middleware 的附加 metadata。</summary>
+    /// <summary>Additional metadata passed through to the provider/middleware.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
-    /// <summary>可选工具列表，供 LLM 选择调用。</summary>
+    /// <summary>Optional list of tools available for the LLM to invoke.</summary>
     public IReadOnlyList<IAgentTool>? Tools { get; init; }
 
-    /// <summary>可选模型名称，覆盖 Provider 默认模型。</summary>
+    /// <summary>Optional model name that overrides the provider default model.</summary>
     public string? Model { get; init; }
 
-    /// <summary>可选温度参数，控制生成随机性。</summary>
+    /// <summary>Optional temperature parameter that controls generation randomness.</summary>
     public double? Temperature { get; init; }
 
-    /// <summary>可选最大生成 Token 数。</summary>
+    /// <summary>Optional maximum number of output tokens.</summary>
     public int? MaxTokens { get; init; }
+
+    /// <summary>Optional response format constraint (Text / JsonObject / JsonSchema).</summary>
+    public LLMResponseFormat? ResponseFormat { get; init; }
 
     public IReadOnlySet<ContentPartKind> GetRequestedInputModalities()
     {
@@ -55,36 +58,36 @@ public sealed class LLMRequest
     }
 }
 
-/// <summary>单条 Chat 消息。支持 system / user / assistant / tool 四种角色。</summary>
+/// <summary>A single Chat message. Supports the system / user / assistant / tool roles.</summary>
 public sealed class ChatMessage
 {
-    /// <summary>消息角色：system / user / assistant / tool。</summary>
+    /// <summary>Message role: system / user / assistant / tool.</summary>
     public required string Role { get; init; }
 
-    /// <summary>文本内容，tool 角色时表示工具执行结果。</summary>
+    /// <summary>Text content; for the tool role, this represents the tool execution result.</summary>
     public string? Content { get; init; }
 
-    /// <summary>多模态内容分片（文本/图片）。存在时优先由 Provider 按分片构造消息。</summary>
+    /// <summary>Multimodal content parts (text/image). When present, the provider should construct the message from the parts first.</summary>
     public IReadOnlyList<ContentPart>? ContentParts { get; init; }
 
-    /// <summary>tool 角色时，对应 tool_call 的 Id。</summary>
+    /// <summary>For the tool role, the corresponding tool_call Id.</summary>
     public string? ToolCallId { get; init; }
 
-    /// <summary>assistant 角色时，LLM 返回的 tool_call 列表。</summary>
+    /// <summary>For the assistant role, the tool_call list returned by the LLM.</summary>
     public IReadOnlyList<ToolCall>? ToolCalls { get; init; }
 
-    /// <summary>创建 system 角色消息。</summary>
+    /// <summary>Creates a system-role message.</summary>
     public static ChatMessage System(string content) => new() { Role = "system", Content = content };
 
-    /// <summary>创建 user 角色消息。</summary>
+    /// <summary>Creates a user-role message.</summary>
     public static ChatMessage User(string content) => new() { Role = "user", Content = content };
 
-    /// <summary>创建 assistant 角色消息。</summary>
+    /// <summary>Creates an assistant-role message.</summary>
     public static ChatMessage Assistant(string content) => new() { Role = "assistant", Content = content };
 
-    /// <summary>创建 tool 角色消息，携带工具执行结果。</summary>
-    /// <param name="callId">对应 tool_call 的 Id。</param>
-    /// <param name="result">工具执行结果 JSON 字符串。</param>
+    /// <summary>Creates a tool-role message carrying the tool execution result.</summary>
+    /// <param name="callId">The corresponding tool_call Id.</param>
+    /// <param name="result">Tool execution result as a JSON string.</param>
     public static ChatMessage Tool(string callId, string result) => new() { Role = "tool", ToolCallId = callId, Content = result };
 
     public static ChatMessage User(IReadOnlyList<ContentPart> parts, string? text = null) => new()
@@ -104,32 +107,32 @@ public enum ContentPartKind
     Video = 4,
 }
 
-/// <summary>多模态内容分片。</summary>
+/// <summary>Multimodal content part.</summary>
 public sealed class ContentPart
 {
-    /// <summary>分片类型：text / image / audio / video。</summary>
+    /// <summary>Part kind: text / image / audio / video.</summary>
     public required ContentPartKind Kind { get; init; }
 
-    /// <summary>文本分片内容。</summary>
+    /// <summary>Text part content.</summary>
     public string? Text { get; init; }
 
-    /// <summary>媒体分片的内联 base64 数据（不带 data-uri 头）。</summary>
+    /// <summary>Inline base64 data for a media part (without the data-uri prefix).</summary>
     public string? DataBase64 { get; init; }
 
-    /// <summary>媒体 MIME 类型（例如 image/png、audio/wav、video/mp4）。</summary>
+    /// <summary>Media MIME type (for example image/png, audio/wav, video/mp4).</summary>
     public string? MediaType { get; init; }
 
-    /// <summary>媒体远程地址或 data-uri。</summary>
+    /// <summary>Remote media URI or data-uri.</summary>
     public string? Uri { get; init; }
 
-    /// <summary>可选显示名或文件名。</summary>
+    /// <summary>Optional display name or file name.</summary>
     public string? Name { get; init; }
 
-    /// <summary>创建文本分片。</summary>
+    /// <summary>Creates a text part.</summary>
     public static ContentPart TextPart(string text) =>
         new() { Kind = ContentPartKind.Text, Text = text };
 
-    /// <summary>创建图片分片。</summary>
+    /// <summary>Creates an image part.</summary>
     public static ContentPart ImagePart(string dataBase64, string mediaType = "image/png", string? name = null) =>
         new() { Kind = ContentPartKind.Image, DataBase64 = dataBase64, MediaType = mediaType, Name = name };
 
@@ -149,15 +152,15 @@ public sealed class ContentPart
         new() { Kind = ContentPartKind.Video, Uri = uri, MediaType = mediaType, Name = name };
 }
 
-/// <summary>单次工具调用。包含 Id、名称、参数 JSON。</summary>
+/// <summary>A single tool call. Includes Id, name, and parameter JSON.</summary>
 public sealed class ToolCall
 {
-    /// <summary>工具调用唯一标识。</summary>
+    /// <summary>Unique tool call identifier.</summary>
     public required string Id { get; init; }
 
-    /// <summary>工具名称。</summary>
+    /// <summary>Tool name.</summary>
     public required string Name { get; init; }
 
-    /// <summary>工具参数 JSON 字符串。</summary>
+    /// <summary>Tool parameter JSON string.</summary>
     public required string ArgumentsJson { get; init; }
 }
