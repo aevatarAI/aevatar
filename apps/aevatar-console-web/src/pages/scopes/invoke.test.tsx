@@ -425,76 +425,55 @@ describe('ScopeInvokePage', () => {
     });
   });
 
-  it('deduplicates repeated service ids before building picker options', () => {
-    expect(
-      buildServiceOptions(
-        [
-          {
-            serviceKey: 'scope-a:default:default:hello-chat:older',
-            tenantId: 'scope-a',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'hello-chat',
-            displayName: 'hello-chat',
-            defaultServingRevisionId: 'rev-1',
-            activeServingRevisionId: 'rev-1',
-            deploymentId: 'deploy-1',
-            primaryActorId: 'actor://scope-a/hello-chat/1',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'chat',
-                kind: 'chat',
-                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
-                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
-                description: 'Chat endpoint.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-04-09T09:00:00Z',
-          },
-          {
-            serviceKey: 'scope-a:default:default:hello-chat:newer',
-            tenantId: 'scope-a',
-            appId: 'default',
-            namespace: 'default',
-            serviceId: 'hello-chat',
-            displayName: 'hello-chat',
-            defaultServingRevisionId: 'rev-2',
-            activeServingRevisionId: 'rev-2',
-            deploymentId: 'deploy-2',
-            primaryActorId: 'actor://scope-a/hello-chat/2',
-            deploymentStatus: 'Active',
-            endpoints: [
-              {
-                endpointId: 'chat',
-                displayName: 'chat',
-                kind: 'chat',
-                requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
-                responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
-                description: 'Chat endpoint.',
-              },
-              {
-                endpointId: 'health',
-                displayName: 'health',
-                kind: 'command',
-                requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
-                responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
-                description: 'Health endpoint.',
-              },
-            ],
-            policyIds: [],
-            updatedAt: '2026-04-09T09:30:00Z',
-          },
-        ],
-        'hello-chat',
-      ),
-    ).toEqual([
+  it('prepends the built-in NyxID Chat service and maps published services', () => {
+    const result = buildServiceOptions(
+      [
+        {
+          serviceKey: 'scope-a:default:default:hello-chat',
+          tenantId: 'scope-a',
+          appId: 'default',
+          namespace: 'default',
+          serviceId: 'hello-chat',
+          displayName: 'hello-chat',
+          defaultServingRevisionId: 'rev-2',
+          activeServingRevisionId: 'rev-2',
+          deploymentId: 'deploy-2',
+          primaryActorId: 'actor://scope-a/hello-chat/2',
+          deploymentStatus: 'Active',
+          endpoints: [
+            {
+              endpointId: 'chat',
+              displayName: 'chat',
+              kind: 'chat',
+              requestTypeUrl: 'type.googleapis.com/aevatar.ChatRequestEvent',
+              responseTypeUrl: 'type.googleapis.com/aevatar.ChatResponseEvent',
+              description: 'Chat endpoint.',
+            },
+            {
+              endpointId: 'health',
+              displayName: 'health',
+              kind: 'command',
+              requestTypeUrl: 'type.googleapis.com/google.protobuf.Empty',
+              responseTypeUrl: 'type.googleapis.com/google.protobuf.StringValue',
+              description: 'Health endpoint.',
+            },
+          ],
+          policyIds: [],
+          updatedAt: '2026-04-09T09:30:00Z',
+        },
+      ],
+      'hello-chat',
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        serviceId: 'nyxid-chat',
+        kind: 'nyxid-chat',
+      }),
       expect.objectContaining({
         serviceId: 'hello-chat',
-        serviceKey: 'scope-a:default:default:hello-chat:newer',
-        activeServingRevisionId: 'rev-2',
+        kind: 'service',
+        primaryActorId: 'actor://scope-a/hello-chat/2',
       }),
     ]);
   });
@@ -993,11 +972,12 @@ describe('ScopeInvokePage', () => {
 
     renderWithQueryClient(React.createElement(ScopeInvokePage));
 
-    const invokeButton = await screen.findByRole('button', {
-      name: 'Invoke endpoint',
-    });
+    await screen.findByText('Prompt / Payload');
+
     await waitFor(() => {
-      expect(invokeButton).not.toBeDisabled();
+      expect(
+        screen.getByRole('button', { name: 'Invoke endpoint' }),
+      ).not.toBeDisabled();
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset' }));

@@ -57,7 +57,7 @@ describe("StudioShell", () => {
       flex: "1",
       minHeight: "0",
       overflowX: "hidden",
-      overflowY: "hidden",
+      overflowY: "auto",
     });
 
     expect(screen.getByLabelText("Workbench")).toHaveStyle({ width: "64px" });
@@ -97,7 +97,7 @@ describe("StudioShell", () => {
       })
     );
 
-    expect(screen.getByText("Studio content").parentElement).toHaveStyle({
+    expect(screen.getByText("Studio content").parentElement?.parentElement).toHaveStyle({
       overflowY: "hidden",
     });
   });
