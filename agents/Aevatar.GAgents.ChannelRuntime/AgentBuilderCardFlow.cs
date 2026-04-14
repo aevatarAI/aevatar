@@ -9,6 +9,9 @@ internal static class AgentBuilderCardFlow
     private const string CardActionChatType = "card_action";
     private const string DailyReportAction = "create_daily_report";
     private const string ListAgentsAction = "list_agents";
+    private const string AgentStatusAction = "agent_status";
+    private const string ConfirmDeleteAgentAction = "confirm_delete_agent";
+    private const string DeleteAgentAction = "delete_agent";
     private const string DefaultScheduleTime = "09:00";
 
     private static readonly HashSet<string> LaunchIntents = new(StringComparer.OrdinalIgnoreCase)
@@ -72,6 +75,38 @@ internal static class AgentBuilderCardFlow
                 decision = AgentBuilderFlowDecision.ToolCall(ListAgentsAction, """{"action":"list_agents"}""");
                 return true;
 
+            case AgentStatusAction:
+                if (!TryBuildAgentActionArguments(evt, "agent_status", out argumentsJson, out validationError))
+                {
+                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
+                    return true;
+                }
+
+                decision = AgentBuilderFlowDecision.ToolCall(AgentStatusAction, argumentsJson!);
+                return true;
+
+            case ConfirmDeleteAgentAction:
+                if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
+                {
+                    decision = AgentBuilderFlowDecision.DirectReply("agent_id is required for delete confirmation.");
+                    return true;
+                }
+
+                decision = AgentBuilderFlowDecision.DirectReply(BuildDeleteConfirmationCard(
+                    agentId,
+                    evt.Extra.TryGetValue("template", out var template) ? template : null));
+                return true;
+
+            case DeleteAgentAction:
+                if (!TryBuildAgentActionArguments(evt, "delete_agent", out argumentsJson, out validationError, confirm: true))
+                {
+                    decision = AgentBuilderFlowDecision.DirectReply(validationError!);
+                    return true;
+                }
+
+                decision = AgentBuilderFlowDecision.ToolCall(DeleteAgentAction, argumentsJson!);
+                return true;
+
             default:
                 return false;
         }
@@ -88,6 +123,8 @@ internal static class AgentBuilderCardFlow
             {
                 DailyReportAction => FormatCreateDailyReportResult(doc.RootElement),
                 ListAgentsAction => FormatListAgentsResult(doc.RootElement),
+                AgentStatusAction => FormatAgentStatusResult(doc.RootElement),
+                DeleteAgentAction => FormatDeleteAgentResult(doc.RootElement),
                 _ => toolResultJson,
             };
         }
@@ -147,6 +184,31 @@ internal static class AgentBuilderCardFlow
             schedule_cron = scheduleCron,
             schedule_timezone = scheduleTimezone,
             run_immediately = runImmediately,
+        });
+        return true;
+    }
+
+    private static bool TryBuildAgentActionArguments(
+        ChannelInboundEvent evt,
+        string action,
+        out string? argumentsJson,
+        out string? validationError,
+        bool confirm = false)
+    {
+        argumentsJson = null;
+        validationError = null;
+
+        if (!TryGetRequiredExtra(evt, "agent_id", out var agentId))
+        {
+            validationError = "agent_id is required. Send /agents and retry from the latest card.";
+            return false;
+        }
+
+        argumentsJson = JsonSerializer.Serialize(new
+        {
+            action,
+            agent_id = agentId,
+            confirm,
         });
         return true;
     }
@@ -318,19 +380,101 @@ internal static class AgentBuilderCardFlow
             return "No agents found. Send /daily-report to create one.";
         }
 
-        var lines = new List<string>();
+        var agents = new List<AgentListCardItem>();
         foreach (var item in agentsElement.EnumerateArray())
         {
             var agentId = ReadString(item, "agent_id") ?? "unknown-agent";
             var template = ReadString(item, "template") ?? "unknown-template";
             var status = ReadString(item, "status") ?? "unknown";
             var nextRun = ReadString(item, "next_scheduled_run") ?? "pending";
-            lines.Add($"- {agentId}: {template}, {status}, next {nextRun}");
+            agents.Add(new AgentListCardItem(agentId, template, status, nextRun));
         }
 
-        return lines.Count == 0
+        return agents.Count == 0
             ? "No agents found. Send /daily-report to create one."
-            : $"Current agents:\n{string.Join("\n", lines)}";
+            : BuildAgentListCard(agents);
+    }
+
+    private static string FormatAgentStatusResult(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return $"Agent status failed: {error}";
+
+        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
+        var template = ReadString(root, "template") ?? "unknown-template";
+        var status = ReadString(root, "status") ?? "unknown";
+        var scheduleCron = ReadString(root, "schedule_cron") ?? "n/a";
+        var scheduleTimezone = ReadString(root, "schedule_timezone") ?? "n/a";
+        var lastRunAt = ReadString(root, "last_run_at") ?? "n/a";
+        var nextRunAt = ReadString(root, "next_scheduled_run") ?? "n/a";
+        var errorCount = ReadString(root, "error_count") ?? "0";
+        var lastError = ReadString(root, "last_error");
+
+        var lines = new List<string>
+        {
+            $"**Agent:** `{agentId}`",
+            $"Template: `{template}`",
+            $"Status: `{status}`",
+            $"Schedule: `{scheduleCron}` ({scheduleTimezone})",
+            $"Last run: `{lastRunAt}`",
+            $"Next run: `{nextRunAt}`",
+            $"Error count: `{errorCount}`",
+        };
+
+        if (!string.IsNullOrWhiteSpace(lastError))
+            lines.Add($"Last error: `{lastError}`");
+
+        return BuildInfoCard(
+            "Agent Status",
+            string.Join("\n", lines),
+            "green",
+            new object[]
+            {
+                BuildButton("Back to Agents", "default", new
+                {
+                    agent_builder_action = ListAgentsAction,
+                }),
+                BuildButton("Delete Agent", "danger", new
+                {
+                    agent_builder_action = ConfirmDeleteAgentAction,
+                    agent_id = agentId,
+                    template,
+                }),
+            });
+    }
+
+    private static string FormatDeleteAgentResult(JsonElement root)
+    {
+        if (TryReadError(root, out var error))
+            return $"Delete agent failed: {error}";
+
+        var status = ReadString(root, "status") ?? "accepted";
+        var agentId = ReadString(root, "agent_id") ?? "unknown-agent";
+        var revokedApiKeyId = ReadString(root, "revoked_api_key_id") ?? "n/a";
+        var note = ReadString(root, "note");
+
+        var lines = new List<string>
+        {
+            string.Equals(status, "deleted", StringComparison.OrdinalIgnoreCase)
+                ? $"Agent deleted: `{agentId}`"
+                : $"Delete accepted: `{agentId}`",
+            $"Revoked API key: `{revokedApiKeyId}`",
+        };
+
+        if (!string.IsNullOrWhiteSpace(note))
+            lines.Add(note!);
+
+        return BuildInfoCard(
+            "Agent Deleted",
+            string.Join("\n", lines),
+            "red",
+            new object[]
+            {
+                BuildButton("Back to Agents", "default", new
+                {
+                    agent_builder_action = ListAgentsAction,
+                }),
+            });
     }
 
     private static bool TryReadError(JsonElement root, out string error)
@@ -353,7 +497,146 @@ internal static class AgentBuilderCardFlow
             _ => null,
         };
     }
+
+    private static string BuildAgentListCard(IReadOnlyList<AgentListCardItem> agents)
+    {
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "markdown",
+                content = $"You currently have **{agents.Count}** agent(s).",
+            },
+        };
+
+        foreach (var agent in agents)
+        {
+            elements.Add(new
+            {
+                tag = "markdown",
+                content = $"**{EscapeMarkdown(agent.Template)}**\nID: `{EscapeMarkdown(agent.AgentId)}`\nStatus: `{EscapeMarkdown(agent.Status)}`\nNext run: `{EscapeMarkdown(agent.NextRun)}`",
+            });
+            elements.Add(new
+            {
+                tag = "action",
+                actions = new object[]
+                {
+                    BuildButton("Status", "primary", new
+                    {
+                        agent_builder_action = AgentStatusAction,
+                        agent_id = agent.AgentId,
+                    }),
+                    BuildButton("Delete", "danger", new
+                    {
+                        agent_builder_action = ConfirmDeleteAgentAction,
+                        agent_id = agent.AgentId,
+                        template = agent.Template,
+                    }),
+                },
+            });
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            config = new
+            {
+                wide_screen_mode = true,
+            },
+            header = new
+            {
+                title = new
+                {
+                    tag = "plain_text",
+                    content = "Current Agents",
+                },
+                template = "wathet",
+            },
+            elements,
+        });
+    }
+
+    private static string BuildDeleteConfirmationCard(string agentId, string? template)
+    {
+        var templateLabel = NormalizeOptional(template) ?? "unknown-template";
+        return BuildInfoCard(
+            "Delete Agent",
+            $"Delete agent `{EscapeMarkdown(agentId)}` from template `{EscapeMarkdown(templateLabel)}`?\nThis will disable scheduling, revoke the Nyx API key, and tombstone the registry entry.",
+            "red",
+            new object[]
+            {
+                BuildButton("Confirm Delete", "danger", new
+                {
+                    agent_builder_action = DeleteAgentAction,
+                    agent_id = agentId,
+                }),
+                BuildButton("Back to Agents", "default", new
+                {
+                    agent_builder_action = ListAgentsAction,
+                }),
+            });
+    }
+
+    private static string BuildInfoCard(
+        string title,
+        string markdown,
+        string template,
+        object[] actions)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            config = new
+            {
+                wide_screen_mode = true,
+            },
+            header = new
+            {
+                title = new
+                {
+                    tag = "plain_text",
+                    content = title,
+                },
+                template,
+            },
+            elements = new object[]
+            {
+                new
+                {
+                    tag = "markdown",
+                    content = markdown,
+                },
+                new
+                {
+                    tag = "action",
+                    actions,
+                },
+            },
+        });
+    }
+
+    private static object BuildButton(string label, string style, object value) =>
+        new
+        {
+            tag = "button",
+            type = style,
+            text = new
+            {
+                tag = "plain_text",
+                content = label,
+            },
+            value,
+        };
+
+    private static string EscapeMarkdown(string value) =>
+        value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal);
 }
+
+internal sealed record AgentListCardItem(
+    string AgentId,
+    string Template,
+    string Status,
+    string NextRun);
 
 internal sealed record AgentBuilderFlowDecision(
     bool RequiresToolExecution,

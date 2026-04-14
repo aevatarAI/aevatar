@@ -448,6 +448,224 @@ public class ChannelUserGAgentContinuationTests
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task HandleInbound_ListAgentsIntent_ShouldSendInteractiveAgentListCard()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.QueryAllAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IReadOnlyList<AgentRegistryEntry>>(
+            [
+                new AgentRegistryEntry
+                {
+                    AgentId = "skill-runner-1",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    Status = "running",
+                    NextRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
+                    OwnerNyxUserId = "user-1",
+                },
+            ]));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Get, "/api/v1/users/me", """{"user":{"id":"user-1"}}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            runtime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/agents";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("agent_status");
+        adapter.Replies[0].ReplyText.Should().Contain("confirm_delete_agent");
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Current Agents");
+    }
+
+    [Fact]
+    public async Task HandleInbound_AgentStatusCardAction_ShouldSendStatusCard()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = "running",
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+                LastRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 14, 9, 0, 0, TimeSpan.Zero)),
+                NextRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
+                ErrorCount = 0,
+                ConversationId = "oc_chat_1",
+            }));
+
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            runtime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"agent_status"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_status_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "agent_status" },
+                { "agent_id", "skill-runner-1" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Delete Agent");
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Agent Status");
+    }
+
+    [Fact]
+    public async Task HandleInbound_DeleteAgentCardAction_ShouldExecuteDeleteAndSendResultCard()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+                {
+                    AgentId = "skill-runner-1",
+                    AgentType = SkillRunnerDefaults.AgentType,
+                    TemplateName = "daily_report",
+                    ApiKeyId = "key-1",
+                }),
+                Task.FromResult<AgentRegistryEntry?>(null));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+        var registryActor = Substitute.For<IActor>();
+        registryActor.Id.Returns(AgentRegistryGAgent.WellKnownId);
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+        actorRuntime.GetAsync(AgentRegistryGAgent.WellKnownId).Returns(Task.FromResult<IActor?>(registryActor));
+
+        var handler = new RoutingJsonHandler();
+        handler.Add(HttpMethod.Delete, "/api/v1/api-keys/key-1", """{"ok":true}""");
+
+        var nyxClient = new NyxIdApiClient(
+            new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" },
+            new HttpClient(handler) { BaseAddress = new Uri("https://nyx.example.com") });
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+                serviceCollection.AddSingleton(nyxClient);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"delete_agent"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_delete_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "delete_agent" },
+                { "agent_id", "skill-runner-1" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Agent Deleted");
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(DisableSkillRunnerCommand.Descriptor) &&
+                e.Payload.Unpack<DisableSkillRunnerCommand>().Reason == "delete_agent"),
+            Arg.Any<CancellationToken>());
+
+        await registryActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
+                e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "skill-runner-1"),
+            Arg.Any<CancellationToken>());
+    }
+
     // ─── Durable Dedup Tests ───
 
     [Fact]
