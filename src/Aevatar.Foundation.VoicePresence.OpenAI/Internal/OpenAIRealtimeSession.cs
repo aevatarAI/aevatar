@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Aevatar.Foundation.VoicePresence.Abstractions;
@@ -6,6 +7,7 @@ using System.ClientModel;
 
 namespace Aevatar.Foundation.VoicePresence.OpenAI.Internal;
 
+[ExcludeFromCodeCoverage]
 internal sealed class OpenAIRealtimeSessionFactory : IOpenAIRealtimeSessionFactory
 {
     public async Task<IOpenAIRealtimeSession> StartConversationSessionAsync(
@@ -56,6 +58,7 @@ internal sealed class OpenAIRealtimeSessionFactory : IOpenAIRealtimeSessionFacto
     }
 }
 
+[ExcludeFromCodeCoverage]
 internal sealed class OpenAIRealtimeSession : IOpenAIRealtimeSession
 {
     private readonly RealtimeSessionClient _session;

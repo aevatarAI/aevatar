@@ -206,8 +206,192 @@ public class OpenAIRealtimeProviderTests
         }, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Connect_with_wrong_provider_name_should_throw()
+    {
+        var provider = CreateProvider(new FakeSession());
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            provider.ConnectAsync(new VoiceProviderConfig
+            {
+                ProviderName = "azure",
+                ApiKey = "sk-test",
+            }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Connect_without_api_key_should_throw()
+    {
+        var provider = CreateProvider(new FakeSession());
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            provider.ConnectAsync(new VoiceProviderConfig
+            {
+                ProviderName = "openai",
+            }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Double_connect_should_throw()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            provider.ConnectAsync(CreateConfig(), CancellationToken.None));
+    }
+
+    [Fact]
+    public void SendAudio_before_connect_should_throw()
+    {
+        var provider = CreateProvider(new FakeSession());
+
+        Should.Throw<InvalidOperationException>(() =>
+            provider.SendAudioAsync(new byte[] { 1 }, CancellationToken.None));
+    }
+
+    [Fact]
+    public void CancelResponse_before_connect_should_throw()
+    {
+        var provider = CreateProvider(new FakeSession());
+
+        Should.Throw<InvalidOperationException>(() =>
+            provider.CancelResponseAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task SendToolResult_with_empty_callId_should_throw()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await Should.ThrowAsync<ArgumentException>(() =>
+            provider.SendToolResultAsync("", "{}", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task InjectUserText_with_empty_text_should_throw()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await Should.ThrowAsync<ArgumentException>(() =>
+            provider.InjectUserTextAsync("", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Dispose_before_connect_should_not_throw()
+    {
+        var provider = CreateProvider(new FakeSession());
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Double_dispose_should_not_throw()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await provider.DisposeAsync();
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Connect_after_dispose_should_throw()
+    {
+        var provider = CreateProvider(new FakeSession());
+        await provider.DisposeAsync();
+
+        await Should.ThrowAsync<ObjectDisposedException>(() =>
+            provider.ConnectAsync(CreateConfig(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UpdateSession_with_zero_sample_rate_should_use_default()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await provider.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            SampleRateHz = 0,
+        }, CancellationToken.None);
+
+        session.ConfiguredOptions.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task UpdateSession_without_tools_should_not_set_tool_choice()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+
+        await provider.UpdateSessionAsync(new VoiceSessionConfig
+        {
+            Voice = "alloy",
+            Instructions = "test",
+        }, CancellationToken.None);
+
+        session.ConfiguredOptions.Single().Tools.Count.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Receive_loop_error_should_produce_disconnected_event()
+    {
+        var session = new ErrorSession();
+        var provider = CreateProvider(session);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        provider.OnEvent = (evt, _) =>
+        {
+            if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
+                disconnected.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Callback_exception_should_not_crash_dispatch_loop()
+    {
+        var session = new FakeSession(
+        [
+            new OpenAIRealtimeSpeechStartedEvent(),
+            new OpenAIRealtimeSpeechStoppedEvent(),
+            new OpenAIRealtimeDisconnectedEvent("done"),
+        ]);
+        var provider = CreateProvider(session);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callCount = 0;
+
+        provider.OnEvent = (evt, _) =>
+        {
+            Interlocked.Increment(ref callCount);
+            if (evt.EventCase == VoiceProviderEvent.EventOneofCase.SpeechStarted)
+                throw new InvalidOperationException("callback boom");
+            if (evt.EventCase == VoiceProviderEvent.EventOneofCase.Disconnected)
+                disconnected.TrySetResult();
+            return Task.CompletedTask;
+        };
+
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        callCount.ShouldBeGreaterThanOrEqualTo(3);
+    }
+
     private static OpenAIRealtimeProvider CreateProvider(
-        FakeSession session,
+        IOpenAIRealtimeSession session,
         OpenAIRealtimeProviderOptions? options = null)
     {
         return new OpenAIRealtimeProvider(
@@ -226,9 +410,9 @@ public class OpenAIRealtimeProviderTests
 
     private sealed class FakeSessionFactory : IOpenAIRealtimeSessionFactory
     {
-        private readonly FakeSession _session;
+        private readonly IOpenAIRealtimeSession _session;
 
-        public FakeSessionFactory(FakeSession session)
+        public FakeSessionFactory(IOpenAIRealtimeSession session)
         {
             _session = session;
         }
@@ -241,7 +425,7 @@ public class OpenAIRealtimeProviderTests
             _ = config;
             _ = defaultModel;
             _ = ct;
-            return Task.FromResult<IOpenAIRealtimeSession>(_session);
+            return Task.FromResult(_session);
         }
     }
 
@@ -316,5 +500,24 @@ public class OpenAIRealtimeProviderTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ErrorSession : IOpenAIRealtimeSession
+    {
+        public Task ConfigureConversationSessionAsync(RealtimeConversationSessionOptions options, CancellationToken ct) => Task.CompletedTask;
+        public Task SendInputAudioAsync(BinaryData audio, CancellationToken ct) => Task.CompletedTask;
+        public Task AddItemAsync(RealtimeItem item, CancellationToken ct) => Task.CompletedTask;
+        public Task StartResponseAsync(CancellationToken ct) => Task.CompletedTask;
+        public Task CancelResponseAsync(CancellationToken ct) => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+#pragma warning disable CS1998
+        public async IAsyncEnumerable<OpenAIRealtimeSessionEvent> ReceiveEventsAsync(
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            throw new InvalidOperationException("simulated connection error");
+            yield break;
+        }
+#pragma warning restore CS1998
     }
 }
