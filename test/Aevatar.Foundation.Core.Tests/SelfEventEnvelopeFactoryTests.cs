@@ -1,5 +1,6 @@
 using Aevatar.Foundation.Abstractions.Attributes;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
+using Aevatar.Foundation.Core.Pipeline;
 using FluentAssertions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
@@ -9,6 +10,103 @@ namespace Aevatar.Foundation.Core.Tests;
 
 public class SelfEventEnvelopeFactoryTests
 {
+    [Fact]
+    public void Create_ShouldValidateInputs_AndApplyPropagationDeliveryOverrides()
+    {
+        var inbound = new EventEnvelope
+        {
+            Id = "inbound-1",
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-inbound",
+                CausationEventId = "cause-inbound",
+                Trace = new TraceContext
+                {
+                    TraceId = "trace-inbound",
+                    SpanId = "span-inbound",
+                },
+            },
+        };
+        inbound.Propagation.Baggage["existing"] = "value";
+
+        var envelope = SelfEventEnvelopeFactory.Create(
+            "actor-1",
+            new StringValue { Value = "payload" },
+            inbound,
+            new EventEnvelopePublishOptions
+            {
+                Propagation = new EventEnvelopePropagationOverrides
+                {
+                    CorrelationId = "corr-override",
+                    CausationEventId = "cause-override",
+                    Trace = new TraceContext
+                    {
+                        TraceId = "trace-override",
+                        SpanId = "span-override",
+                    },
+                    Baggage =
+                    {
+                        ["mode"] = "override",
+                    },
+                },
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    DeduplicationOperationId = "op-1",
+                },
+            });
+
+        envelope.Route.GetTopologyAudience().Should().Be(TopologyAudience.Self);
+        envelope.Payload.Unpack<StringValue>().Value.Should().Be("payload");
+        envelope.Propagation.Should().NotBeSameAs(inbound.Propagation);
+        envelope.Propagation.CorrelationId.Should().Be("corr-override");
+        envelope.Propagation.CausationEventId.Should().Be("cause-override");
+        envelope.Propagation.Trace.TraceId.Should().Be("trace-override");
+        envelope.Propagation.Baggage["existing"].Should().Be("value");
+        envelope.Propagation.Baggage["mode"].Should().Be("override");
+        envelope.Runtime.Deduplication.OperationId.Should().Be("op-1");
+    }
+
+    [Fact]
+    public void Create_ShouldSkipOptionalRuntimeFieldsWhenOptionsAreBlank()
+    {
+        var inbound = new EventEnvelope
+        {
+            Propagation = new EnvelopePropagation
+            {
+                CorrelationId = "corr-1",
+            },
+        };
+
+        var envelope = SelfEventEnvelopeFactory.Create(
+            "actor-2",
+            new StringValue { Value = "payload" },
+            inbound,
+            new EventEnvelopePublishOptions
+            {
+                Propagation = new EventEnvelopePropagationOverrides(),
+                Delivery = new EventEnvelopeDeliveryOptions
+                {
+                    DeduplicationOperationId = " ",
+                },
+            });
+
+        envelope.Propagation.CorrelationId.Should().Be("corr-1");
+        envelope.Propagation.CausationEventId.Should().BeEmpty();
+        envelope.Runtime.Should().BeNull();
+    }
+
+    [Fact]
+    public void Create_ShouldThrowForBlankActorIdOrNullEvent()
+    {
+        FluentActions.Invoking(() => SelfEventEnvelopeFactory.Create(" ", new StringValue()))
+            .Should()
+            .Throw<ArgumentException>();
+        FluentActions.Invoking(() => SelfEventEnvelopeFactory.Create("actor-1", null!))
+            .Should()
+            .Throw<ArgumentNullException>();
+    }
+
     [Fact]
     public async Task ScheduleSelfDurableTimeoutAsync_ShouldStripRuntimeRetryContext_AndPreservePropagation()
     {

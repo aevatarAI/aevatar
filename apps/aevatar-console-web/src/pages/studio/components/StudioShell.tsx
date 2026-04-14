@@ -30,6 +30,7 @@ export type StudioShellNavItem = {
 
 type StudioShellProps = {
   readonly alerts?: React.ReactNode;
+  readonly contentOverflow?: 'auto' | 'hidden';
   readonly currentPage: StudioWorkspacePage;
   readonly navItems: readonly StudioShellNavItem[];
   readonly onSelectPage: (page: StudioWorkspacePage) => void;
@@ -123,8 +124,8 @@ const workbenchFooterStyle: React.CSSProperties = {
 const shellRootStyle: React.CSSProperties = {
   ...cardStackStyle,
   flex: 1,
-  height: 'calc(100vh - 176px)',
-  minHeight: 'calc(100vh - 176px)',
+  height: '100%',
+  minHeight: 0,
   overflow: 'hidden',
 };
 
@@ -135,6 +136,7 @@ const shellRowStyle: React.CSSProperties = {
 
 const shellColumnStyle: React.CSSProperties = {
   ...stretchColumnStyle,
+  flexDirection: 'column',
   minHeight: 0,
 };
 
@@ -166,6 +168,7 @@ const navItemIconByKey: Record<StudioWorkspacePage, React.ReactNode> = {
 
 const StudioShell: React.FC<StudioShellProps> = ({
   alerts,
+  contentOverflow = 'auto',
   currentPage,
   navItems,
   onSelectPage,
@@ -310,7 +313,12 @@ const StudioShell: React.FC<StudioShellProps> = ({
           </aside>
         </Col>
         <Col flex="auto" style={{ ...shellColumnStyle, minWidth: 0 }}>
-          <div style={shellContentStyle}>
+          <div
+            style={{
+              ...shellContentStyle,
+              overflowY: contentOverflow,
+            }}
+          >
             {showPageHeader ? (
               <div
                 style={{

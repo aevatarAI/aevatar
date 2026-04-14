@@ -75,7 +75,7 @@ public sealed class ChronoStorageUserConfigStoreTests
         var config = await store.GetAsync();
 
         config.DefaultModel.Should().Be("gpt-4.1");
-        config.PreferredLlmRoute.Should().Be("chrono-llm");
+        config.PreferredLlmRoute.Should().Be("/api/v1/proxy/s/chrono-llm");
         config.RuntimeMode.Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         config.LocalRuntimeBaseUrl.Should().Be("http://127.0.0.1:6001");
         config.RemoteRuntimeBaseUrl.Should().Be("https://user-remote.example");
@@ -98,7 +98,7 @@ public sealed class ChronoStorageUserConfigStoreTests
         storageServer.Objects.Should().ContainKey("aevatar-studio:profiles/scope-save/config.json");
         using var json = JsonDocument.Parse(storageServer.Objects["aevatar-studio:profiles/scope-save/config.json"]);
         json.RootElement.GetProperty("defaultModel").GetString().Should().Be("claude-sonnet-4-5-20250929");
-        json.RootElement.GetProperty("preferredLlmRoute").GetString().Should().Be("chrono-llm");
+        json.RootElement.GetProperty("preferredLlmRoute").GetString().Should().Be("/api/v1/proxy/s/chrono-llm");
         json.RootElement.GetProperty("runtimeMode").GetString().Should().Be(UserConfigRuntimeDefaults.RemoteMode);
         json.RootElement.GetProperty("localRuntimeBaseUrl").GetString().Should().Be("http://127.0.0.1:5080");
         json.RootElement.GetProperty("remoteRuntimeBaseUrl").GetString().Should().Be("https://runtime-save.example");

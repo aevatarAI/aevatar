@@ -1,0 +1,218 @@
+syntax = "proto3";
+package aevatar.gagents.channelruntime;
+option csharp_namespace = "Aevatar.GAgents.ChannelRuntime";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Persistent State ───
+
+message ChannelBotRegistrationEntry {
+  string id = 1;
+  string platform = 2;
+  string nyx_provider_slug = 3;
+  string nyx_user_token = 4;
+  string verification_token = 5;
+  string scope_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  string webhook_url = 8;  // Full callback URL configured via setWebhook
+  string encrypt_key = 9;  // Lark Encrypt Key — used for signature verification AND event decryption
+}
+
+message ChannelBotRegistrationStoreState {
+  repeated ChannelBotRegistrationEntry registrations = 1;
+}
+
+// ─── Channel User Identity (per platform sender, coordinator actor) ───
+
+message ChannelUserState {
+  string platform = 1;
+  string platform_user_id = 2;
+  string display_name = 3;
+  string nyxid_user_id = 4;           // empty = 未绑定
+  string nyxid_access_token = 5;      // empty = 用 registration fallback token
+  google.protobuf.Timestamp first_seen = 6;
+  google.protobuf.Timestamp last_seen = 7;
+  map<string, ChannelPendingChatSession> pending_sessions = 8;  // session_id → pending session
+  repeated string processed_message_ids = 9;                    // durable dedup — bounded to last 200
+}
+
+// Tracks an in-flight chat request (persisted in actor state for durability).
+message ChannelPendingChatSession {
+  string session_id = 1;
+  string chat_actor_id = 2;
+  string org_token = 3;
+  // Replay context from original inbound event
+  string platform = 4;
+  string conversation_id = 5;
+  string sender_id = 6;
+  string sender_name = 7;
+  string message_id = 8;
+  string chat_type = 9;
+  string registration_id = 10;
+  string nyx_provider_slug = 11;
+  string registration_scope_id = 12;
+  string prompt = 13;
+  google.protobuf.Timestamp timeout_at = 14;
+}
+
+// Domain event: track sender identity on each inbound message
+message ChannelUserTrackedEvent {
+  string platform = 1;
+  string platform_user_id = 2;
+  string display_name = 3;
+}
+
+// Domain event: user binds NyxID identity
+message ChannelUserBoundEvent {
+  string nyxid_user_id = 1;
+  string nyxid_access_token = 2;
+}
+
+// ─── Device Registration (Actor-backed, #164 pattern) ───
+
+message DeviceRegistrationEntry {
+  string id = 1;
+  string scope_id = 2;                    // Maps to household-{scope_id} actor
+  string hmac_key = 3;                    // HMAC-SHA256 signing key for NyxID relay verification
+  string nyx_conversation_id = 4;         // NyxID conversation ID
+  string description = 5;                 // Human-readable label
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message DeviceRegistrationState {
+  repeated DeviceRegistrationEntry registrations = 1;
+}
+
+// Domain events for DeviceRegistrationGAgent
+message DeviceRegisteredEvent {
+  DeviceRegistrationEntry entry = 1;
+}
+
+message DeviceUnregisteredEvent {
+  string registration_id = 1;
+}
+
+// Commands dispatched to DeviceRegistrationGAgent via EventEnvelope
+message DeviceRegisterCommand {
+  string scope_id = 1;
+  string hmac_key = 2;
+  string nyx_conversation_id = 3;
+  string description = 4;
+}
+
+message DeviceUnregisterCommand {
+  string registration_id = 1;
+}
+
+// Projection read model for device registrations
+message DeviceRegistrationDocument {
+  string id = 1;                          // Registration ID (= document key)
+  string scope_id = 2;
+  string hmac_key = 3;
+  string nyx_conversation_id = 4;
+  string description = 5;
+  int64 state_version = 6;
+  string last_event_id = 7;
+  google.protobuf.Timestamp updated_at_utc = 8;
+  string actor_id = 9;                    // Source actor ID
+}
+
+// ─── Channel Bot Registration (Actor-backed, same pattern as DeviceRegistration) ───
+
+// Domain events for ChannelBotRegistrationGAgent
+message ChannelBotRegisteredEvent {
+  ChannelBotRegistrationEntry entry = 1;
+}
+
+message ChannelBotUnregisteredEvent {
+  string registration_id = 1;
+}
+
+// Commands dispatched to ChannelBotRegistrationGAgent via EventEnvelope
+message ChannelBotRegisterCommand {
+  string platform = 1;
+  string nyx_provider_slug = 2;
+  string nyx_user_token = 3;
+  string verification_token = 4;
+  string scope_id = 5;
+  string webhook_url = 6;
+  string requested_id = 7;  // Caller-provided ID; actor uses if non-empty, else generates
+  string encrypt_key = 8;   // Lark Encrypt Key for signature verification + event decryption
+}
+
+message ChannelBotUnregisterCommand {
+  string registration_id = 1;
+}
+
+message ChannelBotUpdateTokenCommand {
+  string registration_id = 1;
+  string nyx_user_token = 2;
+}
+
+// Domain event: token updated on an existing registration
+message ChannelBotTokenUpdatedEvent {
+  string registration_id = 1;
+  string nyx_user_token = 2;
+}
+
+// Projection read model for channel bot registrations
+message ChannelBotRegistrationDocument {
+  string id = 1;                            // Registration ID (= document key)
+  string platform = 2;
+  string nyx_provider_slug = 3;
+  string scope_id = 4;
+  string verification_token = 5;
+  string webhook_url = 6;
+  int64 state_version = 7;
+  string last_event_id = 8;
+  google.protobuf.Timestamp updated_at_utc = 9;
+  string actor_id = 10;                     // Source actor ID
+  string nyx_user_token = 11;               // Kept in document for callback flow (internal store)
+  string encrypt_key = 12;                   // Lark Encrypt Key (internal store, not exposed in list queries)
+}
+
+// ─── Channel Chat Lifecycle (continuation pattern) ───
+
+// Domain event: chat session requested — carries full replay context
+// so ApplyRequested can restore pending_sessions from event store.
+//
+// Wire safety: field 1 was never persisted under a prior schema — this
+// message type is new in the continuation-pattern PR (feature/bot,
+// 2026-04-11). ApplyRequested guards evt.Session == null as defense
+// against any hypothetical wire mismatch.
+message ChannelChatRequestedEvent {
+  ChannelPendingChatSession session = 1;
+}
+
+// Domain event: inbound message dispatch succeeded.
+// Persisted only after chat dispatch succeeds so durable dedup never marks
+// a message as processed before the chat actor has accepted it.
+message ChannelInboundDispatchedEvent {
+  string session_id = 1;
+  string message_id = 2;
+}
+
+// Domain event: chat session completed (reply sent or timed out)
+message ChannelChatCompletedEvent {
+  string session_id = 1;
+}
+
+// Self-event: chat response timeout (scheduled via ScheduleSelfDurableTimeoutAsync)
+message ChannelChatTimeoutEvent {
+  string session_id = 1;
+}
+
+// Callback endpoint → ChannelUserGAgent inbound dispatch
+message ChannelInboundEvent {
+  string text = 1;
+  string sender_id = 2;
+  string sender_name = 3;
+  string conversation_id = 4;
+  string message_id = 5;
+  string chat_type = 6;
+  string platform = 7;
+  string registration_id = 8;
+  string registration_token = 9;      // fallback token from registration
+  string registration_scope_id = 10;
+  string nyx_provider_slug = 11;
+}

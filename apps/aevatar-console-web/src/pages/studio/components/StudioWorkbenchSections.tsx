@@ -160,6 +160,70 @@ type StudioSelectedGraphEdge = {
   readonly implicit: boolean;
 };
 
+function readWorkflowSortTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function compareWorkflowSummaryPriority(
+  left: StudioWorkflowSummary,
+  right: StudioWorkflowSummary,
+  selectedWorkflowId = '',
+): number {
+  const leftSelected = left.workflowId === selectedWorkflowId;
+  const rightSelected = right.workflowId === selectedWorkflowId;
+  if (leftSelected !== rightSelected) {
+    return leftSelected ? -1 : 1;
+  }
+
+  const updatedDelta =
+    readWorkflowSortTimestamp(right.updatedAtUtc) -
+    readWorkflowSortTimestamp(left.updatedAtUtc);
+  if (updatedDelta !== 0) {
+    return updatedDelta;
+  }
+
+  if (left.stepCount !== right.stepCount) {
+    return right.stepCount - left.stepCount;
+  }
+
+  const leftDescriptionLength = left.description.trim().length;
+  const rightDescriptionLength = right.description.trim().length;
+  if (leftDescriptionLength !== rightDescriptionLength) {
+    return rightDescriptionLength - leftDescriptionLength;
+  }
+
+  return left.workflowId.localeCompare(right.workflowId);
+}
+
+export function dedupeStudioWorkflowSummaries(
+  workflows: readonly StudioWorkflowSummary[],
+  selectedWorkflowId = '',
+): StudioWorkflowSummary[] {
+  const dedupedWorkflows = new Map<string, StudioWorkflowSummary>();
+
+  for (const workflow of workflows) {
+    const key =
+      workflow.name.trim().toLowerCase() ||
+      workflow.workflowId.trim().toLowerCase();
+    const current = dedupedWorkflows.get(key);
+    if (!current) {
+      dedupedWorkflows.set(key, workflow);
+      continue;
+    }
+
+    if (
+      compareWorkflowSummaryPriority(workflow, current, selectedWorkflowId) < 0
+    ) {
+      dedupedWorkflows.set(key, workflow);
+    }
+  }
+
+  return Array.from(dedupedWorkflows.values()).sort((left, right) =>
+    compareWorkflowSummaryPriority(left, right, selectedWorkflowId),
+  );
+}
+
 const DEFAULT_GAGENT_REQUEST_TYPE_URL =
   'type.googleapis.com/google.protobuf.StringValue';
 
@@ -2817,11 +2881,16 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
 }) => {
   const directories = workspaceSettings.data?.directories ?? [];
   const isScopeMode = workflowStorageMode === 'scope';
+  const visibleWorkflows = React.useMemo(
+    () =>
+      dedupeStudioWorkflowSummaries(workflows.data ?? [], selectedWorkflowId),
+    [selectedWorkflowId, workflows.data],
+  );
   const activeDirectory =
     directories.find((directory) => directory.directoryId === selectedDirectoryId) ||
     directories[0] ||
     null;
-  const filteredWorkflows = (workflows.data ?? []).filter((workflow) => {
+  const filteredWorkflows = visibleWorkflows.filter((workflow) => {
     const keyword = workflowSearch.trim().toLowerCase();
     if (!keyword) {
       return true;
@@ -2835,6 +2904,23 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     ].some((value) => value.toLowerCase().includes(keyword));
   });
   const workflowViewportMaxWidth = isScopeMode ? undefined : 1080;
+  const resolvedWorkspaceRowStyle: React.CSSProperties = isScopeMode
+    ? { width: '100%' }
+    : workflowWorkspaceRowStyle;
+  const resolvedWorkflowBrowserStyle: React.CSSProperties = isScopeMode
+    ? {
+        ...workflowBrowserStyle,
+        flex: '0 0 auto',
+        height: 'auto',
+      }
+    : workflowBrowserStyle;
+  const resolvedWorkflowResultsBodyStyle: React.CSSProperties = isScopeMode
+    ? {
+        ...workflowResultsBodyStyle,
+        flex: '0 0 auto',
+        overflowY: 'visible',
+      }
+    : workflowResultsBodyStyle;
 
   const scopeSummaryDescription = workspaceSettings.isLoading
     ? 'Resolving the current scope.'
@@ -2914,7 +3000,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
   ]);
 
   return (
-    <Row gutter={[16, 16]} align="stretch" style={workflowWorkspaceRowStyle}>
+    <Row gutter={[16, 16]} align="stretch" style={resolvedWorkspaceRowStyle}>
       {!isScopeMode ? (
         <Col xs={24} xl={8} xxl={7} style={workflowStretchColumnStyle}>
           <div style={workflowSidebarStackStyle}>
@@ -3065,7 +3151,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
         xxl={isScopeMode ? 24 : 17}
         style={workflowStretchColumnStyle}
       >
-        <section style={workflowBrowserStyle}>
+        <section style={resolvedWorkflowBrowserStyle}>
           <input
             ref={workflowImportInputRef}
             hidden
@@ -3186,7 +3272,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
             data-testid="studio-workflows-results-body"
             ref={resultsBodyRef}
             style={{
-              ...workflowResultsBodyStyle,
+              ...resolvedWorkflowResultsBodyStyle,
               ...(resultsViewportHeight
                 ? {
                     height: resultsViewportHeight,

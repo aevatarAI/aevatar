@@ -2795,8 +2795,8 @@ const GAgentsPage: React.FC = () => {
           </Typography.Text>
         </Space>
       }
-      title="GAgents"
-      titleHelp="Discover runtime GAgent types, publish scope bindings, reuse actors, and verify draft and serving paths from one workbench."
+      title="团队成员"
+      titleHelp="这里保留原有 GAgent runtime 能力，但统一对外表述为团队成员管理与绑定工作台。"
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -2807,7 +2807,7 @@ const GAgentsPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setIsActorRegistryDrawerOpen(false)}
         open={isActorRegistryDrawerOpen}
-        title="Actor Registry"
+        title="成员注册表"
         width={screens.xl ? 680 : 520}
       >
         {actorRegistryPanel}
@@ -2820,7 +2820,7 @@ const GAgentsPage: React.FC = () => {
             ? describeRuntimeGAgentBindingRevisionTarget(selectedRevision)
             : undefined
         }
-        title="Revision Details"
+        title="版本详情"
         width={screens.xl ? 620 : 480}
       >
         {selectedRevisionPanel}

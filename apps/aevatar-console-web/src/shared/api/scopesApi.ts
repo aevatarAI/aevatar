@@ -275,7 +275,7 @@ const decodeScopeScriptSummaries: Decoder<ScopeScriptSummary[]> = (value) =>
 export const scopesApi = {
   listWorkflows(scopeId: string): Promise<ScopeWorkflowSummary[]> {
     return requestJson(
-      `/api/scopes/${encodeURIComponent(scopeId)}/workflows`,
+      `/api/scopes/${encodeURIComponent(scopeId)}/workflows?includeSource=false`,
       decodeScopeWorkflowSummaries
     );
   },
@@ -294,7 +294,7 @@ export const scopesApi = {
 
   listScripts(scopeId: string): Promise<ScopeScriptSummary[]> {
     return requestJson(
-      `/api/scopes/${encodeURIComponent(scopeId)}/scripts`,
+      `/api/scopes/${encodeURIComponent(scopeId)}/scripts?includeSource=false`,
       decodeScopeScriptSummaries
     );
   },
