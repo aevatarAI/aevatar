@@ -57,14 +57,14 @@ public class AgentModuleLifecycleAndPipelineTests
     }
 
     [Fact]
-    public async Task RegisterModule_after_activate_should_initialize_lifecycle_module()
+    public async Task RegisterModuleAsync_after_activate_should_initialize_lifecycle_module()
     {
         var agent = new StatelessModuleAgent();
         agent.SetId("late-register");
         await agent.ActivateAsync();
 
         var module = new LifecycleTrackingModule();
-        agent.RegisterModule(module);
+        await agent.RegisterModuleAsync(module);
 
         module.InitializeCount.ShouldBe(1);
 
@@ -73,18 +73,18 @@ public class AgentModuleLifecycleAndPipelineTests
     }
 
     [Fact]
-    public async Task SetModules_should_dispose_removed_lifecycle_modules()
+    public async Task SetModulesAsync_should_dispose_removed_lifecycle_modules()
     {
         var agent = new StatelessModuleAgent();
         agent.SetId("set-dispose");
 
         var first = new LifecycleTrackingModule();
-        agent.RegisterModule(first);
+        await agent.RegisterModuleAsync(first);
         await agent.ActivateAsync();
         first.InitializeCount.ShouldBe(1);
 
         var replacement = new LifecycleTrackingModule();
-        agent.SetModules([replacement]);
+        await agent.SetModulesAsync([replacement]);
 
         first.DisposeCount.ShouldBe(1);
         replacement.InitializeCount.ShouldBe(1);
