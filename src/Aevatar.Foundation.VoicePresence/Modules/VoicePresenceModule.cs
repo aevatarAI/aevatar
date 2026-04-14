@@ -180,8 +180,11 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     /// <summary>
     /// Detaches the current transport and stops the relay loops.
     /// </summary>
-    public async Task DetachTransportAsync()
+    public async Task DetachTransportAsync(IVoiceTransport? expectedTransport = null)
     {
+        if (expectedTransport != null && !ReferenceEquals(expectedTransport, _userTransport))
+            return;
+
         await StopRelayAsync();
 
         if (_userTransport != null)
