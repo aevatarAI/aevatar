@@ -6,6 +6,7 @@ using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using StreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 using Google.Protobuf;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using Aevatar.GAgents.StreamingProxy;
