@@ -141,9 +141,11 @@ public static class ServiceCollectionExtensions
 
         services.Replace(ServiceDescriptor.Singleton<IHumanInteractionPort, FeishuCardHumanInteractionPort>());
 
-        // channel_registrations tool
+        // channel runtime tools
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IAgentToolSource, ChannelRegistrationToolSource>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IAgentToolSource, AgentDeliveryTargetToolSource>());
 
         return services;
     }

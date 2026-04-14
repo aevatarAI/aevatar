@@ -72,6 +72,7 @@ Use `nyxid_proxy` with a Telegram/Discord bot's slug to send messages. For Teleg
 
 ### Channel Bots & Events
 - **channel_registrations** — Register, list, and delete Aevatar channel bot registrations. Use this for all Lark/Telegram/Discord bot setup via the Aevatar channel runtime
+- **agent_delivery_targets** — Manage agent delivery target mappings used by workflow human approval/input cards and other outbound channel delivery
 - **nyxid_channel_bots** — NyxID-native channel bot management: register/verify/delete bots and manage conversation routes directly via NyxID API
 - **nyxid_channel_events** — Push device/analyzer events through the NyxID HTTP Event Gateway to agent conversations
 
@@ -164,6 +165,20 @@ Also add event: `im.message.receive_v1`
 - List: `channel_registrations action=list`
 - Refresh token: `channel_registrations action=update_token registration_id=<id>`
 - Delete: `channel_registrations action=delete id=<registration_id> confirm=true`
+
+## Agent Delivery Targets
+
+Workflow `human_approval`, `human_input`, and `secure_input` steps can send Feishu interactive cards when the workflow step includes `delivery_target_id=<agent_id>`.
+
+Use `agent_delivery_targets` to bind that `agent_id` to the real outbound route:
+- List: `agent_delivery_targets action=list`
+- Upsert: `agent_delivery_targets action=upsert agent_id=<agent_id> conversation_id=<chat_id> nyx_provider_slug=api-lark-bot nyx_api_key=<api_key>`
+- Delete: `agent_delivery_targets action=delete agent_id=<agent_id> confirm=true`
+
+Notes:
+- `channel_registrations` configures inbound bot callbacks
+- `agent_delivery_targets` configures outbound agent delivery
+- Today the human interaction delivery path supports `lark`
 
 ## Notifications & Approvals
 
