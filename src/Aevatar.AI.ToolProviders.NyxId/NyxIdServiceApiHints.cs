@@ -155,7 +155,7 @@ Use the code_execute tool for a simpler interface.
     /// </summary>
     public static async Task<string> BuildHintsSectionAsync(
         IEnumerable<ServiceHintRequest> services,
-        ConnectedServiceSpecCache specCache,
+        IConnectedServiceSpecSource specSource,
         string accessToken,
         CancellationToken ct = default)
     {
@@ -169,9 +169,14 @@ Use the code_execute tool for a simpler interface.
 
             string? hint = null;
 
-            if (specCache is not null && !string.IsNullOrWhiteSpace(accessToken))
+            if (specSource is not null && !string.IsNullOrWhiteSpace(accessToken))
             {
-                var operations = await specCache.GetOrFetchAsync(svc.Slug, svc.OpenApiUrl, accessToken, ct);
+                var operations = await specSource.GetOrFetchAsync(
+                    svc.Slug,
+                    svc.ServiceId,
+                    svc.OpenApiUrl,
+                    accessToken,
+                    ct);
                 if (operations is { Length: > 0 })
                     hint = BuildHintFromOperations(svc.DisplayName ?? svc.Slug, operations);
             }
@@ -220,6 +225,6 @@ Use the code_execute tool for a simpler interface.
 
 public sealed record ServiceHintRequest(
     string Slug,
+    string? ServiceId = null,
     string? DisplayName = null,
     string? OpenApiUrl = null);
-

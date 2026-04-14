@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aevatar.AI.ToolProviders.NyxId;
 
-public sealed class ConnectedServiceSpecCache : IDisposable
+public sealed class ConnectedServiceSpecCache : IConnectedServiceSpecSource, IDisposable
 {
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(5);
@@ -27,6 +27,7 @@ public sealed class ConnectedServiceSpecCache : IDisposable
 
     public async Task<OperationCard[]?> GetOrFetchAsync(
         string slug,
+        string? serviceId,
         string? specUrl,
         string accessToken,
         CancellationToken ct = default)
@@ -34,7 +35,7 @@ public sealed class ConnectedServiceSpecCache : IDisposable
         if (string.IsNullOrWhiteSpace(slug))
             return null;
 
-        var url = ResolveSpecUrl(slug, specUrl);
+        var url = ResolveSpecUrl(serviceId, specUrl);
         if (url is null)
             return null;
 
@@ -98,15 +99,15 @@ public sealed class ConnectedServiceSpecCache : IDisposable
                && string.Equals(baseUri.Scheme, targetUri.Scheme, StringComparison.OrdinalIgnoreCase);
     }
 
-    private string? ResolveSpecUrl(string slug, string? specUrl)
+    private string? ResolveSpecUrl(string? serviceId, string? specUrl)
     {
         if (!string.IsNullOrWhiteSpace(specUrl))
             return specUrl;
 
-        if (string.IsNullOrWhiteSpace(_options.BaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.BaseUrl) || string.IsNullOrWhiteSpace(serviceId))
             return null;
 
-        return $"{_options.BaseUrl.TrimEnd('/')}/api/v1/proxy/services/{Uri.EscapeDataString(slug)}/openapi.json";
+        return $"{_options.BaseUrl.TrimEnd('/')}/api/v1/proxy/services/{Uri.EscapeDataString(serviceId)}/openapi.json";
     }
 
     public void Dispose() => _http.Dispose();

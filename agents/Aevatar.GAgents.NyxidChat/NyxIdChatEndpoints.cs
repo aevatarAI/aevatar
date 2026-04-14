@@ -518,8 +518,8 @@ public static class NyxIdChatEndpoints
                 memCache?.Set(cacheKey, servicesJson, TimeSpan.FromSeconds(60));
             }
 
-            var specCache = http.RequestServices.GetService<ConnectedServiceSpecCache>();
-            var context = await BuildConnectedServicesContextAsync(servicesJson, specCache, accessToken, ct);
+            var specSource = http.RequestServices.GetService<IConnectedServiceSpecSource>();
+            var context = await BuildConnectedServicesContextAsync(servicesJson, specSource, accessToken, ct);
             if (!string.IsNullOrWhiteSpace(context))
                 metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
         }
@@ -531,7 +531,7 @@ public static class NyxIdChatEndpoints
 
     internal static async Task<string> BuildConnectedServicesContextAsync(
         string servicesJson,
-        ConnectedServiceSpecCache? specCache,
+        IConnectedServiceSpecSource? specSource,
         string accessToken,
         CancellationToken ct)
     {
@@ -559,6 +559,9 @@ public static class NyxIdChatEndpoints
             {
                 foreach (var item in items.EnumerateArray())
                 {
+                    var serviceId = item.TryGetProperty("id", out var id) ? id.GetString()
+                                  : item.TryGetProperty("service_id", out var sid) ? sid.GetString()
+                                  : null;
                     var slug = item.TryGetProperty("slug", out var s) ? s.GetString() : null;
                     var name = item.TryGetProperty("name", out var n) ? n.GetString()
                              : item.TryGetProperty("label", out var l) ? l.GetString()
@@ -569,7 +572,7 @@ public static class NyxIdChatEndpoints
                     var openapiUrl = item.TryGetProperty("openapi_url", out var oa) ? oa.GetString() : null;
 
                     if (string.IsNullOrWhiteSpace(slug)) continue;
-                    hintRequests.Add(new ServiceHintRequest(slug, name, openapiUrl));
+                    hintRequests.Add(new ServiceHintRequest(slug, serviceId, name, openapiUrl));
 
                     sb.Append($"- **{name ?? slug}** (slug: `{slug}`)");
                     if (!string.IsNullOrWhiteSpace(baseUrl))
@@ -592,9 +595,9 @@ public static class NyxIdChatEndpoints
         sb.AppendLine("</connected-services>");
 
         string hints;
-        if (specCache is not null && !string.IsNullOrWhiteSpace(accessToken))
+        if (specSource is not null && !string.IsNullOrWhiteSpace(accessToken))
         {
-            hints = await NyxIdServiceApiHints.BuildHintsSectionAsync(hintRequests, specCache, accessToken, ct);
+            hints = await NyxIdServiceApiHints.BuildHintsSectionAsync(hintRequests, specSource, accessToken, ct);
         }
         else
         {
