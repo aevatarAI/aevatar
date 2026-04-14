@@ -1,7 +1,10 @@
 using System.Runtime.CompilerServices;
+using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 
@@ -21,10 +24,10 @@ public class VoiceTransportRelayTests
             VoiceTransportFrame.Audio(new byte[] { 40, 50 }),
         ]);
 
-        var dispatched = new List<VoiceProviderEvent>();
-        module.AttachTransport(transport, (evt, _) =>
+        var dispatched = new List<IMessage>();
+        module.AttachTransport(transport, (message, _) =>
         {
-            dispatched.Add(evt);
+            dispatched.Add(message);
             return Task.CompletedTask;
         });
 
@@ -42,6 +45,7 @@ public class VoiceTransportRelayTests
         var provider = new RecordingProvider();
         var module = CreateModule(provider);
         await module.InitializeAsync(CancellationToken.None);
+        var ctx = new StubEventHandlerContext();
 
         module.StateMachine.AllocateNextResponseId();
         module.StateMachine.OnResponseDone(module.StateMachine.CurrentResponseId);
@@ -60,7 +64,8 @@ public class VoiceTransportRelayTests
             VoiceTransportFrame.ControlFrame(drainAck),
         ]);
 
-        module.AttachTransport(transport, (_, _) => Task.CompletedTask);
+        module.AttachTransport(transport, (message, ct) =>
+            module.HandleAsync(CreateEnvelope(message), ctx, ct));
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
 
         module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
@@ -101,10 +106,10 @@ public class VoiceTransportRelayTests
 
         var transport = new FakeVoiceTransport([]);
         var dispatchedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var dispatched = new List<VoiceProviderEvent>();
-        module.AttachTransport(transport, (evt, _) =>
+        var dispatched = new List<IMessage>();
+        module.AttachTransport(transport, (message, _) =>
         {
-            dispatched.Add(evt);
+            dispatched.Add(message);
             dispatchedSignal.TrySetResult();
             return Task.CompletedTask;
         });
@@ -114,7 +119,8 @@ public class VoiceTransportRelayTests
             dispatchedSignal);
 
         dispatched.Count.ShouldBe(1);
-        dispatched[0].EventCase.ShouldBe(VoiceProviderEvent.EventOneofCase.SpeechStarted);
+        dispatched[0].ShouldBeOfType<VoiceProviderEvent>()
+            .EventCase.ShouldBe(VoiceProviderEvent.EventOneofCase.SpeechStarted);
         transport.SentAudio.ShouldBeEmpty();
     }
 
@@ -201,6 +207,15 @@ public class VoiceTransportRelayTests
             },
             logger: NullLogger.Instance);
 
+    private static EventEnvelope CreateEnvelope(IMessage payload) =>
+        new()
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(payload),
+            Route = EnvelopeRouteSemantics.CreateTopologyPublication("voice-agent", TopologyAudience.Self),
+        };
+
     // ── Test doubles ──────────────────────────────────────────
 
     private sealed class RecordingProvider : IRealtimeVoiceProvider
@@ -212,6 +227,7 @@ public class VoiceTransportRelayTests
         public int CancelCalls { get; private set; }
         public bool Disposed { get; private set; }
         public List<byte[]> AudioFrames { get; } = [];
+        public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
         public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent
         {
@@ -221,6 +237,7 @@ public class VoiceTransportRelayTests
         public Task ConnectAsync(VoiceProviderConfig config, CancellationToken ct) { ConnectCalls++; return Task.CompletedTask; }
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct) { AudioFrames.Add(pcm16.ToArray()); return Task.CompletedTask; }
         public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct) => Task.CompletedTask;
+        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct) { InjectedEvents.Add(injection.Clone()); return Task.CompletedTask; }
         public Task CancelResponseAsync(CancellationToken ct) { CancelCalls++; return Task.CompletedTask; }
         public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) { UpdateSessionCalls++; return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
@@ -282,5 +299,75 @@ public class VoiceTransportRelayTests
             _consumed.Task.WaitAsync(timeout);
 
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
+    }
+
+    private sealed class StubEventHandlerContext : Aevatar.Foundation.Abstractions.EventModules.IEventHandlerContext
+    {
+        public EventEnvelope InboundEnvelope { get; } = new();
+        public string AgentId => "voice-agent";
+        public IServiceProvider Services { get; } = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
+        public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
+        public Aevatar.Foundation.Abstractions.IAgent Agent { get; } = new StubAgent();
+
+        public Task PublishAsync<TEvent>(
+            TEvent evt,
+            TopologyAudience audience = TopologyAudience.Children,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = evt;
+            _ = audience;
+            _ = ct;
+            _ = options;
+            return Task.CompletedTask;
+        }
+
+        public Task SendToAsync<TEvent>(
+            string targetActorId,
+            TEvent evt,
+            CancellationToken ct = default,
+            EventEnvelopePublishOptions? options = null)
+            where TEvent : IMessage
+        {
+            _ = targetActorId;
+            _ = evt;
+            _ = ct;
+            _ = options;
+            return Task.CompletedTask;
+        }
+
+        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableTimeoutAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease> ScheduleSelfDurableTimerAsync(
+            string callbackId,
+            TimeSpan dueTime,
+            TimeSpan period,
+            IMessage evt,
+            EventEnvelopePublishOptions? options = null,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task CancelDurableCallbackAsync(
+            Aevatar.Foundation.Abstractions.Runtime.Callbacks.RuntimeCallbackLease lease,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubAgent : Aevatar.Foundation.Abstractions.IAgent
+    {
+        public string Id => "voice-agent";
+        public Task HandleEventAsync(EventEnvelope envelope, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string> GetDescriptionAsync() => Task.FromResult("voice-agent");
+        public Task<IReadOnlyList<System.Type>> GetSubscribedEventTypesAsync() =>
+            Task.FromResult<IReadOnlyList<System.Type>>([]);
+        public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
     }
 }

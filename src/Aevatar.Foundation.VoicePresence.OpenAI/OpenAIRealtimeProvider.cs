@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.OpenAI.Internal;
+using Google.Protobuf;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OpenAI.Realtime;
@@ -14,6 +15,7 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
 {
     private static readonly BinaryData PermissiveToolSchema =
         BinaryData.FromString("""{"type":"object","additionalProperties":true}""");
+    private static readonly JsonFormatter InjectionJsonFormatter = new(JsonFormatter.Settings.Default);
 
     private readonly IOpenAIRealtimeSessionFactory _sessionFactory;
     private readonly OpenAIRealtimeProviderOptions _options;
@@ -92,6 +94,12 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         await session.StartResponseAsync(ct);
     }
 
+    public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(injection);
+        return InjectUserTextAsync(BuildInjectedEventText(injection), ct);
+    }
+
     public Task CancelResponseAsync(CancellationToken ct) =>
         EnsureSession().CancelResponseAsync(ct);
 
@@ -116,6 +124,9 @@ public sealed class OpenAIRealtimeProvider : IRealtimeVoiceProvider
         await session.AddItemAsync(item, ct);
         await session.StartResponseAsync(ct);
     }
+
+    private static string BuildInjectedEventText(VoiceConversationEventInjection injection) =>
+        $"External event observed:\n{InjectionJsonFormatter.Format(injection)}";
 
     public async ValueTask DisposeAsync()
     {

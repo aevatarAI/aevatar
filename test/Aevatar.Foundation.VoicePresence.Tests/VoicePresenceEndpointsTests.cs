@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Foundation.VoicePresence.Modules;
+using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -107,6 +108,31 @@ public class VoicePresenceEndpointsTests
         socket.CloseCalls.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task Request_should_reject_second_transport_without_detaching_existing_one()
+    {
+        var module = CreateModule(new RecordingVoiceProvider());
+        await module.InitializeAsync(CancellationToken.None);
+
+        var existingTransport = new StubVoiceTransport();
+        module.AttachTransport(existingTransport, static (_, _) => Task.CompletedTask);
+
+        var socket = new FakeWebSocket(WebSocketState.Open);
+        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
+        using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session));
+        var context = CreateHttpContext(app);
+        context.Features.Set<IHttpWebSocketFeature>(new FakeHttpWebSocketFeature(socket));
+        context.Request.RouteValues["actorId"] = "agent-1";
+
+        await GetVoiceEndpoint(app).RequestDelegate!(context);
+
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status409Conflict);
+        (await ReadBodyAsync(context)).ShouldContain("Voice transport already attached.");
+        module.IsTransportAttached.ShouldBeTrue();
+        existingTransport.Disposed.ShouldBeFalse();
+        socket.CloseCalls.ShouldBe(0);
+    }
+
     private static WebApplication CreateApp(
         Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
     {
@@ -185,6 +211,13 @@ public class VoicePresenceEndpointsTests
             return Task.CompletedTask;
         }
 
+        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+        {
+            _ = injection;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
         public Task CancelResponseAsync(CancellationToken ct)
         {
             _ = ct;
@@ -199,5 +232,38 @@ public class VoicePresenceEndpointsTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StubVoiceTransport : IVoiceTransport
+    {
+        public bool Disposed { get; private set; }
+
+        public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
+        {
+            _ = pcm16;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public Task SendControlAsync(VoiceControlFrame frame, CancellationToken ct)
+        {
+            _ = frame;
+            _ = ct;
+            return Task.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+        {
+            _ = ct;
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 }

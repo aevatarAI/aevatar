@@ -33,7 +33,7 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
-    public void CanHandle_should_only_accept_voice_provider_and_control_frames()
+    public void CanHandle_should_accept_voice_frames_and_external_publications()
     {
         var module = CreateModule(new RecordingVoiceProvider());
 
@@ -47,7 +47,15 @@ public class VoicePresenceModuleTests
             DrainAcknowledged = new VoiceDrainAcknowledged { ResponseId = 1, PlayoutSequence = 7 },
         })).ShouldBeTrue();
 
-        module.CanHandle(CreateEnvelope(new StringValue { Value = "not-voice" })).ShouldBeFalse();
+        module.CanHandle(CreateEnvelope(new StringValue { Value = "external" })).ShouldBeTrue();
+
+        module.CanHandle(new EventEnvelope
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
+            Payload = Any.Pack(new StringValue { Value = "direct" }),
+            Route = EnvelopeRouteSemantics.CreateDirect("api", "voice-agent"),
+        }).ShouldBeFalse();
     }
 
     [Fact]
@@ -198,6 +206,89 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Function_call_should_execute_tool_and_send_result()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"ok":true}""");
+        var module = CreateModule(provider, toolInvoker: invoker);
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-1",
+                ToolName = "doorbell.open",
+                ArgumentsJson = """{"force":true}""",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.Calls.ShouldBe(1);
+        invoker.LastToolName.ShouldBe("doorbell.open");
+        invoker.LastArgumentsJson.ShouldBe("""{"force":true}""");
+        provider.ToolResults.ShouldHaveSingleItem();
+        provider.ToolResults[0].CallId.ShouldBe("call-1");
+        provider.ToolResults[0].ResultJson.ShouldBe("""{"ok":true}""");
+    }
+
+    [Fact]
+    public async Task Function_call_should_resolve_tool_invoker_from_services()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new RecordingVoiceToolInvoker("""{"service":true}""");
+        var services = new ServiceCollection()
+            .AddSingleton<IVoiceToolInvoker>(invoker)
+            .BuildServiceProvider();
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext(services);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-2",
+                ToolName = "doorbell.open",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        invoker.Calls.ShouldBe(1);
+        provider.ToolResults[0].ResultJson.ShouldBe("""{"service":true}""");
+    }
+
+    [Fact]
+    public async Task Function_call_timeout_should_send_error_result()
+    {
+        var provider = new RecordingVoiceProvider();
+        var invoker = new BlockingVoiceToolInvoker();
+        var module = CreateModule(
+            provider,
+            toolInvoker: invoker,
+            options: new VoicePresenceModuleOptions
+            {
+                ToolExecutionTimeout = TimeSpan.FromMilliseconds(20),
+            });
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            FunctionCall = new VoiceFunctionCallRequested
+            {
+                CallId = "call-timeout",
+                ToolName = "slow.tool",
+                ArgumentsJson = "{}",
+                ResponseId = 1,
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.ToolResults.ShouldHaveSingleItem();
+        provider.ToolResults[0].ResultJson.ShouldContain("\"error\"");
+        provider.ToolResults[0].ResultJson.ShouldContain("timed out");
+    }
+
+    [Fact]
     public async Task Null_payload_should_be_ignored()
     {
         var module = CreateModule(new RecordingVoiceProvider());
@@ -246,7 +337,11 @@ public class VoicePresenceModuleTests
         provider.Disposed.ShouldBeTrue();
     }
 
-    private static VoicePresenceModule CreateModule(RecordingVoiceProvider provider, string? linkId = null)
+    private static VoicePresenceModule CreateModule(
+        RecordingVoiceProvider provider,
+        string? linkId = null,
+        IVoiceToolInvoker? toolInvoker = null,
+        VoicePresenceModuleOptions? options = null)
     {
         return new VoicePresenceModule(
             provider,
@@ -264,10 +359,11 @@ public class VoicePresenceModuleTests
                 SampleRateHz = 24000,
                 ToolNames = { "doorbell.open" },
             },
-            new VoicePresenceModuleOptions
+            options ?? new VoicePresenceModuleOptions
             {
                 LinkId = linkId,
-            });
+            },
+            toolInvoker);
     }
 
     private static EventEnvelope CreateEnvelope(IMessage payload)
@@ -292,6 +388,8 @@ public class VoicePresenceModuleTests
         public bool Disposed { get; private set; }
 
         public List<byte[]> AudioFrames { get; } = [];
+        public List<(string CallId, string ResultJson)> ToolResults { get; } = [];
+        public List<VoiceConversationEventInjection> InjectedEvents { get; } = [];
 
         public Func<VoiceProviderEvent, CancellationToken, Task>? OnEvent { private get; set; }
 
@@ -312,9 +410,15 @@ public class VoicePresenceModuleTests
 
         public Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct)
         {
-            _ = callId;
-            _ = resultJson;
             _ = ct;
+            ToolResults.Add((callId, resultJson));
+            return Task.CompletedTask;
+        }
+
+        public Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct)
+        {
+            _ = ct;
+            InjectedEvents.Add(injection.Clone());
             return Task.CompletedTask;
         }
 
@@ -340,13 +444,13 @@ public class VoicePresenceModuleTests
         }
     }
 
-    private sealed class StubEventHandlerContext : IEventHandlerContext
+    private sealed class StubEventHandlerContext(IServiceProvider? services = null) : IEventHandlerContext
     {
         public EventEnvelope InboundEnvelope { get; } = new();
 
         public string AgentId => "voice-agent";
 
-        public IServiceProvider Services { get; } = new ServiceCollection().BuildServiceProvider();
+        public IServiceProvider Services { get; } = services ?? new ServiceCollection().BuildServiceProvider();
 
         public Microsoft.Extensions.Logging.ILogger Logger { get; } = NullLogger.Instance;
 
@@ -415,5 +519,34 @@ public class VoicePresenceModuleTests
         public Task ActivateAsync(CancellationToken ct = default) => Task.CompletedTask;
 
         public Task DeactivateAsync(CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingVoiceToolInvoker(string resultJson) : IVoiceToolInvoker
+    {
+        public int Calls { get; private set; }
+        public string? LastToolName { get; private set; }
+        public string? LastArgumentsJson { get; private set; }
+
+        public Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        {
+            _ = ct;
+            Calls++;
+            LastToolName = toolName;
+            LastArgumentsJson = argumentsJson;
+            return Task.FromResult(resultJson);
+        }
+    }
+
+    private sealed class BlockingVoiceToolInvoker : IVoiceToolInvoker
+    {
+        public async Task<string> ExecuteAsync(string toolName, string argumentsJson, CancellationToken ct = default)
+        {
+            _ = toolName;
+            _ = argumentsJson;
+
+            var gate = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = ct.Register(() => gate.TrySetCanceled(ct));
+            return await gate.Task;
+        }
     }
 }

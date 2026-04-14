@@ -72,6 +72,34 @@ public class OpenAIRealtimeProviderTests
     }
 
     [Fact]
+    public async Task InjectEvent_should_add_structured_user_message_and_start_response()
+    {
+        var session = new FakeSession();
+        var provider = CreateProvider(session);
+
+        await provider.ConnectAsync(CreateConfig(), CancellationToken.None);
+        await provider.InjectEventAsync(new VoiceConversationEventInjection
+        {
+            EnvelopeId = "evt-1",
+            PublisherActorId = "doorbell-1",
+            EventType = "type.googleapis.com/google.protobuf.StringValue",
+            PayloadJson = """{"@type":"type.googleapis.com/google.protobuf.StringValue","value":"ding"}""",
+        }, CancellationToken.None);
+
+        session.AddedItems.Count.ShouldBe(1);
+        session.AddedItems[0].ShouldBeOfType<RealtimeMessageItem>();
+        var message = (RealtimeMessageItem)session.AddedItems[0];
+        message.Role.ToString().ShouldBe("user");
+        message.Content.Count.ShouldBe(1);
+        message.Content[0].ShouldBeOfType<RealtimeInputTextMessageContentPart>();
+        var text = ((RealtimeInputTextMessageContentPart)message.Content[0]).Text;
+        text.ShouldContain("External event observed");
+        text.ShouldContain("\"envelopeId\": \"evt-1\"");
+        text.ShouldContain("\"publisherActorId\": \"doorbell-1\"");
+        session.StartResponseCalls.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Receive_loop_should_map_openai_events_to_voice_provider_events()
     {
         var session = new FakeSession(

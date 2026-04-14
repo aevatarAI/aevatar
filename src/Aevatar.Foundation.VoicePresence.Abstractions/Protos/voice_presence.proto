@@ -4,6 +4,8 @@ package aevatar.voice;
 
 option csharp_namespace = "Aevatar.Foundation.VoicePresence.Abstractions";
 
+import "google/protobuf/timestamp.proto";
+
 message VoiceProviderConfig {
   string provider_name = 1;
   string endpoint = 2;
@@ -16,6 +18,14 @@ message VoiceSessionConfig {
   string instructions = 2;
   int32 sample_rate_hz = 3;
   repeated string tool_names = 4;
+}
+
+message VoiceConversationEventInjection {
+  string envelope_id = 1;
+  string publisher_actor_id = 2;
+  string event_type = 3;
+  string payload_json = 4;
+  google.protobuf.Timestamp observed_at = 5;
 }
 
 message VoiceAudioReceived {

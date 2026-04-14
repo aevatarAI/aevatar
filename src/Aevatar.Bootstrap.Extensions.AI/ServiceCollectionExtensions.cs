@@ -1,5 +1,6 @@
 using Aevatar.AI.Abstractions.Agents;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.AI.Core.Voice;
 using Aevatar.AI.Core.Agents;
 using Aevatar.AI.Core.LLMProviders;
 using Aevatar.AI.LLMProviders.MEAI;
@@ -20,6 +21,7 @@ using Aevatar.Bootstrap.Extensions.AI.Connectors;
 using Aevatar.Workflow.Application.Abstractions.Workflows;
 using Aevatar.Workflow.Core.Primitives;
 using Aevatar.Configuration;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -72,6 +74,7 @@ public static class ServiceCollectionExtensions
         configure?.Invoke(options);
 
         services.TryAddSingleton<IRoleAgentTypeResolver, RoleGAgentTypeResolver>();
+        services.TryAddSingleton<IVoiceToolInvoker, AgentToolVoiceInvoker>();
         services.TryAddSingleton<IWorkflowYamlValidator, WorkflowYamlValidatorImpl>();
         services.TryAddSingleton<IWorkflowDefinitionCommandAdapter>(sp =>
             new LocalWorkflowDefinitionCommandAdapter(

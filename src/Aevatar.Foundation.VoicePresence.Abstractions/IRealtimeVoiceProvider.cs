@@ -21,6 +21,11 @@ public interface IRealtimeVoiceProvider : IAsyncDisposable
     Task SendToolResultAsync(string callId, string resultJson, CancellationToken ct);
 
     /// <summary>
+    /// Injects one external event into the provider conversation as structured context.
+    /// </summary>
+    Task InjectEventAsync(VoiceConversationEventInjection injection, CancellationToken ct);
+
+    /// <summary>
     /// Cancels the current response generation.
     /// </summary>
     Task CancelResponseAsync(CancellationToken ct);
