@@ -1,10 +1,7 @@
 using System.Runtime.CompilerServices;
-using System.Threading.Channels;
-using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 
@@ -32,7 +29,6 @@ public class VoiceTransportRelayTests
         });
 
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
-        await Task.Delay(50);
 
         provider.AudioFrames.Count.ShouldBe(2);
         provider.AudioFrames[0].ShouldBe([10, 20, 30]);
@@ -66,7 +62,6 @@ public class VoiceTransportRelayTests
 
         module.AttachTransport(transport, (_, _) => Task.CompletedTask);
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
-        await Task.Delay(50);
 
         module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
         module.StateMachine.IsSafeToInject.ShouldBeTrue();
@@ -91,8 +86,7 @@ public class VoiceTransportRelayTests
             },
         };
 
-        await provider.SimulateEvent(audioEvent);
-        await Task.Delay(50);
+        await provider.SimulateEventAndWait(audioEvent, transport.AudioSentSignal);
 
         transport.SentAudio.Count.ShouldBe(1);
         transport.SentAudio[0].ToArray().ShouldBe([1, 2, 3]);
@@ -106,20 +100,18 @@ public class VoiceTransportRelayTests
         await module.InitializeAsync(CancellationToken.None);
 
         var transport = new FakeVoiceTransport([]);
+        var dispatchedSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var dispatched = new List<VoiceProviderEvent>();
         module.AttachTransport(transport, (evt, _) =>
         {
             dispatched.Add(evt);
+            dispatchedSignal.TrySetResult();
             return Task.CompletedTask;
         });
 
-        var speechStarted = new VoiceProviderEvent
-        {
-            SpeechStarted = new VoiceSpeechStarted(),
-        };
-
-        await provider.SimulateEvent(speechStarted);
-        await Task.Delay(50);
+        await provider.SimulateEventAndWait(
+            new VoiceProviderEvent { SpeechStarted = new VoiceSpeechStarted() },
+            dispatchedSignal);
 
         dispatched.Count.ShouldBe(1);
         dispatched[0].EventCase.ShouldBe(VoiceProviderEvent.EventOneofCase.SpeechStarted);
@@ -169,7 +161,6 @@ public class VoiceTransportRelayTests
 
         module.AttachTransport(transport, (_, _) => Task.CompletedTask);
         await transport.WaitUntilConsumed(TimeSpan.FromSeconds(3));
-        await Task.Delay(50);
 
         provider.AudioFrames.Count.ShouldBe(1);
     }
@@ -234,10 +225,11 @@ public class VoiceTransportRelayTests
         public Task UpdateSessionAsync(VoiceSessionConfig session, CancellationToken ct) { UpdateSessionCalls++; return Task.CompletedTask; }
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
 
-        public async Task SimulateEvent(VoiceProviderEvent evt)
+        public async Task SimulateEventAndWait(VoiceProviderEvent evt, TaskCompletionSource signal)
         {
             if (_onEvent != null)
                 await _onEvent(evt, CancellationToken.None);
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(3));
         }
     }
 
@@ -255,9 +247,12 @@ public class VoiceTransportRelayTests
         public List<VoiceControlFrame> SentControl { get; } = [];
         public bool Disposed { get; private set; }
 
+        public TaskCompletionSource AudioSentSignal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Task SendAudioAsync(ReadOnlyMemory<byte> pcm16, CancellationToken ct)
         {
             SentAudio.Add(pcm16);
+            AudioSentSignal.TrySetResult();
             return Task.CompletedTask;
         }
 

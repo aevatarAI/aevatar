@@ -1,7 +1,6 @@
 using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 using Aevatar.Foundation.VoicePresence.Abstractions;
 using Google.Protobuf;
 
@@ -9,11 +8,14 @@ namespace Aevatar.Foundation.VoicePresence.Transport;
 
 /// <summary>
 /// Wraps a raw <see cref="WebSocket"/> into <see cref="IVoiceTransport"/>.
-/// Binary messages = PCM16 audio, text messages = JSON-encoded VoiceControlFrame.
+/// Binary messages = PCM16 audio. Text messages = JSON-encoded VoiceControlFrame.
 /// </summary>
 public sealed class WebSocketVoiceTransport : IVoiceTransport
 {
     private const int ReceiveBufferSize = 8 * 1024;
+    private static readonly JsonFormatter ControlJsonWriter = new(JsonFormatter.Settings.Default);
+    private static readonly JsonParser ControlJsonReader = new(JsonParser.Settings.Default);
+
     private readonly WebSocket _ws;
     private bool _disposed;
 
@@ -33,8 +35,9 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(frame);
-        var bytes = frame.ToByteArray();
-        await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Binary, endOfMessage: true, ct);
+        var json = ControlJsonWriter.Format(frame);
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await _ws.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, endOfMessage: true, ct);
     }
 
     public async IAsyncEnumerable<VoiceTransportFrame> ReceiveFramesAsync(
@@ -44,12 +47,11 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
 
         while (_ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
-            WebSocketReceiveResult result;
             int totalBytes;
-
+            WebSocketMessageType messageType;
             try
             {
-                (result, totalBytes, buffer) = await ReceiveFullMessageAsync(buffer, ct);
+                (totalBytes, messageType, buffer) = await ReceiveFullMessageAsync(buffer, ct);
             }
             catch (WebSocketException)
             {
@@ -60,18 +62,18 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
                 yield break;
             }
 
-            if (result.MessageType == WebSocketMessageType.Close)
+            if (messageType == WebSocketMessageType.Close)
                 yield break;
 
-            if (result.MessageType == WebSocketMessageType.Binary)
+            if (messageType == WebSocketMessageType.Binary)
             {
                 var audio = new byte[totalBytes];
                 buffer.AsSpan(0, totalBytes).CopyTo(audio);
                 yield return VoiceTransportFrame.Audio(audio);
             }
-            else if (result.MessageType == WebSocketMessageType.Text)
+            else if (messageType == WebSocketMessageType.Text)
             {
-                var frame = TryParseControlFrame(buffer.AsSpan(0, totalBytes));
+                var frame = TryParseControlFrame(buffer, totalBytes);
                 if (frame != null)
                     yield return VoiceTransportFrame.ControlFrame(frame);
             }
@@ -99,11 +101,11 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
         _ws.Dispose();
     }
 
-    private async Task<(WebSocketReceiveResult Result, int TotalBytes, byte[] Buffer)> ReceiveFullMessageAsync(
-        byte[] buffer, CancellationToken ct)
+    private async Task<(int TotalBytes, WebSocketMessageType MessageType, byte[] Buffer)>
+        ReceiveFullMessageAsync(byte[] buffer, CancellationToken ct)
     {
         var totalBytes = 0;
-        WebSocketReceiveResult result;
+        ValueWebSocketReceiveResult result;
 
         do
         {
@@ -115,14 +117,15 @@ public sealed class WebSocketVoiceTransport : IVoiceTransport
             totalBytes += result.Count;
         } while (!result.EndOfMessage);
 
-        return (result, totalBytes, buffer);
+        return (totalBytes, result.MessageType, buffer);
     }
 
-    private static VoiceControlFrame? TryParseControlFrame(ReadOnlySpan<byte> utf8Bytes)
+    private static VoiceControlFrame? TryParseControlFrame(byte[] buffer, int length)
     {
         try
         {
-            return VoiceControlFrame.Parser.ParseFrom(utf8Bytes.ToArray());
+            var json = Encoding.UTF8.GetString(buffer, 0, length);
+            return ControlJsonReader.Parse<VoiceControlFrame>(json);
         }
         catch
         {

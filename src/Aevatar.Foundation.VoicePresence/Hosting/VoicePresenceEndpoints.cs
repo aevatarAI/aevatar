@@ -5,9 +5,16 @@ using Aevatar.Foundation.VoicePresence.Transport;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
+
+/// <summary>
+/// Resolved voice session. The grain provides both the module and
+/// a dispatcher that routes provider control events through the grain inbox.
+/// </summary>
+public sealed record VoicePresenceSession(
+    VoicePresenceModule Module,
+    Func<VoiceProviderEvent, CancellationToken, Task> ControlEventDispatcher);
 
 /// <summary>
 /// Extension methods to map voice-presence WebSocket endpoints onto an ASP.NET host.
@@ -17,21 +24,22 @@ public static class VoicePresenceEndpoints
     /// <summary>
     /// Maps a WebSocket endpoint that bridges user audio to a voice-enabled GAgent.
     /// <para>
-    /// The <paramref name="resolveModule"/> delegate is called with the actorId from the
-    /// route and must return the <see cref="VoicePresenceModule"/> attached to that agent.
-    /// This keeps the endpoint decoupled from any specific grain/actor resolution mechanism.
+    /// The <paramref name="resolveSession"/> delegate returns a <see cref="VoicePresenceSession"/>
+    /// containing the module and a control event dispatcher that routes events through
+    /// the grain inbox (e.g. via <c>SendToAsync(selfId, envelope)</c>). This ensures
+    /// control events are processed in the actor's single-threaded turn, not off-turn.
     /// </para>
     /// </summary>
     public static IEndpointConventionBuilder MapVoicePresenceWebSocket(
         this IEndpointRouteBuilder endpoints,
         string pattern,
-        Func<string, HttpContext, Task<VoicePresenceModule?>> resolveModule)
+        Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession)
     {
-        ArgumentNullException.ThrowIfNull(resolveModule);
+        ArgumentNullException.ThrowIfNull(resolveSession);
 
         return endpoints.Map(pattern, async (HttpContext ctx) =>
         {
-            if (!ctx.WebSockets.IsWebSocketSupported)
+            if (!ctx.WebSockets.IsWebSocketRequest)
             {
                 ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
                 await ctx.Response.WriteAsync("WebSocket required.");
@@ -46,41 +54,34 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            var module = await resolveModule(actorId, ctx);
-            if (module == null)
+            var session = await resolveSession(actorId, ctx);
+            if (session == null)
             {
                 ctx.Response.StatusCode = StatusCodes.Status404NotFound;
-                await ctx.Response.WriteAsync("Voice module not found for this agent.");
+                await ctx.Response.WriteAsync("Voice session not found for this agent.");
                 return;
             }
 
-            if (!module.IsInitialized)
+            if (!session.Module.IsInitialized)
             {
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await ctx.Response.WriteAsync("Voice module not initialized.");
                 return;
             }
 
-            var logger = ctx.RequestServices.GetService(typeof(ILogger<WebSocketVoiceTransport>)) as ILogger;
             var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             var transport = new WebSocketVoiceTransport(ws);
 
             try
             {
-                module.AttachTransport(transport, CreateControlEventDispatcher(module));
+                session.Module.AttachTransport(transport, session.ControlEventDispatcher);
                 await WaitUntilClosedAsync(ws, ctx.RequestAborted);
             }
             finally
             {
-                await module.DetachTransportAsync();
+                await session.Module.DetachTransportAsync();
             }
         });
-    }
-
-    private static Func<VoiceProviderEvent, CancellationToken, Task> CreateControlEventDispatcher(
-        VoicePresenceModule module)
-    {
-        return (evt, ct) => module.HandleProviderEventAsync(evt, ct);
     }
 
     private static async Task WaitUntilClosedAsync(WebSocket ws, CancellationToken ct)
