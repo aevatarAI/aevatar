@@ -28,6 +28,7 @@ const AevatarLayoutModeContext =
   React.createContext<AevatarLayoutMode>('viewport');
 
 type AevatarPageShellProps = {
+  breadcrumbRender?: false;
   children: React.ReactNode;
   content?: React.ReactNode;
   extra?: React.ReactNode;
@@ -225,6 +226,7 @@ export const AevatarTitleWithHelp: React.FC<{
 );
 
 export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
+  breadcrumbRender,
   children,
   content,
   extra,
@@ -236,6 +238,7 @@ export const AevatarPageShell: React.FC<AevatarPageShellProps> = ({
 }) => (
   <AevatarLayoutModeContext.Provider value={layoutMode}>
     <PageContainer
+      breadcrumbRender={breadcrumbRender}
       className={
         layoutMode === 'document'
           ? 'aevatar-page-shell aevatar-page-shell-document'
