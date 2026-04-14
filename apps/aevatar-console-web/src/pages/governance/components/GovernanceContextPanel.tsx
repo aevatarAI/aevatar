@@ -30,7 +30,7 @@ const GovernanceContextPanel: React.FC<GovernanceContextPanelProps> = ({
       background: 'var(--ant-color-fill-quaternary)',
     }}
   >
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space orientation="vertical" size={12} style={{ width: '100%' }}>
       <div>
         <Typography.Text strong>Current service context</Typography.Text>
         <Typography.Paragraph style={{ margin: '8px 0 0' }} type="secondary">

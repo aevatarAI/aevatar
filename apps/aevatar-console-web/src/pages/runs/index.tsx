@@ -1856,7 +1856,7 @@ const RunsPage: React.FC = () => {
                 {humanInputRecord ? (
                   <div style={embeddedPanelStyle}>
                     <Space
-                      direction="vertical"
+                      orientation="vertical"
                       style={{ width: "100%" }}
                       size={16}
                     >
@@ -1933,7 +1933,7 @@ const RunsPage: React.FC = () => {
                 {waitingSignalRecord ? (
                   <div style={embeddedPanelStyle}>
                     <Space
-                      direction="vertical"
+                      orientation="vertical"
                       style={{ width: "100%" }}
                       size={16}
                     >

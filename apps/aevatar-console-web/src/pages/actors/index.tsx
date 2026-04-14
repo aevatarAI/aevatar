@@ -175,7 +175,7 @@ const ActorsPage: React.FC = () => {
               title="Actor Focus"
               titleHelp="Paste a known actor ID or search discovered runtime agents."
             >
-              <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={12} style={{ width: "100%" }}>
                 <Input
                   onChange={(event) => setSelectedActorId(event.target.value.trim())}
                   placeholder="Enter actor ID"
@@ -191,7 +191,7 @@ const ActorsPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel layoutMode="document" title="Explorer Digest">
-              <Space direction="vertical" size={6}>
+              <Space orientation="vertical" size={6}>
                 <Typography.Text strong>
                   {filteredActors.length} actor entries in view
                 </Typography.Text>
@@ -357,7 +357,7 @@ const ActorsPage: React.FC = () => {
                   value={`${selectedSnapshotQuery.data.completionStatusValue}%`}
                 />
               </div>
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                 {(graphQuery.data?.subgraph.nodes ?? []).slice(0, 6).map((node) => (
                   <div
                     key={node.nodeId}

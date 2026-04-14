@@ -1897,7 +1897,7 @@ const StudioGuidanceBar: React.FC<StudioGuidanceBarProps> = ({
       <Drawer
         title="Workflow guide"
         open={guideOpen}
-        width={560}
+        size={560}
         destroyOnClose
         onClose={() => setGuideOpen(false)}
         styles={{ body: drawerBodyStyle }}
@@ -2273,7 +2273,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
             padding: 18,
           }}
         >
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text strong>Current posture</Typography.Text>
             <Typography.Text type="secondary">
               The current published default binding, target identity, and serving posture live together here.
@@ -2384,7 +2384,7 @@ const StudioScopeBindingPanel: React.FC<StudioScopeBindingPanelProps> = ({
             padding: 18,
           }}
         >
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text strong>Revision rollout</Typography.Text>
             <Typography.Text type="secondary">
               Review published revisions, switch the default serving revision, or retire stale ones.
@@ -5788,7 +5788,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               />
               <Divider style={{ marginBlock: 8 }}>Endpoints</Divider>
               <Space
-                direction="vertical"
+                orientation="vertical"
                 size={12}
                 style={{ width: '100%' }}
               >

@@ -663,7 +663,7 @@ const DeploymentsPage: React.FC = () => {
       },
       title: {
         render: (_, record) => (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text strong>{record.title}</Typography.Text>
             <Typography.Text type="secondary">
               Last synced {record.updatedAt}

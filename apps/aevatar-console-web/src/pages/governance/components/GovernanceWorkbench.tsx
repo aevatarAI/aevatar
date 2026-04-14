@@ -1300,7 +1300,7 @@ const GovernanceWorkbench: React.FC = () => {
             boxShadow: "none",
           }}
         >
-          <Space direction="vertical" size={10} style={{ display: "flex" }}>
+          <Space orientation="vertical" size={10} style={{ display: "flex" }}>
             <Typography.Text strong>
               Revision {activationRevisionId || "unresolved"}
             </Typography.Text>
@@ -1342,7 +1342,7 @@ const GovernanceWorkbench: React.FC = () => {
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={10} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={10} style={{ display: "flex" }}>
               <Typography.Text strong>Missing policies</Typography.Text>
               {activationQuery.data?.missingPolicyIds.length ? (
                 activationQuery.data.missingPolicyIds.map((policyId) => (
@@ -1367,7 +1367,7 @@ const GovernanceWorkbench: React.FC = () => {
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={10} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={10} style={{ display: "flex" }}>
               <Typography.Text strong>Bindings in scope</Typography.Text>
               {(activationQuery.data?.bindings ?? []).length > 0 ? (
                 activationQuery.data?.bindings.map((binding) => (
@@ -1408,7 +1408,7 @@ const GovernanceWorkbench: React.FC = () => {
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={10} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={10} style={{ display: "flex" }}>
               <Typography.Text strong>Exposed endpoints</Typography.Text>
               {(activationQuery.data?.endpoints ?? []).length > 0 ? (
                 activationQuery.data?.endpoints.map((endpoint) => (
@@ -1567,7 +1567,7 @@ const GovernanceWorkbench: React.FC = () => {
                 boxShadow: "none",
               }}
             >
-              <Space direction="vertical" size={12} style={{ display: "flex" }}>
+              <Space orientation="vertical" size={12} style={{ display: "flex" }}>
                 <Typography.Text strong>Governance posture</Typography.Text>
                 <div
                   style={{
@@ -1644,7 +1644,7 @@ const GovernanceWorkbench: React.FC = () => {
                         minHeight: 72,
                       }}
                     >
-                      <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+                      <Space orientation="vertical" size={2} style={{ minWidth: 0 }}>
                         <Typography.Text
                           strong
                           style={{ color: surfaceToken.colorTextHeading, fontSize: 16 }}

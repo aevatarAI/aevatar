@@ -133,7 +133,7 @@ function renderList(values: string[]) {
   }
 
   return (
-    <Space direction="vertical" size={6} style={{ display: "flex" }}>
+    <Space orientation="vertical" size={6} style={{ display: "flex" }}>
       {values.map((value) => (
         <Typography.Text key={value}>{value}</Typography.Text>
       ))}
@@ -258,7 +258,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={16} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Space align="center" size={[8, 8]} wrap>
                 <SafetyCertificateOutlined />
                 <Typography.Text strong>
@@ -359,7 +359,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={16} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Space align="center" size={[8, 8]} wrap>
                 <LinkOutlined />
                 <Typography.Text strong>
@@ -435,7 +435,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={16} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Space align="center" size={[8, 8]} wrap>
                 <ApiOutlined />
                 <Typography.Text strong>
@@ -533,7 +533,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={16} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Typography.Text strong>
                 Revision {target.record.revisionId || "unresolved"} activation
               </Typography.Text>
@@ -589,7 +589,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
               boxShadow: "none",
             }}
           >
-            <Space direction="vertical" size={16} style={{ display: "flex" }}>
+            <Space orientation="vertical" size={16} style={{ display: "flex" }}>
               <Space align="center" size={[8, 8]} wrap>
                 <Typography.Text strong>{target.event.action}</Typography.Text>
                 <span
@@ -609,7 +609,7 @@ const GovernanceInspectorDrawer: React.FC<GovernanceInspectorDrawerProps> = ({
 
               <Divider style={{ margin: 0 }} />
 
-              <Space direction="vertical" size={8} style={{ display: "flex" }}>
+              <Space orientation="vertical" size={8} style={{ display: "flex" }}>
                 <Typography.Text type="secondary">
                   Actor: {target.event.actor}
                 </Typography.Text>

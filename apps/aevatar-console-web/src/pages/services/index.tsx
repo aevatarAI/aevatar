@@ -326,7 +326,7 @@ const ServicesPage: React.FC = () => {
             </AevatarPanel>
 
             <AevatarPanel layoutMode="document" title="Next Actions">
-              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                 <Button onClick={() => history.push("/deployments")}>
                   Open Deployments
                 </Button>
@@ -474,7 +474,7 @@ const ServicesPage: React.FC = () => {
                         padding: 12,
                       }}
                     >
-                      <Space direction="vertical" size={2}>
+                      <Space orientation="vertical" size={2}>
                         <Space wrap size={[8, 8]}>
                           <Typography.Text strong>
                             {endpoint.displayName || endpoint.endpointId}
