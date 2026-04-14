@@ -65,6 +65,10 @@ public sealed class ChannelRegistrationTool : IAgentTool
               "type": "string",
               "description": "Base URL for webhook callbacks, e.g. 'https://aevatar-console-backend-api.aevatar.ai' (for register)"
             },
+            "encrypt_key": {
+              "type": "string",
+              "description": "Lark Encrypt Key for webhook signature verification and event decryption (for register, optional — from Lark developer console)"
+            },
             "registration_id": {
               "type": "string",
               "description": "Registration ID (for delete, update_token)"
@@ -160,6 +164,7 @@ public sealed class ChannelRegistrationTool : IAgentTool
             VerificationToken = GetStr(args, "verification_token")?.Trim() ?? string.Empty,
             ScopeId = GetStr(args, "scope_id")?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl,
+            EncryptKey = GetStr(args, "encrypt_key")?.Trim() ?? string.Empty,
             RequestedId = registrationId,
         };
 
