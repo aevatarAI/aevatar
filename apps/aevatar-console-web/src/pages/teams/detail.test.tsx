@@ -5,6 +5,14 @@ import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import TeamDetailPage from "./detail";
 
+jest.mock("@/shared/graphs/GraphCanvas", () => ({
+  __esModule: true,
+  default: () => {
+    const React = require("react");
+    return React.createElement("div", null, "Graph canvas");
+  },
+}));
+
 function mockCreateRunsCatalog() {
   return {
     scopeId: "scope-1",
@@ -571,7 +579,7 @@ describe("TeamDetailPage", () => {
 
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("可见关系");
+    await screen.findByText("团队事件路径");
     fireEvent.click(screen.getAllByRole("button", { name: "查看服务映射" })[0]);
 
     await waitFor(() => {
