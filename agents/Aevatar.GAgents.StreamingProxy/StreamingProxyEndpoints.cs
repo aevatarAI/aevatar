@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.Extensions.Logging;
+using System.Threading.Channels;
 
 namespace Aevatar.GAgents.StreamingProxy;
 
@@ -125,6 +126,7 @@ public static class StreamingProxyEndpoints
         string scopeId,
         string roomId,
         [FromServices] IGAgentActorStore actorStore,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -138,6 +140,15 @@ public static class StreamingProxyEndpoints
         {
             logger.LogWarning(ex, "Failed to remove room {RoomId} from actor store", roomId);
         }
+        try
+        {
+            await participantStore.RemoveRoomAsync(roomId, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to remove participants for room {RoomId}", roomId);
+        }
         return Results.Ok();
     }
 
@@ -150,6 +161,8 @@ public static class StreamingProxyEndpoints
         ChatTopicRequest request,
         [FromServices] IActorRuntime actorRuntime,
         [FromServices] IActorEventSubscriptionProvider subscriptionProvider,
+        [FromServices] IStreamingProxyParticipantStore participantStore,
+        [FromServices] StreamingProxyNyxParticipantCoordinator participantCoordinator,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken ct)
     {
@@ -175,14 +188,26 @@ public static class StreamingProxyEndpoints
             // Set up SSE response
             await writer.StartAsync(ct);
 
+            var activityChannel = Channel.CreateUnbounded<StreamingProxyStreamSignal>();
+
             // Subscribe to actor events — will receive all group chat events
             await using var subscription = await subscriptionProvider.SubscribeAsync<EventEnvelope>(
                 actor.Id,
-                async envelope => await MapAndWriteEventAsync(envelope, writer),
+                async envelope =>
+                {
+                    var signal = await MapAndWriteEventAsync(envelope, writer);
+                    if (signal.HasValue)
+                        activityChannel.Writer.TryWrite(signal.Value);
+                },
                 ct);
 
-            // Dispatch ChatRequestEvent to actor (which converts to GroupChatTopicEvent)
             var sessionId = request.SessionId ?? Guid.NewGuid().ToString("N");
+            var accessToken = ExtractBearerToken(http);
+            var preferredRoute = request.LlmRoute?.Trim();
+            var defaultModel = request.LlmModel?.Trim();
+
+            // Emit the room topic immediately so the client sees visible progress
+            // even when Nyx participant discovery is slow.
             var chatRequest = new ChatRequestEvent
             {
                 Prompt = prompt,
@@ -198,16 +223,63 @@ public static class StreamingProxyEndpoints
             };
             await actor.HandleEventAsync(envelope, ct);
 
-            // Keep connection open until client disconnects or timeout
-            // The SSE stream stays open to receive subsequent agent messages
-            try
+            IReadOnlyList<StreamingProxyNyxParticipantDefinition> participants = string.IsNullOrWhiteSpace(accessToken)
+                ? Array.Empty<StreamingProxyNyxParticipantDefinition>()
+                : await participantCoordinator.EnsureParticipantsJoinedAsync(
+                    scopeId,
+                    roomId,
+                    actor,
+                    participantStore,
+                    accessToken,
+                    ct,
+                    preferredRoute,
+                    defaultModel);
+
+            if (participants.Count > 0 && !string.IsNullOrWhiteSpace(accessToken))
             {
-                await Task.Delay(Timeout.Infinite, ct);
+                await participantCoordinator.GenerateRepliesAsync(
+                    participants,
+                    actor,
+                    prompt,
+                    sessionId,
+                    accessToken,
+                    ct,
+                    participantStore,
+                    roomId);
+                await writer.WriteRunFinishedAsync(CancellationToken.None);
+                return;
             }
-            catch (OperationCanceledException)
+
+            var sawActivity = false;
+            var sawAgentMessage = false;
+            while (!ct.IsCancellationRequested)
             {
-                // Client disconnected — normal
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                idleCts.CancelAfter(sawAgentMessage
+                    ? StreamingProxyDefaults.IdleCompletionTimeoutMs
+                    : sawActivity
+                        ? StreamingProxyDefaults.PostTopicTimeoutMs
+                        : StreamingProxyDefaults.InitialResponseTimeoutMs);
+
+                try
+                {
+                    if (!await activityChannel.Reader.WaitToReadAsync(idleCts.Token))
+                        break;
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                while (activityChannel.Reader.TryRead(out var signal))
+                {
+                    sawActivity = true;
+                    if (signal == StreamingProxyStreamSignal.AgentMessage)
+                        sawAgentMessage = true;
+                }
             }
+
+            await writer.WriteRunFinishedAsync(CancellationToken.None);
         }
         catch (OperationCanceledException)
         {
@@ -396,21 +468,23 @@ public static class StreamingProxyEndpoints
 
     // ─── Event mapping ───
 
-    private static async ValueTask MapAndWriteEventAsync(EventEnvelope envelope, StreamingProxySseWriter writer)
+    private static async ValueTask<StreamingProxyStreamSignal?> MapAndWriteEventAsync(EventEnvelope envelope, StreamingProxySseWriter writer)
     {
         var payload = envelope.Payload;
         if (payload is null)
-            return;
+            return null;
 
         if (payload.Is(GroupChatTopicEvent.Descriptor))
         {
             var evt = payload.Unpack<GroupChatTopicEvent>();
             await writer.WriteTopicStartedAsync(evt.Prompt, evt.SessionId, CancellationToken.None);
+            return StreamingProxyStreamSignal.TopicStarted;
         }
         else if (payload.Is(GroupChatMessageEvent.Descriptor))
         {
             var evt = payload.Unpack<GroupChatMessageEvent>();
             await writer.WriteAgentMessageAsync(evt.AgentId, evt.AgentName, evt.Content, 0, CancellationToken.None);
+            return StreamingProxyStreamSignal.AgentMessage;
         }
         else if (payload.Is(GroupChatParticipantJoinedEvent.Descriptor))
         {
@@ -422,6 +496,8 @@ public static class StreamingProxyEndpoints
             var evt = payload.Unpack<GroupChatParticipantLeftEvent>();
             await writer.WriteParticipantLeftAsync(evt.AgentId, CancellationToken.None);
         }
+
+        return null;
     }
 
     private static async Task TryRollbackRoomCreationAsync(
@@ -455,7 +531,29 @@ public static class StreamingProxyEndpoints
     // ─── Request DTOs ───
 
     public sealed record CreateRoomRequest(string? RoomName);
-    public sealed record ChatTopicRequest(string? Prompt, string? SessionId = null);
+    public sealed record ChatTopicRequest(
+        string? Prompt,
+        string? SessionId = null,
+        string? LlmRoute = null,
+        string? LlmModel = null);
     public sealed record PostMessageRequest(string? AgentId, string? AgentName, string? Content, string? SessionId = null);
     public sealed record JoinRoomRequest(string? AgentId, string? DisplayName);
+
+    private static string? ExtractBearerToken(HttpContext http)
+    {
+        var header = http.Request.Headers.Authorization.ToString().Trim();
+        if (string.IsNullOrWhiteSpace(header))
+            return null;
+
+        const string prefix = "Bearer ";
+        return header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            ? header[prefix.Length..].Trim()
+            : null;
+    }
+
+    private enum StreamingProxyStreamSignal
+    {
+        TopicStarted,
+        AgentMessage,
+    }
 }

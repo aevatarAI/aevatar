@@ -846,7 +846,7 @@ function MissionControlCanvas({
               display: 'none',
             },
           }}
-          width={ui.inspectorWidth}
+          size={ui.inspectorWidth}
         >
           <InspectorPanel
             actionFeedback={runtime.actionFeedback}

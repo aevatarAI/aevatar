@@ -1,4 +1,9 @@
 export type RuntimeEventType =
+  | 'ROOM_CREATED'
+  | 'TOPIC_STARTED'
+  | 'AGENT_MESSAGE'
+  | 'PARTICIPANT_JOINED'
+  | 'PARTICIPANT_LEFT'
   | 'RUN_STARTED'
   | 'RUN_FINISHED'
   | 'RUN_ERROR'

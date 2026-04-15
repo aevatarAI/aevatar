@@ -43,6 +43,21 @@ describe("teamRoutes", () => {
     });
   });
 
+  it("defaults canonical team routes to the overview tab", () => {
+    expect(
+      readTeamDetailRouteState(
+        "?workflowId=wf-2&tab=not-real",
+        "/teams/scope-query",
+      ),
+    ).toEqual({
+      runId: "",
+      scopeId: "scope-query",
+      serviceId: "",
+      tab: "overview",
+      workflowId: "wf-2",
+    });
+  });
+
   it("falls back to the query scope and overview tab when the path is malformed", () => {
     expect(
       readTeamDetailRouteState(

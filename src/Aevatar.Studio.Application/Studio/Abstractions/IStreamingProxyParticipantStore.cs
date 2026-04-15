@@ -19,6 +19,10 @@ public interface IStreamingProxyParticipantStore
         string roomId, string agentId, string displayName,
         CancellationToken cancellationToken = default);
 
+    Task RemoveParticipantAsync(
+        string roomId, string agentId,
+        CancellationToken cancellationToken = default);
+
     Task RemoveRoomAsync(
         string roomId, CancellationToken cancellationToken = default);
 }

@@ -7,22 +7,25 @@ import {
 import type { ProListMetas } from "@ant-design/pro-components";
 import { ProList } from "@ant-design/pro-components";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Input, Space, Typography } from "antd";
-import React, { useEffect, useMemo, useState } from "react";
-import { runtimeActorsApi } from "@/shared/api/runtimeActorsApi";
-import { runtimeQueryApi } from "@/shared/api/runtimeQueryApi";
-import { formatDateTime } from "@/shared/datetime/dateTime";
-import { history } from "@/shared/navigation/history";
-import { buildRuntimeExplorerHref, buildRuntimeRunsHref } from "@/shared/navigation/runtimeRoutes";
-import type { WorkflowAgentSummary } from "@/shared/models/runtime/query";
+import { Alert, Button, Empty, Input, Space, Typography } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { runtimeActorsApi } from '@/shared/api/runtimeActorsApi';
+import { runtimeQueryApi } from '@/shared/api/runtimeQueryApi';
+import { formatDateTime } from '@/shared/datetime/dateTime';
+import { history } from '@/shared/navigation/history';
+import {
+  buildRuntimeExplorerHref,
+  buildRuntimeRunsHref,
+} from '@/shared/navigation/runtimeRoutes';
+import type { WorkflowAgentSummary } from '@/shared/models/runtime/query';
 import {
   AevatarContextDrawer,
   AevatarInspectorEmpty,
-  AevatarPageShell,
   AevatarPanel,
   AevatarStatusTag,
-  AevatarWorkbenchLayout,
-} from "@/shared/ui/aevatarPageShells";
+} from '@/shared/ui/aevatarPageShells';
+import ConsoleMetricCard from '@/shared/ui/ConsoleMetricCard';
+import ConsoleMenuPageShell from '@/shared/ui/ConsoleMenuPageShell';
 
 type ExplorerRouteSelection = {
   actorId: string;
@@ -159,101 +162,95 @@ const ActorsPage: React.FC = () => {
     }),
     [],
   );
+  const graphNodeCount = graphQuery.data?.subgraph.nodes.length ?? 0;
+  const timelineItemCount = timelineQuery.data?.length ?? 0;
+  const selectedActorSummary =
+    selectedSnapshotQuery.data?.workflowName || selectedActorId || '--';
 
   return (
-    <AevatarPageShell
-      layoutMode="document"
-      title="Runtime Explorer"
-      titleHelp="Explorer is now an entity workbench. Actor discovery stays on stage while timeline, snapshot, and graph context slide into the inspector."
+    <ConsoleMenuPageShell
+      breadcrumb="Aevatar / Platform"
+      title="Topology"
     >
-      <AevatarWorkbenchLayout
-        layoutMode="document"
-        rail={
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <AevatarPanel
-              layoutMode="document"
-              title="Actor Focus"
-              titleHelp="Paste a known actor ID or search discovered runtime agents."
-            >
-              <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                <Input
-                  onChange={(event) => setSelectedActorId(event.target.value.trim())}
-                  placeholder="Enter actor ID"
-                  value={selectedActorId}
-                />
-                <Input
-                  onChange={(event) => setActorKeyword(event.target.value)}
-                  placeholder="Filter discovered actors"
-                  value={actorKeyword}
-                />
-                <Button onClick={() => setSelectedActorId("")}>Clear focus</Button>
-              </Space>
-            </AevatarPanel>
-
-            <AevatarPanel layoutMode="document" title="Explorer Digest">
-              <Space direction="vertical" size={6}>
-                <Typography.Text strong>
-                  {filteredActors.length} actor entries in view
-                </Typography.Text>
-                <Typography.Text type="secondary">
-                  Snapshot, timeline, and subgraph all resolve from the same actor-focused inspector.
-                </Typography.Text>
-              </Space>
-            </AevatarPanel>
-          </div>
-        }
-        stage={
-          <AevatarPanel
-            layoutMode="document"
-            title="Observed Actors"
-            titleHelp="Actor cards replace the old multi-panel explorer so the stage remains readable even when the runtime catalog is large."
-          >
-            {actorsQuery.error ? (
-              <Alert
-                title={
-                  actorsQuery.error instanceof Error
-                    ? actorsQuery.error.message
-                    : "Failed to load actors."
-                }
-                showIcon
-                type="error"
-              />
-            ) : null}
-
-            <ProList<WorkflowAgentSummary>
-              dataSource={filteredActors}
-              grid={{ gutter: 16, column: 1 }}
-              itemCardProps={{
-                bodyStyle: { padding: 16 },
-                style: { borderRadius: 12 },
-              }}
-              locale={{
-                emptyText: (
-                  <Empty
-                    description="No runtime actors matched the current filter."
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  />
-                ),
-              }}
-              metas={metas}
-              pagination={{ defaultPageSize: 8, showSizeChanger: false }}
-              rowKey="id"
-              split={false}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <AevatarPanel layoutMode="document" padding={20} title="Search">
+          <Space wrap size={[12, 12]} style={{ width: '100%' }}>
+            <Input
+              onChange={(event) => setSelectedActorId(event.target.value.trim())}
+              placeholder="Actor ID"
+              style={{ width: 260 }}
+              value={selectedActorId}
             />
-          </AevatarPanel>
-        }
-      />
+            <Input
+              onChange={(event) => setActorKeyword(event.target.value)}
+              placeholder="Filter actors"
+              style={{ width: 260 }}
+              value={actorKeyword}
+            />
+            <Button onClick={() => setSelectedActorId('')}>Reset</Button>
+          </Space>
+        </AevatarPanel>
+
+        <div
+          style={{
+            display: 'grid',
+            gap: 16,
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+          }}
+        >
+          <ConsoleMetricCard label="可见 Actor" tone="purple" value={filteredActors.length} />
+          <ConsoleMetricCard label="当前焦点" value={selectedActorSummary} />
+          <ConsoleMetricCard label="时间线事件" value={timelineItemCount} />
+          <ConsoleMetricCard label="图谱节点" tone="green" value={graphNodeCount} />
+        </div>
+
+        <AevatarPanel layoutMode="document" padding={20} title="Actors">
+          {actorsQuery.error ? (
+            <Alert
+              title={
+                actorsQuery.error instanceof Error
+                  ? actorsQuery.error.message
+                  : 'Failed to load actors.'
+              }
+              showIcon
+              type="error"
+            />
+          ) : null}
+
+          <ProList<WorkflowAgentSummary>
+            dataSource={filteredActors}
+            grid={{ gutter: 16, column: 2 }}
+            itemCardProps={{
+              bodyStyle: { padding: 20 },
+              style: {
+                borderRadius: 12,
+                boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+              },
+            }}
+            locale={{
+              emptyText: (
+                <Empty
+                  description="No actors"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              ),
+            }}
+            metas={metas}
+            pagination={{ defaultPageSize: 8, showSizeChanger: false }}
+            rowKey="id"
+            split={false}
+          />
+        </AevatarPanel>
+      </div>
 
       <AevatarContextDrawer
         onClose={() => setSelectedActorId("")}
         open={Boolean(selectedActorId)}
-        subtitle="Actor snapshot"
-        title={
-          selectedSnapshotQuery.data?.actorId || selectedActorId || "Actor Inspector"
-        }
+        subtitle="Topology"
+        title={selectedSnapshotQuery.data?.actorId || selectedActorId || "Actor"}
       >
         {!selectedActorId ? (
-          <AevatarInspectorEmpty description="Choose an actor to inspect its latest snapshot and runtime trace." />
+          <AevatarInspectorEmpty description="Select an actor" />
         ) : selectedSnapshotQuery.error ? (
           <Alert
             title={
@@ -265,13 +262,10 @@ const ActorsPage: React.FC = () => {
             type="error"
           />
         ) : !selectedSnapshotQuery.data ? (
-          <AevatarInspectorEmpty description="No actor snapshot is available for the current actor ID yet." />
+          <AevatarInspectorEmpty description="No data" />
         ) : (
           <>
-            <AevatarPanel
-              title="Snapshot"
-              titleHelp="Current actor state and completion signal."
-            >
+            <AevatarPanel title="Summary">
               <div
                 style={{
                   display: "grid",
@@ -287,15 +281,13 @@ const ActorsPage: React.FC = () => {
                   value={formatDateTime(selectedSnapshotQuery.data.lastUpdatedAt)}
                 />
               </div>
-              <Typography.Text type="secondary">
-                Last output: {selectedSnapshotQuery.data.lastOutput || "No output yet."}
-              </Typography.Text>
+              <MetricCard
+                label="Last output"
+                value={selectedSnapshotQuery.data.lastOutput || "No output"}
+              />
             </AevatarPanel>
 
-            <AevatarPanel
-              title="Timeline"
-              titleHelp="The event feed replaces the old timeline table."
-            >
+            <AevatarPanel title="Timeline">
               {timelineQuery.data?.length ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {timelineQuery.data.map((item) => (
@@ -323,16 +315,13 @@ const ActorsPage: React.FC = () => {
                 </div>
               ) : (
                 <Empty
-                  description="No timeline items were returned."
+                  description="No timeline"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               )}
             </AevatarPanel>
 
-            <AevatarPanel
-              title="Topology Digest"
-              titleHelp="Graph context stays summarized here instead of becoming a full secondary canvas."
-            >
+            <AevatarPanel title="Topology">
               <div
                 style={{
                   display: "grid",
@@ -383,7 +372,7 @@ const ActorsPage: React.FC = () => {
           </>
         )}
       </AevatarContextDrawer>
-    </AevatarPageShell>
+    </ConsoleMenuPageShell>
   );
 };
 

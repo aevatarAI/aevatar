@@ -61,6 +61,18 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
         await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
     }
 
+    public async Task RemoveParticipantAsync(
+        string roomId, string agentId, CancellationToken cancellationToken = default)
+    {
+        var actor = await EnsureWriteActorAsync(cancellationToken);
+        var evt = new ParticipantRemovedEvent
+        {
+            RoomId = roomId,
+            AgentId = agentId,
+        };
+        await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
+    }
+
     public async Task RemoveRoomAsync(
         string roomId, CancellationToken cancellationToken = default)
     {

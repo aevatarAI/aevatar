@@ -233,6 +233,16 @@ public sealed class StreamingProxyEndpointsCoverageTests
             return Task.CompletedTask;
         }
 
+        public Task RemoveParticipantAsync(
+            string roomId,
+            string agentId,
+            CancellationToken cancellationToken = default)
+        {
+            _ = roomId;
+            _ = agentId;
+            return Task.CompletedTask;
+        }
+
         public Task RemoveRoomAsync(string roomId, CancellationToken cancellationToken = default)
         {
             _ = roomId;

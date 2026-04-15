@@ -408,6 +408,22 @@ public sealed class ActorBackedStoreAdapterTests
     }
 
     [Fact]
+    public async Task ParticipantStore_RemoveParticipantAsync_SendsParticipantRemovedEvent()
+    {
+        var runtime = new FakeActorRuntime();
+        var logger = NullLogger<ActorBackedStreamingProxyParticipantStore>.Instance;
+        var store = new ActorBackedStreamingProxyParticipantStore(runtime, logger);
+
+        await store.RemoveParticipantAsync("room-1", "agent-abc");
+
+        var actorId = "streaming-proxy-participants";
+        var actor = runtime.Actors[actorId];
+        var evt = actor.ReceivedEnvelopes[0].Payload.Unpack<ParticipantRemovedEvent>();
+        evt.RoomId.Should().Be("room-1");
+        evt.AgentId.Should().Be("agent-abc");
+    }
+
+    [Fact]
     public async Task ParticipantStore_ListAsync_NoActor_ReturnsEmpty()
     {
         var runtime = new FakeActorRuntime();

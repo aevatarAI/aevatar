@@ -30,7 +30,11 @@ message ParticipantAddedEvent {
   google.protobuf.Timestamp joined_at = 4;
 }
 
+message ParticipantRemovedEvent {
+  string room_id = 1;
+  string agent_id = 2;
+}
+
 message RoomParticipantsRemovedEvent {
   string room_id = 1;
 }
-

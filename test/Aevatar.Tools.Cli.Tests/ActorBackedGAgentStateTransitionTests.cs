@@ -82,6 +82,7 @@ public sealed class ActorBackedGAgentStateTransitionTests
         StateTransitionMatcher
             .Match(current, evt)
             .On<ParticipantAddedEvent>(ApplyParticipantAdded)
+            .On<ParticipantRemovedEvent>(ApplyParticipantRemoved)
             .On<RoomParticipantsRemovedEvent>(ApplyRoomRemoved)
             .OrCurrent();
 
@@ -116,6 +117,25 @@ public sealed class ActorBackedGAgentStateTransitionTests
     {
         var next = state.Clone();
         next.Rooms.Remove(evt.RoomId);
+        return next;
+    }
+
+    private static StreamingProxyParticipantGAgentState ApplyParticipantRemoved(
+        StreamingProxyParticipantGAgentState state, ParticipantRemovedEvent evt)
+    {
+        var next = state.Clone();
+        if (!next.Rooms.TryGetValue(evt.RoomId, out var list))
+            return next;
+
+        for (var index = list.Participants.Count - 1; index >= 0; index--)
+        {
+            if (string.Equals(list.Participants[index].AgentId, evt.AgentId, StringComparison.Ordinal))
+                list.Participants.RemoveAt(index);
+        }
+
+        if (list.Participants.Count == 0)
+            next.Rooms.Remove(evt.RoomId);
+
         return next;
     }
 
@@ -548,6 +568,43 @@ public sealed class ActorBackedGAgentStateTransitionTests
 
         s3.Rooms.Should().ContainKey("room2");
         s3.Rooms.Should().NotContainKey("room1");
+    }
+
+    [Fact]
+    public void Participant_RemoveParticipant_RemovesOnlyTargetParticipant()
+    {
+        var state = new StreamingProxyParticipantGAgentState();
+        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
+        {
+            RoomId = "room1", AgentId = "a1", DisplayName = "A1", JoinedAt = now,
+        });
+        var s2 = ApplyParticipant(s1, new ParticipantAddedEvent
+        {
+            RoomId = "room1", AgentId = "a2", DisplayName = "A2", JoinedAt = now,
+        });
+
+        var s3 = ApplyParticipant(s2, new ParticipantRemovedEvent { RoomId = "room1", AgentId = "a1" });
+
+        s3.Rooms.Should().ContainKey("room1");
+        s3.Rooms["room1"].Participants.Should().ContainSingle(p => p.AgentId == "a2");
+    }
+
+    [Fact]
+    public void Participant_RemoveParticipant_LastParticipant_RemovesRoom()
+    {
+        var state = new StreamingProxyParticipantGAgentState();
+        var now = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+
+        var s1 = ApplyParticipant(state, new ParticipantAddedEvent
+        {
+            RoomId = "room1", AgentId = "a1", DisplayName = "A1", JoinedAt = now,
+        });
+
+        var s2 = ApplyParticipant(s1, new ParticipantRemovedEvent { RoomId = "room1", AgentId = "a1" });
+
+        s2.Rooms.Should().NotContainKey("room1");
     }
 
     [Fact]

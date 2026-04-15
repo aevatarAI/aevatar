@@ -37,6 +37,21 @@ public sealed class StreamingProxyParticipantGAgent
         await PersistDomainEventAsync(evt);
     }
 
+    [EventHandler(EndpointName = "removeParticipant")]
+    public async Task HandleParticipantRemoved(ParticipantRemovedEvent evt)
+    {
+        if (string.IsNullOrWhiteSpace(evt.RoomId) || string.IsNullOrWhiteSpace(evt.AgentId))
+            return;
+
+        if (!State.Rooms.TryGetValue(evt.RoomId, out var list) ||
+            !list.Participants.Any(p => string.Equals(p.AgentId, evt.AgentId, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        await PersistDomainEventAsync(evt);
+    }
+
     protected override async Task OnActivateAsync(CancellationToken ct)
     {
         await base.OnActivateAsync(ct);
@@ -48,6 +63,7 @@ public sealed class StreamingProxyParticipantGAgent
         return StateTransitionMatcher
             .Match(current, evt)
             .On<ParticipantAddedEvent>(ApplyParticipantAdded)
+            .On<ParticipantRemovedEvent>(ApplyParticipantRemoved)
             .On<RoomParticipantsRemovedEvent>(ApplyRoomRemoved)
             .OrCurrent();
     }
@@ -75,6 +91,25 @@ public sealed class StreamingProxyParticipantGAgent
             DisplayName = evt.DisplayName,
             JoinedAt = evt.JoinedAt,
         });
+
+        return next;
+    }
+
+    private static StreamingProxyParticipantGAgentState ApplyParticipantRemoved(
+        StreamingProxyParticipantGAgentState state, ParticipantRemovedEvent evt)
+    {
+        var next = state.Clone();
+        if (!next.Rooms.TryGetValue(evt.RoomId, out var list))
+            return next;
+
+        for (var index = list.Participants.Count - 1; index >= 0; index--)
+        {
+            if (string.Equals(list.Participants[index].AgentId, evt.AgentId, StringComparison.Ordinal))
+                list.Participants.RemoveAt(index);
+        }
+
+        if (list.Participants.Count == 0)
+            next.Rooms.Remove(evt.RoomId);
 
         return next;
     }

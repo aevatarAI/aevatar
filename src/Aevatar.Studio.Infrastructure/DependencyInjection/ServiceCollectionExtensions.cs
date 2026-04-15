@@ -40,6 +40,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatHistoryStore, ActorBackedChatHistoryStore>();
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
+        services.AddSingleton<IWorkflowStoragePort, ChronoStorageWorkflowStoragePort>();
+        services.AddSingleton<IScriptStoragePort, ChronoStorageScriptStoragePort>();
         services.AddSingleton<IAevatarSettingsStore, FileAevatarSettingsStore>();
         return services;
     }

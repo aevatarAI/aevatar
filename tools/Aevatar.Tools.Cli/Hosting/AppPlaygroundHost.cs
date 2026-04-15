@@ -1,11 +1,14 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.StaticFiles;
 
 namespace Aevatar.Tools.Cli.Hosting;
 
 internal static class AppPlaygroundHost
 {
     private static volatile string _currentApiBaseUrl = "http://127.0.0.1:5080";
+    private static volatile string _localApiBaseUrl = "http://127.0.0.1:5080";
 
     public static async Task RunAsync(
         int port,
@@ -14,7 +17,8 @@ internal static class AppPlaygroundHost
         CancellationToken cancellationToken,
         TaskCompletionSource<string>? startedSignal = null)
     {
-        _currentApiBaseUrl = apiBaseUrl.TrimEnd('/');
+        _localApiBaseUrl = apiBaseUrl.TrimEnd('/');
+        _currentApiBaseUrl = _localApiBaseUrl;
         var baseDir = AppContext.BaseDirectory;
         var webRootCandidates = new[]
         {
@@ -51,7 +55,15 @@ internal static class AppPlaygroundHost
         });
 
         app.UseDefaultFiles();
-        app.UseStaticFiles();
+        app.UseStaticFiles(new StaticFileOptions
+        {
+            OnPrepareResponse = context =>
+            {
+                context.Context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+                context.Context.Response.Headers.Pragma = "no-cache";
+                context.Context.Response.Headers.Expires = "0";
+            },
+        });
 
         app.MapGet("/api/health", () => Results.Json(new { ok = true, service = "aevatar.app" }));
 
@@ -74,6 +86,9 @@ internal static class AppPlaygroundHost
             if (File.Exists(indexPath))
             {
                 ctx.Response.ContentType = "text/html";
+                ctx.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+                ctx.Response.Headers.Pragma = "no-cache";
+                ctx.Response.Headers.Expires = "0";
                 await ctx.Response.SendFileAsync(indexPath);
             }
             else
@@ -89,7 +104,7 @@ internal static class AppPlaygroundHost
         {
             var client = factory.CreateClient("api-proxy");
             var path = ctx.Request.Path + ctx.Request.QueryString;
-            var targetBase = _currentApiBaseUrl.TrimEnd('/');
+            var targetBase = ResolveTargetBaseUrl(ctx.Request.Path).TrimEnd('/');
             var targetUri = new Uri($"{targetBase}{path}");
 
             var requestMessage = new HttpRequestMessage
@@ -177,6 +192,28 @@ internal static class AppPlaygroundHost
             startedSignal?.TrySetException(ex);
             throw;
         }
+    }
+
+    private static string ResolveTargetBaseUrl(PathString path)
+    {
+        var value = path.Value ?? string.Empty;
+        return ShouldUseLocalBackend(value) ? _localApiBaseUrl : _currentApiBaseUrl;
+    }
+
+    private static bool ShouldUseLocalBackend(string path)
+    {
+        if (path.StartsWith("/api/user-config", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (path.StartsWith("/api/settings/runtime/test", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!path.StartsWith("/api/scopes/", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return path.Contains("/nyxid-chat/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/streaming-proxy/", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("/chat-history", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void PrintBanner(string url, string apiBaseUrl, string webRootPath)
