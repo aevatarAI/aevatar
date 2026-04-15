@@ -1,0 +1,27 @@
+syntax = "proto3";
+package aevatar.gagents.registry;
+option csharp_namespace = "Aevatar.GAgents.Registry";
+
+// ─── State ───
+
+message GAgentRegistryEntry {
+  string gagent_type = 1;
+  repeated string actor_ids = 2;
+}
+
+message GAgentRegistryState {
+  repeated GAgentRegistryEntry groups = 1;
+}
+
+// ─── Events ───
+
+message ActorRegisteredEvent {
+  string gagent_type = 1;
+  string actor_id = 2;
+}
+
+message ActorUnregisteredEvent {
+  string gagent_type = 1;
+  string actor_id = 2;
+}
+

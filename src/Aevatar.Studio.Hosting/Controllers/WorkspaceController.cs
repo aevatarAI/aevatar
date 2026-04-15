@@ -1,5 +1,5 @@
 using Aevatar.Studio.Application;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Application.Studio.Contracts;
 using Aevatar.Studio.Application.Studio.Services;
 using Aevatar.Studio.Hosting;

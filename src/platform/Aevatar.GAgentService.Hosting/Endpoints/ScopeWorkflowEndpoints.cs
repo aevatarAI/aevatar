@@ -530,7 +530,7 @@ public static class ScopeWorkflowEndpoints
                 scopedHeaders[ConnectorRequest.HttpAuthorizationMetadataKey] = $"Bearer {bearerToken}";
             }
 
-            var userConfigStore = http.RequestServices.GetService<IUserConfigStore>();
+            var userConfigStore = http.RequestServices.GetService<IUserConfigQueryPort>();
             if (userConfigStore != null)
             {
                 try
