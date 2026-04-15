@@ -1,5 +1,4 @@
 import { UserOutlined } from "@ant-design/icons";
-import { ProCard } from "@ant-design/pro-components";
 import { Avatar, Button, Space, Tag, Tooltip, Typography } from "antd";
 import React, { useMemo } from "react";
 import { history } from "@/shared/navigation/history";
@@ -8,7 +7,7 @@ import {
   clearStoredAuthSession,
   loadRestorableAuthSession,
 } from "@/shared/auth/session";
-import { embeddedPanelStyle, summaryFieldGridStyle, summaryMetricGridStyle } from "@/shared/ui/proComponents";
+import { summaryFieldGridStyle, summaryMetricGridStyle } from "@/shared/ui/proComponents";
 import { AevatarPanel } from "@/shared/ui/aevatarPageShells";
 import { SettingsPageShell, SummaryField, SummaryMetric } from "./shared";
 
@@ -16,12 +15,6 @@ const compactIdentityStyle: React.CSSProperties = {
   margin: 0,
   maxWidth: "100%",
 };
-
-const accountUsageNotes = [
-  "This page reflects the active NyxID session restored from the browser before protected console requests are sent.",
-  "Identity and access stay in the same shell as runtime and governance so operators never switch mental models.",
-  "Sign out only clears the local browser session. Backend runtime state is unaffected.",
-];
 
 function formatCompactIdentifier(
   value: string,
@@ -43,12 +36,12 @@ const AccountSettingsPage: React.FC = () => {
       authSession?.user.name ||
       authSession?.user.email ||
       authSession?.user.sub ||
-      "No active session",
+      "暂无会话",
     [authSession],
   );
   const accountSecondaryText = useMemo(() => {
     if (!authSession) {
-      return "No signed-in user information is available in this browser session.";
+      return "当前浏览器没有可用的登录信息。";
     }
 
     return authSession.user.email || authSession.user.sub;
@@ -57,12 +50,12 @@ const AccountSettingsPage: React.FC = () => {
     () =>
       authSession?.user.sub
         ? formatCompactIdentifier(authSession.user.sub)
-        : "n/a",
+        : "暂无",
     [authSession],
   );
 
-  const rolesLabel = authSession?.user.roles?.join(", ") || "n/a";
-  const groupsLabel = authSession?.user.groups?.join(", ") || "n/a";
+  const rolesLabel = authSession?.user.roles?.join(", ") || "暂无";
+  const groupsLabel = authSession?.user.groups?.join(", ") || "暂无";
 
   const handleSignOut = () => {
     clearStoredAuthSession();
@@ -70,11 +63,8 @@ const AccountSettingsPage: React.FC = () => {
   };
 
   return (
-    <SettingsPageShell content="Manage your signed-in identity, operator access posture, and browser-backed session.">
-      <AevatarPanel
-        title="Operator Account"
-        titleHelp="Identity is presented like an operator surface, not a detached profile page."
-      >
+    <SettingsPageShell>
+      <AevatarPanel title="账号信息">
         {authSession ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <Space align="start" size={16}>
@@ -97,18 +87,18 @@ const AccountSettingsPage: React.FC = () => {
             </Space>
 
             <Space wrap size={[8, 8]}>
-              <Tag color="processing">Signed in</Tag>
+              <Tag color="processing">已登录</Tag>
               <Tag color={authSession.user.email_verified ? "success" : "warning"}>
-                {authSession.user.email_verified ? "Email verified" : "Email unverified"}
+                {authSession.user.email_verified ? "邮箱已验证" : "邮箱未验证"}
               </Tag>
-              <Tag>{`${authSession.user.roles?.length ?? 0} roles`}</Tag>
-              <Tag>{`${authSession.user.groups?.length ?? 0} groups`}</Tag>
+              <Tag>{`${authSession.user.roles?.length ?? 0} 个角色`}</Tag>
+              <Tag>{`${authSession.user.groups?.length ?? 0} 个分组`}</Tag>
             </Space>
 
             <div style={summaryFieldGridStyle}>
-              <SummaryField label="Email" value={authSession.user.email || "n/a"} />
+              <SummaryField label="邮箱" value={authSession.user.email || "暂无"} />
               <SummaryField
-                label="User ID"
+                label="用户 ID"
                 value={
                   <Tooltip title={authSession.user.sub}>
                     <Typography.Text
@@ -120,8 +110,8 @@ const AccountSettingsPage: React.FC = () => {
                   </Tooltip>
                 }
               />
-              <SummaryField label="Roles" value={rolesLabel} />
-              <SummaryField label="Groups" value={groupsLabel} />
+              <SummaryField label="角色" value={rolesLabel} />
+              <SummaryField label="分组" value={groupsLabel} />
             </div>
 
             <Space wrap>
@@ -134,10 +124,10 @@ const AccountSettingsPage: React.FC = () => {
                   )
                 }
               >
-                Open runtime runs
+                打开运行记录
               </Button>
               <Button danger onClick={handleSignOut}>
-                Sign out
+                退出登录
               </Button>
             </Space>
           </div>
@@ -147,57 +137,33 @@ const AccountSettingsPage: React.FC = () => {
               {accountSecondaryText}
             </Typography.Text>
             <Button type="primary" onClick={() => window.location.replace("/login")}>
-              Sign in
+              去登录
             </Button>
           </div>
         )}
       </AevatarPanel>
 
-      <div
-        style={{
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-        }}
-      >
-        <AevatarPanel title="Session Summary">
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={summaryMetricGridStyle}>
-              <SummaryMetric label="Roles" value={authSession?.user.roles?.length ?? 0} />
-              <SummaryMetric label="Groups" value={authSession?.user.groups?.length ?? 0} />
-            </div>
-            <div style={summaryFieldGridStyle}>
-              <SummaryField label="Display name" value={accountDisplayName} />
-              <SummaryField
-                label="Email status"
-                value={
-                  authSession
-                    ? authSession.user.email_verified
-                      ? "Verified"
-                      : "Unverified"
-                    : "No session"
-                }
-              />
-            </div>
+      <AevatarPanel title="会话摘要">
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={summaryMetricGridStyle}>
+            <SummaryMetric label="角色" value={authSession?.user.roles?.length ?? 0} />
+            <SummaryMetric label="分组" value={authSession?.user.groups?.length ?? 0} />
           </div>
-        </AevatarPanel>
-
-        <ProCard
-          ghost
-          style={{
-            ...embeddedPanelStyle,
-            borderRadius: 12,
-            height: "100%",
-          }}
-        >
-          <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-            <Typography.Text strong>Access Notes</Typography.Text>
-            {accountUsageNotes.map((item) => (
-              <Typography.Text key={item}>{item}</Typography.Text>
-            ))}
-          </Space>
-        </ProCard>
-      </div>
+          <div style={summaryFieldGridStyle}>
+            <SummaryField label="显示名称" value={accountDisplayName} />
+            <SummaryField
+              label="邮箱状态"
+              value={
+                authSession
+                  ? authSession.user.email_verified
+                    ? "已验证"
+                    : "未验证"
+                  : "暂无会话"
+              }
+            />
+          </div>
+        </div>
+      </AevatarPanel>
     </SettingsPageShell>
   );
 };

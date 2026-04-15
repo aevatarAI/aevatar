@@ -96,13 +96,13 @@ describe('StudioWorkflowsPage', () => {
     render(React.createElement(StudioWorkflowsPage, createProps()));
 
     const browserSection = screen
-      .getByPlaceholderText('Search workflows')
+      .getByPlaceholderText('搜索定义')
       .closest('section');
     expect(browserSection).toHaveStyle('height: 100%');
     expect(browserSection).toHaveStyle('min-height: 0');
 
     const emptyContainer = screen
-      .getByText('Create a workflow with the New workflow button above.')
+      .getByText('还没有定义')
       .closest('.ant-empty')?.parentElement?.parentElement;
     expect(emptyContainer).toHaveStyle('display: flex');
     expect(emptyContainer).toHaveStyle('justify-content: center');
@@ -123,12 +123,10 @@ describe('StudioWorkflowsPage', () => {
       ),
     );
 
-    expect(screen.getByText('Current draft')).toBeInTheDocument();
-    expect(screen.getByText('Blank draft')).toBeInTheDocument();
+    expect(screen.getByText('当前定义')).toBeInTheDocument();
+    expect(screen.getByText('新建草稿')).toBeInTheDocument();
     expect(screen.getByText('legacy_draft')).toBeInTheDocument();
-    expect(
-      screen.getByText('Loaded from the browser draft handoff.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Loaded from the browser draft handoff.')).toBeInTheDocument();
   });
 
   it('renders only the newest workflow card when duplicate names are returned', () => {
@@ -189,13 +187,13 @@ describe('StudioWorkflowsPage', () => {
 
     const workflowSection = screen.getByText('NyxID Chat').closest('section');
     expect(workflowSection).toHaveStyle('height: auto');
-    expect(screen.getByText('Current scope')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Open editor' })).toBeInTheDocument();
+    expect(screen.queryByText('当前团队下的行为定义。')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '进入编辑' })).toBeInTheDocument();
   });
 });
 
 describe('StudioWorkspaceAlerts', () => {
-  it('shows draft notices and adds auth guidance when sign-in is required', () => {
+  it('only shows auth guidance when sign-in is required', () => {
     const { rerender } = render(
       <StudioWorkspaceAlerts
         authSession={{
@@ -208,9 +206,7 @@ describe('StudioWorkspaceAlerts', () => {
       />,
     );
 
-    expect(screen.getByText('Blank Studio draft')).toBeInTheDocument();
-    expect(screen.getByText('Imported local draft')).toBeInTheDocument();
-    expect(screen.queryByText('Studio sign-in required')).not.toBeInTheDocument();
+    expect(screen.queryByText('需要登录')).not.toBeInTheDocument();
 
     rerender(
       <StudioWorkspaceAlerts
@@ -225,8 +221,7 @@ describe('StudioWorkspaceAlerts', () => {
       />,
     );
 
-    expect(screen.getByText('Studio sign-in required')).toBeInTheDocument();
-    expect(screen.getByText('Blank Studio draft')).toBeInTheDocument();
-    expect(screen.getByText('Imported local draft')).toBeInTheDocument();
+    expect(screen.getByText('需要登录')).toBeInTheDocument();
+    expect(screen.getByText('登录后可继续访问团队构建器。')).toBeInTheDocument();
   });
 });

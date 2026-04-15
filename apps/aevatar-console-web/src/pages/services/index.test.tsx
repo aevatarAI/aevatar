@@ -128,7 +128,7 @@ describe('ServicesPage', () => {
     expect(screen.getByText('Services 是 Platform 的 authority 视图。这里回答当前范围内有哪些服务、它们挂在哪个 deployment 上、暴露了哪些入口，以及应该继续跳到 Governance、Deployments 还是 Topology。')).toBeTruthy();
     expect(screen.getByRole('button', { name: '查看服务' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '打开治理' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Apply' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '筛选服务' })).toBeTruthy();
     expect(screen.queryByText('Next Actions')).toBeNull();
     expect(screen.queryByText('No services matched the current scope.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Inspect' })).toBeNull();

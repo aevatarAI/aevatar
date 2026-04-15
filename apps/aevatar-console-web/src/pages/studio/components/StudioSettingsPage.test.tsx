@@ -152,17 +152,17 @@ describe('StudioSettingsPage', () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save workspace settings' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存工作区设置' }));
     expect(onSaveSettings).toHaveBeenCalledTimes(1);
   });
 
   it('shows provider catalog controls while keeping connection settings in Advanced', () => {
     render(<StudioSettingsPage {...createBaseProps()} />);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'AI 提供方' }));
 
-    expect(screen.getByText('Provider catalog')).toBeInTheDocument();
-    expect(screen.getByText('Provider detail')).toBeInTheDocument();
+    expect(screen.getByText('提供方列表')).toBeInTheDocument();
+    expect(screen.getByText('提供方详情')).toBeInTheDocument();
     expect(
       screen.queryByLabelText('Studio provider endpoint'),
     ).not.toBeInTheDocument();
@@ -182,11 +182,11 @@ describe('StudioSettingsPage', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Open Advanced' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'AI 提供方' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开高级配置' }));
 
-    expect(screen.getByText('Workflow source management')).toBeInTheDocument();
-    expect(screen.getByText('Provider connection')).toBeInTheDocument();
+    expect(screen.getByText('工作流来源管理')).toBeInTheDocument();
+    expect(screen.getByText('提供方连接')).toBeInTheDocument();
     expect(screen.getByLabelText('Studio provider endpoint')).toHaveValue(
       'https://aevatar-console-backend-api.aevatar.ai',
     );
@@ -208,11 +208,11 @@ describe('StudioSettingsPage', () => {
     );
 
     expect(
-      screen.getByText('Runtime is host-managed in embedded mode'),
+      screen.getByText('当前运行时由宿主管理'),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Studio runtime base URL')).toBeDisabled();
     expect(
-      screen.getByRole('button', { name: 'Check host runtime' }),
+      screen.getByRole('button', { name: '检测宿主运行时' }),
     ).toBeInTheDocument();
   });
 });
