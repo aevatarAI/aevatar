@@ -4693,13 +4693,10 @@ const StudioPage: React.FC = () => {
             style={{
               display: 'flex',
               flexDirection: 'column',
-              gap: 8,
+              gap: 4,
             }}
           >
-            <strong>当前宿主暂不提供脚本行为</strong>
-            <span style={{ color: 'var(--ant-color-text-secondary)' }}>
-              当前宿主暂不提供脚本行为，请切换到支持脚本能力的 Studio 环境后继续编辑。
-            </span>
+            <strong>当前环境暂不支持脚本行为</strong>
           </div>
         </div>
       )

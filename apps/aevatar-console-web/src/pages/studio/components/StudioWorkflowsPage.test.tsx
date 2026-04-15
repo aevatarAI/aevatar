@@ -102,7 +102,7 @@ describe('StudioWorkflowsPage', () => {
     expect(browserSection).toHaveStyle('min-height: 0');
 
     const emptyContainer = screen
-      .getByText('点击上方“新建定义”开始创建。')
+      .getByText('还没有定义')
       .closest('.ant-empty')?.parentElement?.parentElement;
     expect(emptyContainer).toHaveStyle('display: flex');
     expect(emptyContainer).toHaveStyle('justify-content: center');
@@ -187,7 +187,7 @@ describe('StudioWorkflowsPage', () => {
 
     const workflowSection = screen.getByText('NyxID Chat').closest('section');
     expect(workflowSection).toHaveStyle('height: auto');
-    expect(screen.getByText('当前团队下的行为定义。')).toBeInTheDocument();
+    expect(screen.queryByText('当前团队下的行为定义。')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '进入编辑' })).toBeInTheDocument();
   });
 });

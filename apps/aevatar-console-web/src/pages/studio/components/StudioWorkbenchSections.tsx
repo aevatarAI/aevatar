@@ -1879,9 +1879,8 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
     ? '正在解析团队上下文。'
     : workspaceSettings.isError
       ? describeError(workspaceSettings.error)
-      : '当前团队下的行为定义。';
-  const draftSummaryDescription =
-    activeWorkflowDescription || '选择一个定义，或新建草稿继续编辑。';
+      : '';
+  const draftSummaryDescription = activeWorkflowDescription || '';
 
   return (
     <Row gutter={[16, 16]} align="stretch" style={resolvedWorkspaceRowStyle}>
@@ -1898,9 +1897,6 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                 <div style={cardStackStyle}>
                   <Typography.Text style={workflowSectionHeadingStyle}>
                     工作区目录
-                  </Typography.Text>
-                  <Typography.Text style={workflowSectionCopyStyle}>
-                    选择新建定义的保存位置。
                   </Typography.Text>
                 </div>
                 <Button
@@ -2031,9 +2027,6 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                   <Typography.Text style={workflowSectionHeadingStyle}>
                     当前定义
                   </Typography.Text>
-                  <Typography.Text style={workflowSectionCopyStyle}>
-                    继续编辑当前定义。
-                  </Typography.Text>
                 </div>
               </div>
 
@@ -2051,10 +2044,11 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                   <Typography.Text strong>
                     {activeWorkflowName || '尚未选择定义'}
                   </Typography.Text>
-                  <Typography.Text style={workflowSectionCopyStyle}>
-                    {activeWorkflowDescription ||
-                      '选择一个定义，或新建草稿继续编辑。'}
-                  </Typography.Text>
+                  {activeWorkflowDescription ? (
+                    <Typography.Text style={workflowSectionCopyStyle}>
+                      {activeWorkflowDescription}
+                    </Typography.Text>
+                  ) : null}
                   <Space wrap size={[8, 8]}>
                     <Button
                       type="primary"
@@ -2108,9 +2102,11 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                         <Typography.Text strong style={workflowCardTitleStyle}>
                           {activeDirectory?.label || '当前团队'}
                         </Typography.Text>
-                        <Typography.Text style={workflowSummaryHintStyle}>
-                          {scopeSummaryDescription}
-                        </Typography.Text>
+                        {scopeSummaryDescription ? (
+                          <Typography.Text style={workflowSummaryHintStyle}>
+                            {scopeSummaryDescription}
+                          </Typography.Text>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -2135,9 +2131,11 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                         <Typography.Text strong style={workflowCardTitleStyle}>
                           {activeWorkflowName || '尚未选择定义'}
                         </Typography.Text>
-                        <Typography.Text style={workflowSummaryHintStyle}>
-                          {draftSummaryDescription}
-                        </Typography.Text>
+                        {draftSummaryDescription ? (
+                          <Typography.Text style={workflowSummaryHintStyle}>
+                            {draftSummaryDescription}
+                          </Typography.Text>
+                        ) : null}
                       </div>
                       <div style={workflowSummaryActionsStyle}>
                         <Button
@@ -2292,7 +2290,7 @@ export const StudioWorkflowsPage: React.FC<StudioWorkflowsPageProps> = ({
                     description={
                       workflowSearch.trim()
                         ? '没有匹配的定义。'
-                        : '点击上方“新建定义”开始创建。'
+                        : '还没有定义'
                     }
                   />
                 </div>
