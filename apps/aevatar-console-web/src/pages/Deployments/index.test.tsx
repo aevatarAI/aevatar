@@ -25,6 +25,16 @@ jest.mock("@/shared/api/servicesApi", () => ({
   },
 }));
 
+jest.mock("@/shared/studio/api", () => ({
+  studioApi: {
+    getAuthSession: jest.fn(async () => ({
+      scope: {
+        id: "scope-1",
+      },
+    })),
+  },
+}));
+
 const { servicesApi: mockServicesApi } = jest.requireMock(
   "@/shared/api/servicesApi",
 ) as {
@@ -288,12 +298,10 @@ describe("DeploymentsPage", () => {
   it("stays in empty detail state until an operator selects a deployment", async () => {
     renderDeploymentsPage();
 
-    expect(await screen.findByText("Deployment Inventory")).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        "Select a deployment from the left list to open the two-column detail view.",
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Aevatar / Platform")).toBeInTheDocument();
+    expect(await screen.findAllByText("Deployments")).toHaveLength(2);
+    expect(await screen.findByText("Select a deployment")).toBeInTheDocument();
+    expect(screen.queryByText("Deployment Inventory")).toBeNull();
   });
 
   it("opens the extra-wide rollout drawer from the detail header", async () => {
@@ -302,13 +310,11 @@ describe("DeploymentsPage", () => {
     );
 
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Open detail" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Policy & Weight" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Weights" }));
 
-    expect(await screen.findByText("Deployment Control Drawer")).toBeInTheDocument();
+    expect(await screen.findByText("Deployment Controls")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Apply weights" })).toBeInTheDocument();
   });
 
@@ -318,11 +324,9 @@ describe("DeploymentsPage", () => {
     );
 
     expect(await screen.findByText("Trade Agent")).toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Open detail" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Rollout Strategy" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "Rollout" }));
     fireEvent.click(
       await screen.findByRole("button", { name: "Deploy candidate revision" }),
     );

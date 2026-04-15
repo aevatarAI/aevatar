@@ -39,6 +39,15 @@ internal sealed class WorkflowGenerateOrchestrator
     private static readonly Regex YamlFenceRegex = new(
         @"```(?:ya?ml)?\s*\n([\s\S]*?)```",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly string[] AuthoringSchemaRules =
+    [
+        "Use canonical step types only. For a simple assistant/chat workflow, the step type must be llm_call (not llm, chat, or task).",
+        "Use only these step-level fields: id, type, target_role (or role), parameters, next, branches, children, retry, on_error, timeout_ms.",
+        "Do not put model, provider, temperature, max_tokens, max_history_messages, connectors, or system_prompt on steps. Those belong under roles[*].",
+        "Do not use steps[*].messages.",
+        "Do not use steps[*].params. Put step options under steps[*].parameters.",
+        "If you need to shape LLM input, use steps[*].parameters.prompt_prefix.",
+    ];
 
     private readonly WorkflowEditorService _editorService;
 
@@ -106,7 +115,7 @@ internal sealed class WorkflowGenerateOrchestrator
                     ct);
             }
             var parse = _editorService.ParseYaml(new ParseYamlRequest(candidateYaml, request.AvailableWorkflowNames));
-            if (parse.Document == null || HasErrors(parse.Findings))
+            if (parse.Document == null)
             {
                 lastFindings = parse.Findings.Count > 0
                     ? parse.Findings
@@ -133,6 +142,25 @@ internal sealed class WorkflowGenerateOrchestrator
             var normalized = _editorService.Normalize(new NormalizeWorkflowRequest(
                 parse.Document,
                 request.AvailableWorkflowNames));
+            var blockingParseFindings = GetBlockingParseFindings(parse.Findings);
+            if (blockingParseFindings.Count > 0)
+            {
+                lastCandidate = string.IsNullOrWhiteSpace(normalized.Yaml)
+                    ? candidateYaml
+                    : normalized.Yaml;
+                lastFindings = blockingParseFindings;
+                if (onProgress != null && attempt < MaxAttempts)
+                {
+                    await onProgress(
+                        new WorkflowGenerateProgress(
+                            WorkflowGenerateProgressStage.RepairingDraft,
+                            attempt,
+                            BuildRepairStatusMessage(lastFindings, attempt)),
+                        ct);
+                }
+                continue;
+            }
+
             if (HasErrors(normalized.Findings))
             {
                 lastCandidate = normalized.Yaml;
@@ -210,6 +238,7 @@ internal sealed class WorkflowGenerateOrchestrator
         }
 
         parts.Add($"User request:\n{request}");
+        parts.Add(BuildAuthoringSchemaHintBlock());
         return string.Join("\n\n", parts);
     }
 
@@ -258,7 +287,28 @@ internal sealed class WorkflowGenerateOrchestrator
         }
 
         builder.AppendLine();
+        builder.AppendLine("Workflow authoring constraints:");
+        foreach (var rule in AuthoringSchemaRules)
+        {
+            builder.Append("- ");
+            builder.AppendLine(rule);
+        }
+
+        builder.AppendLine();
         builder.Append("Return workflow YAML only.");
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildAuthoringSchemaHintBlock()
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Workflow authoring constraints:");
+        foreach (var rule in AuthoringSchemaRules)
+        {
+            builder.Append("- ");
+            builder.AppendLine(rule);
+        }
+
         return builder.ToString().Trim();
     }
 
@@ -279,5 +329,26 @@ internal sealed class WorkflowGenerateOrchestrator
 
         var firstFinding = findings[0];
         return $"{headline} {firstFinding.Path}: {firstFinding.Message}";
+    }
+
+    private static IReadOnlyList<ValidationFinding> GetBlockingParseFindings(
+        IReadOnlyList<ValidationFinding> findings) =>
+        findings
+            .Where(static finding => finding.Level == ValidationLevel.Error)
+            .Where(static finding => !IsSanitizableParseFinding(finding))
+            .ToList();
+
+    private static bool IsSanitizableParseFinding(ValidationFinding finding)
+    {
+        if (string.Equals(finding.Code, "unknown_field", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.Equals(finding.Code, "runtime_validation", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var message = finding.Message ?? string.Empty;
+        return message.Contains("Unknown field '", StringComparison.OrdinalIgnoreCase) ||
+               (message.Contains("Property '", StringComparison.OrdinalIgnoreCase) &&
+                message.Contains("not found on type", StringComparison.OrdinalIgnoreCase));
     }
 }

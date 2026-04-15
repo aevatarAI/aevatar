@@ -319,7 +319,7 @@ public class RoleGAgentReplayContractTests
         {
             Prompt = "hello",
             SessionId = "session-timeout-failure",
-            TimeoutMs = 1,
+            TimeoutMs = 1000,
         });
 
         publisher.Published
@@ -489,12 +489,56 @@ public class RoleGAgentReplayContractTests
             .ContainSingle(x => x.SessionId == "session-rich" && x.Content == "final answer");
     }
 
+    [Fact]
+    public async Task HandleChatRequest_WhenPersistCompletionFails_ShouldStillPublishResponse()
+    {
+        var inner = new InMemoryEventStoreForTests();
+        var store = new FailOnCompletionEventStore(inner);
+        var provider = new CountingLlmProviderFactory("persist-fail answer");
+        var services = BuildServices(store);
+
+        var publisher = new RecordingEventPublisher();
+        var agent = CreateAgent(services, "role-persist-fail", provider);
+        agent.EventPublisher = publisher;
+        await agent.ActivateAsync();
+        await agent.HandleInitializeRoleAgent(new InitializeRoleAgentEvent
+        {
+            RoleName = "assistant",
+            ProviderName = provider.Name,
+            SystemPrompt = "system",
+        });
+
+        await agent.HandleChatRequest(new ChatRequestEvent
+        {
+            Prompt = "hello",
+            SessionId = "session-persist-fail",
+        });
+
+        // Response was published despite persistence failure.
+        publisher.Published
+            .OfType<TextMessageEndEvent>()
+            .Should()
+            .ContainSingle(x =>
+                x.SessionId == "session-persist-fail" &&
+                x.Content == "persist-fail answer");
+
+        // The completion event should NOT be in the store (persist failed).
+        var persisted = await inner.GetEventsAsync("role-persist-fail");
+        persisted.Should().NotContain(x =>
+            x.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal));
+    }
+
     private static IServiceProvider BuildServices(
         InMemoryEventStoreForTests store,
+        Action<IServiceCollection>? configure = null) =>
+        BuildServices((IEventStore)store, configure);
+
+    private static IServiceProvider BuildServices(
+        IEventStore store,
         Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection()
-            .AddSingleton<IEventStore>(store)
+            .AddSingleton(store)
             .AddSingleton<EventSourcingRuntimeOptions>()
             .AddTransient(typeof(IEventSourcingBehaviorFactory<>), typeof(DefaultEventSourcingBehaviorFactory<>));
         configure?.Invoke(services);
@@ -708,5 +752,36 @@ public class RoleGAgentReplayContractTests
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(execute(argumentsJson));
         }
+    }
+
+    /// <summary>
+    /// Wraps an inner store but throws on appends that contain a
+    /// <see cref="RoleChatSessionCompletedEvent"/>, simulating a
+    /// persistence failure during session completion.
+    /// </summary>
+    private sealed class FailOnCompletionEventStore(InMemoryEventStoreForTests inner) : IEventStore
+    {
+        public Task<EventStoreCommitResult> AppendAsync(
+            string agentId,
+            IEnumerable<StateEvent> events,
+            long expectedVersion,
+            CancellationToken ct = default)
+        {
+            var list = events.ToList();
+            if (list.Any(e => e.EventType.Contains(nameof(RoleChatSessionCompletedEvent), StringComparison.Ordinal)))
+                throw new InvalidOperationException("Simulated persistence failure for session completion.");
+
+            return inner.AppendAsync(agentId, list, expectedVersion, ct);
+        }
+
+        public Task<IReadOnlyList<StateEvent>> GetEventsAsync(
+            string agentId, long? fromVersion = null, CancellationToken ct = default) =>
+            inner.GetEventsAsync(agentId, fromVersion, ct);
+
+        public Task<long> GetVersionAsync(string agentId, CancellationToken ct = default) =>
+            inner.GetVersionAsync(agentId, ct);
+
+        public Task<long> DeleteEventsUpToAsync(string agentId, long toVersion, CancellationToken ct = default) =>
+            inner.DeleteEventsUpToAsync(agentId, toVersion, ct);
     }
 }

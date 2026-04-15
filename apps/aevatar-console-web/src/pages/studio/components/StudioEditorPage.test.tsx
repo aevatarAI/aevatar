@@ -94,6 +94,25 @@ const workflowSteps = [
 
 function createBaseProps(overrides = {}) {
   return {
+    workflows: {
+      isLoading: false,
+      isError: false,
+      error: null,
+      data: [
+        {
+          workflowId: 'workflow-1',
+          name: 'workspace-demo',
+          description: 'Workspace workflow',
+          fileName: 'workspace-demo.yaml',
+          filePath: '/tmp/workflows/workspace-demo.yaml',
+          directoryId: 'dir-1',
+          directoryLabel: 'Workspace',
+          stepCount: 1,
+          hasLayout: true,
+          updatedAtUtc: '2026-03-25T00:00:00Z',
+        },
+      ],
+    },
     selectedWorkflow: {
       isLoading: false,
       isError: false,
@@ -202,6 +221,8 @@ function createBaseProps(overrides = {}) {
     onPublishWorkflow: jest.fn(),
     onOpenProjectOverview: jest.fn(),
     onOpenProjectInvoke: jest.fn(),
+    onOpenWorkflow: jest.fn(),
+    onStartBlankDraft: jest.fn(),
     onBindGAgent: jest.fn(async () => undefined),
     onActivateBindingRevision: jest.fn(),
     onRetireBindingRevision: jest.fn(),
@@ -232,11 +253,11 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Add node/i }));
+    fireEvent.click(screen.getByRole('button', { name: /添加步骤/i }));
 
-    expect(await screen.findByText('Node library')).toBeInTheDocument();
+    expect(await screen.findByText('步骤库')).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Insert' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: /插\s*入/ })[0]);
 
     expect(onAddGraphNode).toHaveBeenCalledWith('llm_call', undefined, {
       x: 420,
@@ -257,12 +278,12 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Ask AI/i }));
+    fireEvent.click(screen.getByRole('button', { name: /AI 辅助/i }));
 
-    expect(await screen.findByText('Workflow prompt')).toBeInTheDocument();
-    expect(screen.getByText('Validated YAML')).toBeInTheDocument();
+    expect(await screen.findByText('行为描述')).toBeInTheDocument();
+    expect(screen.getByText('校验后的 YAML')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    fireEvent.click(screen.getByRole('button', { name: /生\s*成/ }));
 
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
   });
@@ -281,9 +302,9 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next step: Save asset')).toBeInTheDocument();
+    expect(await screen.findByText('下一步：保存定义')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save asset' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存定义' }));
 
     expect(onSaveDraft).toHaveBeenCalledTimes(1);
   });
@@ -298,21 +319,21 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('No active binding')).toBeInTheDocument();
-    expect(screen.queryByText('No published binding')).not.toBeInTheDocument();
+    expect(await screen.findByText('未发布默认入口')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /收起详情/i })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /show details/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /查看详情/i })[0]);
 
-    expect(await screen.findByText('No published binding')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /收起详情/i })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /hide details/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /收起详情/i })[0]);
 
     await waitFor(() => {
-      expect(screen.queryByText('No published binding')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /收起详情/i })).not.toBeInTheDocument();
     });
   });
 
-  it('guides published projects toward Project Invoke', async () => {
+  it('guides published teams toward the legacy invoke lab', async () => {
     const onOpenProjectInvoke = jest.fn();
 
     render(
@@ -339,9 +360,9 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    expect(await screen.findByText('Next step: Open Project Invoke')).toBeInTheDocument();
+    expect(await screen.findByText('下一步：打开测试台')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open Project Invoke' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开测试台' }));
 
     expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
   });
@@ -366,16 +387,16 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /GAgent service/i }));
+    fireEvent.click(screen.getByRole('button', { name: /绑定 GAgent/i }));
 
-    expect(await screen.findByText('Bind GAgent service')).toBeInTheDocument();
+    expect(await screen.findByText('绑定 GAgent 服务')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /Add endpoint/i }));
-    fireEvent.change(screen.getByLabelText('GAgent endpoint id 2'), {
+    fireEvent.click(screen.getByRole('button', { name: /添加入口/i }));
+    fireEvent.change(screen.getByLabelText('GAgent 入口 ID 2'), {
       target: { value: 'chat' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Bind' }));
+    fireEvent.click(screen.getByRole('button', { name: '仅绑定' }));
 
     await waitFor(() => {
       expect(onBindGAgent).toHaveBeenCalledWith(

@@ -1609,7 +1609,7 @@ const GAgentsPage: React.FC = () => {
       title={selectedRevision ? selectedRevision.revisionId : 'No revision selected'}
     >
       {selectedRevision ? (
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
           <Space size={[8, 8]} wrap>
             <Typography.Text strong copyable>
               {selectedRevision.revisionId}
@@ -1756,7 +1756,7 @@ const GAgentsPage: React.FC = () => {
       }
       title="Actor Registry"
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         {registryNotice ? (
           <Alert
             closable
@@ -1965,7 +1965,7 @@ const GAgentsPage: React.FC = () => {
           : 'No published binding'
       }
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {bindingQuery.error ? (
           <Alert
             showIcon
@@ -1995,7 +1995,7 @@ const GAgentsPage: React.FC = () => {
                 <Typography.Text type="secondary">
                   Implementation
                 </Typography.Text>
-                <Space direction="vertical" size={4} style={{ marginTop: 4 }}>
+                <Space orientation="vertical" size={4} style={{ marginTop: 4 }}>
                   <Tag color={getBindingTone(currentBindingRevision)}>
                     {formatRuntimeGAgentBindingImplementationKind(
                       currentBindingRevision?.implementationKind,
@@ -2084,7 +2084,7 @@ const GAgentsPage: React.FC = () => {
           : 'Publish GAgent Binding'
       }
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {!selectedType ? (
           <AevatarInspectorEmpty description="Choose a discovered GAgent type before configuring a published binding." />
         ) : (
@@ -2096,7 +2096,7 @@ const GAgentsPage: React.FC = () => {
                   key: 'settings',
                   label: 'Service settings',
                   children: (
-                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                       <div
                         style={{
                           display: 'grid',
@@ -2157,7 +2157,7 @@ const GAgentsPage: React.FC = () => {
 
                       {bindingActorReuseMode === 'existing' ? (
                         <Space
-                          direction="vertical"
+                          orientation="vertical"
                           size={12}
                           style={{ width: '100%' }}
                         >
@@ -2213,7 +2213,7 @@ const GAgentsPage: React.FC = () => {
                   key: 'endpoints',
                   label: `Endpoints (${bindingDraft.endpoints.length})`,
                   children: (
-                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <Space orientation="vertical" size={16} style={{ width: '100%' }}>
                       <div
                         style={{
                           ...infoCardStyle,
@@ -2247,7 +2247,7 @@ const GAgentsPage: React.FC = () => {
                           </Button>
                         </Space>
 
-                        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                        <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                           {bindingDraft.endpoints.map((endpoint, index) => (
                             <div
                               key={`binding-endpoint-${index}`}
@@ -2441,7 +2441,7 @@ const GAgentsPage: React.FC = () => {
           : 'No revisions yet'
       }
     >
-      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
         {bindingQuery.error ? (
           <Alert
             showIcon
@@ -2547,7 +2547,7 @@ const GAgentsPage: React.FC = () => {
                     ) : null}
                   </div>
 
-                  <Space direction="vertical" size={8}>
+                  <Space orientation="vertical" size={8}>
                     <Button
                       disabled={!canActivate}
                       loading={
@@ -2596,7 +2596,7 @@ const GAgentsPage: React.FC = () => {
       }
       title={selectedType ? selectedType.typeName : 'GAgent Draft Run'}
     >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={16} style={{ width: '100%' }}>
         {selectedType ? (
           <div
             style={{
@@ -2639,7 +2639,7 @@ const GAgentsPage: React.FC = () => {
         />
 
         {actorReuseMode === 'existing' ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={12} style={{ width: '100%' }}>
             <Select
               allowClear
               aria-label="Saved actor id"
@@ -2795,8 +2795,8 @@ const GAgentsPage: React.FC = () => {
           </Typography.Text>
         </Space>
       }
-      title="GAgents"
-      titleHelp="Discover runtime GAgent types, publish scope bindings, reuse actors, and verify draft and serving paths from one workbench."
+      title="团队成员"
+      titleHelp="这里保留原有 GAgent runtime 能力，但统一对外表述为团队成员管理与绑定工作台。"
     >
       <AevatarWorkbenchLayout
         layoutMode="document"
@@ -2807,7 +2807,7 @@ const GAgentsPage: React.FC = () => {
       <AevatarContextDrawer
         onClose={() => setIsActorRegistryDrawerOpen(false)}
         open={isActorRegistryDrawerOpen}
-        title="Actor Registry"
+        title="成员注册表"
         width={screens.xl ? 680 : 520}
       >
         {actorRegistryPanel}
@@ -2820,7 +2820,7 @@ const GAgentsPage: React.FC = () => {
             ? describeRuntimeGAgentBindingRevisionTarget(selectedRevision)
             : undefined
         }
-        title="Revision Details"
+        title="版本详情"
         width={screens.xl ? 620 : 480}
       >
         {selectedRevisionPanel}

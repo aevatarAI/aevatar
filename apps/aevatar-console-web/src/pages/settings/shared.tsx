@@ -2,17 +2,16 @@ import { UserOutlined } from "@ant-design/icons";
 import { Menu, Space, Typography } from "antd";
 import React from "react";
 import { history } from "@/shared/navigation/history";
-import { CONSOLE_HOME_ROUTE } from "@/shared/navigation/consoleHome";
 import {
   buildAevatarMetricCardStyle,
   resolveAevatarMetricVisual,
   type AevatarThemeSurfaceToken,
 } from "@/shared/ui/aevatarWorkbench";
 import {
-  AevatarPageShell,
   AevatarPanel,
   AevatarTwoPaneLayout,
 } from "@/shared/ui/aevatarPageShells";
+import ConsoleMenuPageShell from "@/shared/ui/ConsoleMenuPageShell";
 import {
   summaryFieldLabelStyle,
   summaryFieldStyle,
@@ -94,11 +93,10 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
   content,
   title = "Settings",
 }) => (
-  <AevatarPageShell
-    layoutMode="document"
-    onBack={() => history.push(CONSOLE_HOME_ROUTE)}
+  <ConsoleMenuPageShell
+    breadcrumb="Aevatar / Settings"
+    description={content}
     title={title}
-    titleHelp={content}
   >
     <AevatarTwoPaneLayout
       layoutMode="document"
@@ -124,5 +122,5 @@ export const SettingsPageShell: React.FC<SettingsPageShellProps> = ({
       }
       stage={<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>}
     />
-  </AevatarPageShell>
+  </ConsoleMenuPageShell>
 );

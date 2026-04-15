@@ -45,17 +45,9 @@ describe('GovernanceResultPanels', () => {
 
   it('renders a lightweight selection notice', () => {
     render(
-      <GovernanceSelectionNotice
-        title="Select a service"
-        description="Load a service context before opening the Governance catalog."
-      />,
+      <GovernanceSelectionNotice title="Select a service" />,
     );
 
     expect(screen.getByText('Select a service')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'Load a service context before opening the Governance catalog.',
-      ),
-    ).toBeInTheDocument();
   });
 });

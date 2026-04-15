@@ -57,6 +57,7 @@ export function buildRuntimeRunsHref(options?: {
   payloadBase64?: string;
   actorId?: string;
   draftKey?: string;
+  returnTo?: string;
 }): string {
   return buildHref(runtimePaths.runs, {
     route: options?.route ?? options?.workflow,
@@ -69,6 +70,7 @@ export function buildRuntimeRunsHref(options?: {
     payloadBase64: options?.payloadBase64,
     actorId: options?.actorId,
     draftKey: options?.draftKey,
+    returnTo: options?.returnTo,
   });
 }
 

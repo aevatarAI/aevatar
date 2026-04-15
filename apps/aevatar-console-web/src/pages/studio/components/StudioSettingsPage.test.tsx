@@ -9,6 +9,7 @@ import type {
 import { StudioSettingsPage } from './StudioWorkbenchSections';
 
 type SettingsProps = React.ComponentProps<typeof StudioSettingsPage>;
+type SettingsDraftUpdate = Parameters<SettingsProps['onSetSettingsDraft']>[0];
 
 const providerTypes: StudioProviderType[] = [
   {
@@ -41,7 +42,7 @@ const providers: StudioProviderSettings[] = [
     category: 'llm',
     description: 'Secondary provider',
     model: 'gpt-5.4-mini',
-    endpoint: 'https://api.openai.test',
+    endpoint: '',
     apiKey: '',
     apiKeyConfigured: false,
   },
@@ -113,66 +114,91 @@ function createBaseProps(overrides: Partial<SettingsProps> = {}): SettingsProps 
 }
 
 describe('StudioSettingsPage', () => {
-  it('shows sectioned settings navigation and selects another provider', () => {
-    const onSelectProviderName = jest.fn();
+  it('edits runtime settings through runtime actions and saves the draft', () => {
+    let capturedDraft: NonNullable<SettingsProps['settingsDraft']> | null = null;
+    const onSetSettingsDraft = jest.fn((updater: SettingsDraftUpdate) => {
+      capturedDraft =
+        typeof updater === 'function'
+          ? updater({
+              runtimeBaseUrl: 'https://aevatar-console-backend-api.aevatar.ai',
+              defaultProviderName: 'tornado',
+              providerTypes,
+              providers,
+            })
+          : updater;
+    });
+    const onSaveSettings = jest.fn();
 
     render(
       <StudioSettingsPage
         {...createBaseProps({
-          onSelectProviderName,
+          onSetSettingsDraft,
+          onSaveSettings,
         })}
       />,
     );
 
-    expect(screen.getByRole('tab', { name: 'Runtime' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('tab', { name: 'AI Providers' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('tab', { name: 'Workflow Sources' }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Advanced' })).toBeInTheDocument();
-    expect(
-      screen.queryByLabelText('Studio provider endpoint'),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Studio provider API key')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Studio runtime base URL'), {
+      target: {
+        value: 'http://127.0.0.1:5111',
+      },
+    });
+
+    expect(onSetSettingsDraft).toHaveBeenCalledWith(expect.any(Function));
+    expect(capturedDraft).toEqual(
+      expect.objectContaining({
+        runtimeBaseUrl: 'http://127.0.0.1:5111',
+        defaultProviderName: 'tornado',
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save workspace settings' }));
+    expect(onSaveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows provider catalog controls while keeping connection settings in Advanced', () => {
+    render(<StudioSettingsPage {...createBaseProps()} />);
 
     fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
 
     expect(screen.getByText('Provider catalog')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-
-    expect(onSelectProviderName).toHaveBeenCalledWith('zephyr');
+    expect(screen.getByText('Provider detail')).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Studio provider endpoint'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByLabelText('Studio provider API key'),
+    ).not.toBeInTheDocument();
   });
 
-  it('keeps provider connection and secrets in Advanced and runtime actions in Runtime', () => {
-    const onTestRuntime = jest.fn();
+  it('opens Advanced to edit provider connection details and workflow sources', () => {
+    const onSetSettingsDraft = jest.fn();
 
     render(
       <StudioSettingsPage
         {...createBaseProps({
-          onTestRuntime,
+          onSetSettingsDraft,
         })}
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Test runtime' }));
-
-    expect(onTestRuntime).toHaveBeenCalledTimes(1);
-    expect(
-      screen.queryByLabelText('Studio provider endpoint'),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'AI Providers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Advanced' }));
 
     expect(screen.getByText('Workflow source management')).toBeInTheDocument();
     expect(screen.getByText('Provider connection')).toBeInTheDocument();
-    expect(screen.getByText('Provider secrets')).toBeInTheDocument();
-    expect(screen.getByLabelText('Studio provider endpoint')).toBeInTheDocument();
-    expect(screen.getByLabelText('Studio provider API key')).toBeInTheDocument();
+    expect(screen.getByLabelText('Studio provider endpoint')).toHaveValue(
+      'https://aevatar-console-backend-api.aevatar.ai',
+    );
+
+    fireEvent.change(screen.getByLabelText('Studio provider endpoint'), {
+      target: { value: 'https://runtime.example' },
+    });
+
+    expect(onSetSettingsDraft).toHaveBeenCalledWith(expect.any(Function));
   });
 
-  it('treats runtime editing as host-managed in embedded mode', () => {
+  it('shows host-managed runtime copy in embedded mode', () => {
     render(
       <StudioSettingsPage
         {...createBaseProps({

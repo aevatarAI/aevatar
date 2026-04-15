@@ -177,6 +177,16 @@ echo "==> Booting local Mainnet Host API..."
 AEVATAR_APP_HOST="${API_HOST}" \
 AEVATAR_APP_PORT="${API_PORT}" \
 AEVATAR_APP_CONFIGURATION="${API_CONFIGURATION}" \
+AEVATAR_ActorRuntime__OrleansStreamBackend=InMemory \
+AEVATAR_ActorRuntime__OrleansPersistenceBackend=InMemory \
+AEVATAR_ActorRuntime__Policies__Environment=Development \
+AEVATAR_Projection__Policies__Environment=Development \
+AEVATAR_Projection__Policies__DenyInMemoryDocumentReadStore=false \
+AEVATAR_Projection__Policies__DenyInMemoryGraphFactStore=false \
+Projection__Document__Providers__Elasticsearch__Enabled=false \
+Projection__Document__Providers__InMemory__Enabled=true \
+Projection__Graph__Providers__Neo4j__Enabled=false \
+Projection__Graph__Providers__InMemory__Enabled=true \
 bash "${MAINNET_BOOT_SCRIPT}" \
   --port "${API_PORT}" \
   --configuration "${API_CONFIGURATION}"
