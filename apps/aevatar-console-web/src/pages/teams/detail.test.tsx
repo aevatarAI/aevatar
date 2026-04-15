@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
+import { history } from "@/shared/navigation/history";
 import { studioApi } from "@/shared/studio/api";
 import { loadDraftRunPayload } from "@/shared/runs/draftRunSession";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
@@ -679,6 +680,19 @@ describe("TeamDetailPage", () => {
     await waitFor(() => {
       expect(window.location.search).toContain("runId=run-good");
     });
+    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
+  });
+
+  it("syncs tab and run state when the route changes after mount", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "服务映射" });
+
+    act(() => {
+      history.push("/teams/scope-1?scopeId=scope-1&tab=events&runId=run-good");
+    });
+
+    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
     expect(await screen.findByText("LLM_CALL")).toBeTruthy();
   });
 
