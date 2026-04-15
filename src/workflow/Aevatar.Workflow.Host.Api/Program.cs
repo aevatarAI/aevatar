@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────
 
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.Workflow.Extensions.Hosting;
 using Aevatar.Workflow.Host.Api;
 
@@ -27,5 +28,6 @@ builder.AddAevatarWorkflowObservability();
 var app = builder.Build();
 
 app.UseAevatarDefaultHost();
+app.MapVoicePresenceWebSocket("/ws/voice/{actorId}");
 
 app.Run();

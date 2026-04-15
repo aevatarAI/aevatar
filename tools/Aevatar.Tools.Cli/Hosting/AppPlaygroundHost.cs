@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.StaticFiles;
@@ -54,6 +55,7 @@ internal static class AppPlaygroundHost
                 OpenBrowser(url);
         });
 
+        app.UseWebSockets();
         app.UseDefaultFiles();
         app.UseStaticFiles(new StaticFileOptions
         {
@@ -97,8 +99,57 @@ internal static class AppPlaygroundHost
             }
         });
 
+        app.Map("/ws/voice/{actorId}", ProxyVoiceWebSocket);
+
         // Reverse proxy: forward /api/* to the backend API.
         app.Map("/api/{**rest}", ProxyToBackend);
+
+        async Task ProxyVoiceWebSocket(HttpContext ctx)
+        {
+            if (!ctx.WebSockets.IsWebSocketRequest)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await ctx.Response.WriteAsync("WebSocket required.");
+                return;
+            }
+
+            using var upstream = new ClientWebSocket();
+            foreach (var protocol in ctx.WebSockets.WebSocketRequestedProtocols)
+                upstream.Options.AddSubProtocol(protocol);
+
+            ForwardWebSocketHeaders(ctx, upstream);
+
+            var targetUri = BuildWebSocketTargetUri(_currentApiBaseUrl, ctx.Request.Path, ctx.Request.QueryString);
+            try
+            {
+                await upstream.ConnectAsync(targetUri, ctx.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
+                await ctx.Response.WriteAsync($"Voice backend WebSocket is unreachable: {ex.Message}");
+                return;
+            }
+
+            using var downstream = string.IsNullOrWhiteSpace(upstream.SubProtocol)
+                ? await ctx.WebSockets.AcceptWebSocketAsync()
+                : await ctx.WebSockets.AcceptWebSocketAsync(upstream.SubProtocol);
+
+            var downstreamToUpstream = RelayWebSocketAsync(downstream, upstream, ctx.RequestAborted);
+            var upstreamToDownstream = RelayWebSocketAsync(upstream, downstream, ctx.RequestAborted);
+
+            await Task.WhenAny(downstreamToUpstream, upstreamToDownstream);
+            await CloseProxySocketsAsync(downstream, upstream, ctx.RequestAborted);
+
+            try
+            {
+                await Task.WhenAll(downstreamToUpstream, upstreamToDownstream);
+            }
+            catch
+            {
+                // Relay shutdown is best effort once either side closes.
+            }
+        }
 
         async Task ProxyToBackend(HttpContext ctx, IHttpClientFactory factory)
         {
@@ -225,6 +276,118 @@ internal static class AppPlaygroundHost
         Console.WriteLine($"  WebRoot:  {webRootPath}");
         Console.WriteLine("  Press Ctrl+C to stop");
         Console.WriteLine();
+    }
+
+    private static Uri BuildWebSocketTargetUri(string targetBaseUrl, PathString path, QueryString queryString)
+    {
+        var baseUri = new Uri(targetBaseUrl.TrimEnd('/'));
+        var builder = new UriBuilder(baseUri)
+        {
+            Scheme = string.Equals(baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                ? "wss"
+                : "ws",
+            Path = path.Value ?? string.Empty,
+            Query = queryString.HasValue ? queryString.Value![1..] : string.Empty,
+        };
+
+        return builder.Uri;
+    }
+
+    private static void ForwardWebSocketHeaders(HttpContext ctx, ClientWebSocket upstream)
+    {
+        foreach (var header in ctx.Request.Headers)
+        {
+            if (header.Key.StartsWith("Host", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.StartsWith("Connection", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.StartsWith("Upgrade", StringComparison.OrdinalIgnoreCase) ||
+                header.Key.StartsWith("Sec-WebSocket", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            upstream.Options.SetRequestHeader(header.Key, header.Value.ToString());
+        }
+    }
+
+    private static async Task RelayWebSocketAsync(
+        WebSocket source,
+        WebSocket destination,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[16 * 1024];
+
+        while (!cancellationToken.IsCancellationRequested &&
+               source.State is WebSocketState.Open or WebSocketState.CloseReceived &&
+               destination.State is WebSocketState.Open)
+        {
+            ValueWebSocketReceiveResult result;
+            try
+            {
+                result = await source.ReceiveAsync(buffer.AsMemory(), cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch
+            {
+                break;
+            }
+
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                await TryCloseOutputAsync(destination, source.CloseStatus, source.CloseStatusDescription, cancellationToken);
+                break;
+            }
+
+            await destination.SendAsync(
+                buffer.AsMemory(0, result.Count),
+                result.MessageType,
+                result.EndOfMessage,
+                cancellationToken);
+        }
+    }
+
+    private static async Task CloseProxySocketsAsync(
+        WebSocket downstream,
+        ClientWebSocket upstream,
+        CancellationToken cancellationToken)
+    {
+        await TryCloseOutputAsync(downstream, WebSocketCloseStatus.NormalClosure, null, cancellationToken);
+
+        if (upstream.State is WebSocketState.Open or WebSocketState.CloseReceived)
+        {
+            try
+            {
+                await upstream.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cancellationToken);
+            }
+            catch
+            {
+                // best effort close
+            }
+        }
+    }
+
+    private static async Task TryCloseOutputAsync(
+        WebSocket socket,
+        WebSocketCloseStatus? closeStatus,
+        string? closeDescription,
+        CancellationToken cancellationToken)
+    {
+        if (socket.State is not WebSocketState.Open and not WebSocketState.CloseReceived)
+            return;
+
+        try
+        {
+            await socket.CloseOutputAsync(
+                closeStatus ?? WebSocketCloseStatus.NormalClosure,
+                closeDescription,
+                cancellationToken);
+        }
+        catch
+        {
+            // best effort close
+        }
     }
 
     private static void OpenBrowser(string url)

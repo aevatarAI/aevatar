@@ -1,6 +1,7 @@
 using Aevatar.Authentication.Hosting;
 using Aevatar.Authentication.Providers.NyxId;
 using Aevatar.Bootstrap.Hosting;
+using Aevatar.Foundation.VoicePresence.Hosting;
 using Aevatar.GAgentService.Hosting.Endpoints;
 using Aevatar.Mainnet.Host.Api.Hosting;
 using Aevatar.AI.ToolProviders.ChronoStorage;
@@ -59,6 +60,7 @@ builder.Services.AddChronoStorageTools(o =>
 var app = builder.Build();
 
 app.UseAevatarDefaultHost();
+app.MapVoicePresenceWebSocket("/ws/voice/{actorId}");
 app.MapNyxIdChatEndpoints();
 app.MapStreamingProxyEndpoints();
 app.MapChannelCallbackEndpoints();

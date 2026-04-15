@@ -119,8 +119,8 @@ aevatar app
 # run without browser and custom port
 aevatar app --no-browser --port 6690
 
-# optional explicit SDK base url
-aevatar app --api-base http://localhost:5100
+# optional explicit backend base url
+aevatar app --url http://localhost:5100
 
 # force restart app on port (kill listener process then relaunch)
 aevatar app restart
@@ -221,6 +221,29 @@ echo "design an incident response workflow with human approval" | aevatar chat w
 aevatar chat workflow "generate a rollout plan workflow with approval gate" --url http://localhost:5100 --filename rollout_plan
 ```
 
+```bash
+# open the Phase A browser voice UI for an actor
+aevatar voice --agent workflow-agent-123
+
+# use a non-default local app port and backend url
+aevatar voice --agent workflow-agent-123 --port 6690 --url http://localhost:5100
+
+# optional provider / voice hints for the browser UI
+aevatar voice --agent workflow-agent-123 --provider minicpm --voice alloy
+```
+
+`aevatar voice` ensures the embedded web UI is running, updates its backend target, and opens:
+
+```text
+http://localhost:<port>/voice?agent=<actorId>
+```
+
+Optional config keys for the voice page:
+
+- `Cli:Voice:Provider`
+- `Cli:Voice:Voice`
+- `Cli:Voice:SampleRateHz`
+
 `aevatar chat workflow` writes files to `AEVATAR_HOME/workflows` (`~/.aevatar/workflows` by default).  
 Without `--yes`, it prompts for confirmation before saving.
 
@@ -235,9 +258,9 @@ aevatar chat config get-url
 aevatar chat config clear-url
 ```
 
-URL precedence for both `aevatar chat` and `aevatar app`:
+URL precedence for `aevatar chat`, `aevatar voice`, and `aevatar app`:
 
-1. command line override (`chat --url` / `app --api-base`)
+1. command line override (`chat --url` / `voice --url` / `app --url`)
 2. persisted config key `Cli:App:ApiBaseUrl` in `~/.aevatar/config.json`
 3. local embedded host URL (`http://localhost:<port>`)
 
