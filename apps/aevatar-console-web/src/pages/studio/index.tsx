@@ -11,7 +11,6 @@ import {
 } from '@/shared/navigation/runtimeRoutes';
 import type { Node } from '@xyflow/react';
 import {
-  Alert,
   Button,
   Modal,
   Space,
@@ -92,6 +91,7 @@ import type {
   StudioWorkflowDirectory,
   StudioWorkspaceSettings,
 } from '@/shared/studio/models';
+import { getStudioScopeBindingCurrentRevision } from '@/shared/studio/models';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioInspectorPane from './components/StudioInspectorPane';
@@ -114,7 +114,6 @@ import {
   StudioRolesPage,
   StudioSettingsPage,
   StudioWorkflowsPage,
-  StudioWorkspaceAlerts,
 } from './components/StudioWorkbenchSections';
 
 type StudioRouteState = {
@@ -196,6 +195,10 @@ function hasValidationError(findings: StudioValidationFinding[]): boolean {
 
 function trimOptional(value: string | null | undefined): string {
   return value?.trim() ?? '';
+}
+
+function normalizeComparableText(value: string | null | undefined): string {
+  return trimOptional(value).toLowerCase();
 }
 
 function describeScopeBindingTarget(result: {
@@ -1204,6 +1207,36 @@ const StudioPage: React.FC = () => {
       ),
     [selectedWorkflowId, workflowsQuery.data],
   );
+  const currentScopeBindingRevision = useMemo(
+    () => getStudioScopeBindingCurrentRevision(scopeBindingQuery.data ?? null),
+    [scopeBindingQuery.data],
+  );
+  const boundWorkflowLookupKey = useMemo(() => {
+    if (
+      currentScopeBindingRevision?.implementationKind !== 'workflow'
+    ) {
+      return '';
+    }
+
+    return trimOptional(currentScopeBindingRevision.workflowName);
+  }, [currentScopeBindingRevision]);
+  const preferredScopeWorkflow = useMemo(() => {
+    const normalizedLookupKey = normalizeComparableText(boundWorkflowLookupKey);
+    if (!normalizedLookupKey) {
+      return null;
+    }
+
+    return (
+      visibleWorkflowSummaries.find((item) => {
+        const fileStem = item.fileName.replace(/\.(ya?ml)$/i, '');
+        return (
+          normalizeComparableText(item.workflowId) === normalizedLookupKey ||
+          normalizeComparableText(item.name) === normalizedLookupKey ||
+          normalizeComparableText(fileStem) === normalizedLookupKey
+        );
+      }) ?? null
+    );
+  }, [boundWorkflowLookupKey, visibleWorkflowSummaries]);
   const matchingWorkspaceWorkflow = useMemo(
     () =>
       visibleWorkflowSummaries.find((item) => item.name === templateWorkflow) ??
@@ -1323,14 +1356,29 @@ const StudioPage: React.FC = () => {
     if (
       selectedWorkflowId ||
       templateWorkflow ||
-      draftMode === 'new' ||
-      visibleWorkflowSummaries.length === 0
+      draftMode === 'new'
     ) {
       return;
     }
 
-    setSelectedWorkflowId(visibleWorkflowSummaries[0]?.workflowId ?? '');
-  }, [draftMode, selectedWorkflowId, templateWorkflow, visibleWorkflowSummaries]);
+    const preferredWorkflowId =
+      preferredScopeWorkflow?.workflowId ||
+      boundWorkflowLookupKey ||
+      visibleWorkflowSummaries[0]?.workflowId ||
+      '';
+    if (!preferredWorkflowId) {
+      return;
+    }
+
+    setSelectedWorkflowId(preferredWorkflowId);
+  }, [
+    boundWorkflowLookupKey,
+    draftMode,
+    preferredScopeWorkflow,
+    selectedWorkflowId,
+    templateWorkflow,
+    visibleWorkflowSummaries,
+  ]);
 
   useEffect(() => {
     if (
@@ -1533,7 +1581,9 @@ const StudioPage: React.FC = () => {
         ? studioView === 'execution'
           ? 'executions'
           : 'studio'
-        : workspacePage;
+        : workspacePage === 'execution'
+          ? 'executions'
+          : workspacePage;
 
     window.history.replaceState(null, '', buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
@@ -4079,12 +4129,6 @@ const StudioPage: React.FC = () => {
       count: visibleWorkflowSummaries.length,
     },
     {
-      key: 'studio',
-      label: '成员编辑器',
-      description: '编辑当前成员草稿，并查看测试运行状态。',
-      count: executionsQuery.data?.length ?? 0,
-    },
-    {
       key: 'roles',
       label: 'Agent 角色',
       description: '编辑、导入并保存 Agent 角色定义。',
@@ -4095,6 +4139,12 @@ const StudioPage: React.FC = () => {
       label: '集成',
       description: '编辑、导入并保存团队可用集成。',
       count: connectorsQuery.data?.connectors.length ?? 0,
+    },
+    {
+      key: 'execution',
+      label: '测试运行',
+      description: '查看执行状态、执行图和运行日志。',
+      count: executionsQuery.data?.length ?? 0,
     },
     {
       key: 'settings',
@@ -4113,11 +4163,16 @@ const StudioPage: React.FC = () => {
 
   const applyWorkspacePageSelection = React.useCallback(
     (page: StudioWorkspacePage) => {
-      if (page === 'studio') {
+      if (page === 'studio' || page === 'execution') {
         ensureActiveWorkflowDraftLoaded();
       }
+      if (page === 'execution') {
+        setWorkspacePage('studio');
+        setStudioView('execution');
+        return;
+      }
       setWorkspacePage(page);
-      if (page === 'studio' && studioView !== 'execution') {
+      if (page === 'studio') {
         setStudioView('editor');
       }
       if (page === 'scripts') {
@@ -4138,106 +4193,153 @@ const StudioPage: React.FC = () => {
       : workspacePage === 'studio'
         ? studioView === 'execution'
           ? '测试运行'
-          : '成员编辑器'
+          : '行为定义'
         : workspacePage === 'roles'
           ? 'Agent 角色'
           : workspacePage === 'connectors'
             ? '集成'
             : '编辑器设置';
 
-  const pageToolbar =
-    workspacePage === 'studio' ? (
+  const studioContextActions =
+    workspacePage === 'studio' && studioView === 'execution' ? (
       <Space wrap size={[8, 8]}>
         <Button
-          type={studioView === 'editor' ? 'primary' : 'default'}
-          onClick={() => handleSwitchStudioView('editor')}
+          loading={runPending}
+          onClick={() => void handleStartExecution()}
+          type="primary"
+          disabled={!canRunWorkflow || runPending}
         >
-          编辑画布
-        </Button>
-        <Button
-          type={studioView === 'execution' ? 'primary' : 'default'}
-          onClick={() => handleSwitchStudioView('execution')}
-        >
-          测试运行
-        </Button>
-        <Button onClick={() => setWorkspacePage('workflows')}>
-          行为定义
+          重新运行
         </Button>
       </Space>
-    ) : workspacePage === 'scripts' ? (
+    ) : workspacePage === 'studio' ? (
       <Space wrap size={[8, 8]}>
-        <Button onClick={() => setWorkspacePage('workflows')}>
-          行为定义
+        <Button onClick={() => handleSwitchStudioView('execution')}>
+          测试运行
+        </Button>
+        <Button
+          disabled={!canSaveWorkflow}
+          loading={savePending}
+          onClick={() => void handleSaveDraft()}
+          type="primary"
+        >
+          保存
         </Button>
       </Space>
     ) : undefined;
 
-  const studioContextScopeLabel = initialState.scopeLabel || resolvedStudioScopeId;
-  const studioContextMemberLabel = initialState.memberLabel;
+  const studioContextScopeLabel =
+    initialState.scopeLabel ||
+    scopeBindingQuery.data?.displayName ||
+    resolvedStudioScopeId;
+  const studioContextMemberLabel =
+    initialState.memberLabel || activeWorkflowName || templateWorkflow;
   const currentStudioReturnTo =
     typeof window === 'undefined'
       ? ''
       : sanitizeReturnTo(
           `${window.location.pathname}${window.location.search}${window.location.hash}`,
         );
-  const studioContextAlert =
-    resolvedStudioScopeId || studioContextMemberLabel ? (
-      <Alert
-        action={
-          <Space wrap size={[8, 8]}>
-            {resolvedStudioScopeId ? (
-              <Button
-                onClick={() =>
-                  history.push(
-                    buildTeamDetailHref({
-                      scopeId: resolvedStudioScopeId,
-                      tab: 'advanced',
-                      serviceId: scopeBindingQuery.data?.serviceId || undefined,
-                    }),
-                  )
-                }
-                size="small"
-                type="link"
-              >
-                返回团队
-              </Button>
-            ) : null}
-            <Button
-              onClick={() => setWorkspacePage('workflows')}
-              size="small"
-              type="link"
-            >
-              查看行为定义
-            </Button>
-          </Space>
+  const studioContextCode = [
+    resolvedStudioScopeId,
+    scopeBindingQuery.data?.serviceId,
+  ]
+    .map((value) => trimOptional(value))
+    .filter(Boolean)
+    .join(' · ');
+  const studioContextBar = (
+    <div
+      style={{
+        alignItems: 'center',
+        background: '#ffffff',
+        borderBottom: '1px solid #f0f0f0',
+        display: 'flex',
+        gap: 12,
+        minHeight: 44,
+        padding: '0 16px',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          history.push(
+            resolvedStudioScopeId
+              ? buildTeamDetailHref({
+                  scopeId: resolvedStudioScopeId,
+                  tab: 'advanced',
+                  serviceId: scopeBindingQuery.data?.serviceId || undefined,
+                })
+              : buildTeamsHref(),
+          )
         }
-        description={
-          studioContextMemberLabel
-            ? `${studioContextScopeLabel || '当前团队'} / ${studioContextMemberLabel}`
-            : `${studioContextScopeLabel || '当前团队'}`
-        }
-        message="团队构建器上下文"
-        showIcon
-        type="info"
-      />
-    ) : null;
-
-  const workspaceAlerts = (
-    <>
-      {studioContextAlert}
-      <StudioWorkspaceAlerts
-        authSession={authRecoveryPending ? null : authSessionQuery.data}
-        templateWorkflow={templateWorkflow}
-        draftMode={draftMode}
-        legacySource={legacySource}
-      />
-    </>
+        style={{
+          alignItems: 'center',
+          background: 'transparent',
+          border: 'none',
+          color: '#1890ff',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          flexShrink: 0,
+          fontSize: 12,
+          gap: 4,
+          padding: 0,
+        }}
+      >
+        ← {studioContextScopeLabel || '返回团队'}
+      </button>
+      <div
+        style={{
+          alignItems: 'center',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            color: '#8c8c8c',
+            fontSize: 13,
+            lineHeight: '20px',
+          }}
+        >
+          / <b style={{ color: '#1d2129' }}>
+            {studioContextMemberLabel || studioContextScopeLabel || '当前团队'}
+          </b>{' '}
+          / {pageTitle}
+        </span>
+        {studioContextCode ? (
+          <code
+            style={{
+              color: '#8c8c8c',
+              fontFamily: '"SF Mono", "JetBrains Mono", monospace',
+              fontSize: 11,
+            }}
+          >
+            {studioContextCode}
+          </code>
+        ) : null}
+      </div>
+      {studioContextActions ? (
+        <div
+          style={{
+            alignItems: 'center',
+            display: 'flex',
+            gap: 8,
+            marginLeft: 'auto',
+          }}
+        >
+          {studioContextActions}
+        </div>
+      ) : null}
+    </div>
   );
 
   const inspectorContent = (
     <StudioInspectorPane
       draftYaml={draftYaml}
       inspectorTab={inspectorTab}
+      showTabSwitcher={false}
       workflowRoleIds={workflowRoleIds}
       workflowStepIds={workflowStepIds}
       workflowRoles={workflowGraph.roles}
@@ -4378,6 +4480,12 @@ const StudioPage: React.FC = () => {
         />
       ) : (
         <StudioEditorPage
+          workflows={{
+            isLoading: workflowsQuery.isLoading,
+            isError: workflowsQuery.isError,
+            error: workflowsQuery.error,
+            data: visibleWorkflowSummaries,
+          }}
           selectedWorkflow={selectedWorkflowQuery}
           templateWorkflow={templateWorkflowQuery}
           connectors={connectorsQuery}
@@ -4484,6 +4592,8 @@ const StudioPage: React.FC = () => {
           onResetDraft={resetDraftFromSource}
           onSaveDraft={() => void handleSaveDraft()}
           onPublishWorkflow={() => void handlePublishWorkflow()}
+          onOpenWorkflow={openWorkspaceWorkflow}
+          onStartBlankDraft={startBlankDraft}
           onBindGAgent={(input, options) =>
             handleBindGAgent(input, options)
           }
@@ -4758,7 +4868,11 @@ const StudioPage: React.FC = () => {
     logsPopoutMode === 'popout' ? 'Execution logs' : undefined;
 
   return (
-    <PageContainer title={pageContainerTitle}>
+    <PageContainer
+      pageHeaderRender={false}
+      style={{ minHeight: '100%' }}
+      title={pageContainerTitle}
+    >
       <StudioBootstrapGate
         appContextLoading={appContextQuery.isLoading}
         appContextError={appContextQuery.isError ? appContextQuery.error : null}
@@ -4773,8 +4887,14 @@ const StudioPage: React.FC = () => {
           currentPageContent
         ) : (
           <StudioShell
-            alerts={workspaceAlerts}
-            currentPage={workspacePage}
+            contextBar={studioContextBar}
+            currentPage={
+              workspacePage === 'studio'
+                ? studioView === 'execution'
+                  ? 'execution'
+                  : 'workflows'
+                : workspacePage
+            }
             navItems={navItems}
             onSelectPage={(page: StudioWorkspacePage) => {
               if (
@@ -4789,13 +4909,7 @@ const StudioPage: React.FC = () => {
               applyWorkspacePageSelection(page);
             }}
             pageTitle={pageTitle}
-            pageToolbar={pageToolbar}
-            showPageHeader={
-              workspacePage !== 'roles' &&
-              workspacePage !== 'connectors' &&
-              workspacePage !== 'studio' &&
-              workspacePage !== 'scripts'
-            }
+            showPageHeader={false}
           >
             {currentPageContent}
           </StudioShell>

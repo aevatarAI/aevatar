@@ -74,6 +74,7 @@ if rg -n "IProjectionReadModelBindingResolver|ProjectionReadModelBindingResolver
 fi
 
 bash "${SCRIPT_DIR}/query_projection_priming_guard.sh"
+bash "${SCRIPT_DIR}/scripting_write_path_cqrs_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_version_guard.sh"
 bash "${SCRIPT_DIR}/projection_state_mirror_current_state_guard.sh"
 
@@ -726,7 +727,7 @@ then
   exit 1
 fi
 
-id_mapping_state_pattern='^\s*(private|protected|internal)\s+((readonly|static)\s+)*(ConcurrentDictionary|Dictionary|HashSet|Queue)\s*<[^>]+>\s+_[A-Za-z0-9_]*(actor|entity|run|session)[A-Za-z0-9_]*\b'
+id_mapping_state_pattern='^\s*(private|protected|internal)\s+((readonly|static)\s+)*((global::)?System\.Collections\.(Concurrent\.)?)?(ConcurrentDictionary|Dictionary|HashSet|Queue)\s*<[^>]+>\s+_[A-Za-z0-9_]*(actor|entity|run|session)[A-Za-z0-9_]*\b'
 id_mapping_state_hits=""
 
 id_mapping_scan_roots=(

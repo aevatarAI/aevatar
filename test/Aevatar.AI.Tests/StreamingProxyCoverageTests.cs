@@ -2,8 +2,11 @@ using System.IO;
 using System.Reflection;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.AI.Abstractions;
+using Aevatar.AI.Abstractions.LLMProviders;
 using Aevatar.Foundation.Core.EventSourcing;
 using Aevatar.Foundation.Abstractions.Streaming;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using StreamingProxyParticipant = Aevatar.Studio.Application.Studio.Abstractions.StreamingProxyParticipant;
 using Google.Protobuf;
 using Any = Google.Protobuf.WellKnownTypes.Any;
 using Aevatar.GAgents.StreamingProxy;
@@ -12,6 +15,8 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -22,16 +27,16 @@ namespace Aevatar.AI.Tests;
 public class StreamingProxyCoverageTests
 {
     [Fact]
-    public void AddStreamingProxy_ShouldRegisterSingletonStore()
+    public void AddStreamingProxy_ShouldRegisterSingletonCoordinator()
     {
-        var provider = new ServiceCollection()
-            .AddStreamingProxy()
-            .BuildServiceProvider();
+        var services = new ServiceCollection();
+        services.AddStreamingProxy();
 
-        var first = provider.GetRequiredService<StreamingProxyActorStore>();
-        var second = provider.GetRequiredService<StreamingProxyActorStore>();
+        var descriptor = services.FirstOrDefault(d =>
+            d.ServiceType == typeof(StreamingProxyNyxParticipantCoordinator));
 
-        first.Should().BeSameAs(second);
+        descriptor.Should().NotBeNull();
+        descriptor!.Lifetime.Should().Be(ServiceLifetime.Singleton);
     }
 
     [Fact]
@@ -62,7 +67,7 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task HandleCreateRoomAsync_ShouldCreateRoomAndInitActor()
     {
-        var store = new StreamingProxyActorStore();
+        var actorStore = new StubGAgentActorStore();
         var runtime = new StubActorRuntime();
         var request = new CreateRoomRequest("Project X");
 
@@ -71,14 +76,15 @@ public class StreamingProxyCoverageTests
             new DefaultHttpContext(),
             "scope-a",
             request,
-            store,
+            actorStore,
             runtime,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("roomName");
-        (await store.ListRoomsAsync("scope-a")).Should().HaveCount(1);
+        actorStore.AddedActors.Should().ContainSingle(x => x.gagentType == StreamingProxyDefaults.GAgentTypeName);
         runtime.CreateCalls.Should().ContainSingle();
         runtime.CreateCalls[0].agentType.Should().Be(typeof(StreamingProxyGAgent));
     }
@@ -86,34 +92,45 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task HandleListRoomsAsync_ShouldReturnRoomsForScope()
     {
-        var store = new StreamingProxyActorStore();
-        var room = await store.CreateRoomAsync("scope-a", "Room One");
+        var actorStore = new StubGAgentActorStore();
+        actorStore.Groups.Add(new GAgentActorGroup(
+            StreamingProxyDefaults.GAgentTypeName,
+            new[] { "room-001" }));
 
         var result = await InvokeResultAsync(
             "HandleListRoomsAsync",
             new DefaultHttpContext(),
             "scope-a",
-            store,
+            actorStore,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        response.Body.Should().Contain(room.RoomId);
+        response.Body.Should().Contain("room-001");
     }
 
     [Fact]
-    public async Task HandleDeleteRoomAsync_ShouldReturnNotFound_WhenMissing()
+    public async Task HandleDeleteRoomAsync_ShouldReturnOk_AndRemoveFromBothStores()
     {
+        var actorStore = new StubGAgentActorStore();
+        var participantStore = new StubParticipantStore();
+
         var result = await InvokeResultAsync(
             "HandleDeleteRoomAsync",
             new DefaultHttpContext(),
             "scope-a",
-            "missing",
-            new StreamingProxyActorStore(),
+            "room-1",
+            actorStore,
+            participantStore,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
-        response.StatusCode.Should().Be(StatusCodes.Status404NotFound);
+        response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        actorStore.RemovedActors.Should().ContainSingle(x =>
+            x.gagentType == StreamingProxyDefaults.GAgentTypeName && x.actorId == "room-1");
+        participantStore.RemovedRooms.Should().ContainSingle(x => x == "room-1");
     }
 
     [Fact]
@@ -122,11 +139,13 @@ public class StreamingProxyCoverageTests
         var context = new DefaultHttpContext();
         var runtime = new StubActorRuntime();
         var subscriptions = new StubSubscriptionProvider();
+        var participantStore = new StubParticipantStore();
+        var coordinator = CreateNyxParticipantCoordinator();
 
         var method = typeof(StreamingProxyEndpoints).GetMethod(
             "HandleChatAsync",
             BindingFlags.NonPublic | BindingFlags.Static)!;
-        var task = method.Invoke(null, [context, "scope-a", "room-a", new ChatTopicRequest(null), runtime, subscriptions, NullLoggerFactory.Instance, CancellationToken.None]);
+        var task = method.Invoke(null, [context, "scope-a", "room-a", new ChatTopicRequest(null), runtime, subscriptions, participantStore, coordinator, NullLoggerFactory.Instance, CancellationToken.None]);
         await InvokeTaskAsync(task);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
@@ -194,7 +213,7 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task HandleJoinAsync_ShouldRejectMissingAgentIdAndAddParticipant()
     {
-        var store = new StreamingProxyActorStore();
+        var participantStore = new StubParticipantStore();
         var runtime = new StubActorRuntime(new List<IActor> { new StubActor("room-a") });
 
         var result = await InvokeResultAsync(
@@ -204,7 +223,8 @@ public class StreamingProxyCoverageTests
             "room-a",
             new JoinRoomRequest(null, null),
             runtime,
-            store,
+            participantStore,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
@@ -218,12 +238,14 @@ public class StreamingProxyCoverageTests
             "room-a",
             joinRequest,
             runtime,
-            store,
+            participantStore,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
-        store.ListParticipants("scope-a", "room-a").Should().ContainSingle(x => x.AgentId == "agent-1");
+        participantStore.AddedParticipants.Should().ContainSingle(x =>
+            x.roomId == "room-a" && x.agentId == "agent-1" && x.displayName == "Alice");
         ((StubActor)runtime.Actors["room-a"]).HandleEventCalls.Should().Be(1);
     }
 
@@ -275,44 +297,24 @@ public class StreamingProxyCoverageTests
     [Fact]
     public async Task HandleListParticipantsAsync_ShouldReturnStoreParticipants()
     {
-        var store = new StreamingProxyActorStore();
-        store.AddParticipant("scope-a", "room-a", "agent-1", "Alice");
+        var participantStore = new StubParticipantStore();
+        participantStore.Participants["room-a"] =
+        [
+            new StreamingProxyParticipant("agent-1", "Alice", DateTimeOffset.UtcNow),
+        ];
 
         var result = await InvokeResultAsync(
             "HandleListParticipantsAsync",
             new DefaultHttpContext(),
             "scope-a",
             "room-a",
-            store,
+            participantStore,
+            NullLoggerFactory.Instance,
             CancellationToken.None);
 
         var response = await ExecuteResultAsync(result);
         response.StatusCode.Should().Be(StatusCodes.Status200OK);
         response.Body.Should().Contain("Alice");
-    }
-
-    [Fact]
-    public async Task ActorStore_ShouldNormalizeScopes_ApplyDefaultRoomName_AndReplaceParticipants()
-    {
-        var store = new StreamingProxyActorStore();
-
-        store.ListParticipants("scope-a", "room-1").Should().BeEmpty();
-
-        var room = await store.CreateRoomAsync(" Scope-A ", roomName: null);
-        room.RoomName.Should().Be("Group Chat");
-
-        var rooms = await store.ListRoomsAsync("scope-a");
-        rooms.Should().ContainSingle(x => x.RoomId == room.RoomId);
-
-        store.AddParticipant("scope-a", room.RoomId, "agent-1", "Alice");
-        store.AddParticipant("scope-a", room.RoomId, "agent-1", "Alice Updated");
-
-        var participants = store.ListParticipants("SCOPE-A", room.RoomId);
-        participants.Should().ContainSingle();
-        participants[0].DisplayName.Should().Be("Alice Updated");
-
-        (await store.DeleteRoomAsync("scope-a", room.RoomId)).Should().BeTrue();
-        (await store.DeleteRoomAsync("scope-a", room.RoomId)).Should().BeFalse();
     }
 
     [Fact]
@@ -565,5 +567,100 @@ public class StreamingProxyCoverageTests
     private sealed class NoopDisposable : IAsyncDisposable
     {
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class StubGAgentActorStore : IGAgentActorStore
+    {
+        public List<GAgentActorGroup> Groups { get; } = [];
+        public List<(string gagentType, string actorId)> AddedActors { get; } = [];
+        public List<(string gagentType, string actorId)> RemovedActors { get; } = [];
+
+        public Task<IReadOnlyList<GAgentActorGroup>> GetAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<GAgentActorGroup>>(Groups.AsReadOnly());
+
+        public Task AddActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
+        {
+            AddedActors.Add((gagentType, actorId));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveActorAsync(string gagentType, string actorId, CancellationToken cancellationToken = default)
+        {
+            RemovedActors.Add((gagentType, actorId));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StubParticipantStore : IStreamingProxyParticipantStore
+    {
+        public Dictionary<string, List<StreamingProxyParticipant>> Participants { get; } = new(StringComparer.Ordinal);
+        public List<(string roomId, string agentId, string displayName)> AddedParticipants { get; } = [];
+        public List<string> RemovedRooms { get; } = [];
+
+        public Task<IReadOnlyList<StreamingProxyParticipant>> ListAsync(
+            string roomId, CancellationToken cancellationToken = default)
+        {
+            if (Participants.TryGetValue(roomId, out var list))
+                return Task.FromResult<IReadOnlyList<StreamingProxyParticipant>>(list.AsReadOnly());
+            return Task.FromResult<IReadOnlyList<StreamingProxyParticipant>>([]);
+        }
+
+        public Task AddAsync(
+            string roomId, string agentId, string displayName,
+            CancellationToken cancellationToken = default)
+        {
+            AddedParticipants.Add((roomId, agentId, displayName));
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveParticipantAsync(
+            string roomId, string agentId,
+            CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task RemoveRoomAsync(
+            string roomId, CancellationToken cancellationToken = default)
+        {
+            RemovedRooms.Add(roomId);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static StreamingProxyNyxParticipantCoordinator CreateNyxParticipantCoordinator()
+    {
+        var stubProvider = new StubLlmProvider();
+        var llmFactory = new StubLlmProviderFactory(stubProvider);
+        var configuration = new ConfigurationBuilder().Build();
+        var httpClientFactory = new StubHttpClientFactory();
+
+        return new StreamingProxyNyxParticipantCoordinator(
+            llmFactory,
+            configuration,
+            httpClientFactory,
+            NullLogger<StreamingProxyNyxParticipantCoordinator>.Instance);
+    }
+
+    private sealed class StubLlmProvider : ILLMProvider
+    {
+        public string Name => "stub";
+        public Task<LLMResponse> ChatAsync(LLMRequest request, CancellationToken ct = default)
+            => Task.FromResult(new LLMResponse { Content = string.Empty });
+        public async IAsyncEnumerable<LLMStreamChunk> ChatStreamAsync(LLMRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+    }
+
+    private sealed class StubLlmProviderFactory(ILLMProvider provider) : ILLMProviderFactory
+    {
+        public ILLMProvider GetProvider(string name) => provider;
+        public ILLMProvider GetDefault() => provider;
+        public IReadOnlyList<string> GetAvailableProviders() => [];
+    }
+
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
     }
 }

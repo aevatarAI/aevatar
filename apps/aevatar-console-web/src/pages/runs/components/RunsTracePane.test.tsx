@@ -30,6 +30,9 @@ describe("RunsTracePane", () => {
       minHeight: "0",
       overflow: "hidden",
     });
+    const styleNode = container.querySelector("style");
+    expect(styleNode?.textContent).toContain(".ant-tabs-tabpane-hidden");
+    expect(styleNode?.textContent).toContain("display: none !important");
   });
 
   it("shows only the active trace pane when switching tabs", () => {

@@ -329,6 +329,30 @@ public class AIComponentCoverageTests
     }
 
     [Fact]
+    public async Task MEAILLMProvider_ShouldExtractTextContentWhenChatMessageTextIsEmpty()
+    {
+        var client = new StubChatClient
+        {
+            OnGetResponse = (_, _, _) =>
+            {
+                var assistant = new MeaiChatMessage(ChatRole.Assistant, string.Empty);
+                assistant.Contents.Clear();
+                assistant.Contents.Add(new TextContent("hello "));
+                assistant.Contents.Add(new TextContent("world"));
+                return Task.FromResult(new ChatResponse(assistant));
+            },
+        };
+
+        var provider = new MEAILLMProvider("meai-text-content", client);
+        var response = await provider.ChatAsync(new LLMRequest
+        {
+            Messages = [new AevatarChatMessage { Role = "user", Content = "hi" }],
+        });
+
+        response.Content.Should().Be("hello world");
+    }
+
+    [Fact]
     public void LLMProviderFactories_ShouldRegisterResolveAndThrowOnMissing()
     {
         var meaiFactory = new MEAILLMProviderFactory();

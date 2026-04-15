@@ -29,9 +29,7 @@ import {
 } from "@/shared/navigation/runtimeRoutes";
 import {
   Button,
-  Divider,
   Drawer,
-  Empty,
   message,
   Popover,
   Space,
@@ -85,7 +83,9 @@ import {
   embeddedPanelStyle,
 } from "@/shared/ui/proComponents";
 import RunsInspectorPane from "./components/RunsInspectorPane";
+import RunsEventsView from "./components/RunsEventsView";
 import RunsLaunchRail from "./components/RunsLaunchRail";
+import RunsMessagesView from "./components/RunsMessagesView";
 import RunsStatusStrip from "./components/RunsStatusStrip";
 import RunsTracePane from "./components/RunsTracePane";
 import RunsTimelineView from "./components/RunsTimelineView";
@@ -127,11 +127,6 @@ import {
   trimOptional,
   waitingSignalColumns,
   type WaitingSignalRecord,
-  workbenchConsoleScrollStyle,
-  workbenchConsoleSurfaceStyle,
-  workbenchEventHeaderStyle,
-  workbenchEventRowStyle,
-  workbenchMessageListStyle,
   workbenchOverviewGridStyle,
   workbenchTraceTabsStyle,
   workbenchTraceTabsStyles,
@@ -180,6 +175,10 @@ const runsWorkspaceTabsCss = `
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.${runsWorkspaceTabsClassName} .ant-tabs-tabpane-hidden {
+  display: none !important;
 }
 `;
 
@@ -1567,156 +1566,17 @@ const RunsPage: React.FC = () => {
         ? "/api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}"
         : "/api/scopes/{scopeId}/invoke/{endpointId}";
 
-  const messageConsoleView = (
-    <div style={workbenchConsoleSurfaceStyle}>
-      <div
-        style={{
-          borderBottom: "1px solid var(--ant-color-border-secondary)",
-          color: "var(--ant-color-text-secondary)",
-          padding: "10px 12px",
-        }}
-      >
-        Message stream
-      </div>
-      <div style={workbenchConsoleScrollStyle}>
-        {displayedMessages.length > 0 ? (
-          <div style={workbenchMessageListStyle}>
-            {displayedMessages.map((record) => (
-              <div
-                key={record.messageId}
-                style={{
-                  alignSelf: record.role === "user" ? "flex-end" : "flex-start",
-                  background:
-                    record.role === "user"
-                      ? "rgba(22, 119, 255, 0.10)"
-                      : "rgba(15, 23, 42, 0.04)",
-                  border:
-                    record.complete === false
-                      ? "1px solid rgba(22, 119, 255, 0.28)"
-                      : "1px solid var(--ant-color-border-secondary)",
-                  borderRadius: 12,
-                  maxWidth: "88%",
-                  padding: 12,
-                }}
-              >
-                <Space separator={<Divider orientation="vertical" />} size={8}>
-                  <Typography.Text
-                    style={{
-                      color: "var(--ant-color-text)",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    {record.role}
-                  </Typography.Text>
-                  <Typography.Text
-                    style={{
-                      color: "var(--ant-color-text-secondary)",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    {record.messageId}
-                  </Typography.Text>
-                  <Typography.Text
-                    style={{
-                      color: "var(--ant-color-text-secondary)",
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    {record.complete ? "complete" : "streaming"}
-                  </Typography.Text>
-                </Space>
-                <Typography.Paragraph
-                  style={{
-                    color: "var(--ant-color-text)",
-                    fontFamily: "inherit",
-                    margin: "8px 0 0",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {record.content || "(streaming...)"}
-                </Typography.Paragraph>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No message output yet."
-          />
-        )}
-      </div>
-    </div>
-  );
+  const messageConsoleView = <RunsMessagesView messages={displayedMessages} />;
 
   const eventConsoleView = (
-    <div style={workbenchConsoleSurfaceStyle}>
-      <div style={workbenchEventHeaderStyle}>
-        <span>Timestamp</span>
-        <span>Category</span>
-        <span>Description</span>
-      </div>
-      <div style={workbenchConsoleScrollStyle}>
-        {eventRows.length > 0 ? (
-          eventRows.map((record) => (
-            <div key={record.key} style={workbenchEventRowStyle}>
-              <Typography.Text
-                style={{
-                  color: "var(--ant-color-text-secondary)",
-                  fontFamily: "inherit",
-                }}
-              >
-                {record.timestamp || "n/a"}
-              </Typography.Text>
-              <Space direction="vertical" size={4}>
-                <Typography.Text
-                  style={{
-                    color: "var(--ant-color-text)",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {record.eventCategory}
-                </Typography.Text>
-                <Typography.Text
-                  style={{
-                    color: "var(--ant-color-text-secondary)",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {record.eventStatus}
-                </Typography.Text>
-              </Space>
-              <div>
-                <Typography.Text
-                  style={{
-                    color: "var(--ant-color-text)",
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {record.eventType}
-                </Typography.Text>
-                <Typography.Paragraph
-                  ellipsis={{ rows: 2, expandable: true, symbol: "more" }}
-                  style={{
-                    color: "var(--ant-color-text-secondary)",
-                    fontFamily: "inherit",
-                    margin: "6px 0 0",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {record.description}
-                  {record.payloadPreview ? `\n${record.payloadPreview}` : ""}
-                </Typography.Paragraph>
-              </div>
-            </div>
-          ))
-        ) : (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No events observed yet."
-          />
-        )}
-      </div>
-    </div>
+    <RunsEventsView
+      onSelectItem={(item) => {
+        setSelectedTraceItemKey(item.key);
+        setIsInspectorDrawerOpen(true);
+      }}
+      rows={eventRows}
+      selectedItemKey={selectedTraceItemKey}
+    />
   );
 
   return (
@@ -1915,8 +1775,14 @@ const RunsPage: React.FC = () => {
               <style>{runsWorkspaceTabsCss}</style>
               <Tabs
                 activeKey="trace-layout"
+                animated={false}
                 className={runsWorkspaceTabsClassName}
-                style={workbenchTraceTabsStyle}
+                destroyOnHidden
+                style={{
+                  ...workbenchTraceTabsStyle,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
                 items={[
                   {
                     key: "trace-layout",
@@ -1989,7 +1855,7 @@ const RunsPage: React.FC = () => {
                 {humanInputRecord ? (
                   <div style={embeddedPanelStyle}>
                     <Space
-                      direction="vertical"
+                      orientation="vertical"
                       style={{ width: "100%" }}
                       size={16}
                     >
@@ -2066,7 +1932,7 @@ const RunsPage: React.FC = () => {
                 {waitingSignalRecord ? (
                   <div style={embeddedPanelStyle}>
                     <Space
-                      direction="vertical"
+                      orientation="vertical"
                       style={{ width: "100%" }}
                       size={16}
                     >

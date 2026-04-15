@@ -27,8 +27,12 @@ function decodePathSegment(value: string): string {
   }
 }
 
-function parseTeamTab(value: string | null | undefined): TeamDetailTab {
+function parseTeamTab(
+  value: string | null | undefined,
+  fallback: TeamDetailTab = 'overview',
+): TeamDetailTab {
   switch (trimOptional(value).toLowerCase()) {
+    case 'overview':
     case 'topology':
     case 'events':
     case 'members':
@@ -36,7 +40,7 @@ function parseTeamTab(value: string | null | undefined): TeamDetailTab {
     case 'advanced':
       return trimOptional(value).toLowerCase() as TeamDetailTab;
     default:
-      return 'overview';
+      return fallback;
   }
 }
 
@@ -98,12 +102,13 @@ export function readTeamDetailRouteState(
     pathnameSegments[0] === 'teams' && pathnameSegments[1]
       ? decodePathSegment(pathnameSegments[1])
       : '';
+  const defaultTab: TeamDetailTab = 'overview';
 
   return {
     runId: trimOptional(params.get('runId')),
     scopeId: trimOptional(params.get('scopeId')) || scopeIdFromPath,
     serviceId: trimOptional(params.get('serviceId')),
-    tab: parseTeamTab(params.get('tab')),
+    tab: parseTeamTab(params.get('tab'), defaultTab),
     workflowId: trimOptional(params.get('workflowId')),
   };
 }

@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
+import { scopesApi } from "@/shared/api/scopesApi";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import ScopeOverviewPage from "./overview";
 
@@ -161,21 +162,40 @@ describe("ScopeOverviewPage", () => {
     expect(screen.getByText("运行中成员")).toBeTruthy();
     expect(screen.getByText("健康团队率")).toBeTruthy();
     expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "切换到卡片视图" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "切换到列表视图" })).toBeTruthy();
+    expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看运行" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "更多" }).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "显示草稿团队 (1)" })).toBeTruthy();
     expect(screen.queryByText("草稿团队")).toBeNull();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "更多" })[0]);
+
+    expect(await screen.findByText("查看运行")).toBeTruthy();
+    expect(screen.getByText("进入 Builder")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "显示草稿团队 (1)" }));
 
     expect(await screen.findByText("草稿团队")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "高级编辑" }).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getAllByRole("button", { name: "更多" })[0]);
+    expect(screen.getAllByText("进入 Builder").length).toBeGreaterThan(0);
     expect(
       screen.queryByText(
         "先看到“我有哪些团队、这些团队在做什么、哪里需要我关注”，而不是先看到工程术语和底层模块。",
       ),
     ).toBeNull();
     expect(screen.queryByText("产品意图：")).toBeNull();
+  });
+
+  it("lets the user switch from cards to the compact roster manually", async () => {
+    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+
+    await screen.findByText("客服团队");
+    fireEvent.click(screen.getByRole("button", { name: "切换到列表视图" }));
+
+    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
+    expect(screen.queryByLabelText("团队卡片视图")).toBeNull();
   });
 
   it("keeps the homepage visible when runtime sampling partially fails", async () => {
@@ -205,5 +225,28 @@ describe("ScopeOverviewPage", () => {
     expect(params.get("workflowId")).toBe("workflow-alpha");
     expect(params.get("serviceId")).toBe("service-alpha");
     expect(params.get("runId")).toBe("run-latest");
+  });
+
+  it("switches to the compact roster when many teams are visible", async () => {
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce(
+      Array.from({ length: 7 }, (_, index) => ({
+        scopeId: "scope-a",
+        workflowId: `workflow-${index + 1}`,
+        displayName: `团队 ${index + 1}`,
+        serviceKey: "scope-a:alpha",
+        workflowName: `team-${index + 1}`,
+        actorId: `actor://workflow-${index + 1}`,
+        activeRevisionId: "rev-2",
+        deploymentStatus: "Active",
+        deploymentId: "deploy-1",
+        updatedAt: `2026-04-13T10:0${Math.min(index, 5)}:00Z`,
+      })),
+    );
+
+    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+
+    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
+    expect(screen.getByText("团队 1")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "查看团队" }).length).toBe(7);
   });
 });

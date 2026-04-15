@@ -107,8 +107,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!selectedSnapshot) {
       return (
         <ScriptsStudioEmptyState
-          title="No runtime output yet"
-          copy="Run the current draft. The materialized read model will appear here."
+          title="还没有测试结果"
+          copy="执行一次测试运行后，这里会显示运行时的物化结果。"
         />
       );
     }
@@ -151,8 +151,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!scopeDetail?.script) {
       return (
         <ScriptsStudioEmptyState
-          title="Not saved into current scope catalog yet"
-          copy="Save the active draft into the current scope catalog to inspect the stored catalog state."
+          title="还没有保存到当前团队"
+          copy="先把当前草稿保存到团队里，这里才会显示已保存版本的目录状态。"
         />
       );
     }
@@ -204,8 +204,8 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
     if (!selectedDecision) {
       return (
         <ScriptsStudioEmptyState
-          title="No promotion submitted"
-          copy="When the draft is stable, use Promote to send an evolution proposal and inspect the decision here."
+          title="还没有发布记录"
+          copy="当草稿稳定后，使用“发布”提交演进提案，这里会显示发布结果。"
         />
       );
     }
@@ -311,9 +311,9 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
   }
 
   if (validationError) {
-    return (
-      <div className="console-scripts-detail-card">
-        <div className="console-scripts-section-label">Validation error</div>
+      return (
+        <div className="console-scripts-detail-card">
+        <div className="console-scripts-section-label">校验失败</div>
         <div className="console-scripts-detail-copy">{validationError}</div>
       </div>
     );
@@ -322,11 +322,11 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
   if (!validationResult?.diagnostics.length) {
     return (
       <ScriptsStudioEmptyState
-        title={validationPending ? 'Validation in progress' : 'No diagnostics'}
+        title={validationPending ? '正在校验' : '没有诊断信息'}
         copy={
           validationPending
-            ? 'Compiling the active draft package now.'
-            : 'Compiler and contract problems will appear here.'
+            ? '正在编译并校验当前草稿。'
+            : '编译器和合约问题会显示在这里。'
         }
       />
     );
@@ -363,23 +363,23 @@ function renderResultDetail(props: ScriptResultsPanelProps): React.JSX.Element {
 
 const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
   const validationSummary = props.validationPending
-    ? 'Checking'
+    ? '校验中'
     : props.validationResult?.errorCount
-      ? `${props.validationResult.errorCount} error${props.validationResult.errorCount === 1 ? '' : 's'}`
+      ? `${props.validationResult.errorCount} 个错误`
       : props.validationResult?.warningCount
-        ? `${props.validationResult.warningCount} warning${props.validationResult.warningCount === 1 ? '' : 's'}`
-        : 'Clean';
+        ? `${props.validationResult.warningCount} 个警告`
+        : '通过';
 
   const runtimeSummary = props.selectedSnapshot
-    ? props.selectedSnapshotView.output || props.selectedSnapshotView.status || 'Runtime snapshot available'
-    : 'Run the current draft to materialize a runtime read model.';
+    ? props.selectedSnapshotView.output || props.selectedSnapshotView.status || '运行结果已就绪'
+    : '开始一次测试运行后，这里会显示运行时快照。';
   const saveSummary = props.scopeDetail?.script
-    ? `Scope ${props.scopeDetail.scopeId} is pointing at ${props.scopeDetail.script.activeRevision}.`
-    : 'The active draft has not been saved into the current scope catalog yet.';
+    ? `当前团队 ${props.scopeDetail.scopeId} 正在指向 ${props.scopeDetail.script.activeRevision}。`
+    : '当前草稿还没有保存到团队目录。';
   const promotionSummary = props.selectedDecision
     ? props.selectedDecision.failureReason ||
       `Candidate ${props.selectedDecision.candidateRevision || '-'}`
-    : 'Submit a promotion proposal when this draft is ready.';
+    : '草稿稳定后，可以提交发布提案。';
 
   return (
     <div className="console-scripts-panel" style={{ borderRadius: 24 }}>
@@ -387,25 +387,25 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
         <div className="console-scripts-detail-grid">
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'diagnostics'}
-            title="Diagnostics"
+            title="诊断"
             meta={
-              props.validationPending ? 'Running validation' : validationSummary
+              props.validationPending ? '正在校验' : validationSummary
             }
             summary={
               props.validationError ||
               props.validationResult?.diagnostics[0]?.message ||
-              'Compiler and contract problems will appear here.'
+              '编译器和合约问题会显示在这里。'
             }
             status={props.validationPending ? 'pending' : ''}
             onClick={() => props.onChangeActiveResultTab('diagnostics')}
           />
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'runtime'}
-            title="Draft Run"
+            title="测试运行"
             meta={
               props.selectedSnapshot
                 ? formatScriptDateTime(props.selectedSnapshot.updatedAt)
-                : 'Not run yet'
+                : '还未运行'
             }
             summary={runtimeSummary}
             status={props.selectedSnapshotView.status || ''}
@@ -413,11 +413,11 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
           />
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'save'}
-            title="Catalog"
+            title="已保存"
             meta={
               props.scopeDetail?.script
                 ? formatScriptDateTime(props.scopeDetail.script.updatedAt)
-                : 'Not saved yet'
+                : '还未保存'
             }
             summary={saveSummary}
             status={props.scopeDetail?.script ? 'saved' : 'pending'}
@@ -425,11 +425,11 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
           />
           <ScriptsStudioResultCard
             active={props.activeResultTab === 'promotion'}
-            title="Promotion"
+            title="发布"
             meta={
               props.selectedDecision?.candidateRevision ||
               props.selectedDecision?.proposalId ||
-              'No candidate'
+              '暂无候选版本'
             }
             summary={promotionSummary}
             status={
@@ -449,12 +449,12 @@ const ScriptResultsPanel: React.FC<ScriptResultsPanelProps> = (props) => {
                 <div className="console-scripts-eyebrow">Activity</div>
                 <div className="console-scripts-section-title">
                   {props.activeResultTab === 'runtime'
-                    ? 'Runtime output'
+                    ? '测试运行'
                     : props.activeResultTab === 'save'
-                      ? 'Catalog state'
+                      ? '已保存状态'
                       : props.activeResultTab === 'promotion'
-                        ? 'Promotion proposal'
-                        : 'Diagnostics'}
+                        ? '发布结果'
+                        : '诊断'}
                 </div>
               </div>
               {props.validationPending ? <SyncOutlined spin /> : null}
