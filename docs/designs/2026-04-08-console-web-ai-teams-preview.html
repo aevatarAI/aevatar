@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aevatar Console — SaaS + Cloud Platform</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: #f0f2f5; color: #1d2129; font-size: 13px; }
+  code, .mono { font-family: "SF Mono", "JetBrains Mono", "Consolas", monospace; font-size: 11px; }
+
+  .screens { max-width: 1300px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 40px; }
+  .screen-label { color: #fff; padding: 6px 14px; font-size: 12px; font-weight: 600; border-radius: 6px 6px 0 0; display: inline-block; }
+  .screen-label.saas { background: #6c5ce7; }
+  .screen-label.platform { background: #1d2129; }
+  .screen-label.bridge { background: linear-gradient(90deg, #6c5ce7 50%, #1d2129 50%); }
+  .section-divider { text-align: center; padding: 24px 0 8px; font-size: 18px; font-weight: 700; color: #8c8c8c; letter-spacing: 2px; text-transform: uppercase; }
+
+  .app { display: flex; min-height: 720px; border: 1px solid #d9d9d9; border-radius: 0 8px 8px 8px; overflow: hidden; background: #fff; }
+
+  /* ===== SIDEBAR ===== */
+  .sidebar { width: 216px; background: #001529; color: #ffffffa6; display: flex; flex-direction: column; flex-shrink: 0; }
+  .sb-header { padding: 16px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #ffffff12; }
+  .sb-logo { font-size: 15px; font-weight: 700; color: #fff; }
+  .sb-version { font-size: 9px; color: #ffffff4d; background: #ffffff12; padding: 1px 5px; border-radius: 3px; }
+  .sb-group { font-size: 11px; color: #ffffff45; padding: 16px 16px 6px; text-transform: uppercase; letter-spacing: 0.8px; }
+  .sb-item { padding: 8px 16px 8px 24px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #ffffffa6; }
+  .sb-item:hover { color: #fff; background: #ffffff08; }
+  .sb-item.active { color: #fff; background: #1890ff; }
+  .sb-item.active-platform { color: #fff; background: #2f54eb; }
+  .sb-count { margin-left: auto; font-size: 10px; background: #ffffff1a; padding: 0 5px; border-radius: 8px; }
+  .sb-item.active .sb-count, .sb-item.active-platform .sb-count { background: #ffffff30; color: #fff; }
+  .sb-divider { height: 1px; background: #ffffff0d; margin: 4px 16px; }
+  .sb-footer { margin-top: auto; padding: 12px 16px; border-top: 1px solid #ffffff0d; font-size: 10px; color: #ffffff3d; line-height: 1.6; }
+  .cluster-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #52c41a; margin-right: 4px; }
+
+  /* ===== MAIN ===== */
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ===== SHARED ===== */
+  .page-header { padding: 16px 24px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; }
+  .ph-crumb { font-size: 12px; color: #00000073; }
+  .ph-crumb a { color: #1890ff; text-decoration: none; }
+  .ph-title { font-size: 18px; font-weight: 600; margin-top: 4px; }
+  .ph-right { margin-left: auto; display: flex; gap: 8px; }
+  .btn { height: 30px; padding: 0 14px; border-radius: 6px; border: 1px solid #d9d9d9; background: #fff; font-size: 12px; cursor: pointer; color: #595959; display: inline-flex; align-items: center; gap: 4px; }
+  .btn:hover { color: #1890ff; border-color: #1890ff; }
+  .btn-primary { background: #6c5ce7; color: #fff; border-color: #6c5ce7; border-radius: 8px; }
+  .btn-primary:hover { background: #5a4bd1; }
+  .btn-blue { background: #1890ff; color: #fff; border-color: #1890ff; }
+  .btn-danger { color: #ff4d4f; border-color: #ff4d4f; }
+  .content { flex: 1; padding: 16px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+  .status-tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+  .status-tag.running { background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+  .mp { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: #f5f5f5; color: #595959; border: 1px solid #e8e8e8; }
+  .mp .mtype { color: #bfbfbf; margin-left: 2px; }
+  .mp.connector { background: #e6f7ff; border-color: #91d5ff; color: #1890ff; }
+  .link { color: #1890ff; text-decoration: none; cursor: pointer; }
+  .link:hover { text-decoration: underline; }
+
+  /* ===== SAAS LAYER STYLES ===== */
+  .saas-bg { background: #fff; }
+  .team-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .team-card { background: #fff; border: 1px solid #e8e8e8; border-radius: 12px; padding: 20px; transition: all 0.2s; }
+  .team-card:hover { border-color: #6c5ce7; box-shadow: 0 4px 16px rgba(108,92,231,0.08); transform: translateY(-1px); }
+  .tc-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+  .tc-name { font-size: 17px; font-weight: 600; color: #1d2129; }
+  .tc-desc { font-size: 12px; color: #8c8c8c; margin-top: 3px; line-height: 1.4; }
+  .tc-status { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #52c41a; font-weight: 500; }
+  .tc-dot { width: 8px; height: 8px; border-radius: 50%; background: #52c41a; }
+  .tc-members { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tc-member { display: inline-flex; align-items: center; gap: 5px; background: #f6f0ff; border-radius: 20px; padding: 5px 12px; font-size: 12px; color: #6c5ce7; }
+  .tc-member-dot { width: 6px; height: 6px; border-radius: 50%; background: #52c41a; }
+  .tc-metrics { display: flex; gap: 20px; padding-top: 14px; border-top: 1px solid #f5f5f5; }
+  .tc-metric-val { font-size: 18px; font-weight: 600; color: #1d2129; }
+  .tc-metric-val.green { color: #52c41a; }
+  .tc-metric-label { font-size: 10px; color: #8c8c8c; margin-top: 1px; }
+  .tc-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+  .saas-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 8px; }
+  .saas-stat { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px; padding: 16px; text-align: center; }
+  .saas-stat-val { font-size: 28px; font-weight: 700; color: #1d2129; }
+  .saas-stat-val.purple { color: #6c5ce7; }
+  .saas-stat-val.green { color: #52c41a; }
+  .saas-stat-label { font-size: 11px; color: #8c8c8c; margin-top: 2px; }
+
+  /* ===== PLATFORM LAYER STYLES ===== */
+  .platform-bg { background: #f0f2f5; }
+  .data-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e8e8e8; }
+  .data-table th { text-align: left; font-size: 11px; font-weight: 500; color: #8c8c8c; padding: 9px 14px; border-bottom: 1px solid #f0f0f0; background: #fafafa; text-transform: uppercase; letter-spacing: 0.3px; }
+  .data-table td { padding: 10px 14px; border-bottom: 1px solid #f5f5f5; font-size: 12px; }
+  .data-table tr:hover td { background: #fafafa; }
+  .id-col { font-family: "SF Mono", monospace; font-size: 11px; color: #8c8c8c; }
+  .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+  .status-dot.running { background: #52c41a; }
+  .status-dot.warning { background: #faad14; }
+
+  .action-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #fff; border: 1px solid #e8e8e8; border-bottom: none; border-radius: 4px 4px 0 0; }
+  .action-bar input { height: 26px; padding: 0 8px; border: 1px solid #d9d9d9; border-radius: 3px; font-size: 11px; width: 220px; }
+  .action-bar select { height: 26px; font-size: 11px; border: 1px solid #d9d9d9; border-radius: 3px; padding: 0 6px; }
+
+  /* Tabs */
+  .ant-tabs { border-bottom: 1px solid #f0f0f0; background: #fff; padding: 0 24px; display: flex; }
+  .ant-tab { padding: 12px 0; margin-right: 28px; font-size: 13px; color: #595959; cursor: pointer; border-bottom: 2px solid transparent; }
+  .ant-tab.active { color: #1890ff; border-bottom-color: #1890ff; font-weight: 500; }
+
+  /* Panel */
+  .panel { background: #fff; border: 1px solid #e8e8e8; border-radius: 4px; overflow: hidden; }
+  .panel-head { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; font-size: 12px; font-weight: 500; background: #fafafa; }
+  .ph-extra { margin-left: auto; font-size: 11px; color: #8c8c8c; font-weight: 400; }
+
+  /* Topology */
+  .topo-canvas { background: #fafafa; position: relative; height: 300px; }
+  .tnode { position: absolute; background: #fff; border: 1.5px solid #d9d9d9; border-radius: 6px; padding: 8px 12px; font-size: 11px; text-align: center; min-width: 90px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .tnode.live { border-color: #52c41a; }
+  .tnode.ext { border-style: dashed; border-color: #1890ff; }
+  .tn-name { font-weight: 600; font-size: 12px; color: #262626; }
+  .tn-type { font-size: 9px; color: #8c8c8c; margin-top: 1px; }
+  .tn-metric { font-size: 10px; color: #52c41a; margin-top: 3px; }
+  .topo-svg { position: absolute; inset: 0; pointer-events: none; }
+  .topo-svg line.active { stroke: #52c41a; stroke-width: 1.5; stroke-dasharray: 5 3; animation: dash 1s linear infinite; }
+  .topo-svg line.reply { stroke: #1890ff; stroke-dasharray: 3 3; stroke-width: 1; }
+  .topo-svg line.llm { stroke: #fa8c16; stroke-dasharray: 3 3; stroke-width: 1; }
+  @keyframes dash { to { stroke-dashoffset: -8; } }
+  .topo-legend { position: absolute; bottom: 6px; left: 10px; font-size: 9px; color: #8c8c8c; display: flex; gap: 12px; background: #ffffffcc; padding: 3px 8px; border-radius: 3px; }
+
+  /* Event log */
+  .elog { font-family: "SF Mono", "JetBrains Mono", monospace; font-size: 11px; }
+  .elog-row { display: flex; gap: 8px; padding: 4px 12px; border-bottom: 1px solid #fafafa; line-height: 1.6; }
+  .elog-row:hover { background: #fafafa; }
+  .elog-row.err { background: #fff2f0; }
+  .elog-ts { color: #bfbfbf; min-width: 60px; }
+  .elog-type { min-width: 52px; font-weight: 600; }
+  .elog-type.msg { color: #722ed1; }
+  .elog-type.route { color: #52c41a; }
+  .elog-type.cmd { color: #fa8c16; }
+  .elog-type.reply { color: #1890ff; }
+  .elog-type.sched { color: #faad14; }
+  .elog-type.error { color: #ff4d4f; }
+  .elog-flow { color: #8c8c8c; min-width: 120px; }
+  .elog-detail { color: #434343; flex: 1; }
+  .elog-header { display: flex; align-items: center; padding: 8px 12px; background: #fafafa; border-bottom: 1px solid #f0f0f0; font-size: 12px; font-weight: 500; font-family: -apple-system, sans-serif; }
+  .elog-body { max-height: 280px; overflow-y: auto; }
+
+  /* Desc list */
+  .desc-strip { display: flex; gap: 24px; padding: 10px 24px; background: #fafafa; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+  .desc-strip dt { color: #8c8c8c; display: inline; }
+  .desc-strip dd { color: #262626; display: inline; font-weight: 500; margin-left: 4px; }
+</style>
+</head>
+<body>
+<div class="screens">
+
+<!-- ===== SAAS SECTION ===== -->
+<div class="section-divider" style="color:#6c5ce7;">&#9670; Teams Layer — SaaS Product Experience</div>
+
+<!-- SCREEN 1: Teams List (SaaS style) -->
+<div>
+<span class="screen-label saas">SaaS · /teams — 我的团队</span>
+<div class="app">
+  <div class="sidebar">
+    <div class="sb-header"><span class="sb-logo">Aevatar</span> <span class="sb-version">v0.9</span></div>
+    <div class="sb-group">Teams</div>
+    <div class="sb-item active">我的团队 <span class="sb-count">2</span></div>
+    <div class="sb-item">组建团队</div>
+    <div class="sb-divider"></div>
+    <div class="sb-group">Platform</div>
+    <div class="sb-item">Governance <span class="sb-count">7</span></div>
+    <div class="sb-item">Services <span class="sb-count">7</span></div>
+    <div class="sb-item">Topology</div>
+    <div class="sb-item">Deployments <span class="sb-count">3</span></div>
+    <div class="sb-divider"></div>
+    <div class="sb-item" style="font-size:12px;">设置</div>
+    <div class="sb-footer"><span class="cluster-dot"></span> Cluster: healthy<br>Region: ap-southeast-1</div>
+  </div>
+  <div class="main saas-bg">
+    <div class="page-header" style="background:#fff;">
+      <div>
+        <div class="ph-crumb">Aevatar / Teams</div>
+        <div class="ph-title">我的 AI 团队</div>
+      </div>
+      <div class="ph-right">
+        <div class="btn btn-primary" style="font-size:13px; height:34px; padding:0 18px;">+ 组建新团队</div>
+      </div>
+    </div>
+    <div class="content" style="background:#f8f9fc;">
+
+      <div class="saas-stats">
+        <div class="saas-stat"><div class="saas-stat-val purple">2</div><div class="saas-stat-label">活跃团队</div></div>
+        <div class="saas-stat"><div class="saas-stat-val">7</div><div class="saas-stat-label">运行中成员</div></div>
+        <div class="saas-stat"><div class="saas-stat-val">847</div><div class="saas-stat-label">今日处理消息</div></div>
+        <div class="saas-stat"><div class="saas-stat-val green">99.7%</div><div class="saas-stat-label">平均在线率</div></div>
+      </div>
+
+      <div class="team-grid">
+        <!-- Team 1 -->
+        <div class="team-card">
+          <div class="tc-top">
+            <div><div class="tc-name">客服团队</div><div class="tc-desc">处理 Telegram 客户咨询，24/7 自动接待与跟进</div></div>
+            <div class="tc-status"><span class="tc-dot"></span> Running</div>
+          </div>
+          <div class="tc-members">
+            <div class="tc-member"><span class="tc-member-dot"></span> 接待员</div>
+            <div class="tc-member"><span class="tc-member-dot"></span> 处理专员</div>
+            <div class="tc-member"><span class="tc-member-dot"></span> 跟进员</div>
+          </div>
+          <div class="tc-metrics">
+            <div><div class="tc-metric-val">612</div><div class="tc-metric-label">今日消息</div></div>
+            <div><div class="tc-metric-val green">99.9%</div><div class="tc-metric-label">在线率</div></div>
+            <div><div class="tc-metric-val">94%</div><div class="tc-metric-label">成功率</div></div>
+            <div><div class="tc-metric-val">2.3s</div><div class="tc-metric-label">平均响应</div></div>
+          </div>
+          <div class="tc-actions">
+            <button class="btn btn-primary" style="height:28px; font-size:12px;">查看详情</button>
+            <button class="btn" style="height:28px; font-size:12px;">事件拓扑</button>
+            <button class="btn" style="height:28px; font-size:12px;">暂停</button>
+          </div>
+        </div>
+        <!-- Team 2 -->
+        <div class="team-card">
+          <div class="tc-top">
+            <div><div class="tc-name">内容团队</div><div class="tc-desc">监听群讨论，每日生成摘要简报，审核后自动分发</div></div>
+            <div class="tc-status"><span class="tc-dot"></span> Running</div>
+          </div>
+          <div class="tc-members">
+            <div class="tc-member"><span class="tc-member-dot"></span> 群监听</div>
+            <div class="tc-member"><span class="tc-member-dot"></span> 编辑</div>
+            <div class="tc-member"><span class="tc-member-dot"></span> 审核</div>
+            <div class="tc-member"><span class="tc-member-dot" style="background:#faad14;"></span> 分发员</div>
+          </div>
+          <div class="tc-metrics">
+            <div><div class="tc-metric-val">235</div><div class="tc-metric-label">今日消息</div></div>
+            <div><div class="tc-metric-val green">99.5%</div><div class="tc-metric-label">在线率</div></div>
+            <div><div class="tc-metric-val">3</div><div class="tc-metric-label">今日简报</div></div>
+            <div><div class="tc-metric-val">18:00</div><div class="tc-metric-label">下次发布</div></div>
+          </div>
+          <div class="tc-actions">
+            <button class="btn btn-primary" style="height:28px; font-size:12px;">查看详情</button>
+            <button class="btn" style="height:28px; font-size:12px;">事件拓扑</button>
+            <button class="btn" style="height:28px; font-size:12px;">暂停</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- SCREEN 2: Team Detail — bridge between SaaS and Platform -->
+<div>
+<span class="screen-label bridge">SaaS → Platform · /teams/:id — 团队详情</span>
+<div class="app">
+  <div class="sidebar">
+    <div class="sb-header"><span class="sb-logo">Aevatar</span></div>
+    <div class="sb-group">Teams</div>
+    <div class="sb-item active">我的团队</div>
+    <div class="sb-item">组建团队</div>
+    <div class="sb-divider"></div>
+    <div class="sb-group">Platform</div>
+    <div class="sb-item">Governance</div>
+    <div class="sb-item">Services</div>
+    <div class="sb-item">Topology</div>
+    <div class="sb-item">Deployments</div>
+    <div class="sb-footer"><span class="cluster-dot"></span> Cluster: healthy</div>
+  </div>
+  <div class="main">
+    <div class="page-header" style="background:#fff;">
+      <div>
+        <div class="ph-crumb"><a>Teams</a> / <b>客服团队</b> <code style="color:#8c8c8c; margin-left:8px;">scope-cs-001</code></div>
+        <div class="ph-title" style="display:flex; align-items:center; gap:8px;">客服团队 <span class="status-tag running">Running</span></div>
+      </div>
+      <div class="ph-right">
+        <div class="btn">测试对话</div>
+        <div class="btn">编辑</div>
+        <div class="btn btn-danger">暂停</div>
+      </div>
+    </div>
+    <div class="desc-strip">
+      <div><dt>成员</dt><dd>3 agents</dd></div>
+      <div><dt>类型</dt><dd>2 workflow, 1 scripting</dd></div>
+      <div><dt>连接器</dt><dd><span class="mp connector">Telegram</span></dd></div>
+      <div><dt>消息 (24h)</dt><dd>612</dd></div>
+      <div><dt>在线率</dt><dd style="color:#52c41a;">99.9%</dd></div>
+    </div>
+    <div class="ant-tabs">
+      <div class="ant-tab">概览</div>
+      <div class="ant-tab active">事件拓扑</div>
+      <div class="ant-tab">事件流</div>
+      <div class="ant-tab">成员</div>
+      <div class="ant-tab">连接器</div>
+      <div class="ant-tab">高级编辑</div>
+    </div>
+    <div class="content platform-bg" style="padding-top:16px;">
+      <div class="panel">
+        <div class="panel-head">EventEnvelope 流转拓扑 <span class="ph-extra">实时 · 点击节点查看详情</span></div>
+        <div class="topo-canvas">
+          <svg class="topo-svg" viewBox="0 0 950 300">
+            <line x1="100" y1="150" x2="260" y2="80" class="active"/>
+            <line x1="370" y1="80" x2="480" y2="145" class="active"/>
+            <line x1="590" y1="155" x2="720" y2="230" class="active"/>
+            <line x1="575" y1="130" x2="720" y2="60" class="llm"/>
+            <line x1="720" y1="75" x2="590" y2="140" class="llm"/>
+            <line x1="480" y1="165" x2="110" y2="165" class="reply"/>
+          </svg>
+          <div class="tnode ext" style="left:28px; top:118px;"><div class="tn-name">Telegram</div><div class="tn-type">CONNECTOR</div><div class="tn-metric" style="color:#1890ff;">612 in / 590 out</div></div>
+          <div class="tnode live" style="left:250px; top:48px;"><div class="tn-name">接待员</div><div class="tn-type">workflow · svc-reception</div><div class="tn-metric">312 processed</div></div>
+          <div class="tnode live" style="left:465px; top:112px;"><div class="tn-name">处理专员</div><div class="tn-type">workflow · svc-handler</div><div class="tn-metric">198 processed</div></div>
+          <div class="tnode live" style="left:700px; top:200px;"><div class="tn-name">跟进员</div><div class="tn-type">scripting · svc-followup</div><div class="tn-metric">102 scheduled</div></div>
+          <div class="tnode ext" style="left:710px; top:32px; border-color:#fa8c16;"><div class="tn-name">LLM</div><div class="tn-type">gpt-5.4</div><div class="tn-metric" style="color:#fa8c16;">~1.2k tok/req</div></div>
+          <div class="topo-legend"><span style="color:#52c41a;">——</span> Event <span style="color:#1890ff;">---</span> Reply <span style="color:#fa8c16;">···</span> LLM</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ===== PLATFORM SECTION ===== -->
+<div class="section-divider">&#9670; Platform Layer — Cloud Management</div>
+
+<!-- SCREEN 3: Event Stream (Platform style) -->
+<div>
+<span class="screen-label platform">Platform · /teams/:id/events — 事件流</span>
+<div class="app">
+  <div class="sidebar">
+    <div class="sb-header"><span class="sb-logo">Aevatar</span></div>
+    <div class="sb-group">Teams</div>
+    <div class="sb-item active">我的团队</div>
+    <div class="sb-item">组建团队</div>
+    <div class="sb-divider"></div>
+    <div class="sb-group">Platform</div>
+    <div class="sb-item">Governance</div>
+    <div class="sb-item">Services</div>
+    <div class="sb-item">Topology</div>
+    <div class="sb-item">Deployments</div>
+    <div class="sb-footer"><span class="cluster-dot"></span> Cluster: healthy<br>Actors: 7 running · 0 faulted</div>
+  </div>
+  <div class="main platform-bg">
+    <div class="page-header" style="background:#fff;">
+      <div>
+        <div class="ph-crumb"><a>Teams</a> / <a>客服团队</a> / <b>事件流</b></div>
+        <div class="ph-title" style="font-size:16px;">客服团队 · EventEnvelope Stream</div>
+      </div>
+    </div>
+    <div class="ant-tabs">
+      <div class="ant-tab">概览</div>
+      <div class="ant-tab">事件拓扑</div>
+      <div class="ant-tab active">事件流</div>
+      <div class="ant-tab">成员</div>
+      <div class="ant-tab">连接器</div>
+      <div class="ant-tab">高级编辑</div>
+    </div>
+    <div class="content" style="padding-top:12px;">
+      <div class="panel">
+        <div class="elog-header">
+          EventEnvelope Stream
+          <div style="display:flex; gap:6px; margin-left:12px;">
+            <select style="height:22px; font-size:10px; border:1px solid #d9d9d9; border-radius:3px; padding:0 4px;"><option>Type: All</option></select>
+            <select style="height:22px; font-size:10px; border:1px solid #d9d9d9; border-radius:3px; padding:0 4px;"><option>Agent: All</option></select>
+            <input style="height:22px; font-size:10px; border:1px solid #d9d9d9; border-radius:3px; padding:0 6px; width:140px;" placeholder="Filter...">
+          </div>
+          <span class="ph-extra">&#9679; Live · 12 events/min</span>
+        </div>
+        <div class="elog-body elog">
+          <div class="elog-row"><span class="elog-ts">14:32:07</span><span class="elog-type msg">MSG_IN</span><span class="elog-flow">Telegram → 接待员</span><span class="elog-detail">"企业版定价方案是什么？"</span></div>
+          <div class="elog-row"><span class="elog-ts">14:32:08</span><span class="elog-type route">ROUTED</span><span class="elog-flow">接待员 → 处理专员</span><span class="elog-detail">Audience.CHILDREN · pricing · high</span></div>
+          <div class="elog-row"><span class="elog-ts">14:32:09</span><span class="elog-type cmd">LLM</span><span class="elog-flow">处理专员 → gpt-5.4</span><span class="elog-detail">GeneratePricingReply · 480→720 tok</span></div>
+          <div class="elog-row"><span class="elog-ts">14:32:11</span><span class="elog-type reply">REPLY</span><span class="elog-flow">处理专员 → Telegram</span><span class="elog-detail">DirectRoute · 2.3s · delivered</span></div>
+          <div class="elog-row"><span class="elog-ts">14:32:11</span><span class="elog-type sched">SCHED</span><span class="elog-flow">处理专员 → 跟进员</span><span class="elog-detail">Audience.CHILDREN · FollowupReminder · T+24h</span></div>
+          <div class="elog-row err"><span class="elog-ts">14:30:12</span><span class="elog-type error">ERROR</span><span class="elog-flow">分发员 → Telegram</span><span class="elog-detail">RateLimit · retry=60s · 1/3 · evt-8f3a2</span></div>
+          <div class="elog-row"><span class="elog-ts">14:29:55</span><span class="elog-type msg">MSG_IN</span><span class="elog-flow">Telegram → 接待员</span><span class="elog-detail">"你们支持哪些支付方式？"</span></div>
+          <div class="elog-row"><span class="elog-ts">14:29:56</span><span class="elog-type route">ROUTED</span><span class="elog-flow">接待员 → 处理专员</span><span class="elog-detail">Audience.CHILDREN · faq · normal</span></div>
+          <div class="elog-row"><span class="elog-ts">14:29:57</span><span class="elog-type cmd">LLM</span><span class="elog-flow">处理专员 → gpt-5.4</span><span class="elog-detail">GenerateFaqReply · 320→410 tok</span></div>
+          <div class="elog-row"><span class="elog-ts">14:29:58</span><span class="elog-type reply">REPLY</span><span class="elog-flow">处理专员 → Telegram</span><span class="elog-detail">DirectRoute · 1.8s · delivered</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- SCREEN 4: Members (Platform style table) -->
+<div>
+<span class="screen-label platform">Platform · /teams/:id/members — 团队成员</span>
+<div class="app">
+  <div class="sidebar">
+    <div class="sb-header"><span class="sb-logo">Aevatar</span></div>
+    <div class="sb-group">Teams</div>
+    <div class="sb-item active">我的团队</div>
+    <div class="sb-item">组建团队</div>
+    <div class="sb-divider"></div>
+    <div class="sb-group">Platform</div>
+    <div class="sb-item">Governance</div>
+    <div class="sb-item">Services</div>
+    <div class="sb-item">Topology</div>
+    <div class="sb-item">Deployments</div>
+    <div class="sb-footer"><span class="cluster-dot"></span> Cluster: healthy</div>
+  </div>
+  <div class="main platform-bg">
+    <div class="page-header" style="background:#fff;">
+      <div>
+        <div class="ph-crumb"><a>Teams</a> / <a>客服团队</a> / <b>成员</b></div>
+        <div class="ph-title" style="font-size:16px;">客服团队 · Agents</div>
+      </div>
+      <div class="ph-right"><div class="btn btn-blue">+ 添加成员</div></div>
+    </div>
+    <div class="ant-tabs">
+      <div class="ant-tab">概览</div>
+      <div class="ant-tab">事件拓扑</div>
+      <div class="ant-tab">事件流</div>
+      <div class="ant-tab active">成员</div>
+      <div class="ant-tab">连接器</div>
+      <div class="ant-tab">高级编辑</div>
+    </div>
+    <div class="content" style="padding-top:12px;">
+      <div class="action-bar">
+        <input placeholder="搜索成员或 Actor ID...">
+        <select><option>类型: All</option><option>workflow</option><option>scripting</option><option>static</option></select>
+        <select><option>状态: All</option><option>Running</option><option>Idle</option><option>Faulted</option></select>
+      </div>
+      <table class="data-table">
+        <thead><tr>
+          <th>Status</th><th>Name</th><th>Role</th><th>Type</th><th>Msgs (24h)</th><th>Uptime</th><th>Actor ID</th><th>Governance Service</th><th>Actions</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="status-dot running"></span> Running</td>
+            <td><b>接待员</b></td>
+            <td>客户接待与分流</td>
+            <td><span class="mp">workflow</span></td>
+            <td>312</td>
+            <td style="color:#52c41a;">99.9%</td>
+            <td class="id-col">actor-7f2a3b</td>
+            <td><a class="link mono">svc-reception-001</a></td>
+            <td><a class="link" style="font-size:11px;">Edit</a> · <a class="link" style="font-size:11px;">Logs</a> · <a class="link" style="font-size:11px;">Graph</a></td>
+          </tr>
+          <tr>
+            <td><span class="status-dot running"></span> Running</td>
+            <td><b>处理专员</b></td>
+            <td>问题处理与 LLM 回复</td>
+            <td><span class="mp">workflow</span></td>
+            <td>198</td>
+            <td style="color:#52c41a;">99.8%</td>
+            <td class="id-col">actor-a1c4e9</td>
+            <td><a class="link mono">svc-handler-001</a></td>
+            <td><a class="link" style="font-size:11px;">Edit</a> · <a class="link" style="font-size:11px;">Logs</a> · <a class="link" style="font-size:11px;">Graph</a></td>
+          </tr>
+          <tr>
+            <td><span class="status-dot running"></span> Running</td>
+            <td><b>跟进员</b></td>
+            <td>24h 跟进提醒调度</td>
+            <td><span class="mp">scripting</span></td>
+            <td>102</td>
+            <td style="color:#52c41a;">99.9%</td>
+            <td class="id-col">actor-d5f8b2</td>
+            <td><a class="link mono">svc-followup-001</a></td>
+            <td><a class="link" style="font-size:11px;">Edit</a> · <a class="link" style="font-size:11px;">Logs</a> · <a class="link" style="font-size:11px;">Graph</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="margin-top:12px; padding:8px 12px; background:#e6f7ff; border:1px solid #91d5ff; border-radius:4px; font-size:11px; color:#1890ff;">
+        &#9432; Governance Service ID 链接到 Platform → Services 页面。Actor ID 链接到 Platform → Topology 的 Actor 详情。
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+</div>
+</body>
+</html>

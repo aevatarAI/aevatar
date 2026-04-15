@@ -117,6 +117,8 @@
     <PackageVersion Include="OpenAI" Version="2.9.1" />
     <PackageVersion Include="Azure.Identity" Version="1.17.1" />
     <PackageVersion Include="LlmTornado" Version="3.8.43" />
+    <PackageVersion Include="SIPSorcery" Version="8.0.23" />
+    <PackageVersion Include="Concentus" Version="2.2.2" />
     <!-- ════════════════════════════════════════════════════════════ -->
     <!-- Databases & Storage                                         -->
     <!-- ════════════════════════════════════════════════════════════ -->
