@@ -5,11 +5,6 @@ on:
   schedule:
     - cron: "0 15 * * 5"
   workflow_dispatch:
-    inputs:
-      skip_ci_check:
-        description: "Skip CI green check (emergency release)"
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -19,9 +14,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  weekly-tag:
+  check-changes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+      previous_tag: ${{ steps.check.outputs.previous_tag }}
+      version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +37,7 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
             echo "previous_tag=" >> "$GITHUB_OUTPUT"
             echo "version=v0.1.0" >> "$GITHUB_OUTPUT"
+            exit 0
           else
             COMMITS_SINCE=$(git rev-list --count "${LAST_TAG}..HEAD")
             echo "Commits since ${LAST_TAG}: ${COMMITS_SINCE}"
@@ -45,6 +45,7 @@ jobs:
             if [ "$COMMITS_SINCE" -eq 0 ]; then
               echo "No new commits. Skipping."
               echo "has_changes=false" >> "$GITHUB_OUTPUT"
+              exit 0
             else
               # Bump patch version
               CURRENT=$(echo "$LAST_TAG" | sed 's/^v//')
@@ -57,34 +58,68 @@ jobs:
             fi
           fi
 
-      - name: Verify CI is green on dev
-        if: steps.check.outputs.has_changes == 'true' && !inputs.skip_ci_check
+  release-gate:
+    needs: check-changes
+    if: needs.check-changes.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Prepare Runner
+        uses: ./.github/actions/prepare-runner
+        with:
+          install-ripgrep: "true"
+
+      - name: Architecture Guards
         run: |
-          # Check the latest commit on dev has passing status
-          DEV_SHA=$(git rev-parse HEAD)
-          if ! STATUS=$(gh api "repos/${{ github.repository }}/commits/${DEV_SHA}/status" --jq '.state'); then
-            echo "::error::Unable to read CI status for dev at ${DEV_SHA}."
-            echo "::error::Use workflow_dispatch with skip_ci_check=true for emergency releases."
-            exit 1
-          fi
-          if [ "$STATUS" != "success" ]; then
-            echo "::error::CI is not green on dev (status: ${STATUS}). Fix CI before releasing."
-            echo "::error::Use workflow_dispatch with skip_ci_check=true for emergency releases."
-            exit 1
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ZERO_SHA="0000000000000000000000000000000000000000"
+          CURRENT_SHA=$(git rev-parse HEAD)
+          PREVIOUS_SHA=$(git rev-parse HEAD^ 2>/dev/null || echo "$ZERO_SHA")
+          GITHUB_EVENT_NAME=push \
+          GITHUB_EVENT_BEFORE="$PREVIOUS_SHA" \
+          GITHUB_SHA="$CURRENT_SHA" \
+          bash tools/ci/architecture_guards.sh
+
+      - name: Test Stability Guards
+        run: bash tools/ci/test_stability_guards.sh
+
+      - name: Split Test Guards
+        run: bash tools/ci/solution_split_test_guards.sh
+
+      - name: Distributed 3-Node Smoke
+        run: bash tools/ci/distributed_3node_smoke.sh
+
+      - name: Distributed Mixed-Version Smoke
+        run: bash tools/ci/distributed_mixed_version_smoke.sh
+
+  weekly-tag:
+    needs:
+      - check-changes
+      - release-gate
+    if: needs.check-changes.outputs.has_changes == 'true' && needs.release-gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Merge dev into master and tag
-        if: steps.check.outputs.has_changes == 'true'
         run: |
-          VERSION="${{ steps.check.outputs.version }}"
+          VERSION="${{ needs.check-changes.outputs.version }}"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          git fetch origin master
           git checkout master
-          git merge dev --no-edit --ff-only || {
+          git merge origin/dev --no-edit --ff-only || {
             echo "::error::Cannot fast-forward master to dev. Manual merge required."
             exit 1
           }
@@ -95,10 +130,9 @@ jobs:
           echo "Tagged ${VERSION} on master."
 
       - name: Create GitHub Release
-        if: steps.check.outputs.has_changes == 'true'
         run: |
-          VERSION="${{ steps.check.outputs.version }}"
-          LAST_TAG="${{ steps.check.outputs.previous_tag }}"
+          VERSION="${{ needs.check-changes.outputs.version }}"
+          LAST_TAG="${{ needs.check-changes.outputs.previous_tag }}"
 
           if [ -n "$LAST_TAG" ]; then
             BODY=$(git log --oneline "${LAST_TAG}..${VERSION}" | head -30)
