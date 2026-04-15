@@ -667,6 +667,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         approvalResolved.Approved.Should().BeTrue();
         approvalResolved.UserInput.Should().Be("approved-output");
         approvalResolved.DeliveryTargetId.Should().Be("agent-approval-1");
+        approvalResolved.ResolvedContent.Should().Be("approved-output");
         ctx.Published.Clear();
 
         await module.HandleAsync(

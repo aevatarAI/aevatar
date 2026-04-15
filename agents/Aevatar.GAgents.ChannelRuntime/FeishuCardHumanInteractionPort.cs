@@ -58,6 +58,16 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             "Feishu approval resolution delivery failed",
             cancellationToken);
 
+        if (ShouldSendApprovedContent(target, resolution))
+        {
+            await SendTextMessageAsync(
+                target,
+                resolution.ResolvedContent!,
+                "Feishu approved-content delivery returned empty response.",
+                "Feishu approved-content delivery failed",
+                cancellationToken);
+        }
+
         _logger.LogInformation(
             "Delivered human approval resolution card: target={DeliveryTargetId}, run={RunId}, step={StepId}, approved={Approved}",
             deliveryTargetId,
@@ -114,7 +124,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         var lines = new List<string>
         {
             resolution.Approved
-                ? "**Approval recorded.** The workflow will continue."
+                ? "**Approval recorded.** The approved content will be posted below."
                 : "**Rejection recorded.** The workflow will follow the rejection path.",
             $"\nRun: `{EscapeMarkdown(resolution.RunId)}`",
             $"Step: `{EscapeMarkdown(resolution.StepId)}`",
@@ -163,6 +173,13 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         return target;
     }
 
+    private static bool ShouldSendApprovedContent(
+        AgentRegistryEntry target,
+        HumanApprovalResolution resolution) =>
+        resolution.Approved &&
+        !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
+        string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
+
     private async Task SendInteractiveCardAsync(
         AgentRegistryEntry target,
         string cardJson,
@@ -175,6 +192,36 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             receive_id = target.ConversationId,
             msg_type = "interactive",
             content = cardJson,
+        });
+
+        var result = await _nyxIdApiClient.ProxyRequestAsync(
+            target.NyxApiKey,
+            target.NyxProviderSlug,
+            "open-apis/im/v1/messages?receive_id_type=chat_id",
+            "POST",
+            body,
+            extraHeaders: null,
+            cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(result))
+            throw new InvalidOperationException(emptyResponseMessage);
+
+        if (result.Contains("\"error\"", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{failurePrefix}: {result}");
+    }
+
+    private async Task SendTextMessageAsync(
+        AgentRegistryEntry target,
+        string text,
+        string emptyResponseMessage,
+        string failurePrefix,
+        CancellationToken cancellationToken)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            receive_id = target.ConversationId,
+            msg_type = "text",
+            content = JsonSerializer.Serialize(new { text }),
         });
 
         var result = await _nyxIdApiClient.ProxyRequestAsync(

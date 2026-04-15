@@ -119,6 +119,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     Approved = false,
                     UserInput = "Need stronger CTA",
                     DeliveryTargetId = "agent-delivery-4",
+                    ResolvedContent = "Draft needs stronger CTA",
                 }),
             },
             CancellationToken.None);
@@ -131,6 +132,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.resolution.StepId.Should().Be("approval-4");
         call.resolution.Approved.Should().BeFalse();
         call.resolution.UserInput.Should().Be("Need stronger CTA");
+        call.resolution.ResolvedContent.Should().Be("Draft needs stronger CTA");
     }
 
     [Fact]

@@ -43,6 +43,7 @@ public sealed class WorkflowHumanApprovalResolutionProjector
                 StepId = evt.StepId,
                 Approved = evt.Approved,
                 UserInput = string.IsNullOrWhiteSpace(evt.UserInput) ? null : evt.UserInput,
+                ResolvedContent = string.IsNullOrWhiteSpace(evt.ResolvedContent) ? null : evt.ResolvedContent,
             },
             evt.DeliveryTargetId,
             ct);

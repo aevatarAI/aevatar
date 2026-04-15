@@ -108,7 +108,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     BranchKey = "true",
                 };
                 await ctx.PublishAsync(approved, TopologyAudience.Self, ct);
-                await PublishResolutionAsync(ctx, pending, approved: true, resumed.UserInput, ct);
+                await PublishResolutionAsync(ctx, pending, approved: true, resumed.UserInput, approved.Output, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
@@ -134,7 +134,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     BranchKey = "false",
                 };
                 await ctx.PublishAsync(rejected, TopologyAudience.Self, ct);
-                await PublishResolutionAsync(ctx, pending, approved: false, resumed.UserInput, ct);
+                await PublishResolutionAsync(ctx, pending, approved: false, resumed.UserInput, rejected.Output, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
@@ -146,6 +146,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
         PendingApprovalState pending,
         bool approved,
         string? userInput,
+        string? resolvedContent,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(pending.DeliveryTargetId))
@@ -159,6 +160,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 Approved = approved,
                 UserInput = userInput ?? string.Empty,
                 DeliveryTargetId = pending.DeliveryTargetId,
+                ResolvedContent = resolvedContent ?? string.Empty,
             },
             TopologyAudience.Self,
             ct);

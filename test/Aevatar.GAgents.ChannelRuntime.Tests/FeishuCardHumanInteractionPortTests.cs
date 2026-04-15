@@ -24,6 +24,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
                 NyxApiKey = "nyx-api-key-1",
+                TemplateName = "social_media",
             }));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_1"}}""");
@@ -119,6 +120,7 @@ public sealed class FeishuCardHumanInteractionPortTests
                 ConversationId = "oc_chat_1",
                 NyxProviderSlug = "api-lark-bot",
                 NyxApiKey = "nyx-api-key-1",
+                TemplateName = "social_media",
             }));
 
         var handler = new RecordingHandler("""{"data":{"message_id":"om_2"}}""");
@@ -132,15 +134,67 @@ public sealed class FeishuCardHumanInteractionPortTests
                 ActorId = "workflow-actor-1",
                 RunId = "run-2",
                 StepId = "approval-2",
-                Approved = false,
-                UserInput = "Need stronger hook",
+                Approved = true,
+                UserInput = "Looks good",
+                ResolvedContent = "Launch day update.",
             },
             "agent-1",
             CancellationToken.None);
 
-        using var body = JsonDocument.Parse(handler.LastBody!);
-        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        handler.Bodies.Should().HaveCount(2);
 
+        using var cardBody = JsonDocument.Parse(handler.Bodies[0]);
+        cardBody.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+        using var card = JsonDocument.Parse(cardBody.RootElement.GetProperty("content").GetString()!);
+        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("green");
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Approval Recorded");
+        card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
+            .Should().Contain("posted below");
+
+        using var textBody = JsonDocument.Parse(handler.Bodies[1]);
+        textBody.RootElement.GetProperty("msg_type").GetString().Should().Be("text");
+        using var textContent = JsonDocument.Parse(textBody.RootElement.GetProperty("content").GetString()!);
+        textContent.RootElement.GetProperty("text").GetString().Should().Be("Launch day update.");
+    }
+
+    [Fact]
+    public async Task DeliverApprovalResolutionAsync_ShouldOnlySendCard_ForRejectedSocialMedia()
+    {
+        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "agent-1",
+                Platform = "lark",
+                ConversationId = "oc_chat_1",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-api-key-1",
+                TemplateName = "social_media",
+            }));
+
+        var handler = new RecordingHandler("""{"data":{"message_id":"om_3"}}""");
+        var httpClient = new HttpClient(handler);
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
+
+        await port.DeliverApprovalResolutionAsync(
+            new HumanApprovalResolution
+            {
+                ActorId = "workflow-actor-1",
+                RunId = "run-3",
+                StepId = "approval-3",
+                Approved = false,
+                UserInput = "Need stronger hook",
+                ResolvedContent = "Rejected draft content",
+            },
+            "agent-1",
+            CancellationToken.None);
+
+        handler.Bodies.Should().HaveCount(1);
+
+        using var body = JsonDocument.Parse(handler.Bodies[0]);
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
         using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("red");
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
@@ -199,6 +253,7 @@ public sealed class FeishuCardHumanInteractionPortTests
     {
         public HttpRequestMessage? LastRequest { get; private set; }
         public string? LastBody { get; private set; }
+        public List<string> Bodies { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -206,6 +261,8 @@ public sealed class FeishuCardHumanInteractionPortTests
             LastBody = request.Content == null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
+            if (LastBody != null)
+                Bodies.Add(LastBody);
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {

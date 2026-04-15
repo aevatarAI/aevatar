@@ -170,6 +170,7 @@ message WorkflowHumanApprovalResolvedEvent
   bool approved = 3;
   string user_input = 4;
   string delivery_target_id = 5;
+  string resolved_content = 6;
 }
 message SecureValueCapturedEvent { string run_id = 1; string step_id = 2; string variable = 3; string value = 4; }
 message WorkflowRunStoppedEvent { string run_id = 1; string reason = 2; }
