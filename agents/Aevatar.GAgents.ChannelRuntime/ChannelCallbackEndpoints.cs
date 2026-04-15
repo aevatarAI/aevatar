@@ -279,6 +279,7 @@ public static class ChannelCallbackEndpoints
             VerificationToken = request.VerificationToken?.Trim() ?? string.Empty,
             ScopeId = request.ScopeId?.Trim() ?? string.Empty,
             WebhookUrl = webhookUrl ?? string.Empty,
+            EncryptKey = request.EncryptKey?.Trim() ?? string.Empty,
             RequestedId = registrationId,
         };
 
@@ -574,7 +575,8 @@ public static class ChannelCallbackEndpoints
         string? NyxUserToken,
         string? VerificationToken,
         string? ScopeId,
-        string? WebhookBaseUrl);
+        string? WebhookBaseUrl,
+        string? EncryptKey);
 
     private sealed record TestReplyRequest(string? ChatId, string? Message);
 

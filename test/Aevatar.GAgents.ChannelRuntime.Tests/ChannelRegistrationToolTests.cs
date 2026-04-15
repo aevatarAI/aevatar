@@ -425,6 +425,113 @@ public class ChannelRegistrationToolTests
         }
     }
 
+    // ─── encrypt_key parameter ───
+
+    [Fact]
+    public void ParametersSchema_Contains_EncryptKey_Property()
+    {
+        var sp = new ServiceCollection().BuildServiceProvider();
+        var tool = new ChannelRegistrationTool(sp);
+
+        var doc = JsonDocument.Parse(tool.ParametersSchema);
+        var properties = doc.RootElement.GetProperty("properties");
+        properties.TryGetProperty("encrypt_key", out _).Should().BeTrue(
+            "the register action should accept an encrypt_key parameter");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Register_Dispatches_EncryptKey_In_Command()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        // Return confirmation on first poll
+        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "confirmed-id", Platform = "lark" }));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-bot-registration-store");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("channel-bot-registration-store")
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        // No projection port — GetService returns null, which is fine
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                    "action": "register",
+                    "platform": "lark",
+                    "nyx_provider_slug": "api-lark-bot",
+                    "encrypt_key": "my-secret-encrypt-key"
+                }
+                """);
+
+            // Verify the actor received a command with encrypt_key set
+            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == "my-secret-encrypt-key"));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Register_DefaultsEncryptKeyToEmpty_WhenNotProvided()
+    {
+        var queryPort = Substitute.For<IChannelBotRegistrationQueryPort>();
+        queryPort.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<ChannelBotRegistrationEntry?>(new ChannelBotRegistrationEntry
+                { Id = "confirmed", Platform = "lark" }));
+
+        var actor = Substitute.For<IActor>();
+        actor.Id.Returns("channel-bot-registration-store");
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("channel-bot-registration-store")
+            .Returns(Task.FromResult<IActor?>(actor));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(queryPort);
+        services.AddSingleton(actorRuntime);
+        var sp = services.BuildServiceProvider();
+
+        var tool = new ChannelRegistrationTool(sp);
+
+        AgentToolRequestContext.CurrentMetadata = new Dictionary<string, string>
+            { [LLMRequestMetadataKeys.NyxIdAccessToken] = "test-token" };
+        try
+        {
+            await tool.ExecuteAsync("""
+                {
+                    "action": "register",
+                    "platform": "lark",
+                    "nyx_provider_slug": "api-lark-bot"
+                }
+                """);
+
+            // Verify encrypt_key defaults to empty
+            await actor.Received(1).HandleEventAsync(Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(ChannelBotRegisterCommand.Descriptor) &&
+                e.Payload.Unpack<ChannelBotRegisterCommand>().EncryptKey == ""));
+        }
+        finally
+        {
+            AgentToolRequestContext.CurrentMetadata = null;
+        }
+    }
+
     // ─── ChannelRegistrationToolSource ───
 
     [Fact]

@@ -46,7 +46,7 @@ public sealed class StreamingProxyGAgent : RoleGAgent
     /// converts the user prompt into a group chat topic and broadcasts it.
     /// </summary>
     [EventHandler]
-    public new async Task HandleChatRequest(ChatRequestEvent request)
+    public override async Task HandleChatRequest(ChatRequestEvent request)
     {
         var topicEvent = new GroupChatTopicEvent
         {

@@ -36,6 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILLMCallMiddleware, UserMemoryInjectionMiddleware>();
         services.AddSingleton<ILLMCallMiddleware, ConnectedServicesContextMiddleware>();
         services.AddSingleton<IGAgentActorStore, ChronoStorageGAgentActorStore>();
+        services.AddSingleton<IStreamingProxyParticipantStore, ChronoStorageStreamingProxyParticipantStore>();
         services.AddSingleton<IChatHistoryStore, ChronoStorageChatHistoryStore>();
         services.AddSingleton<IWorkflowStoragePort, ChronoStorageWorkflowStoragePort>();
         services.AddSingleton<IScriptStoragePort, ChronoStorageScriptStoragePort>();

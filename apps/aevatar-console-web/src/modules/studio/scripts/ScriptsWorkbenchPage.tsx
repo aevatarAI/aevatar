@@ -55,9 +55,12 @@ import type {
   ScriptPackage,
   ScriptPromotionDecision,
   ScriptReadModelSnapshot,
+  ScopeScriptSaveObservationRequest,
+  ScopeScriptSaveObservationResult,
   ScriptValidationDiagnostic,
   ScriptValidationResult,
   ScopedScriptDetail,
+  ScopeScriptUpsertAcceptedResponse,
 } from '@/shared/studio/scriptsModels';
 import {
   ScriptsStudioEmptyState,
@@ -567,22 +570,24 @@ function summarizeValidation(
   pending: boolean,
 ): string {
   if (pending || !validation) {
-    return '校验中';
+    return 'Checking';
   }
 
   if (validation.errorCount > 0) {
-    return `${validation.errorCount} 个错误${
+    return `${validation.errorCount} error${validation.errorCount === 1 ? '' : 's'}${
       validation.warningCount > 0
-        ? ` · ${validation.warningCount} 个警告`
+        ? ` · ${validation.warningCount} warning${validation.warningCount === 1 ? '' : 's'}`
         : ''
     }`;
   }
 
   if (validation.warningCount > 0) {
-    return `${validation.warningCount} 个警告`;
+    return `${validation.warningCount} warning${
+      validation.warningCount === 1 ? '' : 's'
+    }`;
   }
 
-  return '通过';
+  return 'Clean';
 }
 
 function compactHeaderValue(value: string, leading = 8, trailing = 4): string {
@@ -652,6 +657,49 @@ function hydrateDraftFromScopeDetail(
     lastPromotion: existing?.lastPromotion || null,
     scopeDetail: detail,
   });
+}
+
+function buildSaveObservationRequest(
+  accepted: ScopeScriptUpsertAcceptedResponse,
+): ScopeScriptSaveObservationRequest {
+  return {
+    revisionId: accepted.acceptedScript.revisionId,
+    definitionActorId: accepted.acceptedScript.definitionActorId,
+    sourceHash: accepted.acceptedScript.sourceHash,
+    proposalId: accepted.acceptedScript.proposalId,
+    expectedBaseRevision: accepted.acceptedScript.expectedBaseRevision,
+    acceptedAt: accepted.acceptedScript.acceptedAt,
+  };
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function catalogMatchesPromotion(
+  catalog: ScriptCatalogSnapshot | null | undefined,
+  decision: ScriptPromotionDecision,
+): boolean {
+  if (!catalog || !decision.accepted) {
+    return false;
+  }
+
+  if (catalog.activeRevision !== decision.candidateRevision) {
+    return false;
+  }
+
+  if (
+    decision.definitionActorId &&
+    catalog.activeDefinitionActorId !== decision.definitionActorId
+  ) {
+    return false;
+  }
+
+  if (decision.proposalId && catalog.lastProposalId !== decision.proposalId) {
+    return false;
+  }
+
+  return true;
 }
 
 function compactScriptIdList(details: ScopedScriptDetail[] | undefined): string[] {
@@ -741,7 +789,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   const [bindPending, setBindPending] = React.useState(false);
   const [askAiPending, setAskAiPending] = React.useState(false);
   const [workspaceSection, setWorkspaceSection] =
-    React.useState<WorkspaceSection>('details');
+    React.useState<WorkspaceSection>('library');
   const [workspacePanelOpen, setWorkspacePanelOpen] = React.useState(false);
   const [filesPaneOpen, setFilesPaneOpen] = React.useState(true);
   const [editorView, setEditorView] = React.useState<EditorView>('source');
@@ -767,7 +815,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     appContext.scopeResolved && appContext.scriptStorageMode === 'scope';
   const isEmbeddedMode = appContext.mode === 'embedded';
   const resolvedScopeId = appContext.scopeId?.trim() || '';
-  const askAiUnavailableMessage = 'AI 辅助需要在嵌入式 Studio Host 中使用。';
+  const askAiUnavailableMessage = 'Ask AI requires an embedded host.';
   const headerHostLabel = formatStudioHostModeLabel(appContext.mode);
   const headerHostTooltip = getStudioHostModeTooltip(appContext.mode);
 
@@ -1231,7 +1279,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       onSelectScriptId?.(detail.script?.scriptId || '');
       setNotice({
         type: 'info',
-        message: `已将 ${detail.script?.scriptId || '团队脚本'} 加入当前草稿列表。`,
+        message: `Loaded ${detail.script?.scriptId || 'scope script'} into the active draft list.`,
       });
     },
     [drafts, onSelectScriptId],
@@ -1245,7 +1293,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     setSelectedDraftKey((current) => (current === draftKey ? '' : current));
     setNotice({
       type: 'info',
-      message: `已移除 ${scriptId}。`,
+      message: `Removed ${scriptId}.`,
     });
   }, []);
 
@@ -1259,8 +1307,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         mode: 'add',
         kind,
         originalPath: '',
-        title: kind === 'csharp' ? '添加 C# 文件' : '添加 Proto 文件',
-        confirmLabel: '添加文件',
+        title: kind === 'csharp' ? 'Add C# file' : 'Add proto file',
+        confirmLabel: 'Add file',
         value: kind === 'csharp' ? 'Behavior.cs' : 'schema.proto',
       });
     },
@@ -1284,8 +1332,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         mode: 'rename',
         kind: entry.kind,
         originalPath: filePath,
-        title: '重命名文件',
-        confirmLabel: '确认重命名',
+        title: 'Rename file',
+        confirmLabel: 'Rename file',
         value: filePath,
       });
     },
@@ -1343,7 +1391,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       });
       setNotice({
         type: 'success',
-        message: `已添加 ${nextFilePath}。`,
+        message: `Added ${nextFilePath}.`,
       });
     } else {
       updateSelectedDraft((draft) => {
@@ -1366,7 +1414,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       });
       setNotice({
         type: 'success',
-        message: `已将 ${fileDialog.originalPath} 重命名为 ${nextFilePath}。`,
+        message: `Renamed ${fileDialog.originalPath} to ${nextFilePath}.`,
       });
     }
 
@@ -1382,7 +1430,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       handleRemoveFile(removalTarget.filePath);
       setNotice({
         type: 'info',
-        message: `已删除 ${removalTarget.filePath}。`,
+        message: `Removed ${removalTarget.filePath}.`,
       });
     } else {
       removeDraft(removalTarget.draftKey, removalTarget.scriptId);
@@ -1523,8 +1571,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setNotice({
         type: result.success ? 'success' : 'warning',
         message: result.success
-          ? '校验完成，没有阻塞性错误。'
-          : '校验返回了阻塞性错误。',
+          ? 'Validation completed without blocking errors.'
+          : 'Validation returned blocking errors.',
       });
     } catch (error) {
       setValidationResult(null);
@@ -1533,7 +1581,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       );
       setNotice({
         type: 'error',
-        message: error instanceof Error ? error.message : '校验失败。',
+        message: error instanceof Error ? error.message : 'Validation failed.',
       });
     } finally {
       setValidationPending(false);
@@ -1542,63 +1590,159 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
   const saveCurrentDraftToScope = React.useCallback(async () => {
     if (!selectedDraft) {
-      throw new Error('请先选择一个脚本草稿再保存。');
+      throw new Error('Select a script draft before saving.');
     }
 
     if (!scopeBacked) {
-      throw new Error('只有绑定到当前团队后，才能保存脚本。');
+      throw new Error('Save is only available after Studio resolves the current scope.');
     }
 
-    const response = await scriptsApi.saveScript(resolvedScopeId, {
+    const persistedSource = serializePersistedSource(selectedDraft.package);
+    const accepted = await scriptsApi.saveScript(resolvedScopeId, {
       scriptId: normalizeStudioId(selectedDraft.scriptId, 'script'),
       revisionId: normalizeStudioId(selectedDraft.revision, 'rev'),
       expectedBaseRevision: selectedDraft.baseRevision || undefined,
-      sourceText: serializePersistedSource(selectedDraft.package),
+      sourceText: persistedSource,
     });
 
     updateSelectedDraft((draft) => ({
       ...draft,
-      scriptId: response.script?.scriptId || draft.scriptId,
-      revision:
-        response.script?.activeRevision || response.source?.revision || draft.revision,
-      baseRevision:
-        response.script?.activeRevision || response.source?.revision || draft.baseRevision,
+      scriptId: accepted.acceptedScript.scriptId || draft.scriptId,
       definitionActorId:
-        response.script?.definitionActorId ||
-        response.source?.definitionActorId ||
-        draft.definitionActorId,
-      lastSourceHash:
-        response.source?.sourceHash ||
-        response.script?.activeSourceHash ||
-        draft.lastSourceHash,
-      scopeDetail: response,
+        accepted.acceptedScript.definitionActorId || draft.definitionActorId,
+      lastSourceHash: accepted.acceptedScript.sourceHash || draft.lastSourceHash,
     }));
-    onSelectScriptId?.(response.script?.scriptId || selectedDraft.scriptId);
+    onSelectScriptId?.(accepted.acceptedScript.scriptId || selectedDraft.scriptId);
 
-    return response;
-  }, [onSelectScriptId, scopeBacked, selectedDraft, updateSelectedDraft]);
+    return accepted;
+  }, [onSelectScriptId, resolvedScopeId, scopeBacked, selectedDraft, updateSelectedDraft]);
+
+  const observeAcceptedSave = React.useCallback(async (
+    accepted: ScopeScriptUpsertAcceptedResponse,
+  ): Promise<ScopeScriptSaveObservationResult> => {
+    const request = buildSaveObservationRequest(accepted);
+    let lastObservation: ScopeScriptSaveObservationResult | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const observation = await scriptsApi.observeSaveScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+          request,
+        );
+        lastObservation = observation;
+        lastError = null;
+        if (observation.isTerminal) {
+          return observation;
+        }
+      } catch (error) {
+        lastError = error;
+      }
+
+      await wait(250);
+    }
+
+    if (lastObservation != null) {
+      return lastObservation;
+    }
+
+    if (lastError != null) {
+      throw lastError;
+    }
+
+    return lastObservation ?? {
+      scopeId: accepted.acceptedScript.scopeId,
+      scriptId: accepted.acceptedScript.scriptId,
+      status: 'pending',
+      message: `Save request for ${accepted.acceptedScript.scriptId} is still waiting to appear in the scope catalog.`,
+      currentScript: null,
+      isTerminal: false,
+    };
+  }, [resolvedScopeId]);
+
+  const waitForPromotionCatalog = React.useCallback(async (
+    decision: ScriptPromotionDecision,
+  ): Promise<ScriptCatalogSnapshot | null> => {
+    if (!decision.accepted) {
+      return null;
+    }
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const catalog = await scriptsApi.getScriptCatalog(
+          resolvedScopeId,
+          decision.scriptId,
+        );
+        if (catalogMatchesPromotion(catalog, decision)) {
+          return catalog;
+        }
+      } catch {
+        // Ignore transient query failures while the catalog is catching up.
+      }
+
+      await wait(250);
+    }
+
+    return null;
+  }, [resolvedScopeId]);
 
   const handleSave = React.useCallback(async () => {
     setSavePending(true);
     setNotice(null);
     try {
-      const response = await saveCurrentDraftToScope();
+      const accepted = await saveCurrentDraftToScope();
+      setNotice({
+        type: 'info',
+        message: `Save accepted for ${accepted.acceptedScript.scriptId}. Waiting for the scope catalog to catch up.`,
+      });
+      const observation = await observeAcceptedSave(accepted);
       await refreshScopeScripts();
+      if (observation.status === 'rejected') {
+        throw new Error(observation.message);
+      }
+
+      if (observation.status === 'applied') {
+        const detail = await scriptsApi.getScript(
+          resolvedScopeId,
+          accepted.acceptedScript.scriptId,
+        );
+        updateSelectedDraft((draft) => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || draft.scriptId,
+          revision:
+            detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision:
+            detail.script?.activeRevision || detail.source?.revision || draft.baseRevision,
+          definitionActorId:
+            detail.script?.definitionActorId ||
+            detail.source?.definitionActorId ||
+            draft.definitionActorId,
+          lastSourceHash:
+            detail.source?.sourceHash ||
+            detail.script?.activeSourceHash ||
+            draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
+
       setActiveResultTab('save');
       openWorkspaceSection('activity');
       setNotice({
-        type: 'success',
-        message: `已将 ${response.script?.scriptId || selectedDraft?.scriptId || 'script'} 保存到团队 ${response.scopeId}。`,
+        type: observation.status === 'applied' ? 'success' : 'warning',
+        message: observation.status === 'applied'
+          ? `Saved ${accepted.acceptedScript.scriptId} into current scope ${accepted.acceptedScript.scopeId}.`
+          : observation.message,
       });
     } catch (error) {
       setNotice({
         type: 'error',
-        message: error instanceof Error ? error.message : '保存当前草稿失败。',
+        message: error instanceof Error ? error.message : 'Failed to save the active draft.',
       });
     } finally {
       setSavePending(false);
     }
-  }, [openWorkspaceSection, refreshScopeScripts, saveCurrentDraftToScope, selectedDraft?.scriptId]);
+  }, [observeAcceptedSave, openWorkspaceSection, refreshScopeScripts, resolvedScopeId, saveCurrentDraftToScope, updateSelectedDraft]);
 
   const handleOpenBindScope = React.useCallback(() => {
     const scopeScript = selectedDraft?.scopeDetail?.script;
@@ -1643,18 +1787,19 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `已将团队 ${result.scopeId} 的默认脚本入口更新为 ${result.targetName} · ${result.revisionId}。`,
-        description: '你可以回到团队页查看当前入口、版本发布和已保存脚本。',
+        message: `Updated scope ${result.scopeId} to serve script ${result.targetName} on revision ${result.revisionId}.`,
+        description:
+          'Review the active binding, revision rollout, and saved script assets from the team views.',
         actions: [
           {
-            label: '打开团队资产',
+            label: 'Open Team Assets',
             href: buildScopePageHref('/scopes/assets', resolvedScopeId, {
               tab: 'scripts',
               scriptId,
             }),
           },
           {
-            label: '打开团队工作区',
+            label: 'Open Team Workspace',
             href: buildTeamWorkspaceRoute(resolvedScopeId),
           },
         ],
@@ -1663,7 +1808,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setNotice({
         type: 'error',
         message:
-          error instanceof Error ? error.message : '绑定已保存脚本失败。',
+          error instanceof Error ? error.message : 'Failed to bind the saved script.',
       });
     } finally {
       setBindPending(false);
@@ -1690,7 +1835,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!isEmbeddedMode) {
       setNotice({
         type: 'warning',
-        message: '测试运行需要在嵌入式 Studio Host 中使用。',
+        message: 'Test Run requires an embedded Studio host.',
       });
       return;
     }
@@ -1698,7 +1843,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!resolvedScopeId) {
       setNotice({
         type: 'warning',
-        message: '测试运行需要绑定到当前团队。',
+        message: 'Test Run requires the current scope.',
       });
       return;
     }
@@ -1741,7 +1886,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       openWorkspaceSection('activity');
       setNotice({
         type: 'success',
-        message: `已启动测试运行 ${result.runId}，运行实例 ${result.runtimeActorId}。`,
+        message: `Started draft run ${result.runId} on runtime ${result.runtimeActorId}.`,
       });
     } catch (error) {
       setNotice({
@@ -1749,7 +1894,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message:
           error instanceof Error
             ? error.message
-            : '启动脚本测试运行失败。',
+            : 'Failed to start the script draft run.',
       });
     } finally {
       setRunPending(false);
@@ -1772,7 +1917,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!scopeBacked) {
       setNotice({
         type: 'warning',
-        message: '只有绑定到当前团队后，才能发布脚本。',
+        message: 'Promotion is only available after Studio resolves the current scope.',
       });
       return;
     }
@@ -1782,7 +1927,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     if (!baseRevision) {
       setNotice({
         type: 'warning',
-        message: '请先把脚本保存到当前团队，再继续发布。',
+        message: 'Save the script into the current scope before proposing a promotion.',
       });
       return;
     }
@@ -1807,15 +1952,50 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       setPromotionModalOpen(false);
       setActiveResultTab('promotion');
       openWorkspaceSection('activity');
+      const observedCatalog = response.accepted
+        ? await waitForPromotionCatalog(response)
+        : null;
+      if (observedCatalog) {
+        const detail = await scriptsApi.getScript(
+          resolvedScopeId,
+          response.scriptId,
+        );
+        updateSelectedDraft((draft) => ({
+          ...draft,
+          scriptId: detail.script?.scriptId || draft.scriptId,
+          revision:
+            detail.script?.activeRevision || detail.source?.revision || draft.revision,
+          baseRevision:
+            detail.script?.activeRevision ||
+            detail.source?.revision ||
+            draft.baseRevision,
+          definitionActorId:
+            detail.script?.definitionActorId ||
+            detail.source?.definitionActorId ||
+            response.definitionActorId ||
+            draft.definitionActorId,
+          lastSourceHash:
+            detail.source?.sourceHash ||
+            detail.script?.activeSourceHash ||
+            draft.lastSourceHash,
+          scopeDetail: detail,
+        }));
+      }
       await refreshScopeScripts();
       await queryClient.invalidateQueries({
         queryKey: ['studio-scripts-proposals'],
       });
       setNotice({
-        type: response.accepted ? 'success' : 'warning',
+        type: response.accepted
+          ? observedCatalog
+            ? 'success'
+            : 'info'
+          : 'warning',
         message: response.accepted
-          ? `已将 ${response.scriptId} 发布为 ${response.candidateRevision}。`
-          : response.failureReason || '发布提案被拒绝。',
+          ? observedCatalog
+            ? `Promoted ${response.scriptId} to ${response.candidateRevision}.`
+            : `Promotion accepted for ${response.scriptId} ${response.candidateRevision}. Waiting for the catalog read model to catch up.`
+          : response.failureReason || 'Promotion proposal was rejected.',
       });
     } catch (error) {
       setNotice({
@@ -1823,7 +2003,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message:
           error instanceof Error
             ? error.message
-            : '发布当前草稿失败。',
+            : 'Failed to promote the active draft.',
       });
     } finally {
       setPromotionPending(false);
@@ -1833,9 +2013,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     queryClient,
     openWorkspaceSection,
     refreshScopeScripts,
+    resolvedScopeId,
     scopeBacked,
     selectedDraft,
     updateSelectedDraft,
+    waitForPromotionCatalog,
   ]);
 
   const resetAskAiOutput = React.useCallback(() => {
@@ -1854,10 +2036,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     askAiAbortRef.current.abort();
     askAiAbortRef.current = null;
     setAskAiPending(false);
-      setNotice({
-        type: 'info',
-        message: '已取消 AI 生成。',
-      });
+    setNotice({
+      type: 'info',
+      message: 'Cancelled AI generation.',
+    });
   }, []);
 
   const closeAskAiComposer = React.useCallback(() => {
@@ -1924,7 +2106,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
       );
       setNotice({
         type: 'success',
-        message: 'AI 已生成脚本修改，可以预览并应用到当前草稿。',
+        message: 'Generated script changes are ready to review and apply.',
       });
     } catch (error) {
       if (controller.signal.aborted) {
@@ -1936,7 +2118,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         message:
           error instanceof Error
             ? error.message
-            : 'AI 生成脚本失败。',
+            : 'Failed to generate script changes.',
       });
     } finally {
       if (askAiAbortRef.current === controller) {
@@ -1973,7 +2155,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
     resetAskAiOutput();
     setNotice({
       type: 'success',
-      message: '已把 AI 生成的修改应用到当前草稿。',
+      message: 'Applied AI-generated script changes to the active draft.',
     });
   }, [askAiGeneratedFilePath, askAiGeneratedPackage, resetAskAiOutput, selectedDraft, updateSelectedDraft]);
 
@@ -2209,8 +2391,13 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
   );
   const visibleProblems = validationResult?.diagnostics ?? [];
   const showFilesPane = filesPaneOpen;
-  const scriptsInspectorTab =
-    workspaceSection === 'activity' ? 'diagnostics' : 'info';
+  const packageModalOpen = editorView === 'package';
+  const rightDrawerTab = packageModalOpen
+    ? 'package'
+    : workspacePanelOpen
+      ? 'panels'
+      : null;
+  const rightDrawerOpen = rightDrawerTab !== null;
   const validationSummary = summarizeValidation(validationResult, validationPending);
   const validationPillClass = `console-scripts-validation-pill${
     validationPending
@@ -2222,17 +2409,17 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           : ''
   }`;
   const compilerSummary = validationPending
-    ? '校验中'
+    ? 'Checking'
     : validationError ||
       visibleProblems[0]?.message ||
-      '通过';
-  const headerRevisionLabel = selectedDraft?.revision || '草稿版本';
+      'Clean';
+  const headerRevisionLabel = selectedDraft?.revision || 'draft revision';
   const headerScopeLabel = scopeBacked
-    ? `团队 ${compactHeaderValue(resolvedScopeId)}`
-    : '本地草稿';
+    ? `Scope ${compactHeaderValue(resolvedScopeId)}`
+    : 'Local draft';
   const headerScopeTooltip = scopeBacked
-    ? `团队 ${resolvedScopeId || '-'}`
-    : '本地草稿';
+    ? `Scope ${resolvedScopeId || '-'}`
+    : 'Local draft';
   const moreActions: NonNullable<MenuProps['items']> = [
     {
       key: 'validate',
@@ -2311,7 +2498,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             title={notice.message}
             description={
               notice.description || notice.actions?.length ? (
-                <Space orientation="vertical" size={12}>
+                <Space direction="vertical" size={12}>
                   {notice.description ? <span>{notice.description}</span> : null}
                   {notice.actions?.length ? (
                     <Space wrap size={[8, 8]}>
@@ -2340,7 +2527,6 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           <div className="console-scripts-title-bar">
             <div className="console-scripts-title-group">
               <div className="console-scripts-title-copy">
-                <div className="console-scripts-eyebrow">正在编辑</div>
                 <input
                   className="console-scripts-title-input"
                   value={selectedDraft?.scriptId || ''}
@@ -2382,55 +2568,60 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   <span style={{ marginLeft: 6 }}>{validationSummary}</span>
                 </span>
               ) : null}
-              <button
-                type="button"
-                className="console-scripts-ghost-action console-scripts-header-text-action"
-                onClick={() => void handleManualValidate()}
-                disabled={!selectedDraft || validationPending}
-                aria-label="校验"
+              <Tooltip
+                title={scopeBacked ? 'Save the active draft into the current scope catalog' : 'Requires the current scope'}
+                placement="bottom"
               >
-                <ExperimentOutlined />
-                <span>校验</span>
-              </button>
-              <button
-                type="button"
-                className="console-scripts-ghost-action console-scripts-header-text-action"
-                onClick={() => {
-                  setRunInputDraft(selectedDraft?.input || '');
-                  setRunModalOpen(true);
-                }}
-                disabled={!canRun}
-                aria-label="测试运行"
+                <span className="console-scripts-tooltip-anchor">
+                  <button
+                    type="button"
+                    className="console-scripts-solid-action console-scripts-header-text-action"
+                    onClick={() => void handleSave()}
+                    disabled={!canSave}
+                    aria-label="Save"
+                  >
+                    <SaveOutlined />
+                    <span>{savePending ? 'Saving' : 'Save'}</span>
+                  </button>
+                </span>
+              </Tooltip>
+              <Tooltip
+                title={
+                  canBindScope
+                    ? 'Bind the saved script to the default service for this scope.'
+                    : 'Save the current script into the scope before binding it.'
+                }
+                placement="bottom"
               >
-                <PlayCircleOutlined />
-                <span>测试</span>
-              </button>
-              <button
-                type="button"
-                className="console-scripts-solid-action console-scripts-header-text-action"
-                onClick={() => {
-                    setPromotionReasonDraft(
-                      selectedDraft?.reason ||
-                      `发布 ${selectedDraft?.revision || 'candidate'}`,
-                  );
-                  setPromotionModalOpen(true);
-                }}
-                disabled={!canPromote}
-                aria-label="发布"
+                <span className="console-scripts-tooltip-anchor">
+                  <button
+                    type="button"
+                    className="console-scripts-solid-action console-scripts-header-text-action"
+                    onClick={handleOpenBindScope}
+                    disabled={!canBindScope}
+                    aria-label="Bind scope"
+                  >
+                    <SafetyCertificateOutlined />
+                    <span>Bind</span>
+                  </button>
+                </span>
+              </Tooltip>
+              <Dropdown
+                menu={{ items: moreActions }}
+                placement="bottomRight"
+                trigger={['click']}
               >
-                <SafetyCertificateOutlined />
-                <span>{promotionPending ? '发布中' : '发布'}</span>
-              </button>
-              <button
-                type="button"
-                className="console-scripts-solid-action console-scripts-header-text-action"
-                onClick={() => void handleSave()}
-                disabled={!canSave}
-                aria-label="保存"
-              >
-                <SaveOutlined />
-                <span>{savePending ? '保存中' : '保存'}</span>
-              </button>
+                <button
+                  type="button"
+                  className="console-scripts-ghost-action console-scripts-header-text-action"
+                  aria-label="More script actions"
+                  disabled={!selectedDraft}
+                >
+                  <AppstoreOutlined />
+                  <span>More</span>
+                  <DownOutlined />
+                </button>
+              </Dropdown>
             </div>
           </div>
         </div>
@@ -2441,7 +2632,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           <section className="console-scripts-editor-shell">
             <div className="console-scripts-editor-head">
               <div>
-                <div className="console-scripts-eyebrow">脚本编辑器</div>
+                <div className="console-scripts-eyebrow">Editor</div>
                 <div className="console-scripts-editor-title">
                   {selectedPackageEntry?.path ||
                     validationResult?.primarySourcePath ||
@@ -2452,7 +2643,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
               <div className="console-scripts-meta-strip">
                 {hasScopeChanges ? (
                   <span className="console-scripts-chip dirty">
-                    团队内有未保存变更
+                    Unsaved scope changes
                   </span>
                 ) : null}
                 <span>{formatScriptDateTime(selectedDraft?.updatedAtUtc)}</span>
@@ -2460,10 +2651,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
             </div>
 
             <div className="console-scripts-editor-body">
-              <div
-                className="console-scripts-editor-layout"
-                style={{ paddingRight: 336 }}
-              >
+              <div className="console-scripts-editor-layout">
                 <div className={`console-scripts-file-pane ${showFilesPane ? '' : 'collapsed'}`}>
                   <ScriptsPackageFileTree
                     entries={packageEntries}
@@ -2496,6 +2684,31 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                   />
                 </div>
                 <div className="console-scripts-editor-pane">
+                  <div className="console-scripts-editor-drawer-toggles">
+                    <button
+                      type="button"
+                      onClick={() => toggleRightDrawer('panels')}
+                      className={`console-scripts-icon-button ${
+                        rightDrawerOpen && rightDrawerTab === 'panels' ? 'active' : ''
+                      }`}
+                      title="Panels"
+                      aria-label="Panels"
+                    >
+                      <AppstoreOutlined />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleRightDrawer('package')}
+                      className={`console-scripts-icon-button ${
+                        rightDrawerOpen && rightDrawerTab === 'package' ? 'active' : ''
+                      }`}
+                      title="Package"
+                      aria-label="Package"
+                    >
+                      <FolderOpenOutlined />
+                    </button>
+                  </div>
+
                   {selectedPackageEntry ? (
                     <ScriptCodeEditorComponent
                       filePath={selectedPackageEntry.path}
@@ -2529,8 +2742,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                       }}
                     >
                       <ScriptsStudioEmptyState
-                        title="创建或选择一个脚本草稿"
-                        copy="先添加文件，或者选择已有草稿后再开始编辑。"
+                        title="Create or select a script draft"
+                        copy="Add a file to the package or select an existing draft to start editing."
                       />
                     </div>
                   )}
@@ -2551,80 +2764,179 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                     type="button"
                     onClick={() => {
                       setActiveResultTab('diagnostics');
-                      setWorkspaceSection('activity');
+                      openWorkspaceSection('activity');
                     }}
                     className={surfaceActionClass(
-                      workspaceSection === 'activity' &&
+                      workspacePanelOpen &&
+                        workspaceSection === 'activity' &&
                         activeResultTab === 'diagnostics',
                     )}
                   >
                     <FileSearchOutlined />
-                    诊断 {visibleProblems.length}
+                    Problems {visibleProblems.length}
                   </button>
                 ) : (
-                  <div className="console-scripts-validation-pill">通过</div>
+                  <div className="console-scripts-validation-pill">Clean</div>
                 )}
               </div>
             </div>
           </section>
         </div>
 
-        <aside className="console-scripts-right-drawer open">
+        <aside className={`console-scripts-right-drawer ${rightDrawerOpen ? 'open' : ''}`}>
           <div className="console-scripts-drawer-header">
             <div>
-              <div className="console-scripts-eyebrow">侧边面板</div>
+              <div className="console-scripts-eyebrow">
+                {rightDrawerTab === 'package' ? 'Package' : 'Panels'}
+              </div>
               <div className="console-scripts-drawer-title">
-                {scriptsInspectorTab === 'diagnostics' ? '诊断' : '脚本信息'}
+                {rightDrawerTab === 'package'
+                  ? 'Manifest'
+                  : workspaceSection === 'library'
+                    ? 'Library'
+                    : workspaceSection === 'activity'
+                      ? 'Activity'
+                      : 'Details'}
               </div>
             </div>
-            <div className="console-scripts-inline-actions">
-              <button
-                type="button"
-                onClick={() => setWorkspaceSection('details')}
-                className={surfaceActionClass(scriptsInspectorTab === 'info')}
-              >
-                脚本信息
-              </button>
-              <button
-                type="button"
-                onClick={() => setWorkspaceSection('activity')}
-                className={surfaceActionClass(scriptsInspectorTab === 'diagnostics')}
-              >
-                诊断
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={closeRightDrawer}
+              className="console-scripts-icon-button"
+              title="Close drawer"
+              aria-label="Close drawer"
+            >
+              <CloseOutlined />
+            </button>
           </div>
 
-          <div className="console-scripts-drawer-body">
-            <div style={{ height: '100%', minHeight: 0, overflow: 'hidden', padding: 16 }}>
-              {scriptsInspectorTab === 'diagnostics' ? (
-                <ScriptResultsPanel
-                  activeResultTab={activeResultTab}
-                  validationPending={validationPending}
-                  validationError={validationError}
-                  validationResult={validationResult}
-                  selectedSnapshot={selectedSnapshot}
-                  selectedSnapshotView={selectedSnapshotView}
-                  activeDiagnosticKey={selectedDiagnosticKey}
-                  selectedCatalog={selectedCatalog}
-                  scopeDetail={selectedDraft?.scopeDetail || null}
-                  selectedDecision={selectedDecision}
-                  onChangeActiveResultTab={setActiveResultTab}
-                  onSelectDiagnostic={handleSelectDiagnostic}
-                />
-              ) : (
-                <ScriptInspectorPanel
-                  appContext={appContext}
-                  scopeBacked={scopeBacked}
-                  selectedDraft={selectedDraft}
-                  canAskAi={canUseAskAi}
-                  canBindScope={canBindScope}
-                  onOpenAskAi={openAskAiComposer}
-                  onOpenBindScope={handleOpenBindScope}
-                />
-              )}
+          {rightDrawerTab === 'panels' ? (
+            <>
+              <div className="console-scripts-drawer-switches">
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceSection('library')}
+                  className={surfaceActionClass(workspaceSection === 'library')}
+                >
+                  Library
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceSection('activity')}
+                  className={surfaceActionClass(workspaceSection === 'activity')}
+                >
+                  Activity
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWorkspaceSection('details')}
+                  className={surfaceActionClass(workspaceSection === 'details')}
+                >
+                  Details
+                </button>
+              </div>
+              <div className="console-scripts-drawer-body">
+                <div style={{ height: '100%', minHeight: 0, overflow: 'hidden', padding: 16 }}>
+                  {workspaceSection === 'library' ? (
+                    <ScriptsResourceRail
+                      drafts={drafts}
+                      filteredDrafts={filteredDrafts}
+                      selectedDraftKey={selectedDraft?.key || ''}
+                      search={search}
+                      scopeBacked={scopeBacked}
+                      scopeSelectionId={scopeSelectionId}
+                      scopeScripts={filteredScopeScripts}
+                      scopeScriptsLoading={
+                        scopeScriptsQuery.isFetching || scopeScriptsQuery.isLoading
+                      }
+                      runtimeSnapshots={filteredRuntimeSnapshots}
+                      runtimeSnapshotsLoading={
+                        runtimeSnapshotsQuery.isFetching ||
+                        runtimeSnapshotsQuery.isLoading
+                      }
+                      selectedRuntimeActorId={selectedRuntimeActorId}
+                      proposalDecisions={filteredProposalDecisions}
+                      selectedProposalId={selectedProposalId}
+                      onCreateDraft={createNewDraft}
+                      onSearchChange={setSearch}
+                      onSelectDraft={(draft) => {
+                        setSelectedDraftKey(draft.key);
+                        onSelectScriptId?.(draft.scopeDetail?.script?.scriptId || '');
+                      }}
+                      onRefreshScopeScripts={() => void refreshScopeScripts()}
+                      onOpenScopeScript={openScopeScript}
+                      onRefreshRuntimeSnapshots={() => void refreshRuntimeSnapshots()}
+                      onSelectRuntime={(snapshot) => {
+                        setSelectedRuntimeActorId(snapshot.actorId);
+                        setActiveResultTab('runtime');
+                        setWorkspaceSection('activity');
+                      }}
+                      onSelectProposal={(decision) => {
+                        setSelectedProposalId(decision.proposalId);
+                        setActiveResultTab('promotion');
+                        setWorkspaceSection('activity');
+                      }}
+                    />
+                  ) : workspaceSection === 'activity' ? (
+                    <ScriptResultsPanel
+                      activeResultTab={activeResultTab}
+                      validationPending={validationPending}
+                      validationError={validationError}
+                      validationResult={validationResult}
+                      selectedSnapshot={selectedSnapshot}
+                      selectedSnapshotView={selectedSnapshotView}
+                      activeDiagnosticKey={selectedDiagnosticKey}
+                      selectedCatalog={selectedCatalog}
+                      scopeDetail={selectedDraft?.scopeDetail || null}
+                      selectedDecision={selectedDecision}
+                      onChangeActiveResultTab={setActiveResultTab}
+                      onSelectDiagnostic={handleSelectDiagnostic}
+                    />
+                  ) : (
+                    <ScriptInspectorPanel
+                      appContext={appContext}
+                      scopeBacked={scopeBacked}
+                      selectedDraft={selectedDraft}
+                    />
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="console-scripts-drawer-body">
+              <ScriptsPackagePanel
+                selectedDraft={selectedDraft}
+                onRevisionChange={(value) =>
+                  updateSelectedDraft((draft) => ({
+                    ...draft,
+                    revision: normalizeStudioId(value, 'rev'),
+                  }))
+                }
+                onBaseRevisionChange={(value) =>
+                  updateSelectedDraft((draft) => ({
+                    ...draft,
+                    baseRevision: normalizeStudioId(value, 'rev'),
+                  }))
+                }
+                onEntryBehaviorTypeChange={(value) =>
+                  updateSelectedDraft((draft) => ({
+                    ...draft,
+                    package: updateEntryBehaviorTypeName(draft.package, value),
+                  }))
+                }
+                onDeleteDraft={() =>
+                  selectedDraft
+                    ? setRemovalTarget({
+                        kind: 'draft',
+                        draftKey: selectedDraft.key,
+                        scriptId: selectedDraft.scriptId,
+                      })
+                    : undefined
+                }
+                canDeleteDraft={drafts.length > 1}
+              />
             </div>
-          </div>
+          )}
         </aside>
 
         <div
@@ -2643,29 +2955,30 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onPointerDown={beginFloatingDrag}
               >
                 <div>
-                  <div className="console-scripts-eyebrow">AI 辅助</div>
-                  <div className="console-scripts-section-title">生成脚本</div>
+                  <div className="console-scripts-eyebrow">Source</div>
+                  <div className="console-scripts-section-title">Ask AI</div>
                 </div>
                 <button
                   type="button"
                   onClick={closeAskAiComposer}
                   onPointerDown={(event) => event.stopPropagation()}
                   className="console-scripts-icon-button"
-                  title="关闭 AI 辅助"
-                  aria-label="关闭 AI 辅助"
+                  title="Close Ask AI"
+                  aria-label="Close Ask AI"
                 >
                   <CloseOutlined />
                 </button>
               </div>
               <div className="console-scripts-ask-ai-body">
                 <div className="console-scripts-ask-ai-copy">
-                  描述你想要的脚本修改内容。取消只会停止当前生成，不会改动现有草稿。
+                  Describe the script change you want. Cancel stops the current
+                  generation without touching the active draft.
                 </div>
 
                 <textarea
                   rows={5}
                   className="console-scripts-textarea"
-                  placeholder="构建一个脚本：校验邮箱、完成标准化处理，并返回 JSON 摘要。"
+                  placeholder="Build a script that validates an email address, normalizes it, and returns a JSON summary."
                   value={askAiPrompt}
                   onChange={(event) => setAskAiPrompt(event.target.value)}
                   style={{ marginTop: 16 }}
@@ -2674,10 +2987,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 <div className="console-scripts-ask-ai-toolbar">
                   <div className="console-scripts-ask-ai-copy">
                     {askAiPending
-                      ? '正在生成并编译文件内容...'
+                      ? 'Generating and compiling file content...'
                       : askAiGeneratedSource
-                        ? `可应用 ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} 个文件` : '当前文件'}`
-                        : '返回格式：script package JSON'}
+                        ? `Ready to apply ${askAiGeneratedPackage ? `${askAiGeneratedPackage.csharpSources.length + askAiGeneratedPackage.protoFiles.length} files` : 'the active file'}`
+                        : 'Return format: script package JSON'}
                   </div>
                   <div className="console-scripts-inline-actions">
                     {askAiPending ? (
@@ -2686,7 +2999,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                         onClick={cancelAskAiGeneration}
                         className="console-scripts-ghost-action"
                       >
-                        取消
+                        Cancel
                       </button>
                     ) : null}
                     <button
@@ -2695,7 +3008,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                       className="console-scripts-ghost-action"
                       disabled={askAiPending || !askAiGeneratedPackage}
                     >
-                      应用
+                      Apply
                     </button>
                     <button
                       type="button"
@@ -2703,38 +3016,38 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                       className="console-scripts-solid-action"
                       disabled={askAiPending || !askAiPrompt.trim()}
                     >
-                      {askAiPending ? '生成中' : '生成'}
+                      {askAiPending ? 'Thinking' : 'Generate'}
                     </button>
                   </div>
                 </div>
 
                 <div className="console-scripts-ai-preview">
-                  <div className="console-scripts-section-label">推理过程</div>
+                  <div className="console-scripts-section-label">Thinking</div>
                   <pre className="console-scripts-pre" style={{ marginTop: 8 }}>
-                    {askAiReasoning || '模型推理会显示在这里。'}
+                    {askAiReasoning || 'LLM reasoning will stream here.'}
                   </pre>
                 </div>
 
                 <div className="console-scripts-ai-preview">
                   <div className="console-scripts-inline-actions" style={{ justifyContent: 'space-between' }}>
                     <div className="console-scripts-section-label">
-                      生成预览
+                      Generated Preview
                     </div>
                     <div className="console-scripts-eyebrow">
-                      {askAiGeneratedSource ? '可应用' : '等待中'}
+                      {askAiGeneratedSource ? 'Ready to apply' : 'Waiting'}
                     </div>
                   </div>
                   {askAiGeneratedPackage ? (
                     <div className="console-scripts-detail-copy">
                       {askAiPreviewEntry?.path || askAiGeneratedFilePath || '-'} ·{' '}
-                      {askAiGeneratedPackage.csharpSources.length} 个 C# 文件 ·{' '}
-                      {askAiGeneratedPackage.protoFiles.length} 个 Proto 文件
+                      {askAiGeneratedPackage.csharpSources.length} C# ·{' '}
+                      {askAiGeneratedPackage.protoFiles.length} proto
                     </div>
                   ) : null}
                   <pre className="console-scripts-pre" style={{ marginTop: 8 }}>
                     {askAiGeneratedSource ||
                       askAiAnswer ||
-                      '生成的文件内容会显示在这里。'}
+                      'Generated file content will appear here.'}
                   </pre>
                 </div>
               </div>
@@ -2744,7 +3057,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           <Tooltip
             title={
               canUseAskAi
-                ? '使用 AI 生成脚本代码。'
+                ? 'Ask AI to generate script code.'
                 : askAiUnavailableMessage
             }
             placement="left"
@@ -2766,10 +3079,10 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 className={`console-scripts-ask-ai-trigger ${askAiOpen ? 'active' : ''}`}
                 title={
                   canUseAskAi
-                    ? '使用 AI 生成脚本代码。'
+                    ? 'Ask AI to generate script code.'
                     : askAiUnavailableMessage
                 }
-                aria-label="使用 AI 生成脚本代码。"
+                aria-label="Ask AI to generate script code."
                 disabled={!canUseAskAi}
               >
                 <RobotOutlined />
@@ -2780,8 +3093,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={runModalOpen}
-          eyebrow="测试运行"
-          title="开始测试"
+          eyebrow="Runtime"
+          title="Test Run"
           onClose={() => setRunModalOpen(false)}
           actions={
             <>
@@ -2790,7 +3103,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setRunModalOpen(false)}
                 className="console-scripts-ghost-action"
               >
-                取消
+                Cancel
               </button>
               <button
                 type="button"
@@ -2798,18 +3111,18 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 className="console-scripts-solid-action"
                 disabled={runPending}
               >
-                {runPending ? '运行中' : '开始运行'}
+                {runPending ? 'Running' : 'Run draft'}
               </button>
             </>
           }
         >
           <div className="console-scripts-detail-copy">
-            测试运行会直接通过
+            Test Run executes the current draft directly through
             <code style={{ marginInline: 4 }}>/api/scopes/{'{scopeId}'}/scripts/draft-run</code>
-            执行当前草稿，不会改动团队默认入口。
+            without rebinding the scope default service.
           </div>
           <textarea
-            aria-label="脚本测试输入"
+            aria-label="Script test run input"
             rows={5}
             className="console-scripts-textarea"
             value={runInputDraft}
@@ -2820,8 +3133,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={promotionModalOpen}
-          eyebrow="发布"
-          title="发布当前草稿"
+          eyebrow="Evolution"
+          title="Promote draft"
           onClose={() => setPromotionModalOpen(false)}
           actions={
             <>
@@ -2830,7 +3143,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setPromotionModalOpen(false)}
                 className="console-scripts-ghost-action"
               >
-                取消
+                Cancel
               </button>
               <button
                 type="button"
@@ -2838,13 +3151,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 className="console-scripts-solid-action"
                 disabled={promotionPending}
               >
-                {promotionPending ? '发布中' : '确认发布'}
+                {promotionPending ? 'Promoting' : 'Promote'}
               </button>
             </>
           }
         >
           <div className="console-scripts-detail-copy">
-            发布会把测试中的草稿和团队线上版本区分开。当前团队版本会作为基线。
+            Promotion keeps test-run iteration separate from scope rollout. The current
+            scope revision is used as the base.
           </div>
           <textarea
             rows={4}
@@ -2857,8 +3171,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={bindModalOpen}
-          eyebrow="团队入口"
-          title="绑定已保存脚本"
+          eyebrow="Scope"
+          title="Bind saved script"
           onClose={() => setBindModalOpen(false)}
           actions={
             <>
@@ -2867,7 +3181,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setBindModalOpen(false)}
                 className="console-scripts-ghost-action"
               >
-                取消
+                Cancel
               </button>
               <button
                 type="button"
@@ -2875,27 +3189,28 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 className="console-scripts-solid-action"
                 disabled={bindPending}
               >
-                {bindPending ? '绑定中' : '确认绑定'}
+                {bindPending ? 'Binding' : 'Bind'}
               </button>
             </>
           }
         >
           <div className="console-scripts-detail-copy">
-            把当前已保存脚本绑定成这个团队的默认脚本入口。
+            Bind the saved scope script to the default service for this scope.
+            Existing workflow authoring stays available alongside this flow.
           </div>
           <div style={{ marginTop: 16 }}>
-            <div className="console-scripts-eyebrow">脚本版本</div>
+            <div className="console-scripts-eyebrow">Script</div>
             <div className="console-scripts-detail-copy">
               {scopeBindingScript?.scriptId || selectedDraft?.scriptId || '-'} ·{' '}
               {scopeBindingScript?.activeRevision || selectedDraft?.revision || '-'}
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
-            <div className="console-scripts-eyebrow">展示名称</div>
+            <div className="console-scripts-eyebrow">Display name</div>
             <Input
               value={bindDisplayNameDraft}
               onChange={(event) => setBindDisplayNameDraft(event.target.value)}
-              placeholder="脚本展示名称"
+              placeholder="Script display name"
               style={{ marginTop: 8 }}
             />
           </div>
@@ -2903,8 +3218,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={Boolean(fileDialog)}
-          eyebrow="文件"
-          title={fileDialog?.title || '编辑文件'}
+          eyebrow="Package"
+          title={fileDialog?.title || 'Edit file'}
           onClose={() => setFileDialog(null)}
           actions={
             <>
@@ -2913,7 +3228,7 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setFileDialog(null)}
                 className="console-scripts-ghost-action"
               >
-                取消
+                Cancel
               </button>
               <button
                 type="button"
@@ -2921,19 +3236,19 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 className="console-scripts-solid-action"
                 disabled={!fileDialog || Boolean(fileDialogError)}
               >
-                {fileDialog?.confirmLabel || '保存'}
+                {fileDialog?.confirmLabel || 'Save'}
               </button>
             </>
           }
           width={560}
         >
           <label className="console-scripts-field">
-            <div className="console-scripts-field-label">文件路径</div>
+            <div className="console-scripts-field-label">File path</div>
             <input
               autoFocus
               className="console-scripts-input"
               value={fileDialog?.value || ''}
-              aria-label="文件路径"
+              aria-label="File path"
               onChange={(event) =>
                 setFileDialog((current) =>
                   current
@@ -2955,8 +3270,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
           {fileDialog ? (
             <div className="console-scripts-detail-copy">
               {fileDialog.kind === 'csharp'
-                ? 'C# 文件需要以 .cs 结尾。'
-                : 'Proto 文件需要以 .proto 结尾。'}
+                ? 'C# files should end with .cs.'
+                : 'Proto files should end with .proto.'}
             </div>
           ) : null}
           {fileDialogError ? (
@@ -2971,11 +3286,11 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
 
         <ScriptsStudioModal
           open={Boolean(removalTarget)}
-          eyebrow={removalTarget?.kind === 'draft' ? '草稿' : '文件'}
+          eyebrow={removalTarget?.kind === 'draft' ? 'Draft' : 'Package'}
           title={
             removalTarget?.kind === 'draft'
-              ? '删除本地草稿'
-              : '删除文件'
+              ? 'Remove local draft'
+              : 'Remove file'
           }
           onClose={() => setRemovalTarget(null)}
           actions={
@@ -2985,14 +3300,14 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
                 onClick={() => setRemovalTarget(null)}
                 className="console-scripts-ghost-action"
               >
-                取消
+                Cancel
               </button>
               <button
                 type="button"
                 onClick={handleConfirmRemoval}
                 className="console-scripts-solid-action"
               >
-                删除
+                Remove
               </button>
             </>
           }
@@ -3000,8 +3315,8 @@ const ScriptsWorkbenchPage: React.FC<ScriptsWorkbenchPageProps> = ({
         >
           <div className="console-scripts-detail-copy" style={{ marginTop: 0 }}>
             {removalTarget?.kind === 'draft'
-              ? `确认把 ${removalTarget.scriptId} 从本地草稿列表里删除吗？`
-              : `确认把 ${removalTarget?.filePath || '这个文件'} 从当前脚本包里删除吗？`}
+              ? `Remove ${removalTarget.scriptId} from the local draft list?`
+              : `Remove ${removalTarget?.filePath || 'this file'} from the current package?`}
           </div>
         </ScriptsStudioModal>
       </section>

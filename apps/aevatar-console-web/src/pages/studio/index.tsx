@@ -1,6 +1,10 @@
 import { PageContainer } from '@ant-design/pro-components';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { history } from '@/shared/navigation/history';
+import {
+  getLocationSnapshot,
+  history,
+  subscribeToLocationChanges,
+} from '@/shared/navigation/history';
 import {
   buildTeamDetailHref,
   buildTeamsHref,
@@ -815,8 +819,8 @@ function buildBlankDraftYaml(workflowName: string): string {
   return `name: ${normalizedName}\nsteps: []\n`;
 }
 
-function readInitialStudioRouteState(): StudioRouteState {
-  if (typeof window === 'undefined') {
+function readStudioRouteState(search?: string): StudioRouteState {
+  if (typeof window === 'undefined' && typeof search !== 'string') {
     return {
       scopeId: '',
       scopeLabel: '',
@@ -834,7 +838,13 @@ function readInitialStudioRouteState(): StudioRouteState {
     };
   }
 
-  const params = new URLSearchParams(window.location.search);
+  const params = new URLSearchParams(
+    typeof search === 'string'
+      ? search
+      : typeof window === 'undefined'
+        ? ''
+        : window.location.search,
+  );
   return {
     scopeId: trimOptional(params.get('scopeId')),
     scopeLabel: trimOptional(params.get('scopeLabel')),
@@ -936,31 +946,56 @@ function isWorkflowNotFoundError(error: unknown): boolean {
 }
 
 const StudioPage: React.FC = () => {
-  const initialState = useMemo(() => readInitialStudioRouteState(), []);
+  const locationSnapshot = React.useSyncExternalStore(
+    subscribeToLocationChanges,
+    getLocationSnapshot,
+    () => '',
+  );
+  const routeState = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return readStudioRouteState('');
+    }
+
+    return readStudioRouteState(window.location.search);
+  }, [locationSnapshot]);
+  const routeWorkspacePage = useMemo(
+    () => readInitialWorkspacePage(routeState),
+    [routeState],
+  );
+  const routeStudioView = useMemo(
+    () => readInitialStudioView(routeState),
+    [routeState],
+  );
+  const isStudioLocation =
+    typeof window !== 'undefined' && window.location.pathname === '/studio';
   const nyxIdConfig = useMemo(() => getNyxIDRuntimeConfig(), []);
   const queryClient = useQueryClient();
   const [workspacePage, setWorkspacePage] = useState<StudioWorkspacePage>(
-    readInitialWorkspacePage(initialState),
+    () => readInitialWorkspacePage(readStudioRouteState()),
   );
   const [studioView, setStudioView] = useState<StudioViewMode>(
-    readInitialStudioView(initialState),
+    () => readInitialStudioView(readStudioRouteState()),
   );
   const [workflowSearch, setWorkflowSearch] = useState('');
   const [showWorkflowDirectoryForm, setShowWorkflowDirectoryForm] =
     useState(false);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
-    initialState.workflowId,
+    () => readStudioRouteState().workflowId,
   );
-  const [selectedScriptId, setSelectedScriptId] = useState(initialState.scriptId);
+  const [selectedScriptId, setSelectedScriptId] = useState(
+    () => readStudioRouteState().scriptId,
+  );
   const [selectedExecutionId, setSelectedExecutionId] = useState(
-    initialState.executionId,
+    () => readStudioRouteState().executionId,
   );
   const [templateWorkflow, setTemplateWorkflow] = useState(
-    initialState.templateWorkflow,
+    () => readStudioRouteState().templateWorkflow,
   );
-  const [draftMode, setDraftMode] = useState<'' | 'new'>(initialState.draftMode);
+  const [draftMode, setDraftMode] = useState<'' | 'new'>(
+    () => readStudioRouteState().draftMode,
+  );
   const [legacySource, setLegacySource] = useState<'' | 'playground'>(
-    initialState.legacySource,
+    () => readStudioRouteState().legacySource,
   );
   const [draftYaml, setDraftYaml] = useState('');
   const [draftWorkflowName, setDraftWorkflowName] = useState('');
@@ -972,7 +1007,7 @@ const StudioPage: React.FC = () => {
   const [draftSourceKey, setDraftSourceKey] = useState('');
   const [savePending, setSavePending] = useState(false);
   const [saveNotice, setSaveNotice] = useState<DraftSaveNotice | null>(null);
-  const [runPrompt, setRunPrompt] = useState(initialState.prompt);
+  const [runPrompt, setRunPrompt] = useState(() => readStudioRouteState().prompt);
   const [runPending, setRunPending] = useState(false);
   const [runNotice, setRunNotice] = useState<DraftRunNotice | null>(null);
   const [publishPending, setPublishPending] = useState(false);
@@ -1034,13 +1069,17 @@ const StudioPage: React.FC = () => {
     useState<StudioRuntimeTestResult | null>(null);
   const [directoryPath, setDirectoryPath] = useState('');
   const [directoryLabel, setDirectoryLabel] = useState('');
-  const [logsPopoutMode] = useState(initialState.logsMode);
+  const [logsPopoutMode] = useState(() => readStudioRouteState().logsMode);
+  const [appliedRouteSnapshot, setAppliedRouteSnapshot] = useState(
+    locationSnapshot,
+  );
   const [promptHistory, setPromptHistory] = useState<
     PlaygroundPromptHistoryEntry[]
   >(() => loadPlaygroundPromptHistory());
   const [scriptsHasUnsavedChanges, setScriptsHasUnsavedChanges] = useState(false);
   const [pendingWorkspacePage, setPendingWorkspacePage] =
     useState<StudioWorkspacePage | null>(null);
+  const handledLocationSnapshotRef = useRef(locationSnapshot);
   const legacyPlaygroundDraft = useMemo(() => loadPlaygroundDraft(), []);
   const workflowImportInputRef = useRef<HTMLInputElement | null>(null);
   const connectorImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -1061,6 +1100,72 @@ const StudioPage: React.FC = () => {
   const studioHostReady =
     studioHostAccessResolved && studioHostAuthenticated;
   const studioAppearance = defaultStudioAppearance;
+
+  useEffect(() => {
+    if (!isStudioLocation) {
+      return;
+    }
+
+    if (handledLocationSnapshotRef.current === locationSnapshot) {
+      return;
+    }
+
+    handledLocationSnapshotRef.current = locationSnapshot;
+    setAppliedRouteSnapshot((currentSnapshot) =>
+      currentSnapshot === locationSnapshot ? currentSnapshot : locationSnapshot,
+    );
+    setWorkspacePage((currentPage) =>
+      currentPage === routeWorkspacePage ? currentPage : routeWorkspacePage,
+    );
+    setStudioView((currentView) =>
+      currentView === routeStudioView ? currentView : routeStudioView,
+    );
+    setSelectedWorkflowId((currentWorkflowId) =>
+      trimOptional(currentWorkflowId) === routeState.workflowId
+        ? currentWorkflowId
+        : routeState.workflowId,
+    );
+    setSelectedScriptId((currentScriptId) =>
+      trimOptional(currentScriptId) === routeState.scriptId
+        ? currentScriptId
+        : routeState.scriptId,
+    );
+    setSelectedExecutionId((currentExecutionId) =>
+      trimOptional(currentExecutionId) === routeState.executionId
+        ? currentExecutionId
+        : routeState.executionId,
+    );
+    setTemplateWorkflow((currentTemplateWorkflow) =>
+      trimOptional(currentTemplateWorkflow) === routeState.templateWorkflow
+        ? currentTemplateWorkflow
+        : routeState.templateWorkflow,
+    );
+    setDraftMode((currentDraftMode) =>
+      currentDraftMode === routeState.draftMode
+        ? currentDraftMode
+        : routeState.draftMode,
+    );
+    setLegacySource((currentLegacySource) =>
+      currentLegacySource === routeState.legacySource
+        ? currentLegacySource
+        : routeState.legacySource,
+    );
+    setRunPrompt((currentPrompt) =>
+      currentPrompt === routeState.prompt ? currentPrompt : routeState.prompt,
+    );
+  }, [
+    locationSnapshot,
+    routeState.draftMode,
+    routeState.executionId,
+    routeState.legacySource,
+    routeState.prompt,
+    routeState.scriptId,
+    routeState.templateWorkflow,
+    routeState.workflowId,
+    routeStudioView,
+    routeWorkspacePage,
+    isStudioLocation,
+  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1129,7 +1234,7 @@ const StudioPage: React.FC = () => {
     queryFn: () => studioApi.getAppContext(),
   });
   const resolvedStudioScopeId =
-    initialState.scopeId ||
+    routeState.scopeId ||
     trimOptional(appContextQuery.data?.scopeId) ||
     trimOptional(authSessionQuery.data?.scopeId) ||
     '';
@@ -1577,6 +1682,14 @@ const StudioPage: React.FC = () => {
       return;
     }
 
+    if (!isStudioLocation) {
+      return;
+    }
+
+    if (appliedRouteSnapshot !== locationSnapshot) {
+      return;
+    }
+
     const tab: StudioTab =
       workspacePage === 'studio'
         ? studioView === 'execution'
@@ -1588,9 +1701,9 @@ const StudioPage: React.FC = () => {
 
     window.history.replaceState(null, '', buildStudioRoute({
       scopeId: resolvedStudioScopeId || undefined,
-      scopeLabel: initialState.scopeLabel || undefined,
-      memberId: initialState.memberId || undefined,
-      memberLabel: initialState.memberLabel || undefined,
+      scopeLabel: routeState.scopeLabel || undefined,
+      memberId: routeState.memberId || undefined,
+      memberLabel: routeState.memberLabel || undefined,
       workflowId: selectedWorkflowId || undefined,
       scriptId: selectedScriptId || undefined,
       template: !selectedWorkflowId ? templateWorkflow || undefined : undefined,
@@ -1601,6 +1714,7 @@ const StudioPage: React.FC = () => {
         draftMode === 'new'
           ? 'new'
           : undefined,
+      prompt: runPrompt || undefined,
       legacySource:
         !selectedWorkflowId &&
         !templateWorkflow &&
@@ -1612,9 +1726,17 @@ const StudioPage: React.FC = () => {
       logsMode: logsPopoutMode === 'popout' ? 'popout' : undefined,
     }));
   }, [
+    appliedRouteSnapshot,
     draftMode,
+    isStudioLocation,
     legacySource,
+    locationSnapshot,
     logsPopoutMode,
+    resolvedStudioScopeId,
+    runPrompt,
+    routeState.memberId,
+    routeState.memberLabel,
+    routeState.scopeLabel,
     selectedExecutionId,
     selectedScriptId,
     selectedWorkflowId,
@@ -4168,7 +4290,7 @@ const StudioPage: React.FC = () => {
     },
     {
       key: 'settings',
-      label: '设置',
+      label: '编辑器设置',
       description: '管理 AI Provider，并检查运行时与行为定义配置。',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
@@ -4218,7 +4340,7 @@ const StudioPage: React.FC = () => {
           ? 'Agent 角色'
           : workspacePage === 'connectors'
             ? '集成'
-            : '设置';
+            : '编辑器设置';
 
   const studioContextActions =
     workspacePage === 'studio' && studioView === 'execution' ? (
@@ -4249,11 +4371,11 @@ const StudioPage: React.FC = () => {
     ) : undefined;
 
   const studioContextScopeLabel =
-    initialState.scopeLabel ||
+    routeState.scopeLabel ||
     scopeBindingQuery.data?.displayName ||
     resolvedStudioScopeId;
   const studioContextMemberLabel =
-    initialState.memberLabel || activeWorkflowName || templateWorkflow;
+    routeState.memberLabel || activeWorkflowName || templateWorkflow;
   const currentStudioReturnTo =
     typeof window === 'undefined'
       ? ''

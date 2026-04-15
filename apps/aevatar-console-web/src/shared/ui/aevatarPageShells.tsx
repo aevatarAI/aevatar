@@ -506,22 +506,35 @@ export const AevatarStatusTag: React.FC<AevatarStatusTagProps> = ({
 };
 
 export const AevatarInspectorEmpty: React.FC<{
+  compact?: boolean;
   description: React.ReactNode;
   title?: React.ReactNode;
-}> = ({ description, title = 'Select an item' }) => {
+}> = ({ compact = false, description, title = 'Select an item' }) => {
   const { token } = theme.useToken();
+  const emptyStyles = compact
+    ? {
+        image: { height: 32, marginBottom: 4 },
+        root: { marginBlock: 4 },
+      }
+    : undefined;
 
   return (
     <Empty
       description={
-        <Space orientation="vertical" size={4}>
+        <Space orientation="vertical" size={compact ? 2 : 4}>
           <Typography.Text strong>{title}</Typography.Text>
-          <Typography.Text style={{ color: token.colorTextSecondary }}>
+          <Typography.Text
+            style={{
+              color: token.colorTextSecondary,
+              fontSize: compact ? 13 : undefined,
+            }}
+          >
             {description}
           </Typography.Text>
         </Space>
       }
       image={Empty.PRESENTED_IMAGE_SIMPLE}
+      styles={emptyStyles}
     />
   );
 };

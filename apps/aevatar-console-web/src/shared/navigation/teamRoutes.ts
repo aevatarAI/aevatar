@@ -102,7 +102,7 @@ export function readTeamDetailRouteState(
     pathnameSegments[0] === 'teams' && pathnameSegments[1]
       ? decodePathSegment(pathnameSegments[1])
       : '';
-  const defaultTab: TeamDetailTab = scopeIdFromPath ? 'topology' : 'overview';
+  const defaultTab: TeamDetailTab = 'overview';
 
   return {
     runId: trimOptional(params.get('runId')),

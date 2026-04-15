@@ -168,7 +168,6 @@ const runsWorkspaceTabsCss = `
   min-height: 0;
 }
 
-.${runsWorkspaceTabsClassName} > .ant-tabs-content-holder {
 .${runsWorkspaceTabsClassName} .ant-tabs-content-holder,
 .${runsWorkspaceTabsClassName} .ant-tabs-content,
 .${runsWorkspaceTabsClassName} .ant-tabs-tabpane-active {

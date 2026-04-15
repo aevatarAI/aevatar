@@ -136,6 +136,63 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   };
 }
 
+export type ScopeScriptCommandAcceptedHandle = {
+  actorId: string;
+  commandId: string;
+  correlationId: string;
+};
+
+export type ScopeScriptAcceptedSummary = {
+  scopeId: string;
+  scriptId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  revisionId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type AppScopeScriptSaveAcceptedResponse = {
+  acceptedScript: ScopeScriptAcceptedSummary;
+  submittedSource: {
+    sourceText: string;
+    definitionActorId: string;
+    revision: string;
+    sourceHash: string;
+  };
+  definitionCommand: ScopeScriptCommandAcceptedHandle;
+  catalogCommand: ScopeScriptCommandAcceptedHandle;
+  scopeId: string;
+  scriptId: string;
+  revisionId: string;
+  catalogActorId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  acceptedAt: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+};
+
+export type AppScopeScriptSaveObservationRequest = {
+  revisionId: string;
+  definitionActorId: string;
+  sourceHash: string;
+  proposalId: string;
+  expectedBaseRevision: string;
+  acceptedAt: string;
+};
+
+export type AppScopeScriptSaveObservationResult = {
+  scopeId: string;
+  scriptId: string;
+  status: 'pending' | 'applied' | 'rejected';
+  message: string;
+  currentScript: any | null;
+  isTerminal: boolean;
+};
+
 async function requestText(path: string, opts?: RequestInit): Promise<string> {
   const headers = createRequestHeaders(opts);
   const res = await fetch(`${BASE}${path}`, {
@@ -665,6 +722,40 @@ export const nyxidChat = {
     ),
 };
 
+/* ─── Streaming Proxy APIs (runtime) ─── */
+export const streamingProxy = {
+  createRoom: (scopeId: string, roomName?: string) =>
+    request<{ roomId: string; roomName: string; createdAt: string }>(
+      `/scopes/${enc(scopeId)}/streaming-proxy/rooms`,
+      { method: 'POST', body: JSON.stringify(roomName ? { roomName } : {}) },
+    ),
+
+  streamChat: (
+    scopeId: string,
+    roomId: string,
+    prompt: string,
+    onFrame?: (frame: any) => void,
+    signal?: AbortSignal,
+    sessionId?: string,
+    llmRoute?: string,
+    llmModel?: string,
+  ) => {
+    const body: any = { prompt };
+    if (sessionId) body.sessionId = sessionId;
+    if (llmRoute !== undefined) body.llmRoute = llmRoute;
+    if (llmModel !== undefined) body.llmModel = llmModel;
+    return streamSse(
+      `/scopes/${enc(scopeId)}/streaming-proxy/rooms/${enc(roomId)}:chat`,
+      body,
+      onFrame ?? (() => {}),
+      signal,
+    );
+  },
+
+  deleteRoom: (scopeId: string, roomId: string) =>
+    request<void>(`/scopes/${enc(scopeId)}/streaming-proxy/rooms/${enc(roomId)}`, { method: 'DELETE' }),
+};
+
 /* ─── Chat History APIs (local, chrono-storage backed) ─── */
 export const chatHistory = {
   getIndex: (scopeId: string) =>
@@ -673,7 +764,7 @@ export const chatHistory = {
     ),
 
   getConversation: (scopeId: string, convId: string) =>
-    request<Array<{ id: string; role: string; content: string; timestamp: number; status: string; error?: string; thinking?: string }>>(
+    request<Array<{ id: string; role: string; content: string; authorId?: string; authorName?: string; timestamp: number; status: string; error?: string; thinking?: string }>>(
       `/scopes/${enc(scopeId)}/chat-history/conversations/${enc(convId)}`,
     ),
 
@@ -824,7 +915,9 @@ export const app = {
   listScriptRuntimes: (take = 24) => request<any>(`/app/scripts/runtimes?take=${take}`),
   getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
   getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
-  saveScript: (data: any) => request<any>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
+  saveScript: (data: any) => request<AppScopeScriptSaveAcceptedResponse>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
+  observeScriptSave: (scriptId: string, data: AppScopeScriptSaveObservationRequest) =>
+    request<AppScopeScriptSaveObservationResult>(`/app/scripts/${encodeURIComponent(scriptId)}/save-observation`, { method: 'POST', body: JSON.stringify(data) }),
   runDraftScript: (scopeId: string, data: any) => request<any>(`/scopes/${enc(scopeId)}/scripts/draft-run`, { method: 'POST', body: JSON.stringify(data) }),
 };
 
