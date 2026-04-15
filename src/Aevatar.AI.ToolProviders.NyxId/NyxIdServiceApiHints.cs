@@ -148,4 +148,83 @@ Use the code_execute tool for a simpler interface.
 
         return "<api-hints>\n" + sb.ToString().TrimEnd() + "\n</api-hints>";
     }
+
+    /// <summary>
+    /// Builds a combined API hints section using spec-derived hints where available,
+    /// falling back to hardcoded hints for services without specs.
+    /// </summary>
+    public static async Task<string> BuildHintsSectionAsync(
+        IEnumerable<ServiceHintRequest> services,
+        IConnectedServiceSpecSource specSource,
+        string accessToken,
+        CancellationToken ct = default)
+    {
+        var sb = new StringBuilder();
+        var seenSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenTitles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var svc in services)
+        {
+            if (!seenSlugs.Add(svc.Slug)) continue;
+
+            string? hint = null;
+
+            if (specSource is not null && !string.IsNullOrWhiteSpace(accessToken))
+            {
+                var operations = await specSource.GetOrFetchAsync(
+                    svc.Slug,
+                    svc.ServiceId,
+                    svc.OpenApiUrl,
+                    accessToken,
+                    ct);
+                if (operations is { Length: > 0 })
+                    hint = BuildHintFromOperations(svc.DisplayName ?? svc.Slug, operations);
+            }
+
+            hint ??= GetHint(svc.Slug);
+
+            if (hint is null) continue;
+
+            // Deduplicate by title (e.g., multiple telegram bots share the same hardcoded hint)
+            var title = hint.Split('\n', 2)[0].Trim();
+            if (!seenTitles.Add(title)) continue;
+
+            sb.Append(hint.TrimEnd());
+            sb.AppendLine();
+        }
+
+        if (sb.Length == 0)
+            return string.Empty;
+
+        return "<api-hints>\n" + sb.ToString().TrimEnd() + "\n</api-hints>";
+    }
+
+    internal static string BuildHintFromOperations(string serviceName, OperationCard[] operations, int maxEndpoints = 15)
+    {
+        if (operations.Length == 0)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"### {serviceName} API (from spec, {operations.Length} endpoints)");
+
+        var shown = operations.Take(maxEndpoints);
+        foreach (var op in shown)
+        {
+            sb.Append($"{op.Method} {op.Path}");
+            if (!string.IsNullOrWhiteSpace(op.Summary))
+                sb.Append($" — {op.Summary}");
+            sb.AppendLine();
+        }
+
+        if (operations.Length > maxEndpoints)
+            sb.AppendLine($"... and {operations.Length - maxEndpoints} more. Use nyxid_search_capabilities to discover them.");
+
+        return sb.ToString();
+    }
 }
+
+public sealed record ServiceHintRequest(
+    string Slug,
+    string? ServiceId = null,
+    string? DisplayName = null,
+    string? OpenApiUrl = null);
