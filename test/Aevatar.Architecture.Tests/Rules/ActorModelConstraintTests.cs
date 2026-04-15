@@ -18,7 +18,7 @@ public class ActorModelConstraintTests
                 Classes().That()
                     .HaveNameContaining("GAgent")
                     .And().DoNotHaveNameContaining("InMemory"))
-            .And().HaveNameContaining("ConcurrentDictionary")
+            .And().HaveFullNameContaining("System.Collections.Concurrent.ConcurrentDictionary")
             .Should().NotExist()
             .Because("single-threaded actor must not use concurrent collections for state");
         rule.Check(Arch);

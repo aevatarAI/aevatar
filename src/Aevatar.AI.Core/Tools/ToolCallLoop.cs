@@ -91,6 +91,7 @@ public sealed class ToolCallLoop
                 Model = baseRequest.Model,
                 Temperature = baseRequest.Temperature,
                 MaxTokens = baseRequest.MaxTokens,
+                ResponseFormat = baseRequest.ResponseFormat,
             };
 
             var (response, terminated) = await InvokeLlmAsync(provider, request, ct);
@@ -209,6 +210,7 @@ public sealed class ToolCallLoop
             Model = baseRequest.Model,
             Temperature = baseRequest.Temperature,
             MaxTokens = baseRequest.MaxTokens,
+            ResponseFormat = baseRequest.ResponseFormat,
         };
         var (finalResponse, _) = await InvokeLlmAsync(provider, finalRequest, ct);
         var finalContent = finalResponse?.Content;
@@ -234,6 +236,7 @@ public sealed class ToolCallLoop
                     Model = finalRequest.Model,
                     Temperature = finalRequest.Temperature,
                     MaxTokens = finalRequest.MaxTokens,
+                    ResponseFormat = finalRequest.ResponseFormat,
                 };
                 var (summaryResponse, _) = await InvokeLlmAsync(provider, summaryRequest, ct);
                 var summaryContent = summaryResponse?.Content;

@@ -177,6 +177,7 @@ function createExecuteEventStream() {
 describe("ChatPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    window.history.pushState({}, "", "/chat");
     window.scrollTo = jest.fn();
     (chatHistoryApi.listConversationMetas as jest.Mock).mockResolvedValue([]);
     (chatHistoryApi.loadConversation as jest.Mock).mockResolvedValue([]);
@@ -194,10 +195,11 @@ describe("ChatPage", () => {
     expect(container.textContent).toContain("Chat");
     expect(container.textContent).toContain("Debug");
 
-    const serviceSelector = (await screen.findByLabelText("Chat service")) as HTMLSelectElement;
+    const serviceSelector = await screen.findByLabelText("Chat service");
     await waitFor(() => {
-      expect(serviceSelector.value).toBe("support-service");
+      expect(serviceSelector.textContent).toContain("Support service");
     });
+    expect(screen.getByAltText("NyxID")).toBeTruthy();
 
     const promptInput = await screen.findByPlaceholderText(
       "Describe the task, ask a question, or paste the next operator instruction."
@@ -245,7 +247,8 @@ describe("ChatPage", () => {
     renderWithQueryClient(React.createElement(ChatPage));
 
     const serviceSelector = await screen.findByLabelText("Chat service");
-    fireEvent.change(serviceSelector, { target: { value: "nyxid-chat" } });
+    fireEvent.click(serviceSelector);
+    fireEvent.click(await screen.findByRole("option", { name: /NyxID Chat/i }));
 
     const promptInput = await screen.findByPlaceholderText(
       "Describe the task, ask a question, or paste the next operator instruction."
@@ -270,6 +273,50 @@ describe("ChatPage", () => {
         "scope-a",
         expect.objectContaining({
           prompt: "Help me inspect my service binding.",
+        }),
+        expect.any(AbortSignal),
+        {
+          serviceId: "nyxid-chat",
+        }
+      );
+    });
+  });
+
+  it("prefers the routed scope and service when Chat opens from Studio", async () => {
+    window.history.pushState(
+      {},
+      "",
+      "/chat?scopeId=scope-route&serviceId=nyxid-chat"
+    );
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    const serviceSelector = await screen.findByLabelText("Chat service");
+    await waitFor(() => {
+      expect(serviceSelector.textContent).toContain("NyxID Chat");
+    });
+
+    const promptInput = await screen.findByPlaceholderText(
+      "Describe the task, ask a question, or paste the next operator instruction."
+    );
+    fireEvent.change(promptInput, {
+      target: { value: "Route me to the published chat." },
+    });
+    fireEvent.click(await screen.findByLabelText("Send"));
+
+    await waitFor(() => {
+      expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeId: "scope-route",
+          serviceId: "nyxid-chat",
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(runtimeRunsApi.streamChat).toHaveBeenCalledWith(
+        "scope-route",
+        expect.objectContaining({
+          prompt: "Route me to the published chat.",
         }),
         expect.any(AbortSignal),
         {
@@ -329,9 +376,9 @@ describe("ChatPage", () => {
   it("shows the raw debug stream for the active conversation", async () => {
     renderWithQueryClient(React.createElement(ChatPage));
 
-    const serviceSelector = (await screen.findByLabelText("Chat service")) as HTMLSelectElement;
+    const serviceSelector = await screen.findByLabelText("Chat service");
     await waitFor(() => {
-      expect(serviceSelector.value).toBe("support-service");
+      expect(serviceSelector.textContent).toContain("Support service");
     });
 
     const promptInput = await screen.findByPlaceholderText(
@@ -362,5 +409,19 @@ describe("ChatPage", () => {
     expect(screen.getByText("RUN_STARTED")).toBeTruthy();
     expect(screen.getByText("TOOL_CALL_START")).toBeTruthy();
     expect(screen.getByText("TEXT_MESSAGE_CONTENT")).toBeTruthy();
+  });
+
+  it("opens a blank Studio draft when Create is clicked", async () => {
+    renderWithQueryClient(React.createElement(ChatPage));
+
+    fireEvent.click(await screen.findByLabelText("Chat service"));
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/studio");
+      const searchParams = new URLSearchParams(window.location.search);
+      expect(searchParams.get("tab")).toBe("studio");
+      expect(searchParams.get("draft")).toBe("new");
+    });
   });
 });

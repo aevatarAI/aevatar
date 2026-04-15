@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Aevatar.Interop.A2A.Tests</AssemblyName>
+    <RootNamespace>Aevatar.Interop.A2A.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Aevatar.Interop.A2A.Abstractions\Aevatar.Interop.A2A.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Interop.A2A.Application\Aevatar.Interop.A2A.Application.csproj" />
+    <ProjectReference Include="..\..\src\Aevatar.Interop.A2A.Hosting\Aevatar.Interop.A2A.Hosting.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+</Project>

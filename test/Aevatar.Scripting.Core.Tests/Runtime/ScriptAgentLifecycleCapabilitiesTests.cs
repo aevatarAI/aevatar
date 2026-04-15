@@ -281,6 +281,63 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
     }
 
     [Fact]
+    public async Task TransientDefinitionSnapshotCache_ShouldStayScopedToSingleCapabilityInstance()
+    {
+        var sharedDefinitionSnapshotPort = new CountingDefinitionSnapshotPort();
+        var firstProvisioningPort = new RecordingRuntimeProvisioningPort();
+        var secondProvisioningPort = new RecordingRuntimeProvisioningPort();
+        var cachedSnapshot = new ScriptDefinitionSnapshot(
+            "script-1",
+            "rev-2",
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            ScriptSources.UppercaseStateTypeUrl,
+            ScriptSources.UppercaseReadModelTypeUrl,
+            "1",
+            "schema-hash");
+
+        var firstCapabilities = CreateCapabilities(
+            definitionSnapshotPort: sharedDefinitionSnapshotPort,
+            definitionCommandPort: new StaticDefinitionCommandPort(
+                new ScriptDefinitionUpsertResult(
+                    "definition-1",
+                    cachedSnapshot,
+                    new ScriptingCommandAcceptedReceipt("definition-1", "command-1", "corr-1"))),
+            runtimeProvisioningPort: firstProvisioningPort);
+
+        await firstCapabilities.UpsertScriptDefinitionAsync(
+            "script-1",
+            "rev-2",
+            ScriptSources.UppercaseBehavior,
+            ScriptSources.UppercaseBehaviorHash,
+            "definition-1",
+            CancellationToken.None);
+        await firstCapabilities.SpawnScriptRuntimeAsync(
+            "definition-1",
+            "rev-2",
+            "runtime-1",
+            CancellationToken.None);
+
+        sharedDefinitionSnapshotPort.RequestCount.Should().Be(0);
+        firstProvisioningPort.EnsureCalls.Should().ContainSingle();
+        firstProvisioningPort.EnsureCalls[0].DefinitionSnapshot.Revision.Should().Be("rev-2");
+
+        var secondCapabilities = CreateCapabilities(
+            definitionSnapshotPort: sharedDefinitionSnapshotPort,
+            runtimeProvisioningPort: secondProvisioningPort);
+
+        await secondCapabilities.SpawnScriptRuntimeAsync(
+            "definition-1",
+            "rev-2",
+            "runtime-2",
+            CancellationToken.None);
+
+        sharedDefinitionSnapshotPort.RequestCount.Should().Be(1);
+        secondProvisioningPort.EnsureCalls.Should().ContainSingle();
+        secondProvisioningPort.EnsureCalls[0].DefinitionSnapshot.Revision.Should().Be("rev-2");
+    }
+
+    [Fact]
     public async Task UpsertScriptDefinitionAsync_ShouldRememberSnapshot_UsingLatestKey_WhenRevisionIsBlank()
     {
         var provisioningPort = new RecordingRuntimeProvisioningPort();
@@ -702,6 +759,29 @@ public sealed class ScriptAgentLifecycleCapabilitiesTests
             CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
+            return Task.FromResult(new ScriptDefinitionSnapshot(
+                "script-" + definitionActorId,
+                requestedRevision,
+                ScriptSources.UppercaseBehavior,
+                ScriptSources.UppercaseBehaviorHash,
+                ScriptSources.UppercaseStateTypeUrl,
+                ScriptSources.UppercaseReadModelTypeUrl,
+                "1",
+                "schema-hash"));
+        }
+    }
+
+    private sealed class CountingDefinitionSnapshotPort : IScriptDefinitionSnapshotPort
+    {
+        public int RequestCount { get; private set; }
+
+        public Task<ScriptDefinitionSnapshot> GetRequiredAsync(
+            string definitionActorId,
+            string requestedRevision,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            RequestCount++;
             return Task.FromResult(new ScriptDefinitionSnapshot(
                 "script-" + definitionActorId,
                 requestedRevision,
