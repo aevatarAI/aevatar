@@ -79,17 +79,16 @@ function createBaseProps(overrides = {}) {
 }
 
 describe('StudioExecutionPage', () => {
-  it('reuses the shared workflow header chrome on the runs view', () => {
+  it('renders the current execution runtime chrome', () => {
     render(
       React.createElement(StudioExecutionPage, createBaseProps() as any),
     );
 
-    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Runs' })).toBeInTheDocument();
-    expect(screen.getByDisplayValue('workspace-demo')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Export' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
+    expect(screen.getByText('运行中')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /停\s*止/ })).toBeInTheDocument();
+    expect(screen.getByText('执行日志')).toBeInTheDocument();
+    expect(screen.getByLabelText('选择测试运行')).toBeInTheDocument();
   });
 
   it('shows the selected execution actor id and lets users copy it', async () => {

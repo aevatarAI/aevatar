@@ -322,7 +322,7 @@ export const TeamContextUnavailable: React.FC<{
         }
         title="Team context unavailable"
       >
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={16} style={{ width: "100%" }}>
           <Typography.Paragraph style={{ margin: 0 }}>
             The console could not resolve a current team from the active session.
             Open Settings, retry, or start the first team from Team Builder.

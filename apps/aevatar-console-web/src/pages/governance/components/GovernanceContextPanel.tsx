@@ -31,14 +31,7 @@ const GovernanceContextPanel: React.FC<GovernanceContextPanelProps> = ({
     }}
   >
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <div>
-        <Typography.Text strong>Current service context</Typography.Text>
-        <Typography.Paragraph style={{ margin: '8px 0 0' }} type="secondary">
-          Stay on the current service and move across Governance tabs. Change
-          service only when you need to jump to another tenant/app/namespace
-          context.
-        </Typography.Paragraph>
-      </div>
+      <Typography.Text strong>Service</Typography.Text>
 
       <div style={summaryFieldGridStyle}>
         <div style={summaryFieldStyle}>
@@ -66,7 +59,7 @@ const GovernanceContextPanel: React.FC<GovernanceContextPanelProps> = ({
       </div>
 
       <div>
-        <Button onClick={onChangeService}>Change service</Button>
+        <Button onClick={onChangeService}>Change</Button>
       </div>
     </Space>
   </div>
