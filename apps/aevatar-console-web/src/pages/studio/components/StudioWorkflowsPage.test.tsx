@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import React from 'react';
 import {
   dedupeStudioWorkflowSummaries,
+  StudioWorkspaceAlerts,
   StudioWorkflowsPage,
 } from './StudioWorkbenchSections';
 
@@ -43,6 +44,7 @@ function createProps(overrides = {}) {
     selectedDirectoryId: '',
     templateWorkflow: '',
     draftMode: '',
+    legacySource: '',
     activeWorkflowName: '',
     activeWorkflowDescription: '',
     activeWorkflowSourceKey: '',
@@ -54,7 +56,6 @@ function createProps(overrides = {}) {
     workflowImportInputRef: React.createRef<HTMLInputElement>(),
     onOpenWorkflow: jest.fn(),
     onStartBlankDraft: jest.fn(),
-    onOpenCurrentDraft: jest.fn(),
     onSelectDirectoryId: jest.fn(),
     onSetWorkflowSearch: jest.fn(),
     onToggleDirectoryForm: jest.fn(),
@@ -107,6 +108,27 @@ describe('StudioWorkflowsPage', () => {
     expect(emptyContainer).toHaveStyle('width: 100%');
   });
 
+  it('surfaces the active draft inside the toolbar summary', () => {
+    render(
+      React.createElement(
+        StudioWorkflowsPage,
+        createProps({
+          draftMode: 'new',
+          legacySource: 'playground',
+          activeWorkflowName: 'legacy_draft',
+          activeWorkflowDescription: 'Loaded from the browser draft handoff.',
+          activeWorkflowSourceKey: 'draft:new',
+        }),
+      ),
+    );
+
+    expect(screen.getByText('Current draft')).toBeInTheDocument();
+    expect(screen.getByText('Imported draft')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Keep the active draft in view while browsing the workspace library.'),
+    ).not.toBeInTheDocument();
+  });
+
   it('renders only the newest workflow card when duplicate names are returned', () => {
     render(
       React.createElement(
@@ -134,5 +156,67 @@ describe('StudioWorkflowsPage', () => {
     );
 
     expect(screen.getAllByText('hello-chat')).toHaveLength(1);
+  });
+
+  it('keeps the workflow results list as an internal scroll viewport', () => {
+    render(
+      React.createElement(
+        StudioWorkflowsPage,
+        createProps({
+          workflows: {
+            isLoading: false,
+            isError: false,
+            error: null,
+            data: [
+              createWorkflowSummary({
+                workflowId: 'workflow-1',
+                name: 'NyxID Chat',
+                fileName: 'nyxid-chat.yaml',
+              }),
+            ],
+          },
+        }),
+      ),
+    );
+
+    const resultsBody = screen.getByTestId('studio-workflows-results-body');
+    expect(resultsBody).toHaveStyle('min-height: 0');
+    expect(resultsBody).toHaveStyle('overflow-y: auto');
+  });
+});
+
+describe('StudioWorkspaceAlerts', () => {
+  it('only keeps blocking auth guidance visible', () => {
+    const { rerender } = render(
+      <StudioWorkspaceAlerts
+        authSession={{
+          enabled: true,
+          authenticated: true,
+        }}
+        templateWorkflow=""
+        draftMode="new"
+        legacySource="playground"
+      />,
+    );
+
+    expect(screen.queryByText('Blank Studio draft')).not.toBeInTheDocument();
+    expect(screen.queryByText('Imported local draft')).not.toBeInTheDocument();
+
+    rerender(
+      <StudioWorkspaceAlerts
+        authSession={{
+          enabled: true,
+          authenticated: false,
+          loginUrl: '/login',
+        }}
+        templateWorkflow=""
+        draftMode="new"
+        legacySource="playground"
+      />,
+    );
+
+    expect(screen.getByText('Studio sign-in required')).toBeInTheDocument();
+    expect(screen.queryByText('Blank Studio draft')).not.toBeInTheDocument();
+    expect(screen.queryByText('Imported local draft')).not.toBeInTheDocument();
   });
 });

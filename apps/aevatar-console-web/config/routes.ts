@@ -52,6 +52,12 @@ export default [
     hideInMenu: true,
   },
   {
+    path: "/scopes/files",
+    name: "Files",
+    component: "./scopes/files",
+    menuGroupKey: "build",
+  },
+  {
     path: "/studio",
     component: "./studio",
     hideInMenu: true,

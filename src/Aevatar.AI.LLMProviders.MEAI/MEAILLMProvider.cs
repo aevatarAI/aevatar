@@ -439,7 +439,7 @@ public sealed class MEAILLMProvider : ILLMProvider
     {
         // ChatResponse.Messages contains all reply messages
         var lastMessage = response.Messages.LastOrDefault();
-        var content = lastMessage?.Text;
+        var content = ExtractMessageText(lastMessage);
         List<ToolCall>? toolCalls = null;
         List<ContentPart>? contentParts = null;
 
@@ -483,6 +483,28 @@ public sealed class MEAILLMProvider : ILLMProvider
             Usage = usage,
             FinishReason = response.FinishReason?.ToString(),
         };
+    }
+
+    private static string? ExtractMessageText(Microsoft.Extensions.AI.ChatMessage? message)
+    {
+        if (message == null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(message.Text))
+            return message.Text;
+
+        if (message.Contents is not { Count: > 0 })
+            return message.Text;
+
+        var textParts = message.Contents
+            .OfType<TextContent>()
+            .Select(part => part.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+
+        return textParts.Count == 0
+            ? message.Text
+            : string.Concat(textParts);
     }
 
     private static ToolCall ConvertFunctionCall(FunctionCallContent functionCall)
