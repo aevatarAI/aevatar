@@ -156,7 +156,7 @@ Tell the user to set the webhook URL in their platform's developer console:
 **Lark/Feishu:** 开发者后台 → 事件与回调 → 事件配置 → 请求地址:
 `https://aevatar-console-backend-api.aevatar.ai/api/channels/lark/callback/<registration_id>`
 
-Also add event: `im.message.receive_v1`
+Also add events: `im.message.receive_v1` and `card.action.trigger` (required for interactive card button clicks and form submissions)
 
 **Telegram:** User must call Telegram's setWebhook API manually or via BotFather, pointing to:
 `https://aevatar-console-backend-api.aevatar.ai/api/channels/telegram/callback/<registration_id>`
