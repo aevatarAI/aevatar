@@ -502,11 +502,166 @@ public class ChannelUserGAgentContinuationTests
         LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
         adapter.Replies[0].ReplyText.Should().Contain("Create Daily Report");
         adapter.Replies[0].ReplyText.Should().Contain("agent_status");
+        adapter.Replies[0].ReplyText.Should().Contain("run_agent");
         adapter.Replies[0].ReplyText.Should().Contain("confirm_delete_agent");
 
         using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
         card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
             .Should().Be("Current Agents");
+    }
+
+    [Fact]
+    public async Task HandleInbound_ListTemplatesIntent_ShouldSendInteractiveTemplateCard()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/templates";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("daily_report");
+        adapter.Replies[0].ReplyText.Should().Contain("social_media");
+        adapter.Replies[0].ReplyText.Should().Contain("Create Daily Report");
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Available Templates");
+    }
+
+    [Fact]
+    public async Task HandleInbound_AgentStatusTextCommand_ShouldSendStatusCard()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+                Status = "running",
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+                NextRunAt = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 4, 15, 9, 0, 0, TimeSpan.Zero)),
+            }));
+
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            runtime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/agent-status skill-runner-1";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Agent Status");
+    }
+
+    [Fact]
+    public async Task HandleInbound_RunAgentTextCommand_ShouldExecuteTriggerAndSendResultCard()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/run-agent skill-runner-1";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Run Triggered");
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "run_agent"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleInbound_DeleteAgentTextCommand_ShouldSendDeleteConfirmationCard()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = BuildInboundEvent();
+        inbound.Text = "/delete-agent skill-runner-1";
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        runtime.ChatRequests.Should().BeEmpty();
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Confirm Delete");
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Delete Agent");
     }
 
     [Fact]
@@ -706,6 +861,77 @@ public class ChannelUserGAgentContinuationTests
                 e.Payload != null &&
                 e.Payload.Is(AgentRegistryTombstoneCommand.Descriptor) &&
                 e.Payload.Unpack<AgentRegistryTombstoneCommand>().AgentId == "skill-runner-1"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task HandleInbound_RunAgentCardAction_ShouldExecuteTriggerAndSendResultCard()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("skill-runner-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "skill-runner-1",
+                AgentType = SkillRunnerDefaults.AgentType,
+                TemplateName = "daily_report",
+            }));
+
+        var skillRunnerActor = Substitute.For<IActor>();
+        skillRunnerActor.Id.Returns("skill-runner-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("skill-runner-1").Returns(Task.FromResult<IActor?>(skillRunnerActor));
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"run_agent"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_run_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "run_agent" },
+                { "agent_id", "skill-runner-1" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+
+        using var card = JsonDocument.Parse(adapter.Replies[0].ReplyText);
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Run Triggered");
+
+        await skillRunnerActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerSkillRunnerExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerSkillRunnerExecutionCommand>().Reason == "run_agent"),
             Arg.Any<CancellationToken>());
     }
 

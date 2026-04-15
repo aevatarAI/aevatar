@@ -23,7 +23,7 @@ public sealed class AgentBuilderTool : IAgentTool
 
     public string Description =>
         "Create and manage persistent user-facing automation agents for the current channel context. " +
-        "Actions: list_templates, create_agent, list_agents, agent_status, delete_agent.";
+        "Actions: list_templates, create_agent, list_agents, agent_status, run_agent, delete_agent.";
 
     public string ParametersSchema => """
         {
@@ -31,7 +31,7 @@ public sealed class AgentBuilderTool : IAgentTool
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_templates", "create_agent", "list_agents", "agent_status", "delete_agent"]
+              "enum": ["list_templates", "create_agent", "list_agents", "agent_status", "run_agent", "delete_agent"]
             },
             "template": {
               "type": "string",
@@ -87,6 +87,10 @@ public sealed class AgentBuilderTool : IAgentTool
         if (args.HasParseError)
             return JsonSerializer.Serialize(new { error = args.ParseError });
 
+        var action = args.Str("action", "list_templates");
+        if (string.Equals(action, "list_templates", StringComparison.Ordinal))
+            return JsonSerializer.Serialize(new { templates = SkillRunnerTemplates.ListTemplates() });
+
         var queryPort = _serviceProvider.GetService<IAgentRegistryQueryPort>();
         var actorRuntime = _serviceProvider.GetService<IActorRuntime>();
         var nyxClient = _serviceProvider.GetService<NyxIdApiClient>();
@@ -95,13 +99,12 @@ public sealed class AgentBuilderTool : IAgentTool
             return """{"error":"Agent builder runtime not available. Required services are not registered in DI."}""";
         }
 
-        var action = args.Str("action", "list_templates");
         return action switch
         {
-            "list_templates" => JsonSerializer.Serialize(new { templates = SkillRunnerTemplates.ListTemplates() }),
             "create_agent" => await CreateAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
             "list_agents" => await ListAgentsAsync(args, queryPort, nyxClient, token, ct),
             "agent_status" => await GetAgentStatusAsync(args, queryPort, ct),
+            "run_agent" => await RunAgentAsync(args, queryPort, actorRuntime, ct),
             "delete_agent" => await DeleteAgentAsync(args, queryPort, actorRuntime, nyxClient, token, ct),
             _ => JsonSerializer.Serialize(new { error = $"Unsupported action '{action}'" }),
         };
@@ -363,6 +366,38 @@ public sealed class AgentBuilderTool : IAgentTool
             agent_id = entry.AgentId,
             revoked_api_key_id = entry.ApiKeyId,
             note = "Delete was submitted but registry tombstone is not yet reflected.",
+        });
+    }
+
+    private async Task<string> RunAgentAsync(
+        BuilderArgs args,
+        IAgentRegistryQueryPort queryPort,
+        IActorRuntime actorRuntime,
+        CancellationToken ct)
+    {
+        var agentId = args.Str("agent_id");
+        if (string.IsNullOrWhiteSpace(agentId))
+            return """{"error":"agent_id is required for run_agent"}""";
+
+        var entry = await queryPort.GetAsync(agentId.Trim(), ct);
+        if (entry is null)
+            return JsonSerializer.Serialize(new { error = $"Agent '{agentId}' not found" });
+
+        if (!string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
+            return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' does not support run_agent" });
+
+        var actor = await actorRuntime.GetAsync(entry.AgentId)
+                    ?? await actorRuntime.CreateAsync<SkillRunnerGAgent>(entry.AgentId, ct);
+        await actor.HandleEventAsync(
+            BuildDirectEnvelope(actor.Id, new TriggerSkillRunnerExecutionCommand { Reason = "run_agent" }),
+            ct);
+
+        return JsonSerializer.Serialize(new
+        {
+            status = "accepted",
+            agent_id = entry.AgentId,
+            template = entry.TemplateName,
+            note = "Manual run dispatched.",
         });
     }
 
