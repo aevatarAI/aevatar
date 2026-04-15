@@ -80,6 +80,38 @@ function compactId(value: string | null | undefined): string {
   return segment.split(":").pop() || segment;
 }
 
+function looksOpaqueIdentifier(value: string | null | undefined): boolean {
+  const normalized = trimText(value);
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(normalized) ||
+    /\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/i.test(normalized)
+  );
+}
+
+function resolveTeamTitle(
+  candidates: Array<string | null | undefined>,
+  fallback: string,
+): string {
+  const preferred = candidates
+    .map((candidate) => trimText(candidate))
+    .find((candidate) => candidate && !looksOpaqueIdentifier(candidate));
+
+  if (preferred) {
+    return preferred;
+  }
+
+  const normalizedFallback = trimText(fallback);
+  if (!normalizedFallback || looksOpaqueIdentifier(normalizedFallback)) {
+    return "当前团队";
+  }
+
+  return normalizedFallback;
+}
+
 function formatTeamTabLabel(tab: TeamDetailTab): string {
   switch (tab) {
     case "topology":
@@ -143,6 +175,10 @@ function formatFriendlyStatus(value: string | null | undefined): string {
   }
 }
 
+function withFriendlyFallback(value: string, fallback: string): string {
+  return value === "--" ? fallback : value;
+}
+
 function formatCompositionKind(kind: string): string {
   switch (normalizeStatus(kind)) {
     case "workflow role":
@@ -152,7 +188,7 @@ function formatCompositionKind(kind: string): string {
     case "service":
       return "服务";
     case "actor":
-      return "Actor";
+      return "成员";
     case "runtime":
       return "运行";
     case "script":
@@ -1209,7 +1245,16 @@ const TeamDetailPage: React.FC = () => {
     [lens.playback.currentRunId, lens.playback.rootActorId, runtimeServiceId, scopeId],
   );
 
-  const teamTitle = activeWorkflowSummary?.displayName || lens.title;
+  const teamTitle = resolveTeamTitle(
+    [
+      activeWorkflowSummary?.displayName,
+      activeWorkflowSummary?.workflowName,
+      lens.title,
+      lens.currentRun?.workflowName,
+      lens.currentService?.displayName,
+    ],
+    lens.title || scopeId,
+  );
   const activeWorkflowId =
     trimText(activeWorkflowSummary?.workflowId) || trimText(routeState.workflowId);
   const teamCompositionRows = React.useMemo(
@@ -1239,9 +1284,18 @@ const TeamDetailPage: React.FC = () => {
     "--";
   const currentHeaderStatus =
     trimText(lens.currentRun?.completionStatus) || currentDeploymentStatus;
-  const currentHeaderStatusFriendly = formatFriendlyStatus(currentHeaderStatus);
-  const currentRevisionFriendly = formatFriendlyStatus(currentRevisionStatus);
-  const currentDeploymentFriendly = formatFriendlyStatus(currentDeploymentStatus);
+  const currentHeaderStatusFriendly = withFriendlyFallback(
+    formatFriendlyStatus(currentHeaderStatus),
+    "待配置",
+  );
+  const currentRevisionFriendly = withFriendlyFallback(
+    formatFriendlyStatus(currentRevisionStatus),
+    "待确认",
+  );
+  const currentDeploymentFriendly = withFriendlyFallback(
+    formatFriendlyStatus(currentDeploymentStatus),
+    "待配置",
+  );
   const currentDeploymentId =
     trimText(lens.activeRevision?.deploymentId) ||
     trimText(lens.currentService?.deploymentId) ||
@@ -1259,7 +1313,7 @@ const TeamDetailPage: React.FC = () => {
   const currentServiceFriendly =
     currentServiceDisplayName !== "--"
       ? currentServiceDisplayName
-      : runtimeServiceId || "--";
+      : runtimeServiceId || "待配置";
   const currentVersionFriendly =
     currentRevisionFriendly !== "--"
       ? currentRevisionFriendly
@@ -1380,33 +1434,6 @@ const TeamDetailPage: React.FC = () => {
           : "未配置",
     },
   ];
-  const detailStripItems = [
-    {
-      label: "成员",
-      value: `${Math.max(lens.members.length, compositionDisplayRows.length)} agents`,
-    },
-    {
-      label: "类型",
-      value: `${lens.workflowCount} workflow, ${lens.scriptCount} scripting`,
-    },
-    {
-      label: "连接器",
-      value:
-        connectorHighlights.length > 0
-          ? connectorHighlights.join("、")
-          : integrations.linkedConnectorCount > 0
-            ? `${integrations.linkedConnectorCount} 个已绑定`
-            : "未配置",
-    },
-    {
-      label: "事件 (24h)",
-      value: String(lens.playback.events.length + lens.playback.steps.length),
-    },
-    {
-      label: "当前状态",
-      value: currentHeaderStatusFriendly,
-    },
-  ];
   const eventLogRows = React.useMemo(
     () => buildTeamEventLogRows(lens.playback),
     [lens.playback],
@@ -1486,6 +1513,51 @@ const TeamDetailPage: React.FC = () => {
       return searchPassed && typePassed && statusPassed;
     });
   }, [memberRows, memberSearch, memberStatusFilter, memberTypeFilter]);
+  const teamOnlineRateValue = React.useMemo(() => {
+    const visibleRates = memberRows
+      .map((row) => row.uptime)
+      .filter((value) => typeof value === "string" && value.trim().endsWith("%"))
+      .map((value) => Number.parseFloat(value));
+
+    if (visibleRates.length === 0) {
+      return lens.healthStatus === "blocked"
+        ? "等待处理"
+        : lens.healthStatus === "attention"
+          ? "可见"
+          : "--";
+    }
+
+    const average =
+      visibleRates.reduce((total, value) => total + value, 0) / visibleRates.length;
+      return `${average.toFixed(1)}%`;
+  }, [lens.healthStatus, memberRows]);
+  const detailStripItems = [
+    {
+      label: "成员",
+      value: `${Math.max(lens.members.length, compositionDisplayRows.length)} 位成员`,
+    },
+    {
+      label: "类型",
+      value: `${lens.workflowCount} 条流程，${lens.scriptCount} 个脚本`,
+    },
+    {
+      label: "连接器",
+      value:
+        connectorHighlights.length > 0
+          ? connectorHighlights.join("、")
+          : integrations.linkedConnectorCount > 0
+            ? `${integrations.linkedConnectorCount} 个已绑定`
+            : "未配置",
+    },
+    {
+      label: "事件 (24h)",
+      value: String(lens.playback.events.length + lens.playback.steps.length),
+    },
+    {
+      label: "在线率",
+      value: teamOnlineRateValue,
+    },
+  ];
 
   const tabOptions: TeamTabOption[] = [
     { label: "概览", value: "overview" },
@@ -1546,24 +1618,6 @@ const TeamDetailPage: React.FC = () => {
       scopeId,
   ]);
 
-  const handleOpenServiceMapping = React.useCallback(() => {
-    handleOpenPlaybackActor(
-      effectiveActorId ||
-        lens.graph.focusActorId ||
-        lens.playback.rootActorId ||
-        lens.currentRun?.actorId,
-      lens.currentRun?.runId || lens.playback.currentRunId,
-    );
-  }, [
-    effectiveActorId,
-    handleOpenPlaybackActor,
-    lens.currentRun?.actorId,
-    lens.currentRun?.runId,
-    lens.graph.focusActorId,
-    lens.playback.currentRunId,
-    lens.playback.rootActorId,
-  ]);
-
   const renderOverviewTab = () => {
     const summaryCards = [
       {
@@ -1620,9 +1674,6 @@ const TeamDetailPage: React.FC = () => {
                   text={currentHeaderStatusFriendly}
                 />
               </Space>
-              <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                当前团队的主服务、发布版本和最近一次可见运行信号。
-              </Typography.Text>
             </div>
             <Space wrap size={[8, 8]}>
               <DetailPill
@@ -1699,7 +1750,7 @@ const TeamDetailPage: React.FC = () => {
             value={workflowNameValue !== "--" ? workflowNameValue : teamTitle}
           />
           <OverviewMetricCard label="主服务入口" value={currentServiceFriendly} />
-          <OverviewMetricCard label="当前状态" value={currentRunFriendly} />
+          <OverviewMetricCard label="在线率" value={teamOnlineRateValue} />
           <OverviewMetricCard
             accent
             label="当前版本状态"
@@ -1730,9 +1781,6 @@ const TeamDetailPage: React.FC = () => {
                 <Typography.Title level={4} style={{ margin: 0 }}>
                   团队构成
                 </Typography.Title>
-                <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                  当前可见的流程角色、脚本成员和主服务映射。
-                </Typography.Text>
               </div>
             </div>
             {compositionDisplayRows.length > 0 ? (
@@ -1777,14 +1825,11 @@ const TeamDetailPage: React.FC = () => {
               padding: 20,
             }}
           >
-            <div>
-              <Typography.Title level={4} style={{ margin: 0 }}>
-                运行摘要
-              </Typography.Title>
-              <Typography.Text style={{ fontSize: 12 }} type="secondary">
-                汇总当前团队的发布版本、可见运行信号和连接器状态。
-              </Typography.Text>
-            </div>
+              <div>
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  运行摘要
+                </Typography.Title>
+              </div>
             {runtimeSummaryRows.map((row, index) => (
               <div
                 key={row.key}
@@ -1854,7 +1899,7 @@ const TeamDetailPage: React.FC = () => {
             padding: "10px 14px",
           }}
         >
-          EventEnvelope 流转拓扑
+          事件拓扑
           <span
             style={{
               color: "#8c8c8c",
@@ -1968,14 +2013,14 @@ const TeamDetailPage: React.FC = () => {
                         marginTop: 3,
                       }}
                     >
-                      {node.relationCount} relations
+                      {node.relationCount} 条连接
                     </div>
                   </button>
                 ))
               ) : (
                 <AevatarInspectorEmpty
                   title="暂无可见关系"
-                  description="当前没有更多可见的事件拓扑关系。"
+                  description="当前团队还没有可见的事件拓扑。"
                 />
               )}
               <div
@@ -1992,13 +2037,17 @@ const TeamDetailPage: React.FC = () => {
                   position: "absolute",
                 }}
               >
-                <span style={{ color: "#52c41a" }}>—— Event</span>
-                <span style={{ color: "#1890ff" }}>--- Reply</span>
-                <span style={{ color: "#fa8c16" }}>··· Peer</span>
+                <span style={{ color: "#52c41a" }}>—— 事件</span>
+                <span style={{ color: "#1890ff" }}>--- 回复</span>
+                <span style={{ color: "#fa8c16" }}>··· 同级</span>
               </div>
             </div>
             <div style={{ padding: "0 16px 16px" }}>
-              <Alert description={selectedFocusReason || lens.graph.stageSummary} showIcon type="info" />
+              <Alert
+                description={selectedFocusReason || "当前团队的可见关系会在这里持续更新。"}
+                showIcon
+                type="info"
+              />
             </div>
           </div>
         )}
@@ -2038,7 +2087,7 @@ const TeamDetailPage: React.FC = () => {
                 padding: "8px 12px",
               }}
             >
-              EventEnvelope Stream
+              事件流
               <div
                 style={{
                   display: "flex",
@@ -2056,7 +2105,7 @@ const TeamDetailPage: React.FC = () => {
                     padding: "0 4px",
                   }}
                 >
-                  <option>Type: All</option>
+                  <option>全部类型</option>
                 </select>
                 <select
                   aria-label="成员过滤"
@@ -2068,11 +2117,11 @@ const TeamDetailPage: React.FC = () => {
                     padding: "0 4px",
                   }}
                 >
-                  <option>Agent: All</option>
+                  <option>全部成员</option>
                 </select>
                 <input
                   aria-label="事件关键词过滤"
-                  placeholder="Filter..."
+                  placeholder="关键词过滤"
                   style={{
                     border: "1px solid #d9d9d9",
                     borderRadius: 3,
@@ -2167,17 +2216,14 @@ const TeamDetailPage: React.FC = () => {
                 ))
               ) : (
                 <AevatarInspectorEmpty
-                  title="当前还没有更多可见的步骤事实。"
-                  description={lens.playback.summary}
+                  title="当前还没有可见事件。"
+                  description="等团队开始运行后，最新事件会显示在这里。"
                 />
               )}
             </div>
             <div style={{ padding: "0 12px 12px" }}>
               <Space wrap>
                 <Button onClick={handleOpenConversation}>测试对话</Button>
-                <Button onClick={handleOpenServiceMapping} type="link">
-                  查看服务映射
-                </Button>
               </Space>
             </div>
           </div>
@@ -2208,7 +2254,7 @@ const TeamDetailPage: React.FC = () => {
         >
           <input
             aria-label="搜索成员"
-            placeholder="搜索成员或 Actor ID..."
+            placeholder="搜索成员"
             value={memberSearch}
             onChange={(event) => setMemberSearch(event.target.value)}
             style={{
@@ -2232,7 +2278,7 @@ const TeamDetailPage: React.FC = () => {
               padding: "0 6px",
             }}
           >
-            <option value="all">类型: All</option>
+            <option value="all">全部类型</option>
             {Array.from(
               new Set(memberRows.map((row) => normalizeStatus(row.implementationType))),
             )
@@ -2255,7 +2301,7 @@ const TeamDetailPage: React.FC = () => {
               padding: "0 6px",
             }}
           >
-            <option value="all">状态: All</option>
+            <option value="all">全部状态</option>
             <option value="运行中">运行中</option>
             <option value="已观察">已观察</option>
             <option value="等待处理">等待处理</option>
@@ -2272,15 +2318,15 @@ const TeamDetailPage: React.FC = () => {
             <thead>
               <tr>
                 {[
-                  "Status",
-                  "Name",
-                  "Role",
-                  "Type",
-                  "Msgs (24h)",
-                  "Uptime",
-                  "Actor ID",
-                  "Governance Service",
-                  "Actions",
+                  "状态",
+                  "名称",
+                  "角色",
+                  "类型",
+                  "消息 (24h)",
+                  "在线率",
+                  "成员 ID",
+                  "治理服务",
+                  "操作",
                 ].map((header) => (
                   <th
                     key={header}
@@ -2399,14 +2445,14 @@ const TeamDetailPage: React.FC = () => {
                           type="link"
                           onClick={() => history.push(teamBuilderRoute)}
                         >
-                          Edit
+                          编辑
                         </Button>
                         <Button
                           size="small"
                           type="link"
                           onClick={() => pushTeamTab("events")}
                         >
-                          Logs
+                          日志
                         </Button>
                         <Button
                           size="small"
@@ -2416,7 +2462,7 @@ const TeamDetailPage: React.FC = () => {
                             pushTeamTab("topology");
                           }}
                         >
-                          Graph
+                          拓扑
                         </Button>
                       </Space>
                     </td>
@@ -2439,17 +2485,6 @@ const TeamDetailPage: React.FC = () => {
               )}
             </tbody>
           </table>
-        </div>
-        <div
-          style={{
-            background: "#e6f7ff",
-            borderTop: "1px solid #91d5ff",
-            color: "#1890ff",
-            fontSize: 11,
-            padding: "8px 12px",
-          }}
-        >
-          Governance Service ID 可跳转到 Platform → Topology，Actor ID 当前指向焦点成员。
         </div>
       </div>
     );
@@ -2580,15 +2615,9 @@ const TeamDetailPage: React.FC = () => {
             padding: 20,
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <Typography.Text strong style={{ fontSize: 16 }}>
               团队构建器
-            </Typography.Text>
-            <Typography.Text type="secondary">
-              从这里进入 Studio，在当前团队上下文下继续编辑行为定义、脚本行为、Agent 角色、集成和测试运行。
-            </Typography.Text>
-            <Typography.Text type="secondary">
-              当前入口会自动带上 scopeId，如果已经锁定了 workflow，也会直接打开对应成员的编辑视图。
             </Typography.Text>
           </div>
           <Space wrap>
@@ -2596,7 +2625,6 @@ const TeamDetailPage: React.FC = () => {
               打开团队构建器
             </Button>
             <Button onClick={handleOpenConversation}>测试对话</Button>
-            <Button onClick={handleOpenServiceMapping}>查看服务映射</Button>
           </Space>
         </div>
         <div
@@ -2629,20 +2657,7 @@ const TeamDetailPage: React.FC = () => {
             </div>
           ))}
         </div>
-        <div
-          style={{
-            background: "#ffffff",
-            border: `1px solid ${token.colorBorderSecondary}`,
-            borderRadius: 8,
-            display: "flex",
-            flexDirection: "column",
-            gap: 16,
-            padding: 20,
-          }}
-        >
-          <Typography.Text strong style={{ fontSize: 16 }}>
-            当前编辑上下文
-          </Typography.Text>
+        <AevatarPanel title="当前编辑上下文">
           <div
             style={{
               display: "grid",
@@ -2666,42 +2681,7 @@ const TeamDetailPage: React.FC = () => {
               caption={`${currentPolicyCount} 条策略`}
             />
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div
-              style={{
-                alignItems: "start",
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "minmax(92px, 120px) minmax(0, 1fr)",
-              }}
-            >
-              <Typography.Text type="secondary">workflowId</Typography.Text>
-              <FactLine rows={1} secondary text={activeWorkflowId || "--"} />
-            </div>
-            <div
-              style={{
-                alignItems: "start",
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "minmax(92px, 120px) minmax(0, 1fr)",
-              }}
-            >
-              <Typography.Text type="secondary">serviceKey</Typography.Text>
-              <FactLine rows={1} secondary text={currentServiceKey} />
-            </div>
-            <div
-              style={{
-                alignItems: "start",
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "minmax(92px, 120px) minmax(0, 1fr)",
-              }}
-            >
-              <Typography.Text type="secondary">deploymentId</Typography.Text>
-              <FactLine rows={1} secondary text={currentDeploymentId} />
-            </div>
-          </div>
-        </div>
+        </AevatarPanel>
       </div>
     );
   };
@@ -2823,10 +2803,10 @@ const TeamDetailPage: React.FC = () => {
           </Button>
           <Button
             danger
-            onClick={handleOpenServiceMapping}
+            disabled
             style={{ borderRadius: 6, height: 30, paddingInline: 14 }}
           >
-            查看服务映射
+            暂停
           </Button>
         </Space>
       }

@@ -15,7 +15,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
   onChange,
   onLoad,
   onReset,
-  loadLabel = 'Apply',
+  loadLabel = '应用筛选',
 }) => {
   return (
     <div
@@ -28,7 +28,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
     >
       <Space wrap size={[8, 8]}>
         <Input
-          placeholder="tenantId (scopeId)"
+          placeholder="团队 ID"
           style={{ width: 220 }}
           value={draft.tenantId}
           onChange={(event) =>
@@ -39,7 +39,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           }
         />
         <Input
-          placeholder="appId"
+          placeholder="应用 ID"
           style={{ width: 180 }}
           value={draft.appId}
           onChange={(event) =>
@@ -50,7 +50,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
           }
         />
         <Input
-          placeholder="namespace"
+          placeholder="命名空间"
           style={{ width: 180 }}
           value={draft.namespace}
           onChange={(event) =>
@@ -75,7 +75,7 @@ const ServiceQueryCard: React.FC<ServiceQueryCardProps> = ({
         <Button onClick={onLoad}>
           {loadLabel}
         </Button>
-        {onReset ? <Button onClick={onReset}>Reset</Button> : null}
+        {onReset ? <Button onClick={onReset}>重置</Button> : null}
       </Space>
     </div>
   );

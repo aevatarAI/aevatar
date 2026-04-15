@@ -125,9 +125,9 @@ describe('ServicesPage', () => {
     expect(screen.getAllByText('Services').length).toBeGreaterThan(0);
     expect(await screen.findByText('服务数')).toBeTruthy();
     expect(await screen.findByText('Service Alpha')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Details' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Governance' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Apply' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /详\s*情/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /治\s*理/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '应用筛选' })).toBeTruthy();
     expect(screen.queryByText('Next Actions')).toBeNull();
     expect(screen.queryByText('No services matched the current scope.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Inspect' })).toBeNull();
@@ -136,15 +136,15 @@ describe('ServicesPage', () => {
   it('renders a compact service drawer instead of oversized metric cards', async () => {
     renderWithQueryClient(React.createElement(ServicesPage));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Details' }));
+    fireEvent.click(await screen.findByRole('button', { name: /详\s*情/ }));
 
-    expect(await screen.findByText('Summary')).toBeTruthy();
-    expect(screen.getByText('Service key')).toBeTruthy();
+    expect(await screen.findByText('当前信息')).toBeTruthy();
+    expect(screen.getByText('服务 Key')).toBeTruthy();
     expect(screen.getByText('tenant-a/app-a/default/service-alpha')).toBeTruthy();
-    expect(screen.getByText('Active deployment')).toBeTruthy();
-    expect(screen.getByText('Latest revision')).toBeTruthy();
-    expect(screen.getByText('Traffic')).toBeTruthy();
-    expect(screen.getByText('Weights')).toBeTruthy();
+    expect(screen.getAllByText('当前部署').length).toBeGreaterThan(0);
+    expect(screen.getByText('最新版本')).toBeTruthy();
+    expect(screen.getByText('入口数')).toBeTruthy();
+    expect(screen.getByText('最大流量权重')).toBeTruthy();
     expect(screen.queryByText('Weight ceiling')).toBeNull();
   });
 });

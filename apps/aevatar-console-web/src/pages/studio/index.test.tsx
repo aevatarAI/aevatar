@@ -1083,8 +1083,8 @@ jest.mock("./components/StudioWorkbenchSections", () => {
 
   const StudioWorkflowsPage = (props: any) =>
     React.createElement("div", null, [
-      React.createElement("h2", { key: "title" }, "Workflows"),
-      React.createElement("div", { key: "draft" }, "Current draft"),
+      React.createElement("h2", { key: "title" }, "行为定义"),
+      React.createElement("div", { key: "draft" }, "当前定义"),
       React.createElement(
         "button",
         {
@@ -1093,11 +1093,11 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           disabled: !props.activeWorkflowSourceKey,
           onClick: () => props.onOpenCurrentDraft?.(),
         },
-        "Open editor"
+        "进入编辑"
       ),
       React.createElement("input", {
         key: "search",
-        placeholder: "Search workflows",
+        placeholder: "搜索定义",
         value: props.workflowSearch ?? "",
         onChange: (event: MockValueEvent) =>
           props.onSetWorkflowSearch?.(event.target.value),
@@ -1120,7 +1120,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           type: "button",
           onClick: () => props.onStartBlankDraft?.(),
         },
-        "Start blank draft"
+        "新建定义"
       ),
     ]);
 
@@ -1129,23 +1129,17 @@ jest.mock("./components/StudioWorkbenchSections", () => {
     const [askAiOpen, setAskAiOpen] = React.useState(false);
     const title =
       props.draftMode === "new"
-        ? props.draftWorkflowName === "legacy_draft"
-          ? "Imported local draft"
-          : "Blank Studio draft"
+        ? "新建草稿"
         : props.templateWorkflowName
-        ? "Published template draft"
-        : "Current draft";
-
-    if (!props.draftYaml) {
-      return React.createElement("div", null, "No draft loaded");
-    }
+        ? "模板定义"
+        : "当前定义";
 
     return React.createElement(
       "div",
       null,
       [
         React.createElement("div", { key: "title" }, title),
-        React.createElement("div", { key: "graph-title" }, "Workflow graph"),
+        React.createElement("div", { key: "graph-title" }, "行为画布"),
         React.createElement(
           "div",
           {
@@ -1157,14 +1151,14 @@ jest.mock("./components/StudioWorkbenchSections", () => {
         renderNoticeTitle(
           "save-notice",
           props.saveNotice,
-          "Workflow saved",
-          "Workflow save failed"
+          "定义已保存",
+          "定义保存失败"
         ),
         renderNoticeTitle(
           "run-notice",
           props.runNotice,
-          "Run started",
-          "Run failed"
+          "测试运行已启动",
+          "测试运行失败"
         ),
         React.createElement(
           "div",
@@ -1177,19 +1171,19 @@ jest.mock("./components/StudioWorkbenchSections", () => {
         renderNoticeTitle(
           "ask-ai-notice",
           props.askAiNotice,
-          "Studio AI generation updated the draft",
-          "Studio AI generation failed"
+          "AI 已更新当前草稿",
+          "AI 生成失败"
         ),
         React.createElement("input", {
           key: "workflow-name",
-          "aria-label": "Workflow name",
+          "aria-label": "定义名称",
           value: props.draftWorkflowName ?? "",
           onChange: (event: MockValueEvent) =>
             props.onSetDraftWorkflowName?.(event.target.value),
         }),
         React.createElement("textarea", {
           key: "workflow-yaml",
-          "aria-label": "Workflow YAML",
+          "aria-label": "定义 YAML",
           value: props.draftYaml ?? "",
           onChange: (event: MockValueEvent) =>
             props.onSetDraftYaml?.(event.target.value),
@@ -1201,7 +1195,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
             type: "button",
             onClick: () => props.onSaveDraft?.(),
           },
-          "Save to workspace"
+          "保存定义"
         ),
         React.createElement(
           "button",
@@ -1217,11 +1211,11 @@ jest.mock("./components/StudioWorkbenchSections", () => {
               React.createElement(
                 "div",
                 { key: "yaml-title" },
-                "Validated by Studio editor"
+                "已校验 YAML"
               ),
               React.createElement("textarea", {
                 key: "yaml-view",
-                "aria-label": "Studio workflow yaml panel",
+                "aria-label": "行为定义 YAML",
                 readOnly: true,
                 value: props.draftYaml ?? "",
               }),
@@ -1246,20 +1240,22 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           "button",
           {
             key: "run-toggle",
+            "data-testid": "studio-editor-run-button",
             type: "button",
             disabled: !props.canOpenRunWorkflow,
             onClick: () => setRunOpen(true),
           },
-          "Run"
+          "测试运行"
         ),
         React.createElement(
           "button",
           {
             key: "publish",
             type: "button",
+            disabled: !props.resolvedScopeId || !props.canPublishWorkflow,
             onClick: () => props.onPublishWorkflow?.(),
           },
-          "Bind team entry"
+          "发布团队入口"
         ),
         props.scopeBinding?.available &&
         props.projectEntryReadyForCurrentWorkflow
@@ -1270,9 +1266,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 type: "button",
                 onClick: () => props.onOpenProjectInvoke?.(),
               },
-              props.projectEntrySurface === "chat"
-                ? "Open Chat"
-                : "Open Legacy Invoke Lab"
+              "打开测试台"
             )
           : null,
         React.createElement(
@@ -1280,6 +1274,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           {
             key: "bind-gagent",
             type: "button",
+            disabled: !props.resolvedScopeId,
             onClick: () =>
               props.onBindGAgent?.({
                 displayName: "orders-gagent",
@@ -1293,13 +1288,14 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 prompt: "Run the orders gagent",
               }),
           },
-          "Bind GAgent"
+          "绑定团队入口"
         ),
         React.createElement(
           "button",
           {
             key: "bind-gagent-runs",
             type: "button",
+            disabled: !props.resolvedScopeId,
             onClick: () =>
               props.onBindGAgent?.(
                 {
@@ -1316,13 +1312,14 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 { openRuns: true }
               ),
           },
-          "Bind GAgent + Runs"
+          "绑定团队入口并打开测试运行"
         ),
         React.createElement(
           "button",
           {
             key: "bind-gagent-chat-runs",
             type: "button",
+            disabled: !props.resolvedScopeId,
             onClick: () =>
               props.onBindGAgent?.(
                 {
@@ -1354,7 +1351,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 { openRuns: true }
               ),
           },
-          "Bind GAgent Chat + Runs"
+          "绑定聊天入口并打开测试运行"
         ),
         React.createElement(
           "button",
@@ -1391,6 +1388,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           ? React.createElement("div", { key: "run-dialog" }, [
               React.createElement("textarea", {
                 key: "run-prompt",
+                "data-testid": "studio-run-prompt-input",
                 "aria-label": "Studio execution prompt",
                 value: props.runPrompt ?? "",
                 onChange: (event: MockValueEvent) =>
@@ -1400,6 +1398,7 @@ jest.mock("./components/StudioWorkbenchSections", () => {
                 "button",
                 {
                   key: "run-submit",
+                  "data-testid": "studio-run-submit-button",
                   type: "button",
                   disabled: !props.canRunWorkflow,
                   onClick: () => props.onStartExecution?.(),
@@ -1614,9 +1613,9 @@ describe("StudioPage", () => {
 
     expect(await screen.findByText("workspace-demo")).toBeTruthy();
     expect(screen.getByText("Workbench")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
-    expect(screen.getByText("Current draft")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Search workflows")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
+    expect(screen.getByText("当前定义")).toBeTruthy();
+    expect(screen.getByPlaceholderText("搜索定义")).toBeTruthy();
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
       flexDirection: "column",
@@ -1648,14 +1647,14 @@ describe("StudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "行为定义" })).toBeTruthy();
     });
   });
 
   it("falls back to behaviors when the removed files tab is requested", async () => {
     renderStudioPage("/studio?tab=files");
 
-    expect(await screen.findByRole("heading", { name: "Workflows" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "行为定义" })).toBeTruthy();
     expect(screen.getByTestId("studio-workflows-viewport")).toHaveStyle({
       display: "flex",
       flexDirection: "column",
@@ -1688,8 +1687,8 @@ describe("StudioPage", () => {
 
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    expect(await screen.findByText("Current draft")).toBeTruthy();
-    expect(screen.queryByText("No draft loaded")).toBeNull();
+    expect(await screen.findByText("当前定义")).toBeTruthy();
+    expect(screen.queryByText("尚未加载定义")).toBeNull();
   });
 
   it("tries to restore auth first and then loads Studio when the host session recovers", async () => {
@@ -1847,20 +1846,28 @@ describe("StudioPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
     fireEvent.click(await screen.findByRole("button", { name: "Leave page" }));
 
-    expect(await screen.findByText("Current draft")).toBeTruthy();
+    expect(await screen.findByText("当前定义")).toBeTruthy();
   });
 
   it("saves edited workflow drafts back to the Studio workspace API", async () => {
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    const editor = await screen.findByLabelText("Workflow YAML");
+    const editor = await screen.findByLabelText("定义 YAML");
+    const nameInput = await screen.findByLabelText("定义名称");
+    await waitFor(() => {
+      expect(nameInput).toHaveValue("workspace-demo");
+    });
     fireEvent.change(editor, {
       target: {
         value: "name: workspace-demo\nsteps:\n  - id: approve_step\n",
       },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Save to workspace" }));
+    const saveButton = screen.getByRole("button", { name: /^保\s*存$/ });
+    await waitFor(() => {
+      expect(saveButton).toBeEnabled();
+    });
+    fireEvent.click(saveButton);
 
     await waitFor(() => {
       expect(studioApi.saveWorkflow).toHaveBeenCalledWith(
@@ -1873,18 +1880,18 @@ describe("StudioPage", () => {
       );
     });
 
-    expect(await screen.findByText("Workflow saved")).toBeTruthy();
+    expect(await screen.findByText("定义已保存")).toBeTruthy();
   });
 
   it("starts a blank draft when the Studio route requests draft mode", async () => {
     renderStudioPage("/studio?draft=new");
 
-    expect(await screen.findByText("Blank Studio draft")).toBeTruthy();
+    expect(await screen.findByText("新建草稿")).toBeTruthy();
     expect(
-      (await screen.findByLabelText("Workflow name")) as HTMLInputElement
+      (await screen.findByLabelText("定义名称")) as HTMLInputElement
     ).toHaveValue("draft");
     expect(
-      (await screen.findByLabelText("Workflow YAML")) as HTMLTextAreaElement
+      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
     ).toHaveValue("name: draft\nsteps: []\n");
   });
 
@@ -1912,10 +1919,10 @@ describe("StudioPage", () => {
     });
 
     expect(
-      (await screen.findByLabelText("Workflow name")) as HTMLInputElement
+      (await screen.findByLabelText("定义名称")) as HTMLInputElement
     ).toHaveValue("draft");
     expect(
-      (await screen.findByLabelText("Workflow YAML")) as HTMLTextAreaElement
+      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
     ).toHaveValue("name: draft\nsteps: []\n");
   });
 
@@ -1928,12 +1935,12 @@ describe("StudioPage", () => {
 
     renderStudioPage("/studio?draft=new&legacy=playground");
 
-    expect(await screen.findByText("Imported local draft")).toBeTruthy();
+    expect(await screen.findByText("新建草稿")).toBeTruthy();
     expect(
-      (await screen.findByLabelText("Workflow name")) as HTMLInputElement
+      (await screen.findByLabelText("定义名称")) as HTMLInputElement
     ).toHaveValue("legacy_draft");
     expect(
-      (await screen.findByLabelText("Workflow YAML")) as HTMLTextAreaElement
+      (await screen.findByLabelText("定义 YAML")) as HTMLTextAreaElement
     ).toHaveValue("name: legacy_draft\nsteps:\n  - id: legacy_step\n");
   });
 
@@ -1967,7 +1974,7 @@ describe("StudioPage", () => {
       );
     });
 
-    expect(await screen.findByText("Published template draft")).toBeTruthy();
+    expect(await screen.findByText("模板定义")).toBeTruthy();
     expect(await screen.findByTestId("workflow-graph-node-count")).toHaveTextContent(
       "2"
     );
@@ -2039,19 +2046,19 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.change(await screen.findByLabelText("Workflow YAML"), {
+    fireEvent.change(await screen.findByLabelText("定义 YAML"), {
       target: {
         value: "name: workspace-demo\nsteps:\n  - id: review_step\n",
       },
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Run" })).toBeEnabled();
+      expect(screen.getByTestId("studio-editor-run-button")).toBeEnabled();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    fireEvent.click(screen.getByTestId("studio-editor-run-button"));
 
-    expect(screen.getAllByRole("button", { name: "Run" }).at(-1)).toBeDisabled();
+    expect(screen.getByTestId("studio-run-submit-button")).toBeDisabled();
 
     fireEvent.change(await screen.findByLabelText("Studio execution prompt"), {
       target: {
@@ -2060,7 +2067,7 @@ describe("StudioPage", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "Run" }).at(-1)).toBeEnabled();
+      expect(screen.getByTestId("studio-run-submit-button")).toBeEnabled();
     });
   });
 
@@ -2101,13 +2108,17 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
-    fireEvent.change(await screen.findByLabelText("Studio execution prompt"), {
+    await screen.findByLabelText("定义 YAML");
+    await waitFor(() => {
+      expect(screen.getByTestId("studio-editor-run-button")).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId("studio-editor-run-button"));
+    fireEvent.change(await screen.findByTestId("studio-run-prompt-input"), {
       target: {
         value: "Run the active draft from Studio.",
       },
     });
-    fireEvent.click(screen.getAllByRole("button", { name: "Run" }).at(-1)!);
+    fireEvent.click(screen.getByTestId("studio-run-submit-button"));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe("/runtime/runs");
@@ -2138,9 +2149,16 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Bind team entry" })
-    );
+    await waitFor(() => {
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
+    });
+    const publishButton = await screen.findByRole("button", {
+      name: "发布团队入口",
+    });
+    await waitFor(() => {
+      expect(publishButton).toBeEnabled();
+    });
+    fireEvent.click(publishButton);
 
     await waitFor(() => {
       expect(studioApi.bindScopeWorkflow).toHaveBeenCalledWith(
@@ -2213,7 +2231,7 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?template=published-demo&tab=studio");
 
-    expect(await screen.findByText("Published template draft")).toBeTruthy();
+    expect(await screen.findByText("模板定义")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Open Chat" })
     ).not.toBeInTheDocument();
@@ -2246,7 +2264,17 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Bind GAgent + Runs" }));
+    await waitFor(() => {
+      expect(mockRuntimeGAgentApi.listTypes).toHaveBeenCalled();
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
+    });
+    const bindRunsButton = await screen.findByRole("button", {
+      name: "绑定团队入口并打开测试运行",
+    });
+    await waitFor(() => {
+      expect(bindRunsButton).toBeEnabled();
+    });
+    fireEvent.click(bindRunsButton);
 
     await waitFor(() => {
       expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
@@ -2300,9 +2328,17 @@ describe("StudioPage", () => {
     });
     renderStudioPage("/studio?workflow=workflow-1&tab=studio");
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Bind GAgent Chat + Runs" })
-    );
+    await waitFor(() => {
+      expect(mockRuntimeGAgentApi.listTypes).toHaveBeenCalled();
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-1");
+    });
+    const bindChatRunsButton = await screen.findByRole("button", {
+      name: "绑定聊天入口并打开测试运行",
+    });
+    await waitFor(() => {
+      expect(bindChatRunsButton).toBeEnabled();
+    });
+    fireEvent.click(bindChatRunsButton);
 
     await waitFor(() => {
       expect(studioApi.bindScopeGAgent).toHaveBeenCalledWith({
@@ -2431,7 +2467,7 @@ describe("StudioPage", () => {
       expect(
         (
           screen.getByLabelText(
-            "Studio workflow yaml panel"
+            "行为定义 YAML"
           ) as HTMLTextAreaElement
         ).value.trim()
       ).toBe("name: ai-generated\nsteps: []");

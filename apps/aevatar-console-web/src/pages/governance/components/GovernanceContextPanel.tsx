@@ -16,7 +16,7 @@ type GovernanceContextPanelProps = {
 
 function renderValue(value: string): string {
   const normalized = value.trim();
-  return normalized || 'n/a';
+  return normalized || '暂无';
 }
 
 const GovernanceContextPanel: React.FC<GovernanceContextPanelProps> = ({
@@ -31,35 +31,35 @@ const GovernanceContextPanel: React.FC<GovernanceContextPanelProps> = ({
     }}
   >
     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Typography.Text strong>Service</Typography.Text>
+      <Typography.Text strong>当前服务</Typography.Text>
 
       <div style={summaryFieldGridStyle}>
         <div style={summaryFieldStyle}>
-          <Typography.Text style={summaryFieldLabelStyle}>Service</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>服务</Typography.Text>
           <Typography.Text strong>{renderValue(draft.serviceId)}</Typography.Text>
         </div>
         <div style={summaryFieldStyle}>
-          <Typography.Text style={summaryFieldLabelStyle}>Tenant</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>团队</Typography.Text>
           <Typography.Text strong>{renderValue(draft.tenantId)}</Typography.Text>
         </div>
         <div style={summaryFieldStyle}>
-          <Typography.Text style={summaryFieldLabelStyle}>App</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>应用</Typography.Text>
           <Typography.Text strong>{renderValue(draft.appId)}</Typography.Text>
         </div>
         <div style={summaryFieldStyle}>
-          <Typography.Text style={summaryFieldLabelStyle}>Namespace</Typography.Text>
+          <Typography.Text style={summaryFieldLabelStyle}>命名空间</Typography.Text>
           <Typography.Text strong>{renderValue(draft.namespace)}</Typography.Text>
         </div>
         {includeRevision ? (
           <div style={summaryFieldStyle}>
-            <Typography.Text style={summaryFieldLabelStyle}>Revision</Typography.Text>
+            <Typography.Text style={summaryFieldLabelStyle}>版本</Typography.Text>
             <Typography.Text strong>{renderValue(draft.revisionId)}</Typography.Text>
           </div>
         ) : null}
       </div>
 
       <div>
-        <Button onClick={onChangeService}>Change</Button>
+        <Button onClick={onChangeService}>切换服务</Button>
       </div>
     </Space>
   </div>

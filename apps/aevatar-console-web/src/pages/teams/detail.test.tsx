@@ -493,7 +493,7 @@ describe("TeamDetailPage", () => {
 
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
-    expect(await screen.findByText("EventEnvelope 流转拓扑")).toBeTruthy();
+    expect(await screen.findByText(/点击节点查看详情/)).toBeTruthy();
     expect(screen.queryByText("运行摘要")).toBeNull();
   });
 
@@ -507,9 +507,10 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("运行摘要")).toBeTruthy();
     expect(screen.getByText("团队状态")).toBeTruthy();
     expect(screen.getByText("团队在做什么")).toBeTruthy();
+    expect(screen.getAllByText("在线率").length).toBeGreaterThan(0);
     expect(screen.getByText("当前版本状态")).toBeTruthy();
     expect(screen.getByRole("button", { name: "测试对话" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "查看服务映射" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /暂\s*停/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /编辑/ })).toBeTruthy();
   });
 
@@ -532,9 +533,9 @@ describe("TeamDetailPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "成员" }));
 
     expect(await screen.findByRole("textbox", { name: "搜索成员" })).toBeTruthy();
-    expect(screen.getByText("Governance Service")).toBeTruthy();
+    expect(screen.getByText("治理服务")).toBeTruthy();
     expect(screen.getByText("RiskReviewAgent")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Graph" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", { name: "拓扑" }).length).toBeGreaterThan(0);
   });
 
   it("surfaces team signal failures without leaking raw runtime errors", async () => {
@@ -557,7 +558,7 @@ describe("TeamDetailPage", () => {
 
     await screen.findByText("运行摘要");
     fireEvent.click(screen.getByRole("button", { name: "事件流" }));
-    await screen.findByText("EventEnvelope Stream");
+    await screen.findByPlaceholderText("关键词过滤");
     fireEvent.click(
       within(screen.getByTestId("page-container-header")).getByRole("button", {
         name: "测试对话",
@@ -580,21 +581,15 @@ describe("TeamDetailPage", () => {
     });
   });
 
-  it("opens runtime explorer from the service mapping action", async () => {
+  it("shows a disabled pause action in the team header", async () => {
     renderWithQueryClient(React.createElement(TeamDetailPage));
 
     await screen.findByText("运行摘要");
-    fireEvent.click(screen.getByRole("button", { name: "事件拓扑" }));
-    await screen.findByText("EventEnvelope 流转拓扑");
-    fireEvent.click(screen.getAllByRole("button", { name: "查看服务映射" })[0]);
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe("/runtime/explorer");
-    });
-    const params = new URLSearchParams(window.location.search);
-    expect(params.get("actorId")).toBe("actor-intake");
-    expect(params.get("scopeId")).toBe("scope-1");
-    expect(params.get("serviceId")).toBe("default");
+    expect(
+      within(screen.getByTestId("page-container-header")).getByRole("button", {
+        name: /暂\s*停/,
+      }),
+    ).toBeDisabled();
   });
 
   it("opens Team Builder in the current team context from the top actions", async () => {

@@ -18,11 +18,11 @@ describe('StudioBootstrapGate', () => {
     );
 
     expect(
-      screen.getByText('Studio setup needs attention'),
+      screen.getByText('Studio 当前有部分能力暂时不可用'),
     ).toBeInTheDocument();
-    expect(screen.getByText(/App context: app context failed/)).toBeInTheDocument();
-    expect(screen.getByText(/Workspace settings: workspace failed/)).toBeInTheDocument();
-    expect(screen.getByText(/Authentication: auth bootstrap warning/)).toBeInTheDocument();
+    expect(screen.getByText(/团队上下文：app context failed/)).toBeInTheDocument();
+    expect(screen.getByText(/工作区设置：workspace failed/)).toBeInTheDocument();
+    expect(screen.getByText(/登录状态：auth bootstrap warning/)).toBeInTheDocument();
     expect(screen.getByText('Studio workbench')).toBeInTheDocument();
   });
 });

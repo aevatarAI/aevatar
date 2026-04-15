@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Alert, Button, Empty, Space } from "antd";
+import { Alert, Button, Space } from "antd";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { scopesApi } from "@/shared/api/scopesApi";
@@ -605,26 +605,74 @@ const ScopeOverviewPage: React.FC = () => {
           padding: 16,
         }}
       >
+        <div
+          style={{
+            display: "grid",
+            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          }}
+        >
+          <SummaryStatCard label="活跃团队" tone="purple" value={scopeId ? activeUnits.length : 0} />
+          <SummaryStatCard label="运行中成员" value={scopeId ? runningMembers.size : 0} />
+          <SummaryStatCard label="今日处理消息" value={scopeId ? dailyMessages : 0} />
+          <SummaryStatCard
+            label="平均在线率"
+            tone="green"
+            value={scopeId ? averageOnlineRate : "0.0%"}
+          />
+        </div>
+
         {!scopeId ? (
-          <Empty
-            description="当前还没有可见团队，登录后的团队上下文会自动显示在这里。"
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          <div
+            style={{
+              background: "#ffffff",
+              border: "1px solid #e8e8e8",
+              borderRadius: 12,
+              boxShadow: "0 1px 3px rgba(15, 23, 42, 0.04)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+              padding: 24,
+            }}
           >
-            <Button
-              onClick={() => history.push(buildTeamCreateHref())}
-              style={{
-                background: "#6c5ce7",
-                borderColor: "#6c5ce7",
-                borderRadius: 8,
-                color: "#ffffff",
-              }}
-            >
-              + 组建新团队
-            </Button>
-          </Empty>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div
+                style={{
+                  color: "#1d2129",
+                  fontSize: 28,
+                  fontWeight: 700,
+                  lineHeight: 1.1,
+                }}
+              >
+                还没有团队
+              </div>
+              <div
+                style={{
+                  color: "#8c8c8c",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }}
+              >
+                登录后会在这里看到当前团队和运行信号。
+              </div>
+            </div>
+            <div>
+              <Button
+                onClick={() => history.push(buildTeamCreateHref())}
+                style={{
+                  background: "#6c5ce7",
+                  borderColor: "#6c5ce7",
+                  borderRadius: 8,
+                  color: "#ffffff",
+                }}
+              >
+                + 组建新团队
+              </Button>
+            </div>
+          </div>
         ) : null}
 
-        {partialIssues.length > 0 ? (
+        {scopeId && partialIssues.length > 0 ? (
           <Alert
             description={partialIssues.join(" ")}
             showIcon
@@ -635,23 +683,6 @@ const ScopeOverviewPage: React.FC = () => {
 
         {scopeId ? (
           <>
-            <div
-              style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              }}
-            >
-              <SummaryStatCard label="活跃团队" tone="purple" value={activeUnits.length} />
-              <SummaryStatCard label="运行中成员" value={runningMembers.size} />
-              <SummaryStatCard label="今日处理消息" value={dailyMessages} />
-              <SummaryStatCard
-                label="平均在线率"
-                tone="green"
-                value={averageOnlineRate}
-              />
-            </div>
-
             {workflowsQuery.isLoading ? (
               <AevatarInspectorEmpty description="正在整理当前 Scope 下的团队卡片。" />
             ) : workflowsQuery.isError ? (
@@ -677,24 +708,59 @@ const ScopeOverviewPage: React.FC = () => {
                 ))}
               </div>
             ) : (
-              <Empty
-                description="当前 Scope 里还没有可展示的团队。"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              <div
+                style={{
+                  background: "#ffffff",
+                  border: "1px solid #e8e8e8",
+                  borderRadius: 12,
+                  boxShadow: "0 1px 3px rgba(15, 23, 42, 0.04)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 16,
+                  padding: 24,
+                }}
               >
-                <Button
-                  onClick={() =>
-                    history.push(
-                      buildStudioWorkflowWorkspaceRoute({
-                        scopeId,
-                        scopeLabel: scopeId,
-                      }),
-                    )
-                  }
-                  type="primary"
-                >
-                  打开工作流空间
-                </Button>
-              </Empty>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div
+                    style={{
+                      color: "#1d2129",
+                      fontSize: 20,
+                      fontWeight: 600,
+                    }}
+                  >
+                    当前 Scope 里还没有团队卡片
+                  </div>
+                  <div
+                    style={{
+                      color: "#8c8c8c",
+                      fontSize: 14,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    先进入 Team Builder，完成第一个团队定义。
+                  </div>
+                </div>
+                <div>
+                  <Button
+                    onClick={() =>
+                      history.push(
+                        buildStudioWorkflowWorkspaceRoute({
+                          scopeId,
+                          scopeLabel: scopeId,
+                        }),
+                      )
+                    }
+                    style={{
+                      background: "#6c5ce7",
+                      borderColor: "#6c5ce7",
+                      borderRadius: 8,
+                      color: "#ffffff",
+                    }}
+                  >
+                    打开 Team Builder
+                  </Button>
+                </div>
+              </div>
             )}
 
             {draftUnits.length > 0 ? (
@@ -706,7 +772,6 @@ const ScopeOverviewPage: React.FC = () => {
                 </Button>
               </div>
             ) : null}
-
           </>
         ) : null}
       </div>

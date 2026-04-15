@@ -32,7 +32,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
   includeRevision = false,
   revisionOptions = [],
   revisionOptionsLoading = false,
-  loadLabel = 'Load governance',
+  loadLabel = '加载治理信息',
   onChange,
   onLoad,
   onReset,
@@ -76,7 +76,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
     >
       <Space wrap>
         <Input
-          placeholder="tenantId (scopeId)"
+          placeholder="团队 ID"
           style={{ width: 200 }}
           value={draft.tenantId}
           onChange={(event) =>
@@ -87,7 +87,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
           }
         />
         <Input
-          placeholder="namespace"
+          placeholder="命名空间"
           style={{ width: 180 }}
           value={draft.namespace}
           onChange={(event) =>
@@ -101,8 +101,8 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
           allowClear
           placeholder={
             serviceSearchEnabled
-              ? 'Search service'
-              : 'Enter tenantId and namespace first'
+              ? '选择服务'
+              : '先填写团队 ID 和命名空间'
           }
           showSearch
           style={{ minWidth: 260 }}
@@ -149,12 +149,12 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
             allowClear
             placeholder={
               !draft.serviceId.trim()
-                ? 'Select service first'
+                ? '先选择服务'
                 : revisionOptionsLoading
-                  ? 'Loading revisions'
+                  ? '正在加载版本'
                   : revisionOptions.length > 0
-                    ? 'Select revision'
-                    : 'No revisions found'
+                    ? '选择版本'
+                    : '暂无版本'
             }
             showSearch
             style={{ minWidth: 240 }}
@@ -178,7 +178,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
         <Button type="primary" onClick={onLoad}>
           {loadLabel}
         </Button>
-        {onReset ? <Button onClick={onReset}>Reset</Button> : null}
+        {onReset ? <Button onClick={onReset}>重置</Button> : null}
       </Space>
     </div>
   );

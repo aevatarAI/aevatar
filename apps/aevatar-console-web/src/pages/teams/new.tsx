@@ -1,4 +1,4 @@
-import { BuildOutlined, RocketOutlined } from '@ant-design/icons';
+import { BuildOutlined } from '@ant-design/icons';
 import { Button, Space, Typography } from 'antd';
 import React from 'react';
 import { history } from '@/shared/navigation/history';
@@ -46,21 +46,10 @@ const TeamCreatePage: React.FC = () => {
         tab: 'studio',
       }),
     );
-  const openBehaviors = () =>
-    history.push(
-      buildStudioRoute({
-        tab: 'workflows',
-      }),
-    );
 
   return (
     <ConsoleMenuPageShell
       breadcrumb="Aevatar / Teams"
-      extra={
-        <Button onClick={openBuilder} style={primaryActionButtonStyle}>
-          Open Team Builder
-        </Button>
-      }
       title="Create Team"
     >
       <div
@@ -80,29 +69,16 @@ const TeamCreatePage: React.FC = () => {
       <AevatarPanel
         layoutMode="document"
         padding={20}
-        title="Start Building"
+        title="Team Builder"
       >
         <div
           style={{
-            alignItems: 'center',
-            display: 'grid',
+            display: 'flex',
+            flexDirection: 'column',
             gap: 20,
-            gridTemplateColumns: 'minmax(0, 1fr) auto',
           }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Typography.Title
-              level={3}
-              style={{
-                color: '#1d2129',
-                fontSize: 28,
-                fontWeight: 600,
-                lineHeight: 1.2,
-                margin: 0,
-              }}
-            >
-              Team Builder
-            </Typography.Title>
             <div
               style={{
                 display: 'flex',
@@ -125,13 +101,6 @@ const TeamCreatePage: React.FC = () => {
                 Open Team Builder
               </Button>
               <Button
-                icon={<RocketOutlined />}
-                onClick={openBehaviors}
-                style={secondaryActionButtonStyle}
-              >
-                View Behaviors
-              </Button>
-              <Button
                 onClick={() => history.push(buildTeamsHref())}
                 style={secondaryActionButtonStyle}
               >
@@ -139,23 +108,15 @@ const TeamCreatePage: React.FC = () => {
               </Button>
             </Space>
           </div>
-          <div
+          <Typography.Text
             style={{
-              alignItems: 'flex-end',
-              display: 'flex',
-              justifyContent: 'flex-end',
+              color: '#8c8c8c',
+              fontSize: 12,
+              fontWeight: 500,
             }}
           >
-            <Typography.Text
-              style={{
-                color: '#8c8c8c',
-                fontSize: 12,
-                fontWeight: 500,
-              }}
-            >
-              Studio
-            </Typography.Text>
-          </div>
+            Studio
+          </Typography.Text>
         </div>
       </AevatarPanel>
     </ConsoleMenuPageShell>

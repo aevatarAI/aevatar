@@ -288,25 +288,19 @@ describe('StudioEditorPage', () => {
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
   });
 
-  it('guides dirty drafts toward save before later project steps', async () => {
-    const onSaveDraft = jest.fn();
-
+  it('hides legacy recommendation notices for dirty drafts', async () => {
     render(
       React.createElement(
         StudioEditorPage,
         createBaseProps({
           resolvedScopeId: 'scope-a',
           isDraftDirty: true,
-          onSaveDraft,
         }) as any,
       ),
     );
 
-    expect(await screen.findByText('下一步：保存定义')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '保存定义' }));
-
-    expect(onSaveDraft).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('行为定义')).toBeInTheDocument();
+    expect(screen.queryByText('下一步：保存定义')).not.toBeInTheDocument();
   });
 
   it('keeps scope binding details collapsed until requested', async () => {
@@ -333,9 +327,7 @@ describe('StudioEditorPage', () => {
     });
   });
 
-  it('guides published teams toward the legacy invoke lab', async () => {
-    const onOpenProjectInvoke = jest.fn();
-
+  it('keeps the published team entry panel visible without recommendation cards', async () => {
     render(
       React.createElement(
         StudioEditorPage,
@@ -355,16 +347,13 @@ describe('StudioEditorPage', () => {
             updatedAt: '2026-03-26T08:00:00Z',
             revisions: [],
           },
-          onOpenProjectInvoke,
         }) as any,
       ),
     );
 
-    expect(await screen.findByText('下一步：打开测试台')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: '打开测试台' }));
-
-    expect(onOpenProjectInvoke).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Workspace Demo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /查看详情/i })).toBeInTheDocument();
+    expect(screen.queryByText('下一步：打开测试台')).not.toBeInTheDocument();
   });
 
   it('adds another GAgent endpoint before binding', async () => {
@@ -387,12 +376,14 @@ describe('StudioEditorPage', () => {
       ),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /绑定 GAgent/i }));
+    fireEvent.click(screen.getByRole('button', { name: '绑定团队入口' }));
 
-    expect(await screen.findByText('绑定 GAgent 服务')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('dialog', { name: '绑定团队入口' }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /添加入口/i }));
-    fireEvent.change(screen.getByLabelText('GAgent 入口 ID 2'), {
+    fireEvent.change(screen.getByLabelText('入口 ID 2'), {
       target: { value: 'chat' },
     });
 

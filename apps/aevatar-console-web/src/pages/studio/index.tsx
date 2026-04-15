@@ -4696,10 +4696,9 @@ const StudioPage: React.FC = () => {
               gap: 8,
             }}
           >
-            <strong>Scripts Studio is unavailable in the current host.</strong>
+            <strong>当前宿主暂不提供脚本行为</strong>
             <span style={{ color: 'var(--ant-color-text-secondary)' }}>
-              The current Studio host does not expose the Scripts capability for
-              this session.
+              当前宿主暂不提供脚本行为，请切换到支持脚本能力的 Studio 环境后继续编辑。
             </span>
           </div>
         </div>
