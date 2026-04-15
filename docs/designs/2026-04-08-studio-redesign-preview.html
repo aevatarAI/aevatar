@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aevatar Studio — Agent Editor Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif; background: #f0f2f5; color: #1d2129; font-size: 13px; }
+  code, .mono { font-family: "SF Mono", "JetBrains Mono", monospace; font-size: 11px; }
+
+  .screens { max-width: 1400px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 40px; }
+  .screen-label { background: #1d2129; color: #fff; padding: 6px 14px; font-size: 12px; font-weight: 600; border-radius: 6px 6px 0 0; display: inline-block; }
+
+  .app { display: flex; min-height: 700px; border: 1px solid #d9d9d9; border-radius: 0 8px 8px 8px; overflow: hidden; background: #fff; }
+
+  /* Studio sidebar — compact tool sidebar */
+  .studio-sidebar { width: 56px; background: #001529; display: flex; flex-direction: column; align-items: center; padding-top: 8px; gap: 2px; flex-shrink: 0; }
+  .ss-icon { width: 40px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 6px; cursor: pointer; font-size: 16px; color: #ffffffa6; position: relative; }
+  .ss-icon:hover { background: #ffffff12; color: #fff; }
+  .ss-icon.active { background: #1890ff; color: #fff; }
+  .ss-icon .ss-tooltip { display: none; position: absolute; left: 52px; top: 50%; transform: translateY(-50%); background: #1d2129; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 4px; white-space: nowrap; z-index: 10; }
+  .ss-icon:hover .ss-tooltip { display: block; }
+  .ss-divider { width: 28px; height: 1px; background: #ffffff12; margin: 4px 0; }
+  .ss-spacer { flex: 1; }
+
+  /* Main area */
+  .studio-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* Top bar */
+  .studio-topbar { display: flex; align-items: center; padding: 0 16px; height: 44px; background: #fff; border-bottom: 1px solid #f0f0f0; gap: 12px; flex-shrink: 0; }
+  .st-back { color: #1890ff; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .st-crumb { font-size: 13px; color: #8c8c8c; }
+  .st-crumb b { color: #1d2129; }
+  .st-right { margin-left: auto; display: flex; gap: 8px; }
+  .btn { height: 28px; padding: 0 12px; border-radius: 4px; border: 1px solid #d9d9d9; background: #fff; font-size: 12px; cursor: pointer; color: #595959; display: inline-flex; align-items: center; gap: 4px; }
+  .btn:hover { color: #1890ff; border-color: #1890ff; }
+  .btn-primary { background: #1890ff; color: #fff; border-color: #1890ff; }
+  .btn-green { background: #52c41a; color: #fff; border-color: #52c41a; }
+
+  /* Three-pane layout */
+  .studio-body { flex: 1; display: flex; overflow: hidden; }
+
+  /* Left pane — workflow list */
+  .studio-left { width: 200px; background: #fafafa; border-right: 1px solid #f0f0f0; display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }
+  .sl-header { padding: 10px 12px; font-size: 12px; font-weight: 500; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; }
+  .sl-header span { margin-left: auto; }
+  .sl-item { padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #f5f5f5; font-size: 12px; }
+  .sl-item:hover { background: #e6f7ff; }
+  .sl-item.active { background: #e6f7ff; border-left: 3px solid #1890ff; }
+  .sl-item-name { font-weight: 500; color: #1d2129; }
+  .sl-item-meta { font-size: 10px; color: #8c8c8c; margin-top: 2px; }
+
+  /* Center pane — graph canvas */
+  .studio-canvas { flex: 1; background: #fafafa; position: relative; overflow: hidden; }
+  .canvas-toolbar { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; background: #fff; border: 1px solid #e8e8e8; border-radius: 6px; padding: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); z-index: 5; }
+  .canvas-toolbar .btn { height: 26px; font-size: 11px; border: none; }
+  .canvas-toolbar .btn:hover { background: #f0f0f0; }
+
+  /* XYFlow nodes */
+  .wf-node { position: absolute; background: #fff; border: 2px solid #d9d9d9; border-radius: 8px; padding: 8px 12px; min-width: 120px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); cursor: pointer; }
+  .wf-node:hover { border-color: #1890ff; box-shadow: 0 2px 8px rgba(24,144,255,0.15); }
+  .wf-node.selected { border-color: #1890ff; box-shadow: 0 0 0 3px #1890ff20; }
+  .wf-node .wn-type { font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .wf-node .wn-name { font-size: 12px; font-weight: 500; color: #1d2129; }
+  .wf-node .wn-role { font-size: 10px; color: #8c8c8c; margin-top: 2px; }
+  .wf-node .wn-status { position: absolute; top: -4px; right: -4px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; }
+  /* Step type colors */
+  .wf-node.ai { border-color: #eb2f96; }
+  .wf-node.ai .wn-type { color: #eb2f96; }
+  .wf-node.control { border-color: #722ed1; }
+  .wf-node.control .wn-type { color: #722ed1; }
+  .wf-node.data { border-color: #1890ff; }
+  .wf-node.data .wn-type { color: #1890ff; }
+  .wf-node.integration { border-color: #52c41a; }
+  .wf-node.integration .wn-type { color: #52c41a; }
+  .wf-node.human { border-color: #13c2c2; }
+  .wf-node.human .wn-type { color: #13c2c2; }
+  .wf-node.composition { border-color: #fa8c16; }
+  .wf-node.composition .wn-type { color: #fa8c16; }
+
+  /* SVG edges */
+  .canvas-svg { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+  .canvas-svg line { stroke: #d9d9d9; stroke-width: 2; }
+  .canvas-svg line.next { stroke: #1890ff; stroke-width: 2; }
+  .canvas-svg line.branch { stroke: #722ed1; stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .edge-label { position: absolute; font-size: 9px; background: #fff; border: 1px solid #e8e8e8; border-radius: 3px; padding: 0 4px; color: #722ed1; z-index: 2; }
+
+  /* Right pane — inspector */
+  .studio-right { width: 280px; background: #fff; border-left: 1px solid #f0f0f0; display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .sr-tabs { display: flex; border-bottom: 1px solid #f0f0f0; }
+  .sr-tab { flex: 1; text-align: center; padding: 9px 0; font-size: 12px; color: #8c8c8c; cursor: pointer; border-bottom: 2px solid transparent; }
+  .sr-tab.active { color: #1890ff; border-bottom-color: #1890ff; }
+  .sr-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .sr-field { display: flex; flex-direction: column; gap: 3px; }
+  .sr-label { font-size: 11px; color: #8c8c8c; font-weight: 500; }
+  .sr-input { height: 28px; padding: 0 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 12px; }
+  .sr-select { height: 28px; padding: 0 8px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 12px; background: #fff; }
+  .sr-textarea { border: 1px solid #d9d9d9; border-radius: 4px; padding: 6px 8px; font-size: 11px; font-family: "SF Mono", monospace; min-height: 80px; resize: vertical; }
+  .sr-section { font-size: 11px; font-weight: 600; color: #1d2129; padding-top: 6px; border-top: 1px solid #f5f5f5; margin-top: 4px; }
+
+  /* Scripts editor area */
+  .editor-area { flex: 1; display: flex; flex-direction: column; background: #1e1e1e; color: #d4d4d4; font-family: "SF Mono", "JetBrains Mono", monospace; font-size: 12px; overflow: hidden; }
+  .editor-tabs { display: flex; background: #252526; border-bottom: 1px solid #3c3c3c; }
+  .editor-tab { padding: 6px 14px; font-size: 11px; color: #969696; cursor: pointer; border-right: 1px solid #3c3c3c; }
+  .editor-tab.active { background: #1e1e1e; color: #fff; }
+  .editor-content { flex: 1; padding: 12px; line-height: 1.7; overflow-y: auto; }
+  .editor-content .kw { color: #569cd6; }
+  .editor-content .str { color: #ce9178; }
+  .editor-content .cm { color: #6a9955; }
+  .editor-content .fn { color: #dcdcaa; }
+  .editor-content .tp { color: #4ec9b0; }
+  .editor-content .ln { color: #858585; display: inline-block; width: 30px; text-align: right; margin-right: 16px; user-select: none; }
+
+  /* Execution overlay */
+  .exec-bar { height: 36px; background: #f6ffed; border-bottom: 1px solid #b7eb8f; display: flex; align-items: center; padding: 0 16px; gap: 12px; font-size: 12px; flex-shrink: 0; }
+  .exec-bar.running { background: #e6f7ff; border-color: #91d5ff; }
+  .exec-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .exec-dot.green { background: #52c41a; }
+  .exec-dot.blue { background: #1890ff; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* Execution log panel (bottom) */
+  .exec-log { height: 180px; border-top: 1px solid #f0f0f0; background: #fff; display: flex; flex-direction: column; flex-shrink: 0; }
+  .exec-log-header { padding: 6px 12px; font-size: 11px; font-weight: 500; border-bottom: 1px solid #f0f0f0; background: #fafafa; display: flex; align-items: center; }
+  .exec-log-body { flex: 1; overflow-y: auto; font-family: "SF Mono", monospace; font-size: 11px; }
+  .el-row { display: flex; gap: 8px; padding: 3px 12px; border-bottom: 1px solid #fafafa; }
+  .el-row:hover { background: #f5f5ff; }
+  .el-ts { color: #bfbfbf; min-width: 60px; }
+  .el-status { min-width: 56px; font-weight: 500; }
+  .el-status.started { color: #1890ff; }
+  .el-status.completed { color: #52c41a; }
+  .el-status.failed { color: #ff4d4f; }
+  .el-detail { color: #434343; flex: 1; }
+</style>
+</head>
+<body>
+<div class="screens">
+
+<!-- ============================================================ -->
+<!-- SCREEN 1: Workflow Visual Editor (core Studio view)           -->
+<!-- ============================================================ -->
+<div>
+<span class="screen-label">Studio · 行为定义 — Workflow 可视化编辑器</span>
+<div class="app" style="min-height:640px;">
+  <!-- Tool sidebar -->
+  <div class="studio-sidebar">
+    <div class="ss-icon active">&#9783;<span class="ss-tooltip">行为定义</span></div>
+    <div class="ss-icon">&#9998;<span class="ss-tooltip">脚本行为</span></div>
+    <div class="ss-icon">&#9673;<span class="ss-tooltip">Agent 角色</span></div>
+    <div class="ss-icon">&#9670;<span class="ss-tooltip">集成</span></div>
+    <div class="ss-divider"></div>
+    <div class="ss-icon">&#9654;<span class="ss-tooltip">测试运行</span></div>
+    <div class="ss-spacer"></div>
+    <div class="ss-icon">&#9881;<span class="ss-tooltip">设置</span></div>
+  </div>
+
+  <div class="studio-main">
+    <!-- Top bar with team context -->
+    <div class="studio-topbar">
+      <span class="st-back">&#8592; 客服团队</span>
+      <span class="st-crumb">/ <b>处理专员</b> / 行为定义</span>
+      <code style="color:#8c8c8c; margin-left:8px;">scope-cs-001 · svc-handler-001</code>
+      <div class="st-right">
+        <div class="btn">&#9654; 测试运行</div>
+        <div class="btn btn-primary">保存</div>
+      </div>
+    </div>
+
+    <!-- Three-pane editor -->
+    <div class="studio-body">
+      <!-- Left: workflow list -->
+      <div class="studio-left">
+        <div class="sl-header">行为定义 <span style="font-size:10px; color:#8c8c8c;">3</span></div>
+        <div class="sl-item">
+          <div class="sl-item-name">接待流程</div>
+          <div class="sl-item-meta">4 步骤 · 刚刚修改</div>
+        </div>
+        <div class="sl-item active">
+          <div class="sl-item-name">处理流程</div>
+          <div class="sl-item-meta">6 步骤 · 2h 前</div>
+        </div>
+        <div class="sl-item">
+          <div class="sl-item-name">跟进流程</div>
+          <div class="sl-item-meta">3 步骤 · 1d 前</div>
+        </div>
+        <div style="padding:8px 12px;">
+          <div class="btn" style="width:100%; justify-content:center; font-size:11px;">+ 新建定义</div>
+        </div>
+      </div>
+
+      <!-- Center: XYFlow canvas -->
+      <div class="studio-canvas">
+        <svg class="canvas-svg" viewBox="0 0 700 500">
+          <line x1="180" y1="70" x2="180" y2="145" class="next"/>
+          <line x1="180" y1="205" x2="100" y2="295" class="branch"/>
+          <line x1="180" y1="205" x2="260" y2="295" class="branch"/>
+          <line x1="100" y1="355" x2="180" y2="420" class="next"/>
+          <line x1="260" y1="355" x2="180" y2="420" class="next"/>
+          <line x1="180" y1="480" x2="180" y2="530" class="next"/>
+        </svg>
+
+        <!-- Step nodes -->
+        <div class="wf-node data" style="left:120px; top:40px; z-index:3;">
+          <div class="wn-type">data</div>
+          <div class="wn-name">retrieve_context</div>
+          <div class="wn-role">→ 处理专员</div>
+        </div>
+
+        <div class="wf-node control selected" style="left:112px; top:155px; z-index:3;">
+          <div class="wn-type">control</div>
+          <div class="wn-name">classify_intent</div>
+          <div class="wn-role">→ 处理专员</div>
+          <div class="wn-status" style="background:#1890ff;"></div>
+        </div>
+        <span class="edge-label" style="left:56px; top:248px;">pricing</span>
+        <span class="edge-label" style="left:240px; top:248px;">faq</span>
+
+        <div class="wf-node ai" style="left:30px; top:295px; z-index:3;">
+          <div class="wn-type">ai · llm_call</div>
+          <div class="wn-name">generate_pricing</div>
+          <div class="wn-role">→ 处理专员</div>
+        </div>
+
+        <div class="wf-node ai" style="left:200px; top:295px; z-index:3;">
+          <div class="wn-type">ai · llm_call</div>
+          <div class="wn-name">generate_faq</div>
+          <div class="wn-role">→ 处理专员</div>
+        </div>
+
+        <div class="wf-node integration" style="left:108px; top:420px; z-index:3;">
+          <div class="wn-type">integration</div>
+          <div class="wn-name">send_reply</div>
+          <div class="wn-role">→ Telegram</div>
+        </div>
+
+        <div class="wf-node human" style="left:108px; top:530px; z-index:3;">
+          <div class="wn-type">human</div>
+          <div class="wn-name">schedule_followup</div>
+          <div class="wn-role">→ 跟进员</div>
+        </div>
+
+        <div class="canvas-toolbar">
+          <div class="btn">自动布局</div>
+          <div class="btn">适应画面</div>
+          <div class="btn">+</div>
+          <div class="btn">−</div>
+          <span style="font-size:10px; color:#8c8c8c; padding:0 4px;">100%</span>
+        </div>
+      </div>
+
+      <!-- Right: inspector -->
+      <div class="studio-right">
+        <div class="sr-tabs">
+          <div class="sr-tab active">步骤属性</div>
+          <div class="sr-tab">角色</div>
+          <div class="sr-tab">YAML</div>
+        </div>
+        <div class="sr-body">
+          <div style="font-size:11px; color:#8c8c8c; margin-bottom:4px;">选中: classify_intent</div>
+
+          <div class="sr-field">
+            <div class="sr-label">步骤类型</div>
+            <select class="sr-select">
+              <option selected>conditional</option>
+              <option>switch</option>
+              <option>guard</option>
+            </select>
+          </div>
+
+          <div class="sr-field">
+            <div class="sr-label">目标角色</div>
+            <select class="sr-select">
+              <option selected>处理专员</option>
+              <option>接待员</option>
+              <option>跟进员</option>
+            </select>
+          </div>
+
+          <div class="sr-section">分支</div>
+          <div class="sr-field">
+            <div class="sr-label">条件 → 目标步骤</div>
+            <textarea class="sr-textarea">{
+  "pricing": "generate_pricing",
+  "faq": "generate_faq"
+}</textarea>
+          </div>
+
+          <div class="sr-section">参数</div>
+          <div class="sr-field">
+            <div class="sr-label">参数 (JSON)</div>
+            <textarea class="sr-textarea">{
+  "evaluator": "intent_classifier",
+  "categories": ["pricing", "faq", "support", "other"]
+}</textarea>
+          </div>
+
+          <div style="padding-top:8px;">
+            <div class="btn btn-primary" style="width:100%; justify-content:center;">应用更改</div>
+          </div>
+          <div style="text-align:center; margin-top:4px;">
+            <span style="font-size:11px; color:#ff4d4f; cursor:pointer;">删除此步骤</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SCREEN 2: Scripts Editor (Monaco-style)                       -->
+<!-- ============================================================ -->
+<div>
+<span class="screen-label">Studio · 脚本行为 — C# 编辑器</span>
+<div class="app" style="min-height:580px;">
+  <div class="studio-sidebar">
+    <div class="ss-icon">&#9783;</div>
+    <div class="ss-icon active">&#9998;</div>
+    <div class="ss-icon">&#9673;</div>
+    <div class="ss-icon">&#9670;</div>
+    <div class="ss-divider"></div>
+    <div class="ss-icon">&#9654;</div>
+    <div class="ss-spacer"></div>
+    <div class="ss-icon">&#9881;</div>
+  </div>
+  <div class="studio-main">
+    <div class="studio-topbar">
+      <span class="st-back">&#8592; 客服团队</span>
+      <span class="st-crumb">/ <b>跟进员</b> / 脚本行为</span>
+      <code style="color:#8c8c8c; margin-left:8px;">scope-cs-001 · svc-followup-001</code>
+      <div class="st-right">
+        <div class="btn">校验</div>
+        <div class="btn">&#9654; 测试</div>
+        <div class="btn btn-green">发布</div>
+        <div class="btn btn-primary">保存</div>
+      </div>
+    </div>
+    <div class="studio-body">
+      <!-- File tree -->
+      <div class="studio-left" style="width:180px;">
+        <div class="sl-header">文件 <span style="font-size:10px; color:#8c8c8c;">3</span></div>
+        <div class="sl-item active">
+          <div class="sl-item-name" style="font-family:monospace; font-size:11px;">FollowupBehavior.cs</div>
+          <div class="sl-item-meta">入口文件</div>
+        </div>
+        <div class="sl-item">
+          <div class="sl-item-name" style="font-family:monospace; font-size:11px;">ReminderService.cs</div>
+        </div>
+        <div class="sl-item">
+          <div class="sl-item-name" style="font-family:monospace; font-size:11px;">models.proto</div>
+          <div class="sl-item-meta">Proto 定义</div>
+        </div>
+        <div style="padding:8px 12px;">
+          <div class="btn" style="width:100%; justify-content:center; font-size:11px;">+ 添加文件</div>
+        </div>
+        <div style="border-top:1px solid #f0f0f0; padding:10px 12px; margin-top:auto;">
+          <div style="font-size:10px; color:#8c8c8c;">草稿 v3</div>
+          <div style="font-size:10px; color:#8c8c8c;">基于 v2 (已发布)</div>
+          <div style="font-size:10px; color:#8c8c8c;">更新: 2 分钟前</div>
+        </div>
+      </div>
+
+      <!-- Monaco editor (simulated) -->
+      <div class="editor-area">
+        <div class="editor-tabs">
+          <div class="editor-tab active">FollowupBehavior.cs</div>
+          <div class="editor-tab">ReminderService.cs</div>
+        </div>
+        <div class="editor-content">
+<span class="ln">1</span><span class="kw">public sealed class</span> <span class="tp">FollowupBehavior</span> :
+<span class="ln">2</span>    <span class="tp">ScriptBehavior</span>&lt;<span class="tp">FollowupReadModel</span>, <span class="tp">FollowupReadModel</span>&gt;
+<span class="ln">3</span>{
+<span class="ln">4</span>    <span class="kw">protected override void</span> <span class="fn">Configure</span>(
+<span class="ln">5</span>        <span class="tp">IScriptBehaviorBuilder</span>&lt;...&gt; builder)
+<span class="ln">6</span>    {
+<span class="ln">7</span>        builder
+<span class="ln">8</span>            .<span class="fn">OnCommand</span>&lt;<span class="tp">ScheduleFollowup</span>&gt;(<span class="fn">HandleSchedule</span>)
+<span class="ln">9</span>            .<span class="fn">OnEvent</span>&lt;<span class="tp">FollowupTriggered</span>&gt;(<span class="fn">HandleTrigger</span>)
+<span class="ln">10</span>            .<span class="fn">ProjectState</span>(s =&gt; s);
+<span class="ln">11</span>    }
+<span class="ln">12</span>
+<span class="ln">13</span>    <span class="cm">// 处理跟进调度命令</span>
+<span class="ln">14</span>    <span class="kw">private static</span> <span class="tp">Task</span> <span class="fn">HandleSchedule</span>(
+<span class="ln">15</span>        <span class="tp">ScheduleFollowup</span> cmd,
+<span class="ln">16</span>        <span class="tp">ScriptCommandContext</span>&lt;...&gt; ctx,
+<span class="ln">17</span>        <span class="tp">CancellationToken</span> ct)
+<span class="ln">18</span>    {
+<span class="ln">19</span>        <span class="cm">// 创建延迟事件，24h 后触发</span>
+<span class="ln">20</span>        ctx.<span class="fn">ScheduleEvent</span>(
+<span class="ln">21</span>            <span class="kw">new</span> <span class="tp">FollowupTriggered</span>(cmd.CustomerId),
+<span class="ln">22</span>            <span class="tp">TimeSpan</span>.<span class="fn">FromHours</span>(<span class="str">24</span>));
+<span class="ln">23</span>        <span class="kw">return</span> <span class="tp">Task</span>.CompletedTask;
+<span class="ln">24</span>    }
+<span class="ln">25</span>}
+        </div>
+      </div>
+
+      <!-- Inspector -->
+      <div class="studio-right">
+        <div class="sr-tabs">
+          <div class="sr-tab active">脚本信息</div>
+          <div class="sr-tab">诊断</div>
+        </div>
+        <div class="sr-body">
+          <div class="sr-field">
+            <div class="sr-label">脚本 ID</div>
+            <div class="mono" style="font-size:11px; color:#595959;">followup-behavior</div>
+          </div>
+          <div class="sr-field">
+            <div class="sr-label">版本</div>
+            <div style="font-size:12px;">草稿 v3 <span style="color:#52c41a; font-size:10px;">基于 v2</span></div>
+          </div>
+          <div class="sr-field">
+            <div class="sr-label">入口类</div>
+            <div class="mono" style="color:#595959;">FollowupBehavior</div>
+          </div>
+          <div class="sr-section">合约</div>
+          <div class="sr-field">
+            <div class="sr-label">输入类型</div>
+            <div class="mono" style="color:#595959;">ScheduleFollowup</div>
+          </div>
+          <div class="sr-field">
+            <div class="sr-label">ReadModel</div>
+            <div class="mono" style="color:#595959;">FollowupReadModel</div>
+          </div>
+          <div class="sr-section">操作</div>
+          <div class="btn" style="width:100%; justify-content:center; font-size:11px; margin-top:4px;">&#9733; Ask AI</div>
+          <div class="btn" style="width:100%; justify-content:center; font-size:11px; margin-top:4px;">绑定到 Scope</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SCREEN 3: Test Run (Execution with graph overlay)            -->
+<!-- ============================================================ -->
+<div>
+<span class="screen-label">Studio · 测试运行 — 执行追踪</span>
+<div class="app" style="min-height:640px;">
+  <div class="studio-sidebar">
+    <div class="ss-icon">&#9783;</div>
+    <div class="ss-icon">&#9998;</div>
+    <div class="ss-icon">&#9673;</div>
+    <div class="ss-icon">&#9670;</div>
+    <div class="ss-divider"></div>
+    <div class="ss-icon active">&#9654;</div>
+    <div class="ss-spacer"></div>
+    <div class="ss-icon">&#9881;</div>
+  </div>
+  <div class="studio-main">
+    <div class="studio-topbar">
+      <span class="st-back">&#8592; 客服团队</span>
+      <span class="st-crumb">/ <b>处理专员</b> / 测试运行</span>
+      <div class="st-right">
+        <div class="btn btn-primary">&#9654; 重新运行</div>
+      </div>
+    </div>
+
+    <div class="exec-bar running">
+      <span class="exec-dot blue"></span>
+      <span style="font-weight:500; color:#1890ff;">运行中</span>
+      <span style="color:#8c8c8c;">处理流程 · 已执行 4/6 步骤 · 耗时 2.8s</span>
+      <span style="margin-left:auto; font-size:11px; color:#8c8c8c;">输入: "企业版定价方案是什么？"</span>
+    </div>
+
+    <div class="studio-body" style="flex-direction:column;">
+      <!-- Graph with execution overlay -->
+      <div class="studio-canvas" style="flex:1; min-height:300px;">
+        <svg class="canvas-svg" viewBox="0 0 700 280">
+          <line x1="180" y1="50" x2="180" y2="105" class="next"/>
+          <line x1="180" y1="155" x2="100" y2="215" class="branch"/>
+          <line x1="180" y1="155" x2="260" y2="215" style="stroke:#e8e8e8; stroke-width:1.5; stroke-dasharray:4 3;"/>
+          <line x1="100" y1="260" x2="100" y2="300" class="next"/>
+        </svg>
+
+        <div class="wf-node data" style="left:120px; top:20px; opacity:0.5;">
+          <div class="wn-type">data</div>
+          <div class="wn-name">retrieve_context</div>
+          <div class="wn-status" style="background:#52c41a;"></div>
+        </div>
+        <div class="wf-node control" style="left:112px; top:110px; opacity:0.5;">
+          <div class="wn-type">control</div>
+          <div class="wn-name">classify_intent</div>
+          <div class="wn-status" style="background:#52c41a;"></div>
+        </div>
+        <div class="wf-node ai" style="left:30px; top:215px; border-width:3px; box-shadow:0 0 12px rgba(24,144,255,0.3);">
+          <div class="wn-type">ai · llm_call</div>
+          <div class="wn-name">generate_pricing</div>
+          <div class="wn-status" style="background:#1890ff; animation:pulse 1s infinite;"></div>
+        </div>
+        <div class="wf-node ai" style="left:200px; top:215px; opacity:0.3;">
+          <div class="wn-type">ai · llm_call</div>
+          <div class="wn-name">generate_faq</div>
+        </div>
+      </div>
+
+      <!-- Execution log -->
+      <div class="exec-log">
+        <div class="exec-log-header">执行日志 <span class="ph-extra">4 个事件</span></div>
+        <div class="exec-log-body">
+          <div class="el-row"><span class="el-ts">14:32:07</span><span class="el-status started">STARTED</span><span class="el-detail">retrieve_context · 获取客户上下文</span></div>
+          <div class="el-row"><span class="el-ts">14:32:07</span><span class="el-status completed">COMPLETED</span><span class="el-detail">retrieve_context · 上下文已加载 (customer_id=c-1234)</span></div>
+          <div class="el-row"><span class="el-ts">14:32:08</span><span class="el-status completed">COMPLETED</span><span class="el-detail">classify_intent · 分类结果: pricing (confidence=0.94)</span></div>
+          <div class="el-row"><span class="el-ts">14:32:09</span><span class="el-status started">STARTED</span><span class="el-detail">generate_pricing · 调用 gpt-5.4 · tokens_in=480...</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+</div>
+</body>
+</html>
