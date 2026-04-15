@@ -651,7 +651,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-1",
                 StepId = "approval-1",
                 Approved = true,
-                UserInput = "approved-output",
+                UserInput = "legacy-approved-output",
+                EditedContent = "approved-output",
+                Feedback = "looks good",
             }),
             ctx,
             CancellationToken.None);
@@ -665,7 +667,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         approvalResolved.RunId.Should().Be("run-1");
         approvalResolved.StepId.Should().Be("approval-1");
         approvalResolved.Approved.Should().BeTrue();
-        approvalResolved.UserInput.Should().Be("approved-output");
+        approvalResolved.UserInput.Should().Be("legacy-approved-output");
+        approvalResolved.EditedContent.Should().Be("approved-output");
+        approvalResolved.Feedback.Should().Be("looks good");
         approvalResolved.DeliveryTargetId.Should().Be("agent-approval-1");
         approvalResolved.ResolvedContent.Should().Be("approved-output");
         ctx.Published.Clear();
@@ -2020,7 +2024,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-branch-1",
                 StepId = "branch-approve",
                 Approved = true,
-                UserInput = "looks good",
+                UserInput = "legacy-approved",
+                EditedContent = "looks good",
+                Feedback = "approved as edited",
             }),
             ctx,
             CancellationToken.None);
@@ -2056,7 +2062,9 @@ public sealed class WorkflowAdditionalModulesCoverageTests
                 RunId = "run-branch-2",
                 StepId = "branch-reject",
                 Approved = false,
-                UserInput = "change the model to gpt-4",
+                UserInput = "legacy-reject",
+                EditedContent = "edited but rejected",
+                Feedback = "change the model to gpt-4",
             }),
             ctx,
             CancellationToken.None);

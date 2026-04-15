@@ -59,7 +59,15 @@ public sealed class FeishuCardHumanInteractionPortTests
 
         using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("orange");
-        var actionElement = card.RootElement.GetProperty("elements")[1];
+        var editedContentInput = card.RootElement.GetProperty("elements")[1];
+        editedContentInput.GetProperty("tag").GetString().Should().Be("input");
+        editedContentInput.GetProperty("name").GetString().Should().Be("edited_content");
+
+        var feedbackInput = card.RootElement.GetProperty("elements")[2];
+        feedbackInput.GetProperty("tag").GetString().Should().Be("input");
+        feedbackInput.GetProperty("name").GetString().Should().Be("user_input");
+
+        var actionElement = card.RootElement.GetProperty("elements")[3];
         actionElement.GetProperty("tag").GetString().Should().Be("action");
         var approve = actionElement.GetProperty("actions")[0];
         approve.GetProperty("value").GetProperty("actor_id").GetString().Should().Be("workflow-actor-1");
@@ -135,7 +143,9 @@ public sealed class FeishuCardHumanInteractionPortTests
                 RunId = "run-2",
                 StepId = "approval-2",
                 Approved = true,
-                UserInput = "Looks good",
+                UserInput = "legacy-approved",
+                EditedContent = "Launch day update.",
+                Feedback = "Looks good",
                 ResolvedContent = "Launch day update.",
             },
             "agent-1",
@@ -185,7 +195,9 @@ public sealed class FeishuCardHumanInteractionPortTests
                 RunId = "run-3",
                 StepId = "approval-3",
                 Approved = false,
-                UserInput = "Need stronger hook",
+                UserInput = "legacy-rejected",
+                EditedContent = "Rejected draft content",
+                Feedback = "Need stronger hook",
                 ResolvedContent = "Rejected draft content",
             },
             "agent-1",
@@ -201,6 +213,18 @@ public sealed class FeishuCardHumanInteractionPortTests
             .Should().Be("Rejection Recorded");
         card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
             .Should().Contain("Need stronger hook");
+
+        var actionElement = card.RootElement.GetProperty("elements")[1];
+        actionElement.GetProperty("tag").GetString().Should().Be("action");
+        var rerun = actionElement.GetProperty("actions")[0];
+        rerun.GetProperty("text").GetProperty("content").GetString().Should().Be("Run Again");
+        rerun.GetProperty("value").GetProperty("agent_builder_action").GetString().Should().Be("run_agent");
+        rerun.GetProperty("value").GetProperty("agent_id").GetString().Should().Be("agent-1");
+        rerun.GetProperty("value").GetProperty("revision_feedback").GetString().Should().Be("Need stronger hook");
+
+        var viewAgents = actionElement.GetProperty("actions")[1];
+        viewAgents.GetProperty("text").GetProperty("content").GetString().Should().Be("View Agents");
+        viewAgents.GetProperty("value").GetProperty("agent_builder_action").GetString().Should().Be("list_agents");
     }
 
     [Fact]
@@ -220,6 +244,26 @@ public sealed class FeishuCardHumanInteractionPortTests
         using var card = JsonDocument.Parse(json);
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("blue");
         card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public void BuildCardJson_ShouldIncludeEditedContentAndFeedbackInputs_ForHumanApproval()
+    {
+        var json = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
+        {
+            ActorId = "workflow-actor-4",
+            RunId = "run-4",
+            StepId = "approval-4",
+            SuspensionType = "human_approval",
+            Prompt = "Need approval",
+            Content = "Review this draft",
+            Options = ["approve", "reject"],
+        });
+
+        using var card = JsonDocument.Parse(json);
+        card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(4);
+        card.RootElement.GetProperty("elements")[1].GetProperty("name").GetString().Should().Be("edited_content");
+        card.RootElement.GetProperty("elements")[2].GetProperty("name").GetString().Should().Be("user_input");
     }
 
     [Fact]

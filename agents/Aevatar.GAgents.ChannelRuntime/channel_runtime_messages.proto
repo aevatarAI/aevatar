@@ -431,6 +431,7 @@ message WorkflowAgentInitializedEvent {
 
 message TriggerWorkflowAgentExecutionCommand {
   string reason = 1;
+  string revision_feedback = 2;
 }
 
 message WorkflowAgentNextRunScheduledEvent {

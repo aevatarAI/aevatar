@@ -351,11 +351,18 @@ internal static class AgentBuilderCardFlow
             return false;
         }
 
+        var revisionFeedback = string.Equals(action, "run_agent", StringComparison.Ordinal)
+            ? NormalizeOptional(evt.Extra.TryGetValue("revision_feedback", out var rawRevisionFeedback)
+                ? rawRevisionFeedback
+                : (evt.Extra.TryGetValue("user_input", out var rawUserInput) ? rawUserInput : null))
+            : null;
+
         argumentsJson = JsonSerializer.Serialize(new
         {
             action,
             agent_id = agentId,
             confirm,
+            revision_feedback = revisionFeedback,
         });
         return true;
     }

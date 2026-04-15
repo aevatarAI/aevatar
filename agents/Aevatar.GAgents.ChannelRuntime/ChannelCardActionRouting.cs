@@ -31,14 +31,19 @@ internal static class ChannelCardActionRouting
         if (!string.IsNullOrWhiteSpace(inbound.MessageId))
             metadata["channel.message_id"] = inbound.MessageId;
 
+        var approved = ResolveApproved(inbound.Extra);
+        var editedContent = ResolveEditedContent(inbound.Extra);
+        var feedback = ResolveFeedback(inbound.Extra, approved);
         command = new WorkflowResumeCommand(
             actorId,
             runId,
             stepId,
             NormalizeOptional(inbound.MessageId),
-            ResolveApproved(inbound.Extra),
-            ResolveUserInput(inbound.Extra),
-            metadata);
+            approved,
+            ResolveUserInput(inbound.Extra, approved),
+            metadata,
+            editedContent,
+            feedback);
         return true;
     }
 
@@ -82,9 +87,44 @@ internal static class ChannelCardActionRouting
         };
     }
 
-    private static string? ResolveUserInput(IReadOnlyDictionary<string, string> values)
+    private static string? ResolveUserInput(IReadOnlyDictionary<string, string> values, bool approved)
     {
-        foreach (var key in new[] { "user_input", "input", "comment", "edited_content" })
+        var preferredKeys = approved
+            ? new[] { "edited_content", "user_input", "input", "comment" }
+            : new[] { "user_input", "comment", "input", "edited_content" };
+
+        foreach (var key in preferredKeys)
+        {
+            if (values.TryGetValue(key, out var raw))
+            {
+                var normalized = NormalizeOptional(raw);
+                if (normalized is not null)
+                    return normalized;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ResolveEditedContent(IReadOnlyDictionary<string, string> values)
+    {
+        if (!values.TryGetValue("edited_content", out var raw))
+            return null;
+
+        return NormalizeOptional(raw);
+    }
+
+    private static string? ResolveFeedback(IReadOnlyDictionary<string, string> values, bool approved)
+    {
+        if (approved)
+        {
+            if (values.TryGetValue("user_input", out var approvedRaw))
+                return NormalizeOptional(approvedRaw);
+
+            return null;
+        }
+
+        foreach (var key in new[] { "user_input", "comment", "input", "edited_content" })
         {
             if (values.TryGetValue(key, out var raw))
             {

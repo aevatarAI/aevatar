@@ -84,7 +84,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         var now = DateTimeOffset.UtcNow;
         try
         {
-            var receipt = await DispatchWorkflowRunAsync(command.Reason, CancellationToken.None);
+            var receipt = await DispatchWorkflowRunAsync(command.Reason, command.RevisionFeedback, CancellationToken.None);
             await PersistDomainEventAsync(new WorkflowAgentExecutionDispatchedEvent
             {
                 DispatchedAt = Timestamp.FromDateTimeOffset(now),
@@ -165,7 +165,10 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
             CancellationToken.None);
     }
 
-    private async Task<WorkflowChatRunAcceptedReceipt> DispatchWorkflowRunAsync(string? reason, CancellationToken ct)
+    private async Task<WorkflowChatRunAcceptedReceipt> DispatchWorkflowRunAsync(
+        string? reason,
+        string? revisionFeedback,
+        CancellationToken ct)
     {
         var dispatchService = Services.GetService<ICommandDispatchService<WorkflowChatRunRequest, WorkflowChatRunAcceptedReceipt, WorkflowChatRunStartError>>();
         if (dispatchService is null)
@@ -173,7 +176,7 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
 
         var metadata = BuildExecutionMetadata();
         var request = new WorkflowChatRunRequest(
-            Prompt: BuildExecutionPrompt(reason),
+            Prompt: BuildExecutionPrompt(reason, revisionFeedback),
             WorkflowName: State.WorkflowName,
             ActorId: State.WorkflowActorId,
             SessionId: null,
@@ -238,13 +241,23 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         return metadata;
     }
 
-    private string BuildExecutionPrompt(string? reason)
+    private string BuildExecutionPrompt(string? reason, string? revisionFeedback)
     {
         var prompt = string.IsNullOrWhiteSpace(State.ExecutionPrompt)
             ? "Run the configured workflow now."
             : State.ExecutionPrompt;
 
-        return $"{prompt}\nTrigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}";
+        var lines = new List<string>
+        {
+            prompt,
+            $"Trigger reason: {(string.IsNullOrWhiteSpace(reason) ? "manual" : reason)}",
+        };
+
+        var normalizedFeedback = NormalizeOptional(revisionFeedback);
+        if (normalizedFeedback is not null)
+            lines.Add($"Revision feedback: {normalizedFeedback}");
+
+        return string.Join('\n', lines);
     }
 
     private async Task UpsertRegistryAsync(string status, CancellationToken ct)
@@ -382,6 +395,12 @@ public sealed class WorkflowAgentGAgent : GAgentBase<WorkflowAgentState>
         string.IsNullOrWhiteSpace(scheduleTimezone)
             ? WorkflowAgentDefaults.DefaultTimezone
             : scheduleTimezone.Trim();
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : normalized;
+    }
 
     private static string MapDispatchError(WorkflowChatRunStartError error) =>
         error switch

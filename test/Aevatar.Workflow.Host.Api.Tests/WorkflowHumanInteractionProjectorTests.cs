@@ -118,6 +118,8 @@ public sealed class WorkflowHumanInteractionProjectorTests
                     StepId = "approval-4",
                     Approved = false,
                     UserInput = "Need stronger CTA",
+                    EditedContent = "Edited but rejected",
+                    Feedback = "Need stronger CTA",
                     DeliveryTargetId = "agent-delivery-4",
                     ResolvedContent = "Draft needs stronger CTA",
                 }),
@@ -132,6 +134,8 @@ public sealed class WorkflowHumanInteractionProjectorTests
         call.resolution.StepId.Should().Be("approval-4");
         call.resolution.Approved.Should().BeFalse();
         call.resolution.UserInput.Should().Be("Need stronger CTA");
+        call.resolution.EditedContent.Should().Be("Edited but rejected");
+        call.resolution.Feedback.Should().Be("Need stronger CTA");
         call.resolution.ResolvedContent.Should().Be("Draft needs stronger CTA");
     }
 

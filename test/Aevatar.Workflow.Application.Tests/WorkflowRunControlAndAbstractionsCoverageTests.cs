@@ -241,7 +241,10 @@ public sealed class WorkflowRunControlAndAbstractionsCoverageTests
             new WorkflowResumeCommand("actor-1", "run-1", "step-1", "cmd-1", true, null),
             context);
 
-        envelope.Payload.Unpack<WorkflowResumedEvent>().UserInput.Should().BeEmpty();
+        var resumed = envelope.Payload.Unpack<WorkflowResumedEvent>();
+        resumed.UserInput.Should().BeEmpty();
+        resumed.EditedContent.Should().BeEmpty();
+        resumed.Feedback.Should().BeEmpty();
 
         var actOnCommand = () => factory.CreateEnvelope(null!, context);
         var actOnContext = () => factory.CreateEnvelope(

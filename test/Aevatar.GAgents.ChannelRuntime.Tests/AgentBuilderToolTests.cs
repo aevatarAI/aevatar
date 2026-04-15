@@ -537,19 +537,22 @@ public sealed class AgentBuilderToolTests
             var result = await tool.ExecuteAsync("""
                 {
                   "action": "run_agent",
-                  "agent_id": "workflow-agent-1"
+                  "agent_id": "workflow-agent-1",
+                  "revision_feedback": "Need stronger hook"
                 }
                 """);
 
             using var doc = JsonDocument.Parse(result);
             doc.RootElement.GetProperty("status").GetString().Should().Be("accepted");
             doc.RootElement.GetProperty("agent_id").GetString().Should().Be("workflow-agent-1");
+            doc.RootElement.GetProperty("note").GetString().Should().Contain("revision feedback");
 
             await workflowAgentActor.Received(1).HandleEventAsync(
                 Arg.Is<EventEnvelope>(e =>
                     e.Payload != null &&
                     e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
-                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "run_agent"),
+                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "run_agent" &&
+                    e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().RevisionFeedback == "Need stronger hook"),
                 Arg.Any<CancellationToken>());
         }
         finally

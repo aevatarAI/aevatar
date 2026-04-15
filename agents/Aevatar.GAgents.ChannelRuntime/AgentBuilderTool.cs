@@ -87,6 +87,10 @@ public sealed class AgentBuilderTool : IAgentTool
             "confirm": {
               "type": "boolean",
               "description": "Must be true to execute delete_agent"
+            },
+            "revision_feedback": {
+              "type": "string",
+              "description": "Optional revision guidance to include in the next workflow-backed run"
             }
           }
         }
@@ -437,7 +441,7 @@ public sealed class AgentBuilderTool : IAgentTool
             });
         }
 
-        var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, ct);
+        var disableResult = await DispatchAgentLifecycleAsync(entry, actorRuntime, "delete_agent", LifecycleAction.Disable, null, ct);
         if (disableResult.error != null)
             return disableResult.error;
 
@@ -510,7 +514,8 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return JsonSerializer.Serialize(new { error = $"Agent '{entry.AgentId}' is disabled. Enable it before running." });
 
-        var dispatch = await DispatchAgentLifecycleAsync(entry, actorRuntime, "run_agent", LifecycleAction.Run, ct);
+        var revisionFeedback = NormalizeOptional(args.Str("revision_feedback"));
+        var dispatch = await DispatchAgentLifecycleAsync(entry, actorRuntime, "run_agent", LifecycleAction.Run, revisionFeedback, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -519,7 +524,9 @@ public sealed class AgentBuilderTool : IAgentTool
             status = "accepted",
             agent_id = entry.AgentId,
             template = entry.TemplateName,
-            note = "Manual run dispatched.",
+            note = revisionFeedback is null
+                ? "Manual run dispatched."
+                : "Manual run dispatched with revision feedback.",
         });
     }
 
@@ -537,7 +544,7 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusDisabled, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already disabled.");
 
-        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "disable_agent", LifecycleAction.Disable, ct);
+        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "disable_agent", LifecycleAction.Disable, null, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -559,7 +566,7 @@ public sealed class AgentBuilderTool : IAgentTool
             string.Equals(entry.value.Status, WorkflowAgentDefaults.StatusRunning, StringComparison.Ordinal))
             return SerializeAgentStatus(entry.value, "Agent is already enabled.");
 
-        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "enable_agent", LifecycleAction.Enable, ct);
+        var dispatch = await DispatchAgentLifecycleAsync(entry.value, actorRuntime, "enable_agent", LifecycleAction.Enable, null, ct);
         if (dispatch.error != null)
             return dispatch.error;
 
@@ -714,6 +721,7 @@ public sealed class AgentBuilderTool : IAgentTool
         IActorRuntime actorRuntime,
         string reason,
         LifecycleAction action,
+        string? revisionFeedback,
         CancellationToken ct)
     {
         if (string.Equals(entry.AgentType, SkillRunnerDefaults.AgentType, StringComparison.Ordinal))
@@ -740,7 +748,11 @@ public sealed class AgentBuilderTool : IAgentTool
 
             IMessage payload = action switch
             {
-                LifecycleAction.Run => new TriggerWorkflowAgentExecutionCommand { Reason = reason },
+                LifecycleAction.Run => new TriggerWorkflowAgentExecutionCommand
+                {
+                    Reason = reason,
+                    RevisionFeedback = revisionFeedback?.Trim() ?? string.Empty,
+                },
                 LifecycleAction.Disable => new DisableWorkflowAgentCommand { Reason = reason },
                 LifecycleAction.Enable => new EnableWorkflowAgentCommand { Reason = reason },
                 _ => throw new ArgumentOutOfRangeException(nameof(action), action, null),
@@ -890,6 +902,12 @@ public sealed class AgentBuilderTool : IAgentTool
         }
 
         return null;
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : normalized;
     }
 
     private sealed class BuilderArgs

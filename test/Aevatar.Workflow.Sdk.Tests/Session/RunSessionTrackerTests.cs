@@ -39,13 +39,21 @@ public sealed class RunSessionTrackerTests
         snapshot.StepId.Should().Be("wait-1");
         snapshot.LastSignalName.Should().Be("ops_window_open");
 
-        var resume = tracker.CreateResumeRequest("scope-a", approved: true, userInput: "approved", serviceId: "orders");
+        var resume = tracker.CreateResumeRequest(
+            "scope-a",
+            approved: true,
+            userInput: "approved",
+            editedContent: "approved draft",
+            feedback: "ship it",
+            serviceId: "orders");
         resume.ScopeId.Should().Be("scope-a");
         resume.ServiceId.Should().Be("orders");
         resume.ActorId.Should().Be("actor-1");
         resume.RunId.Should().Be("run-1");
         resume.StepId.Should().Be("wait-1");
         resume.CommandId.Should().Be("cmd-1");
+        resume.EditedContent.Should().Be("approved draft");
+        resume.Feedback.Should().Be("ship it");
 
         var signal = tracker.CreateSignalRequest("scope-a", payload: "window=open", serviceId: "orders");
         signal.ScopeId.Should().Be("scope-a");

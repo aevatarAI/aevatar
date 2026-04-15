@@ -1167,6 +1167,79 @@ public class ChannelUserGAgentContinuationTests
     }
 
     [Fact]
+    public async Task HandleInbound_RunWorkflowAgentCardAction_ShouldPropagateRevisionFeedback()
+    {
+        var queryPort = Substitute.For<IAgentRegistryQueryPort>();
+        queryPort.GetAsync("workflow-agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "workflow-agent-1",
+                AgentType = WorkflowAgentDefaults.AgentType,
+                TemplateName = WorkflowAgentDefaults.TemplateName,
+                Status = WorkflowAgentDefaults.StatusRunning,
+                ScheduleCron = "0 9 * * *",
+                ScheduleTimezone = "UTC",
+            }));
+
+        var workflowAgentActor = Substitute.For<IActor>();
+        workflowAgentActor.Id.Returns("workflow-agent-1");
+
+        var actorRuntime = Substitute.For<IActorRuntime>();
+        actorRuntime.GetAsync("workflow-agent-1").Returns(Task.FromResult<IActor?>(workflowAgentActor));
+
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(
+            actorRuntime,
+            streams,
+            scheduler,
+            adapter,
+            new InMemoryEventStore(),
+            configure: serviceCollection =>
+            {
+                serviceCollection.AddSingleton(queryPort);
+            });
+
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+        var inbound = new ChannelInboundEvent
+        {
+            Text = """{"action":"run_agent"}""",
+            SenderId = "ou_123",
+            SenderName = "Alice",
+            ConversationId = "oc_chat_1",
+            MessageId = "evt_run_workflow_1",
+            ChatType = "card_action",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "session-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+            Extra =
+            {
+                { "agent_builder_action", "run_agent" },
+                { "agent_id", "workflow-agent-1" },
+                { "revision_feedback", "Need stronger hook" },
+            },
+        };
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(inbound);
+
+        adapter.Replies.Should().ContainSingle();
+        LarkPlatformAdapter.IsInteractiveCardPayload(adapter.Replies[0].ReplyText).Should().BeTrue();
+        adapter.Replies[0].ReplyText.Should().Contain("Refresh Status");
+
+        await workflowAgentActor.Received(1).HandleEventAsync(
+            Arg.Is<EventEnvelope>(e =>
+                e.Payload != null &&
+                e.Payload.Is(TriggerWorkflowAgentExecutionCommand.Descriptor) &&
+                e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().Reason == "run_agent" &&
+                e.Payload.Unpack<TriggerWorkflowAgentExecutionCommand>().RevisionFeedback == "Need stronger hook"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task HandleInbound_EnableAgentCardAction_ShouldExecuteEnableAndSendStatusCard()
     {
         var queryPort = Substitute.For<IAgentRegistryQueryPort>();

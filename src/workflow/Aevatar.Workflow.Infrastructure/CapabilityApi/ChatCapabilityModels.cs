@@ -73,6 +73,8 @@ public sealed record WorkflowResumeInput
     public string? CommandId { get; init; }
     public bool Approved { get; init; }
     public string? UserInput { get; init; }
+    public string? EditedContent { get; init; }
+    public string? Feedback { get; init; }
     public IDictionary<string, string>? Metadata { get; init; }
 }
 

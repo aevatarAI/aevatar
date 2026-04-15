@@ -7,6 +7,9 @@ namespace Aevatar.GAgents.ChannelRuntime;
 
 public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 {
+    private const string AgentBuilderListAgentsAction = "list_agents";
+    private const string AgentBuilderRunAgentAction = "run_agent";
+
     private readonly IAgentRegistryQueryPort _agentRegistryQueryPort;
     private readonly NyxIdApiClient _nyxIdApiClient;
     private readonly ILogger<FeishuCardHumanInteractionPort> _logger;
@@ -53,7 +56,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         var target = await ResolveTargetAsync(deliveryTargetId, cancellationToken);
         await SendInteractiveCardAsync(
             target,
-            BuildApprovalResolutionCardJson(resolution),
+            BuildApprovalResolutionCardJson(resolution, target),
             "Feishu approval resolution delivery returned empty response.",
             "Feishu approval resolution delivery failed",
             cancellationToken);
@@ -89,6 +92,8 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
 
         if (SupportsApproveReject(request))
         {
+            elements.Add(BuildEditedContentInput());
+            elements.Add(BuildFeedbackInput());
             elements.Add(new
             {
                 tag = "action",
@@ -119,7 +124,9 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         });
     }
 
-    internal static string BuildApprovalResolutionCardJson(HumanApprovalResolution resolution)
+    internal static string BuildApprovalResolutionCardJson(
+        HumanApprovalResolution resolution,
+        AgentRegistryEntry? target = null)
     {
         var lines = new List<string>
         {
@@ -130,8 +137,40 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             $"Step: `{EscapeMarkdown(resolution.StepId)}`",
         };
 
-        if (!string.IsNullOrWhiteSpace(resolution.UserInput))
-            lines.Add($"\nFeedback: {EscapeMarkdown(resolution.UserInput!)}");
+        if (!string.IsNullOrWhiteSpace(resolution.Feedback))
+            lines.Add($"\nFeedback: {EscapeMarkdown(resolution.Feedback!)}");
+
+        var elements = new List<object>
+        {
+            new
+            {
+                tag = "markdown",
+                content = string.Concat(lines),
+            },
+        };
+
+        if (ShouldOfferRerun(target, resolution))
+        {
+            elements.Add(new
+            {
+                tag = "action",
+                actions = new object[]
+                {
+                    BuildAgentActionButton(
+                        "Run Again",
+                        "primary",
+                        AgentBuilderRunAgentAction,
+                        target!.AgentId,
+                        resolution.Feedback),
+                    BuildAgentActionButton(
+                        "View Agents",
+                        "default",
+                        AgentBuilderListAgentsAction,
+                        target.AgentId,
+                        null),
+                },
+            });
+        }
 
         return JsonSerializer.Serialize(new
         {
@@ -148,14 +187,7 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
                 },
                 template = resolution.Approved ? "green" : "red",
             },
-            elements = new object[]
-            {
-                new
-                {
-                    tag = "markdown",
-                    content = string.Concat(lines),
-                },
-            },
+            elements,
         });
     }
 
@@ -178,6 +210,13 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         HumanApprovalResolution resolution) =>
         resolution.Approved &&
         !string.IsNullOrWhiteSpace(resolution.ResolvedContent) &&
+        string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ShouldOfferRerun(
+        AgentRegistryEntry? target,
+        HumanApprovalResolution resolution) =>
+        target is not null &&
+        !resolution.Approved &&
         string.Equals(target.TemplateName, WorkflowAgentDefaults.TemplateName, StringComparison.OrdinalIgnoreCase);
 
     private async Task SendInteractiveCardAsync(
@@ -259,6 +298,63 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
             },
         };
 
+    private static object BuildAgentActionButton(
+        string label,
+        string style,
+        string action,
+        string agentId,
+        string? revisionFeedback) =>
+        new
+        {
+            tag = "button",
+            type = style,
+            text = new
+            {
+                tag = "plain_text",
+                content = label,
+            },
+            value = new
+            {
+                agent_builder_action = action,
+                agent_id = agentId,
+                revision_feedback = NormalizeOptional(revisionFeedback) ?? string.Empty,
+            },
+        };
+
+    private static object BuildEditedContentInput() =>
+        new
+        {
+            tag = "input",
+            name = "edited_content",
+            label = new
+            {
+                tag = "plain_text",
+                content = "Edited Draft (Optional)",
+            },
+            placeholder = new
+            {
+                tag = "plain_text",
+                content = "Paste the final draft here before approving",
+            },
+        };
+
+    private static object BuildFeedbackInput() =>
+        new
+        {
+            tag = "input",
+            name = "user_input",
+            label = new
+            {
+                tag = "plain_text",
+                content = "Rejection Feedback (Optional)",
+            },
+            placeholder = new
+            {
+                tag = "plain_text",
+                content = "Explain what should change if you reject",
+            },
+        };
+
     private static bool SupportsApproveReject(HumanInteractionRequest request) =>
         string.Equals(request.SuspensionType, "human_approval", StringComparison.OrdinalIgnoreCase) ||
         (request.Options.Contains("approve", StringComparer.OrdinalIgnoreCase) &&
@@ -288,4 +384,10 @@ public sealed class FeishuCardHumanInteractionPort : IHumanInteractionPort
         value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("`", "\\`", StringComparison.Ordinal);
+
+    private static string? NormalizeOptional(string? value)
+    {
+        var normalized = (value ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : normalized;
+    }
 }

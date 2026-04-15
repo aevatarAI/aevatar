@@ -12,5 +12,9 @@ public sealed record HumanApprovalResolution
 
     public string? UserInput { get; init; }
 
+    public string? EditedContent { get; init; }
+
+    public string? Feedback { get; init; }
+
     public string? ResolvedContent { get; init; }
 }
