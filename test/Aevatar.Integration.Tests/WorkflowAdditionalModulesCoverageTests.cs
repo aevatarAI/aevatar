@@ -661,6 +661,12 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         approved.RunId.Should().Be("run-1");
         approved.Success.Should().BeTrue();
         approved.Output.Should().Be("approved-output");
+        var approvalResolved = ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Single();
+        approvalResolved.RunId.Should().Be("run-1");
+        approvalResolved.StepId.Should().Be("approval-1");
+        approvalResolved.Approved.Should().BeTrue();
+        approvalResolved.UserInput.Should().Be("approved-output");
+        approvalResolved.DeliveryTargetId.Should().Be("agent-approval-1");
         ctx.Published.Clear();
 
         await module.HandleAsync(
@@ -691,6 +697,7 @@ public sealed class WorkflowAdditionalModulesCoverageTests
         rejected.Success.Should().BeTrue();
         rejected.Output.Should().Be("keep-me");
         rejected.Error.Should().BeEmpty();
+        ctx.Published.Select(x => x.evt).OfType<WorkflowHumanApprovalResolvedEvent>().Should().BeEmpty();
     }
 
     [Fact]

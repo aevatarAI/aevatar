@@ -51,6 +51,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
             var timeoutSeconds = WorkflowParameterValueParser.ResolveTimeoutSeconds(
                 request.Parameters,
                 defaultSeconds: 3600);
+            var deliveryTargetId = WorkflowSuspensionRequestSupport.ResolveDeliveryTargetId(request);
 
             var state = WorkflowExecutionStateAccess.Load<HumanApprovalModuleState>(ctx, ModuleStateKey);
             state.Pending[BuildPendingKey(runId, request.StepId)] = new PendingApprovalState
@@ -59,6 +60,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                 RunId = runId,
                 Input = request.Input ?? string.Empty,
                 OnReject = request.Parameters.GetValueOrDefault("on_reject", "fail"),
+                DeliveryTargetId = deliveryTargetId ?? string.Empty,
             };
             await SaveStateAsync(state, ctx, ct);
 
@@ -106,6 +108,7 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     BranchKey = "true",
                 };
                 await ctx.PublishAsync(approved, TopologyAudience.Self, ct);
+                await PublishResolutionAsync(ctx, pending, approved: true, resumed.UserInput, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
@@ -131,10 +134,34 @@ public sealed class HumanApprovalModule : IEventModule<IWorkflowExecutionContext
                     BranchKey = "false",
                 };
                 await ctx.PublishAsync(rejected, TopologyAudience.Self, ct);
+                await PublishResolutionAsync(ctx, pending, approved: false, resumed.UserInput, ct);
                 state.Pending.Remove(pendingKey);
                 await SaveStateAsync(state, ctx, ct);
             }
         }
+    }
+
+    private static Task PublishResolutionAsync(
+        IWorkflowExecutionContext ctx,
+        PendingApprovalState pending,
+        bool approved,
+        string? userInput,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(pending.DeliveryTargetId))
+            return Task.CompletedTask;
+
+        return ctx.PublishAsync(
+            new WorkflowHumanApprovalResolvedEvent
+            {
+                RunId = pending.RunId,
+                StepId = pending.StepId,
+                Approved = approved,
+                UserInput = userInput ?? string.Empty,
+                DeliveryTargetId = pending.DeliveryTargetId,
+            },
+            TopologyAudience.Self,
+            ct);
     }
 
     private bool TryResolvePending(

@@ -100,6 +100,63 @@ public sealed class WorkflowHumanInteractionProjectorTests
         port.Calls.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ApprovalResolutionProjector_ShouldDeliverResolution_WhenDeliveryTargetIsPresent()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanApprovalResolutionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-human-resolution-1",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-resolution-test"),
+                Payload = Any.Pack(new WorkflowHumanApprovalResolvedEvent
+                {
+                    RunId = "run-4",
+                    StepId = "approval-4",
+                    Approved = false,
+                    UserInput = "Need stronger CTA",
+                    DeliveryTargetId = "agent-delivery-4",
+                }),
+            },
+            CancellationToken.None);
+
+        port.ResolutionCalls.Should().ContainSingle();
+        var call = port.ResolutionCalls[0];
+        call.deliveryTargetId.Should().Be("agent-delivery-4");
+        call.resolution.ActorId.Should().Be("workflow-actor-1");
+        call.resolution.RunId.Should().Be("run-4");
+        call.resolution.StepId.Should().Be("approval-4");
+        call.resolution.Approved.Should().BeFalse();
+        call.resolution.UserInput.Should().Be("Need stronger CTA");
+    }
+
+    [Fact]
+    public async Task ApprovalResolutionProjector_ShouldIgnoreResolution_WhenDeliveryTargetMissing()
+    {
+        var port = new RecordingHumanInteractionPort();
+        var projector = new WorkflowHumanApprovalResolutionProjector(port);
+
+        await projector.ProjectAsync(
+            BuildContext(),
+            new EventEnvelope
+            {
+                Id = "evt-human-resolution-2",
+                Route = EnvelopeRouteSemantics.CreateObserverPublication("workflow-human-resolution-test"),
+                Payload = Any.Pack(new WorkflowHumanApprovalResolvedEvent
+                {
+                    RunId = "run-5",
+                    StepId = "approval-5",
+                    Approved = true,
+                }),
+            },
+            CancellationToken.None);
+
+        port.ResolutionCalls.Should().BeEmpty();
+    }
+
     private static WorkflowExecutionProjectionContext BuildContext() => new()
     {
         SessionId = "cmd-1",
@@ -110,6 +167,7 @@ public sealed class WorkflowHumanInteractionProjectorTests
     private sealed class RecordingHumanInteractionPort : IHumanInteractionPort
     {
         public List<(HumanInteractionRequest request, string deliveryTargetId)> Calls { get; } = [];
+        public List<(HumanApprovalResolution resolution, string deliveryTargetId)> ResolutionCalls { get; } = [];
 
         public Task DeliverSuspensionAsync(
             HumanInteractionRequest request,
@@ -117,6 +175,15 @@ public sealed class WorkflowHumanInteractionProjectorTests
             CancellationToken cancellationToken = default)
         {
             Calls.Add((request, deliveryTargetId));
+            return Task.CompletedTask;
+        }
+
+        public Task DeliverApprovalResolutionAsync(
+            HumanApprovalResolution resolution,
+            string deliveryTargetId,
+            CancellationToken cancellationToken = default)
+        {
+            ResolutionCalls.Add((resolution, deliveryTargetId));
             return Task.CompletedTask;
         }
     }

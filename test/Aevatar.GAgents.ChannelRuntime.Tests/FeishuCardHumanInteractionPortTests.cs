@@ -108,6 +108,48 @@ public sealed class FeishuCardHumanInteractionPortTests
     }
 
     [Fact]
+    public async Task DeliverApprovalResolutionAsync_ShouldSendResolutionCardThroughNyxProxy()
+    {
+        var registry = Substitute.For<IAgentRegistryQueryPort>();
+        registry.GetAsync("agent-1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<AgentRegistryEntry?>(new AgentRegistryEntry
+            {
+                AgentId = "agent-1",
+                Platform = "lark",
+                ConversationId = "oc_chat_1",
+                NyxProviderSlug = "api-lark-bot",
+                NyxApiKey = "nyx-api-key-1",
+            }));
+
+        var handler = new RecordingHandler("""{"data":{"message_id":"om_2"}}""");
+        var httpClient = new HttpClient(handler);
+        var nyxClient = new NyxIdApiClient(new NyxIdToolOptions { BaseUrl = "https://nyx.example.com" }, httpClient);
+        var port = new FeishuCardHumanInteractionPort(registry, nyxClient, NullLogger<FeishuCardHumanInteractionPort>.Instance);
+
+        await port.DeliverApprovalResolutionAsync(
+            new HumanApprovalResolution
+            {
+                ActorId = "workflow-actor-1",
+                RunId = "run-2",
+                StepId = "approval-2",
+                Approved = false,
+                UserInput = "Need stronger hook",
+            },
+            "agent-1",
+            CancellationToken.None);
+
+        using var body = JsonDocument.Parse(handler.LastBody!);
+        body.RootElement.GetProperty("msg_type").GetString().Should().Be("interactive");
+
+        using var card = JsonDocument.Parse(body.RootElement.GetProperty("content").GetString()!);
+        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("red");
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Rejection Recorded");
+        card.RootElement.GetProperty("elements")[0].GetProperty("content").GetString()
+            .Should().Contain("Need stronger hook");
+    }
+
+    [Fact]
     public void BuildCardJson_ShouldOmitActionButtons_ForHumanInput()
     {
         var json = FeishuCardHumanInteractionPort.BuildCardJson(new HumanInteractionRequest
@@ -124,6 +166,23 @@ public sealed class FeishuCardHumanInteractionPortTests
         using var card = JsonDocument.Parse(json);
         card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("blue");
         card.RootElement.GetProperty("elements").GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public void BuildApprovalResolutionCardJson_ShouldRenderApprovedCard()
+    {
+        var json = FeishuCardHumanInteractionPort.BuildApprovalResolutionCardJson(new HumanApprovalResolution
+        {
+            ActorId = "workflow-actor-3",
+            RunId = "run-3",
+            StepId = "approval-3",
+            Approved = true,
+        });
+
+        using var card = JsonDocument.Parse(json);
+        card.RootElement.GetProperty("header").GetProperty("template").GetString().Should().Be("green");
+        card.RootElement.GetProperty("header").GetProperty("title").GetProperty("content").GetString()
+            .Should().Be("Approval Recorded");
     }
 
     private static HumanInteractionRequest BuildRequest() => new()

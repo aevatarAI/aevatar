@@ -6,4 +6,9 @@ public interface IHumanInteractionPort
         HumanInteractionRequest request,
         string deliveryTargetId,
         CancellationToken cancellationToken = default);
+
+    Task DeliverApprovalResolutionAsync(
+        HumanApprovalResolution resolution,
+        string deliveryTargetId,
+        CancellationToken cancellationToken = default);
 }

@@ -33,6 +33,9 @@ public static class WorkflowCapabilityServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<
             IProjectionProjector<WorkflowExecutionProjectionContext>,
             WorkflowHumanInteractionProjector>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            IProjectionProjector<WorkflowExecutionProjectionContext>,
+            WorkflowHumanApprovalResolutionProjector>());
         services.AddWorkflowApplication();
         services.AddWorkflowDefinitionFileSource(options =>
         {

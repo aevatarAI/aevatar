@@ -9,4 +9,10 @@ public sealed class NullHumanInteractionPort : IHumanInteractionPort
         string deliveryTargetId,
         CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
+
+    public Task DeliverApprovalResolutionAsync(
+        HumanApprovalResolution resolution,
+        string deliveryTargetId,
+        CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
 }
