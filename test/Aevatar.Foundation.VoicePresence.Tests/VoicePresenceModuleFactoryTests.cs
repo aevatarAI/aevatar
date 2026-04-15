@@ -41,6 +41,22 @@ public class VoicePresenceModuleFactoryTests
     }
 
     [Fact]
+    public void TryCreate_should_pass_requested_alias_into_module_factory()
+    {
+        var services = new ServiceCollection().BuildServiceProvider();
+        var factory = new VoicePresenceModuleFactory(services, [
+            new VoicePresenceModuleRegistration(
+                ["voice_presence", "voice_presence_openai"],
+                (_, resolvedName) => CreateModule(resolvedName)),
+        ]);
+
+        var created = factory.TryCreate("voice_presence_openai", out var module);
+
+        created.ShouldBeTrue();
+        module.ShouldBeOfType<VoicePresenceModule>().Name.ShouldBe("voice_presence_openai");
+    }
+
+    [Fact]
     public void Ctor_should_reject_duplicate_module_names()
     {
         var services = new ServiceCollection().BuildServiceProvider();

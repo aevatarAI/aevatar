@@ -29,7 +29,7 @@ public sealed class VoicePresenceModuleFactory : IEventModuleFactory<IEventHandl
         if (!_registrationsByName.TryGetValue(name, out var registration))
             return false;
 
-        module = registration.Create(_serviceProvider);
+        module = registration.Create(_serviceProvider, name);
         return module != null;
     }
 

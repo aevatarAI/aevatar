@@ -289,6 +289,88 @@ public class VoicePresenceModuleTests
     }
 
     [Fact]
+    public async Task Module_signal_should_ignore_events_for_other_voice_module_aliases()
+    {
+        var module = CreateModule(
+            new RecordingVoiceProvider(),
+            options: new VoicePresenceModuleOptions
+            {
+                Name = "voice_presence_openai",
+            });
+        var ctx = new StubEventHandlerContext();
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence_minicpm",
+            ProviderEvent = new VoiceProviderEvent
+            {
+                ResponseStarted = new VoiceResponseStarted { ResponseId = 1 },
+            },
+        }), ctx, CancellationToken.None);
+
+        module.StateMachine.State.ShouldBe(VoicePresenceState.Idle);
+    }
+
+    [Fact]
+    public async Task Remote_session_signals_should_forward_audio_and_publish_remote_outputs()
+    {
+        var provider = new RecordingVoiceProvider();
+        var module = CreateModule(provider);
+        var ctx = new StubEventHandlerContext();
+        await module.InitializeAsync(CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteSessionOpenRequested = new VoiceRemoteSessionOpenRequested
+            {
+                SessionId = "remote-1",
+            },
+        }), ctx, CancellationToken.None);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceModuleSignal
+        {
+            ModuleName = "voice_presence",
+            RemoteAudioInputReceived = new VoiceRemoteAudioInputReceived
+            {
+                SessionId = "remote-1",
+                Pcm16 = ByteString.CopyFrom([5, 6]),
+            },
+        }), ctx, CancellationToken.None);
+
+        provider.AudioFrames.ShouldHaveSingleItem();
+        provider.AudioFrames[0].ShouldBe([5, 6]);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            AudioReceived = new VoiceAudioReceived
+            {
+                Pcm16 = ByteString.CopyFrom([7, 8]),
+                SampleRateHz = 24000,
+            },
+        }), ctx, CancellationToken.None);
+
+        ctx.PublishedEvents.ShouldHaveSingleItem();
+        var audioOutput = ctx.PublishedEvents[0];
+        audioOutput.ShouldBeOfType<VoiceRemoteTransportOutput>();
+        ((VoiceRemoteTransportOutput)audioOutput).SessionId.ShouldBe("remote-1");
+        ((VoiceRemoteTransportOutput)audioOutput).OutputCase.ShouldBe(VoiceRemoteTransportOutput.OutputOneofCase.AudioOutput);
+
+        await module.HandleAsync(CreateEnvelope(new VoiceProviderEvent
+        {
+            Disconnected = new VoiceProviderDisconnected
+            {
+                Reason = "network",
+            },
+        }), ctx, CancellationToken.None);
+
+        ctx.PublishedEvents.Count.ShouldBe(2);
+        var closedOutput = ctx.PublishedEvents[1].ShouldBeOfType<VoiceRemoteTransportOutput>();
+        closedOutput.OutputCase.ShouldBe(VoiceRemoteTransportOutput.OutputOneofCase.SessionClosed);
+        closedOutput.SessionClosed.Reason.ShouldBe("provider_disconnected");
+    }
+
+    [Fact]
     public async Task Null_payload_should_be_ignored()
     {
         var module = CreateModule(new RecordingVoiceProvider());
@@ -491,6 +573,8 @@ public class VoicePresenceModuleTests
 
         public IAgent Agent { get; } = new StubAgent();
 
+        public List<IMessage> PublishedEvents { get; } = [];
+
         public Task PublishAsync<TEvent>(
             TEvent evt,
             TopologyAudience audience = TopologyAudience.Children,
@@ -498,7 +582,7 @@ public class VoicePresenceModuleTests
             EventEnvelopePublishOptions? options = null)
             where TEvent : IMessage
         {
-            _ = evt;
+            PublishedEvents.Add(evt);
             _ = audience;
             _ = ct;
             _ = options;

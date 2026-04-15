@@ -35,6 +35,20 @@ message VoiceConversationEventInjection {
   google.protobuf.Timestamp observed_at = 5;
 }
 
+message VoiceRemoteSessionOpenRequested {
+  string session_id = 1;
+}
+
+message VoiceRemoteSessionCloseRequested {
+  string session_id = 1;
+  string reason = 2;
+}
+
+message VoiceRemoteAudioInputReceived {
+  string session_id = 1;
+  bytes pcm16 = 2;
+}
+
 message VoiceAudioReceived {
   bytes pcm16 = 1;
   int32 sample_rate_hz = 2;
@@ -94,5 +108,37 @@ message VoiceDrainAcknowledged {
 message VoiceControlFrame {
   oneof frame {
     VoiceDrainAcknowledged drain_acknowledged = 1;
+  }
+}
+
+message VoiceRemoteControlInputReceived {
+  string session_id = 1;
+  VoiceControlFrame control_frame = 2;
+}
+
+message VoiceRemoteSessionClosed {
+  string reason = 1;
+}
+
+message VoiceRemoteTransportOutput {
+  string module_name = 1;
+  string session_id = 2;
+
+  oneof output {
+    VoiceAudioReceived audio_output = 3;
+    VoiceRemoteSessionClosed session_closed = 4;
+  }
+}
+
+message VoiceModuleSignal {
+  string module_name = 1;
+
+  oneof signal {
+    VoiceProviderEvent provider_event = 2;
+    VoiceControlFrame control_frame = 3;
+    VoiceRemoteSessionOpenRequested remote_session_open_requested = 4;
+    VoiceRemoteSessionCloseRequested remote_session_close_requested = 5;
+    VoiceRemoteAudioInputReceived remote_audio_input_received = 6;
+    VoiceRemoteControlInputReceived remote_control_input_received = 7;
   }
 }

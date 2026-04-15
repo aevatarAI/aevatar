@@ -106,7 +106,14 @@ public class VoicePresenceWhipEndpointsTests
         var transport = new StubVoiceTransport();
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var factory = new FakeWebRtcVoiceTransportFactory(new WebRtcVoiceTransportSession(transport, "v=0\r\nanswer", completion.Task));
-        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask, 16000);
+        var detachCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = CreateTrackingSession(
+            module,
+            detachCompletedByTransport: new Dictionary<IVoiceTransport, TaskCompletionSource>
+            {
+                [transport] = detachCompleted,
+            },
+            pcmSampleRateHz: 16000);
         using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
         var context = CreateContext(app, HttpMethods.Post, "v=0\r\noffer");
         context.Request.RouteValues["actorId"] = "agent-1";
@@ -124,9 +131,9 @@ public class VoicePresenceWhipEndpointsTests
         transport.Disposed.ShouldBeFalse();
 
         completion.SetResult();
-        await transport.DisposedTask.Task;
-        await Task.Yield();
+        await detachCompleted.Task;
         module.IsTransportAttached.ShouldBeFalse();
+        transport.Disposed.ShouldBeTrue();
     }
 
     [Fact]
@@ -162,7 +169,15 @@ public class VoicePresenceWhipEndpointsTests
         var factory = new SequencedWebRtcVoiceTransportFactory(
             new WebRtcVoiceTransportSession(transport1, "answer-1", completion1.Task),
             new WebRtcVoiceTransportSession(transport2, "answer-2", completion2.Task));
-        var session = new VoicePresenceSession(module, static (_, _) => Task.CompletedTask);
+        var transport1DetachCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var transport2DetachCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var session = CreateTrackingSession(
+            module,
+            detachCompletedByTransport: new Dictionary<IVoiceTransport, TaskCompletionSource>
+            {
+                [transport1] = transport1DetachCompleted,
+                [transport2] = transport2DetachCompleted,
+            });
         using var app = CreateApp((_, _) => Task.FromResult<VoicePresenceSession?>(session), factory);
 
         var post1 = CreateContext(app, HttpMethods.Post, "offer-1");
@@ -181,16 +196,40 @@ public class VoicePresenceWhipEndpointsTests
         transport2.Disposed.ShouldBeFalse();
 
         completion1.SetResult();
-        await Task.Yield();
+        await transport1DetachCompleted.Task;
 
         module.IsTransportAttached.ShouldBeTrue();
         transport2.Disposed.ShouldBeFalse();
 
         completion2.SetResult();
-        await transport2.DisposedTask.Task;
-        await Task.Yield();
+        await transport2DetachCompleted.Task;
         module.IsTransportAttached.ShouldBeFalse();
     }
+
+    private static VoicePresenceSession CreateTrackingSession(
+        VoicePresenceModule module,
+        IReadOnlyDictionary<IVoiceTransport, TaskCompletionSource> detachCompletedByTransport,
+        int pcmSampleRateHz = 24000) =>
+        new(
+            isInitialized: () => module.IsInitialized,
+            isTransportAttached: () => module.IsTransportAttached,
+            attachTransportAsync: (transport, _) =>
+            {
+                module.AttachTransport(transport, static (_, _) => Task.CompletedTask);
+                return Task.CompletedTask;
+            },
+            detachTransportAsync: async (expectedTransport, _) =>
+            {
+                await module.DetachTransportAsync(expectedTransport);
+                if (expectedTransport != null &&
+                    detachCompletedByTransport.TryGetValue(expectedTransport, out var completion))
+                {
+                    completion.TrySetResult();
+                }
+            },
+            pcmSampleRateHz,
+            module,
+            static (_, _) => Task.CompletedTask);
 
     private static WebApplication CreateApp(
         Func<string, HttpContext, Task<VoicePresenceSession?>> resolveSession,

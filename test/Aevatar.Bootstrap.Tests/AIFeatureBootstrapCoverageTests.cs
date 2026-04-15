@@ -163,7 +163,7 @@ public class AIFeatureBootstrapCoverageTests
         provider.GetRequiredService<IVoiceToolCatalog>()
             .Should().BeOfType<AgentToolVoiceCatalog>();
         provider.GetRequiredService<IVoicePresenceSessionResolver>()
-            .Should().BeOfType<InProcessActorVoicePresenceSessionResolver>();
+            .Should().BeOfType<CompositeVoicePresenceSessionResolver>();
 
         factory.TryCreate("voice_presence", out var defaultModule).Should().BeTrue();
         defaultModule.Should().BeOfType<VoicePresenceModule>();

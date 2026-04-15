@@ -39,6 +39,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     private Task? _userToProviderRelay;
     private Task? _providerToUserRelay;
     private bool _awaitingInjectedResponseStart;
+    private string? _remoteSessionId;
 
     public VoicePresenceModule(
         IRealtimeVoiceProvider provider,
@@ -88,7 +89,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         if (envelope.Payload == null)
             return false;
 
-        return envelope.Payload.Is(VoiceProviderEvent.Descriptor) ||
+        return envelope.Payload.Is(VoiceModuleSignal.Descriptor) ||
+               envelope.Payload.Is(VoiceProviderEvent.Descriptor) ||
                envelope.Payload.Is(VoiceControlFrame.Descriptor) ||
                envelope.Route?.IsPublication() == true;
     }
@@ -97,6 +99,12 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
     {
         if (envelope.Payload == null)
             return;
+
+        if (envelope.Payload.Is(VoiceModuleSignal.Descriptor))
+        {
+            await HandleModuleSignalAsync(envelope.Payload.Unpack<VoiceModuleSignal>(), ctx, ct);
+            return;
+        }
 
         if (envelope.Payload.Is(VoiceProviderEvent.Descriptor))
         {
@@ -111,6 +119,40 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         }
 
         await HandleExternalEventAsync(envelope, ctx, ct);
+    }
+
+    private async Task HandleModuleSignalAsync(
+        VoiceModuleSignal signal,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        if (!MatchesModuleName(signal.ModuleName))
+            return;
+
+        switch (signal.SignalCase)
+        {
+            case VoiceModuleSignal.SignalOneofCase.ProviderEvent:
+                await HandleProviderEventAsync(signal.ProviderEvent, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.ControlFrame:
+                await HandleControlFrameAsync(signal.ControlFrame, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.RemoteSessionOpenRequested:
+                await HandleRemoteSessionOpenRequestedAsync(signal.RemoteSessionOpenRequested, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.RemoteSessionCloseRequested:
+                await HandleRemoteSessionCloseRequestedAsync(signal.RemoteSessionCloseRequested, ctx, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.RemoteAudioInputReceived:
+                await HandleRemoteAudioInputReceivedAsync(signal.RemoteAudioInputReceived, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.RemoteControlInputReceived:
+                await HandleRemoteControlInputReceivedAsync(signal.RemoteControlInputReceived, ct);
+                break;
+            case VoiceModuleSignal.SignalOneofCase.None:
+            default:
+                break;
+        }
     }
 
     // ── ILifecycleAwareEventModule ────────────────────────────
@@ -143,6 +185,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         await _provider.DisposeAsync();
         _pendingInjections.Clear();
         _awaitingInjectedResponseStart = false;
+        _remoteSessionId = null;
+        _selfEventDispatcher = null;
     }
 
     // ── IAudioFastPath (Phase 1 legacy, still usable for non-transport callers) ──
@@ -175,7 +219,7 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         ArgumentNullException.ThrowIfNull(userTransport);
         ArgumentNullException.ThrowIfNull(selfEventDispatcher);
 
-        if (_userTransport != null)
+        if (_userTransport != null || !string.IsNullOrWhiteSpace(_remoteSessionId))
             throw new InvalidOperationException("A voice transport is already attached.");
 
         _userTransport = userTransport;
@@ -286,6 +330,8 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
         IEventHandlerContext ctx,
         CancellationToken ct)
     {
+        EnsureSelfEventDispatcher(ctx);
+
         switch (providerEvent.EventCase)
         {
             case VoiceProviderEvent.EventOneofCase.ResponseStarted:
@@ -317,8 +363,23 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             case VoiceProviderEvent.EventOneofCase.Disconnected:
                 _awaitingInjectedResponseStart = false;
                 StateMachine.OnProviderDisconnected();
+                await CloseRemoteSessionAsync("provider_disconnected", ctx, ct);
                 break;
             case VoiceProviderEvent.EventOneofCase.AudioReceived:
+                if (!string.IsNullOrWhiteSpace(_remoteSessionId))
+                {
+                    await PublishRemoteOutputAsync(
+                        new VoiceRemoteTransportOutput
+                        {
+                            ModuleName = Name,
+                            SessionId = _remoteSessionId,
+                            AudioOutput = providerEvent.AudioReceived.Clone(),
+                        },
+                        ctx,
+                        ct);
+                }
+
+                break;
             case VoiceProviderEvent.EventOneofCase.Error:
             case VoiceProviderEvent.EventOneofCase.None:
             default:
@@ -341,6 +402,154 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             _logger.LogWarning(ex, "Failed to dispatch voice self event {MessageType}.", message.GetType().Name);
         }
     }
+
+    private void EnsureSelfEventDispatcher(IEventHandlerContext ctx)
+    {
+        if (_selfEventDispatcher != null)
+            return;
+
+        var dispatchPort = ctx.Services.GetService<IActorDispatchPort>();
+        if (dispatchPort == null)
+            return;
+
+        _selfEventDispatcher = (message, token) => dispatchPort.DispatchAsync(
+            ctx.AgentId,
+            Hosting.VoicePresenceSessionDispatch.BuildSelfEnvelope(ctx.AgentId, Name, message),
+            token);
+    }
+
+    private bool MatchesModuleName(string? moduleName) =>
+        !string.IsNullOrWhiteSpace(moduleName) &&
+        string.Equals(Name, moduleName, StringComparison.OrdinalIgnoreCase);
+
+    private async Task HandleRemoteSessionOpenRequestedAsync(
+        VoiceRemoteSessionOpenRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        EnsureSelfEventDispatcher(ctx);
+        if (string.IsNullOrWhiteSpace(request.SessionId))
+            return;
+
+        if (!IsInitialized)
+        {
+            await PublishRemoteOutputAsync(
+                new VoiceRemoteTransportOutput
+                {
+                    ModuleName = Name,
+                    SessionId = request.SessionId,
+                    SessionClosed = new VoiceRemoteSessionClosed
+                    {
+                        Reason = "module_not_initialized",
+                    },
+                },
+                ctx,
+                ct);
+            return;
+        }
+
+        if (_userTransport != null ||
+            (!string.IsNullOrWhiteSpace(_remoteSessionId) &&
+             !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal)))
+        {
+            await PublishRemoteOutputAsync(
+                new VoiceRemoteTransportOutput
+                {
+                    ModuleName = Name,
+                    SessionId = request.SessionId,
+                    SessionClosed = new VoiceRemoteSessionClosed
+                    {
+                        Reason = "transport_already_attached",
+                    },
+                },
+                ctx,
+                ct);
+            return;
+        }
+
+        _remoteSessionId = request.SessionId;
+        _provider.OnEvent = OnProviderEventAsync;
+    }
+
+    private async Task HandleRemoteSessionCloseRequestedAsync(
+        VoiceRemoteSessionCloseRequested request,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var currentSessionId = _remoteSessionId;
+        if (string.IsNullOrWhiteSpace(currentSessionId))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(request.SessionId) &&
+            !string.Equals(currentSessionId, request.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await CloseRemoteSessionAsync(
+            string.IsNullOrWhiteSpace(request.Reason) ? "remote_session_closed" : request.Reason,
+            ctx,
+            ct);
+    }
+
+    private async Task HandleRemoteAudioInputReceivedAsync(
+        VoiceRemoteAudioInputReceived request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_remoteSessionId) ||
+            !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal) ||
+            request.Pcm16.IsEmpty)
+        {
+            return;
+        }
+
+        await _provider.SendAudioAsync(request.Pcm16.Memory, ct);
+    }
+
+    private async Task HandleRemoteControlInputReceivedAsync(
+        VoiceRemoteControlInputReceived request,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_remoteSessionId) ||
+            !string.Equals(_remoteSessionId, request.SessionId, StringComparison.Ordinal) ||
+            request.ControlFrame == null)
+        {
+            return;
+        }
+
+        await HandleControlFrameAsync(request.ControlFrame, ct);
+    }
+
+    private async Task CloseRemoteSessionAsync(
+        string reason,
+        IEventHandlerContext ctx,
+        CancellationToken ct)
+    {
+        var currentSessionId = _remoteSessionId;
+        if (string.IsNullOrWhiteSpace(currentSessionId))
+            return;
+
+        _remoteSessionId = null;
+        _provider.OnEvent = _userTransport == null ? null : OnProviderEventAsync;
+        await PublishRemoteOutputAsync(
+            new VoiceRemoteTransportOutput
+            {
+                ModuleName = Name,
+                SessionId = currentSessionId,
+                SessionClosed = new VoiceRemoteSessionClosed
+                {
+                    Reason = reason,
+                },
+            },
+            ctx,
+            ct);
+    }
+
+    private Task PublishRemoteOutputAsync(
+        VoiceRemoteTransportOutput output,
+        IEventHandlerContext ctx,
+        CancellationToken ct) =>
+        ctx.PublishAsync(output, TopologyAudience.Self, ct);
 
     private async Task ExecuteToolCallAsync(
         VoiceFunctionCallRequested request,
@@ -492,7 +701,9 @@ public sealed class VoicePresenceModule : ILifecycleAwareEventModule, IAudioFast
             return false;
 
         if (envelope.Payload.Is(VoiceProviderEvent.Descriptor) ||
-            envelope.Payload.Is(VoiceControlFrame.Descriptor))
+            envelope.Payload.Is(VoiceControlFrame.Descriptor) ||
+            envelope.Payload.Is(VoiceModuleSignal.Descriptor) ||
+            envelope.Payload.Is(VoiceRemoteTransportOutput.Descriptor))
         {
             return false;
         }

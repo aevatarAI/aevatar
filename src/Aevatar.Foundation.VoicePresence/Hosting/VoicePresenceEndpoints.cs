@@ -1,24 +1,13 @@
 using System.Net.WebSockets;
 using Aevatar.Foundation.VoicePresence.Abstractions;
-using Aevatar.Foundation.VoicePresence.Modules;
 using Aevatar.Foundation.VoicePresence.Transport;
 using Aevatar.Foundation.VoicePresence.Transport.Internal;
-using Google.Protobuf;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
-
-/// <summary>
-/// Resolved voice session. The grain provides both the module and
-/// a dispatcher that routes voice control/provider events through the grain inbox.
-/// </summary>
-public sealed record VoicePresenceSession(
-    VoicePresenceModule Module,
-    Func<IMessage, CancellationToken, Task> SelfEventDispatcher,
-    int PcmSampleRateHz = WebRtcVoiceTransportOptions.DefaultPcmSampleRateHz);
 
 /// <summary>
 /// Extension methods to map voice-presence WebSocket endpoints onto an ASP.NET host.
@@ -73,14 +62,14 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            if (!session.Module.IsInitialized)
+            if (!session.IsInitialized)
             {
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await ctx.Response.WriteAsync("Voice module not initialized.");
                 return;
             }
 
-            if (session.Module.IsTransportAttached)
+            if (session.IsTransportAttached)
             {
                 ctx.Response.StatusCode = StatusCodes.Status409Conflict;
                 await ctx.Response.WriteAsync("Voice transport already attached.");
@@ -93,7 +82,7 @@ public static class VoicePresenceEndpoints
 
             try
             {
-                session.Module.AttachTransport(transport, session.SelfEventDispatcher);
+                await session.AttachTransportAsync(transport, ctx.RequestAborted);
                 attached = true;
                 await WaitUntilClosedAsync(ws, ctx.RequestAborted);
             }
@@ -104,7 +93,7 @@ public static class VoicePresenceEndpoints
             finally
             {
                 if (attached)
-                    await session.Module.DetachTransportAsync(transport);
+                    await session.DetachTransportAsync(transport, ctx.RequestAborted);
             }
         });
     }
@@ -163,14 +152,14 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            if (!session.Module.IsInitialized)
+            if (!session.IsInitialized)
             {
                 ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
                 await ctx.Response.WriteAsync("Voice module not initialized.");
                 return;
             }
 
-            if (session.Module.IsTransportAttached)
+            if (session.IsTransportAttached)
             {
                 ctx.Response.StatusCode = StatusCodes.Status409Conflict;
                 await ctx.Response.WriteAsync("Voice transport already attached.");
@@ -188,9 +177,9 @@ public static class VoicePresenceEndpoints
             var attached = false;
             try
             {
-                session.Module.AttachTransport(transportSession.Transport, session.SelfEventDispatcher);
+                await session.AttachTransportAsync(transportSession.Transport, ctx.RequestAborted);
                 attached = true;
-                _ = ObserveTransportLifetimeAsync(session.Module, transportSession.Transport, transportSession.Completion);
+                _ = ObserveTransportLifetimeAsync(session, transportSession.Transport, transportSession.Completion);
 
                 ctx.Response.StatusCode = StatusCodes.Status201Created;
                 ctx.Response.ContentType = "application/sdp";
@@ -223,7 +212,7 @@ public static class VoicePresenceEndpoints
                 return;
             }
 
-            await session.Module.DetachTransportAsync();
+            await session.DetachTransportAsync(ct: ctx.RequestAborted);
             ctx.Response.StatusCode = StatusCodes.Status204NoContent;
         });
 
@@ -297,7 +286,7 @@ public static class VoicePresenceEndpoints
     }
 
     private static async Task ObserveTransportLifetimeAsync(
-        VoicePresenceModule module,
+        VoicePresenceSession session,
         IVoiceTransport transport,
         Task completion)
     {
@@ -310,6 +299,6 @@ public static class VoicePresenceEndpoints
             // transport completion is best-effort cleanup only
         }
 
-        await module.DetachTransportAsync(transport);
+        await session.DetachTransportAsync(transport);
     }
 }

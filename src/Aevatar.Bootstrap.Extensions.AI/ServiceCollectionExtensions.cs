@@ -137,7 +137,9 @@ public static class ServiceCollectionExtensions
         if (registrations.Count == 0)
             return;
 
-        services.TryAddSingleton<IVoicePresenceSessionResolver, InProcessActorVoicePresenceSessionResolver>();
+        services.TryAddSingleton<InProcessActorVoicePresenceSessionResolver>();
+        services.TryAddSingleton<RemoteActorVoicePresenceSessionResolver>();
+        services.TryAddSingleton<IVoicePresenceSessionResolver, CompositeVoicePresenceSessionResolver>();
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IEventModuleFactory<IEventHandlerContext>, VoicePresenceModuleFactory>());
         foreach (var registration in registrations)
@@ -164,16 +166,17 @@ public static class ServiceCollectionExtensions
                     providerName: "openai",
                     isDefaultProvider: string.Equals(resolvedDefaultProvider, "openai", StringComparison.OrdinalIgnoreCase),
                     providerAliases: ["voice_presence_openai"]),
-                serviceProvider => new VoicePresenceModule(
+                (serviceProvider, resolvedModuleName) => new VoicePresenceModule(
                     new OpenAIRealtimeProvider(
                         voiceOptions.OpenAIProviderOptions,
                         serviceProvider.GetService<ILogger<OpenAIRealtimeProvider>>()),
                     openAIProviderConfig.Clone(),
                     BuildOpenAIVoiceSessionConfig(configuration, options),
-                    CloneVoicePresenceModuleOptions(voiceOptions.Module),
+                    CloneVoicePresenceModuleOptions(voiceOptions.Module, resolvedModuleName),
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
-                    serviceProvider.GetService<ILogger<VoicePresenceModule>>())));
+                    serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
+                BuildOpenAIVoiceSessionConfig(configuration, options).SampleRateHz));
         }
 
         if (IsMiniCpmVoiceConfigured(miniCpmProviderConfig))
@@ -183,16 +186,17 @@ public static class ServiceCollectionExtensions
                     providerName: "minicpm",
                     isDefaultProvider: string.Equals(resolvedDefaultProvider, "minicpm", StringComparison.OrdinalIgnoreCase),
                     providerAliases: ["voice_presence_minicpm", "voice_presence_minicpm_o"]),
-                serviceProvider => new VoicePresenceModule(
+                (serviceProvider, resolvedModuleName) => new VoicePresenceModule(
                     new MiniCPMRealtimeProvider(
                         voiceOptions.MiniCPMProviderOptions,
                         serviceProvider.GetService<ILogger<MiniCPMRealtimeProvider>>()),
                     miniCpmProviderConfig.Clone(),
                     BuildMiniCpmVoiceSessionConfig(configuration, options),
-                    CloneVoicePresenceModuleOptions(voiceOptions.Module),
+                    CloneVoicePresenceModuleOptions(voiceOptions.Module, resolvedModuleName),
                     serviceProvider.GetService<IVoiceToolInvoker>(),
                     serviceProvider.GetService<IVoiceToolCatalog>(),
-                    serviceProvider.GetService<ILogger<VoicePresenceModule>>())));
+                    serviceProvider.GetService<ILogger<VoicePresenceModule>>()),
+                BuildMiniCpmVoiceSessionConfig(configuration, options).SampleRateHz));
         }
 
         return registrations;
@@ -309,10 +313,12 @@ public static class ServiceCollectionExtensions
         return session;
     }
 
-    private static VoicePresenceModuleOptions CloneVoicePresenceModuleOptions(VoicePresenceModuleOptions options) =>
+    private static VoicePresenceModuleOptions CloneVoicePresenceModuleOptions(
+        VoicePresenceModuleOptions options,
+        string? resolvedName = null) =>
         new()
         {
-            Name = options.Name,
+            Name = FirstNonEmpty(resolvedName, options.Name) ?? "voice_presence",
             Priority = options.Priority,
             LinkId = options.LinkId,
             StaleAfter = options.StaleAfter,

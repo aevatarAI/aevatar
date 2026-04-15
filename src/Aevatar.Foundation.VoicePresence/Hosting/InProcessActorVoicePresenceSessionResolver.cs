@@ -1,8 +1,8 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.EventModules;
+using Aevatar.Foundation.VoicePresence.Abstractions;
 using Aevatar.Foundation.VoicePresence.Modules;
 using Google.Protobuf;
-using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Aevatar.Foundation.VoicePresence.Hosting;
@@ -42,12 +42,13 @@ public sealed class InProcessActorVoicePresenceSessionResolver : IVoicePresenceS
 
         return new VoicePresenceSession(
             module,
-            (message, dispatchCt) => DispatchSelfEventAsync(actorId, message, dispatchCt),
+            (message, dispatchCt) => DispatchSelfEventAsync(actorId, module.Name, message, dispatchCt),
             module.PcmSampleRateHz);
     }
 
     private Task DispatchSelfEventAsync(
         string actorId,
+        string moduleName,
         IMessage message,
         CancellationToken ct)
     {
@@ -55,17 +56,11 @@ public sealed class InProcessActorVoicePresenceSessionResolver : IVoicePresenceS
             ?? throw new InvalidOperationException(
                 $"{nameof(IActorDispatchPort)} is required to dispatch voice self events.");
 
-        return dispatchPort.DispatchAsync(actorId, BuildSelfEnvelope(actorId, message), ct);
+        return dispatchPort.DispatchAsync(
+            actorId,
+            VoicePresenceSessionDispatch.BuildSelfEnvelope(actorId, moduleName, message),
+            ct);
     }
-
-    private static EventEnvelope BuildSelfEnvelope(string actorId, IMessage message) =>
-        new()
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Timestamp = Timestamp.FromDateTime(DateTime.UtcNow),
-            Payload = Any.Pack(message),
-            Route = EnvelopeRouteSemantics.CreateTopologyPublication(actorId, TopologyAudience.Self),
-        };
 
     private static VoicePresenceModule? ResolveVoiceModule(
         IReadOnlyList<IEventModule<IEventHandlerContext>> modules,

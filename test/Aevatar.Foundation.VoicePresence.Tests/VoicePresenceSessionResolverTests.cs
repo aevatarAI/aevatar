@@ -40,7 +40,10 @@ public class VoicePresenceSessionResolverTests
         dispatchPort.Dispatches[0].ActorId.ShouldBe("agent-1");
         dispatchPort.Dispatches[0].Envelope.Route.GetTopologyAudience().ShouldBe(TopologyAudience.Self);
         dispatchPort.Dispatches[0].Envelope.Payload.ShouldNotBeNull();
-        dispatchPort.Dispatches[0].Envelope.Payload.Is(VoiceControlFrame.Descriptor).ShouldBeTrue();
+        dispatchPort.Dispatches[0].Envelope.Payload.Is(VoiceModuleSignal.Descriptor).ShouldBeTrue();
+        var signal = dispatchPort.Dispatches[0].Envelope.Payload.Unpack<VoiceModuleSignal>();
+        signal.ModuleName.ShouldBe("voice_presence");
+        signal.SignalCase.ShouldBe(VoiceModuleSignal.SignalOneofCase.ControlFrame);
     }
 
     [Fact]
