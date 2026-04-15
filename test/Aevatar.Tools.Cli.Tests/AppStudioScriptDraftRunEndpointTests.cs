@@ -310,7 +310,8 @@ public sealed class AppStudioScriptDraftRunEndpointTests
                     ReadModelSchemaVersion: string.Empty,
                     ReadModelSchemaHash: string.Empty,
                     DefinitionActorId: actorId,
-                    ScopeId: scopeId ?? string.Empty)));
+                    ScopeId: scopeId ?? string.Empty),
+                new ScriptingCommandAcceptedReceipt(actorId, "definition-command-1", "definition-correlation-1")));
         }
     }
 

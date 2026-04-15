@@ -64,6 +64,54 @@ public sealed class ChannelBotRegistrationProjectorTests
     }
 
     [Fact]
+    public async Task ProjectAsync_PropagatesEncryptKey()
+    {
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-enc-1",
+                    Platform = "lark",
+                    NyxProviderSlug = "lark-provider",
+                    NyxUserToken = "token-abc",
+                    EncryptKey = "my-encrypt-key-456",
+                },
+            },
+        };
+
+        var envelope = BuildCommittedEnvelope("evt-enc-1", version: 3, state);
+        await _projector.ProjectAsync(_context, envelope, CancellationToken.None);
+
+        _dispatcher.Upserts.Should().HaveCount(1);
+        _dispatcher.Upserts[0].EncryptKey.Should().Be("my-encrypt-key-456");
+    }
+
+    [Fact]
+    public async Task ProjectAsync_DefaultsEncryptKeyToEmpty_WhenNotSet()
+    {
+        var state = new ChannelBotRegistrationStoreState
+        {
+            Registrations =
+            {
+                new ChannelBotRegistrationEntry
+                {
+                    Id = "bot-no-enc",
+                    Platform = "lark",
+                    // EncryptKey not set
+                },
+            },
+        };
+
+        var envelope = BuildCommittedEnvelope("evt-no-enc", version: 1, state);
+        await _projector.ProjectAsync(_context, envelope, CancellationToken.None);
+
+        _dispatcher.Upserts.Should().HaveCount(1);
+        _dispatcher.Upserts[0].EncryptKey.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task ProjectAsync_WithMultipleRegistrations_UpsertsAll()
     {
         var state = new ChannelBotRegistrationStoreState

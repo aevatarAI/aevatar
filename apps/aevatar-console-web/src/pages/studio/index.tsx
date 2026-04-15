@@ -4148,7 +4148,7 @@ const StudioPage: React.FC = () => {
     },
     {
       key: 'settings',
-      label: '设置',
+      label: '编辑器设置',
       description: '管理 AI Provider，并检查运行时与行为定义配置。',
       count: workspaceSettingsQuery.data?.directories.length ?? 0,
     },
@@ -4198,7 +4198,7 @@ const StudioPage: React.FC = () => {
           ? 'Agent 角色'
           : workspacePage === 'connectors'
             ? '集成'
-            : '设置';
+            : '编辑器设置';
 
   const studioContextActions =
     workspacePage === 'studio' && studioView === 'execution' ? (

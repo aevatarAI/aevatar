@@ -253,12 +253,14 @@ public class ChannelUserGAgentContinuationTests
 
         runtime.ChatRequests.Should().BeEmpty();
         agent.State.PendingSessions.Should().ContainSingle();
+        agent.State.ProcessedMessageIds.Should().BeEmpty();
 
         await agent.HandleInbound(inbound);
         await agent.HandleInbound(inbound);
 
         runtime.ChatRequests.Should().ContainSingle();
         agent.State.PendingSessions.Should().ContainSingle();
+        agent.State.ProcessedMessageIds.Should().Contain("om_msg_1");
     }
 
     [Fact]
@@ -313,6 +315,217 @@ public class ChannelUserGAgentContinuationTests
         adapter.Replies[1].ReplyText.Should().Be("hello world");
         agent.State.PendingSessions.Should().BeEmpty();
         diagnostics.GetRecent().Select(entry => entry.Stage).Should().Contain("Reply:done");
+    }
+
+    // ─── Durable Dedup Tests ───
+
+    [Fact]
+    public async Task HandleInbound_PersistsMessageIdAfterSuccessfulDispatch()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_123");
+
+        await agent.ActivateAsync();
+        await agent.HandleInbound(BuildInboundEvent());
+
+        agent.State.ProcessedMessageIds.Should().Contain("om_msg_1");
+    }
+
+    [Fact]
+    public async Task DurableDedup_SurvivesDeactivationAndReactivation()
+    {
+        const string actorId = "channel-user-lark-reg-1-ou_dedup";
+        var eventStore = new InMemoryEventStore();
+        var inbound = new ChannelInboundEvent
+        {
+            Text = "first message",
+            SenderId = "ou_dedup",
+            SenderName = "Bob",
+            ConversationId = "oc_dedup_chat",
+            MessageId = "om_dedup_msg_1",
+            ChatType = "p2p",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "org-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+        };
+
+        // Activation 1: process a message
+        var runtime1 = new RecordingActorRuntime();
+        var streams1 = new RecordingStreamProvider();
+        var scheduler1 = new RecordingCallbackScheduler();
+        var adapter1 = new RecordingPlatformAdapter("lark");
+        using (var services1 = BuildServices(runtime1, streams1, scheduler1, adapter1, eventStore))
+        {
+            var agent1 = CreateAgent(services1, actorId);
+            await agent1.ActivateAsync();
+            await agent1.HandleInbound(inbound);
+
+            runtime1.ChatRequests.Should().ContainSingle();
+            agent1.State.ProcessedMessageIds.Should().Contain("om_dedup_msg_1");
+        }
+
+        // Activation 2: same messageId should be rejected (dedup from persisted state)
+        var runtime2 = new RecordingActorRuntime();
+        var streams2 = new RecordingStreamProvider();
+        var scheduler2 = new RecordingCallbackScheduler();
+        var adapter2 = new RecordingPlatformAdapter("lark");
+        using var services2 = BuildServices(runtime2, streams2, scheduler2, adapter2, eventStore);
+        var agent2 = CreateAgent(services2, actorId);
+        await agent2.ActivateAsync();
+
+        runtime2.ChatRequests.Should().ContainSingle();
+        agent2.State.ProcessedMessageIds.Should().Contain("om_dedup_msg_1");
+        await agent2.HandleInbound(inbound);
+        runtime2.ChatRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task DurableDedup_DoesNotPersistBeforeSuccessfulDispatchAcrossReactivation()
+    {
+        const string actorId = "channel-user-lark-reg-1-ou_retry";
+        var eventStore = new InMemoryEventStore();
+        var inbound = new ChannelInboundEvent
+        {
+            Text = "retry me",
+            SenderId = "ou_retry",
+            SenderName = "Retry",
+            ConversationId = "oc_retry_chat",
+            MessageId = "om_retry_msg_1",
+            ChatType = "p2p",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "org-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+        };
+
+        var runtime1 = new RecordingActorRuntime
+        {
+            FailChatRequestsRemaining = 1,
+        };
+        var streams1 = new RecordingStreamProvider();
+        var scheduler1 = new RecordingCallbackScheduler();
+        var adapter1 = new RecordingPlatformAdapter("lark");
+        using (var services1 = BuildServices(runtime1, streams1, scheduler1, adapter1, eventStore))
+        {
+            var agent1 = CreateAgent(services1, actorId);
+            await agent1.ActivateAsync();
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => agent1.HandleInbound(inbound));
+
+            agent1.State.PendingSessions.Should().ContainSingle();
+            agent1.State.ProcessedMessageIds.Should().BeEmpty();
+        }
+
+        var runtime2 = new RecordingActorRuntime();
+        var streams2 = new RecordingStreamProvider();
+        var scheduler2 = new RecordingCallbackScheduler();
+        var adapter2 = new RecordingPlatformAdapter("lark");
+        using var services2 = BuildServices(runtime2, streams2, scheduler2, adapter2, eventStore);
+        var agent2 = CreateAgent(services2, actorId);
+
+        await agent2.ActivateAsync();
+
+        runtime2.ChatRequests.Should().ContainSingle();
+        agent2.State.ProcessedMessageIds.Should().Contain("om_retry_msg_1");
+
+        await agent2.HandleInbound(inbound);
+
+        runtime2.ChatRequests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task PersistProcessedMessageId_BoundsProcessedMessageIdsTo200()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_bound");
+
+        await agent.ActivateAsync();
+
+        // Send 210 messages with unique messageIds
+        for (var i = 0; i < 210; i++)
+        {
+            var inbound = new ChannelInboundEvent
+            {
+                Text = $"message {i}",
+                SenderId = "ou_bound",
+                SenderName = "Test",
+                ConversationId = "oc_bound_chat",
+                MessageId = $"om_bound_{i:D4}",
+                ChatType = "p2p",
+                Platform = "lark",
+                RegistrationId = "reg-1",
+                RegistrationToken = "org-token",
+                RegistrationScopeId = "scope-1",
+                NyxProviderSlug = "api-lark-bot",
+            };
+
+            // Complete the previous session before sending a new message
+            if (i > 0)
+            {
+                var prevRequest = runtime.ChatRequests[i - 1];
+                await agent.HandleEventAsync(BuildTopologyEnvelope(
+                    "channel-lark-reg-1-ou_bound",
+                    TopologyAudience.Parent,
+                    new TextMessageEndEvent
+                    {
+                        SessionId = prevRequest.SessionId,
+                        Content = $"reply {i - 1}",
+                    }));
+            }
+
+            await agent.HandleInbound(inbound);
+        }
+
+        // ProcessedMessageIds should be bounded to 200
+        agent.State.ProcessedMessageIds.Count.Should().BeLessThanOrEqualTo(200);
+
+        // The oldest messageIds should have been evicted
+        agent.State.ProcessedMessageIds.Should().NotContain("om_bound_0000");
+        // The newest should still be present
+        agent.State.ProcessedMessageIds.Should().Contain("om_bound_0209");
+    }
+
+    [Fact]
+    public async Task HandleInbound_WithNullMessageId_SkipsDedup()
+    {
+        var runtime = new RecordingActorRuntime();
+        var streams = new RecordingStreamProvider();
+        var scheduler = new RecordingCallbackScheduler();
+        var adapter = new RecordingPlatformAdapter("lark");
+        using var services = BuildServices(runtime, streams, scheduler, adapter, new InMemoryEventStore());
+        var agent = CreateAgent(services, "channel-user-lark-reg-1-ou_null");
+
+        await agent.ActivateAsync();
+
+        // Send message without messageId — should still be processed
+        var inbound = new ChannelInboundEvent
+        {
+            Text = "no message id",
+            SenderId = "ou_null",
+            SenderName = "NoId",
+            ConversationId = "oc_null_chat",
+            MessageId = "", // empty
+            ChatType = "p2p",
+            Platform = "lark",
+            RegistrationId = "reg-1",
+            RegistrationToken = "org-token",
+            RegistrationScopeId = "scope-1",
+            NyxProviderSlug = "api-lark-bot",
+        };
+
+        await agent.HandleInbound(inbound);
+        runtime.ChatRequests.Should().ContainSingle();
     }
 
     private static ChannelInboundEvent BuildInboundEvent() => new()

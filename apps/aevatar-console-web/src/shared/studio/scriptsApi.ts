@@ -4,6 +4,9 @@ import type {
   DraftRunResult,
   GeneratedScriptResult,
   ScopedScriptDetail,
+  ScopeScriptSaveObservationRequest,
+  ScopeScriptSaveObservationResult,
+  ScopeScriptUpsertAcceptedResponse,
   ScriptCatalogSnapshot,
   ScriptPackage,
   ScriptPromotionDecision,
@@ -229,7 +232,7 @@ export const scriptsApi = {
       revisionId?: string;
       expectedBaseRevision?: string;
     },
-  ): Promise<ScopedScriptDetail> {
+  ): Promise<ScopeScriptUpsertAcceptedResponse> {
     return requestJson(
       `${scopePath(scopeId)}/scripts/${encodeURIComponent(payload.scriptId)}`,
       {
@@ -240,6 +243,21 @@ export const scriptsApi = {
           revisionId: payload.revisionId,
           expectedBaseRevision: payload.expectedBaseRevision,
         }),
+      },
+    );
+  },
+
+  observeSaveScript(
+    scopeId: string,
+    scriptId: string,
+    payload: ScopeScriptSaveObservationRequest,
+  ): Promise<ScopeScriptSaveObservationResult> {
+    return requestJson(
+      `${scopePath(scopeId)}/scripts/${encodeURIComponent(scriptId)}/save-observation`,
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify(payload),
       },
     );
   },

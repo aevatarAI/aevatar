@@ -147,4 +147,28 @@ public class CqrsBoundaryTests
             .Because("Query*RequestedEvent patterns are legacy direct actor query contracts; use read models");
         rule.Check(Arch);
     }
+
+    [Fact]
+    public void ScriptingWritePath_ShouldNot_DependOn_AuthorityActivationPorts()
+    {
+        IArchRule rule = Types().That()
+            .HaveNameMatching("^(RuntimeScriptDefinitionCommandService|RuntimeScriptCatalogCommandService|ScriptBehaviorRuntimeCapabilities|ScriptBehaviorRuntimeCapabilityFactory)$")
+            .And().ResideInNamespaceMatching(@"Aevatar\.Scripting\.(Application|Infrastructure)(\..+)?")
+            .Should().NotDependOnAny(
+                Types().That().HaveNameMatching("^(IScriptAuthorityReadModelActivationPort|IScriptAuthorityProjectionPrimingPort)$"))
+            .Because("scripting write paths must not control authority read-model lifecycle");
+        rule.Check(Arch);
+    }
+
+    [Fact]
+    public void ScriptingCatalogWritePath_ShouldNot_DependOn_QueryPorts()
+    {
+        IArchRule rule = Types().That()
+            .HaveName("RuntimeScriptCatalogCommandService")
+            .And().ResideInNamespaceMatching(@"Aevatar\.Scripting\.Infrastructure(\..+)?")
+            .Should().NotDependOnAny(
+                Types().That().HaveNameMatching("^(IScriptCatalogQueryPort|IScriptReadModelQueryPort)$"))
+            .Because("catalog command success must not depend on query-port catch-up");
+        rule.Check(Arch);
+    }
 }
