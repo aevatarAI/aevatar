@@ -93,6 +93,7 @@ import type {
 } from '@/shared/studio/models';
 import { getStudioScopeBindingCurrentRevision } from '@/shared/studio/models';
 import { embeddedPanelStyle } from '@/shared/ui/proComponents';
+import { describeError } from '@/shared/ui/errorText';
 import StudioBootstrapGate from './components/StudioBootstrapGate';
 import StudioInspectorPane from './components/StudioInspectorPane';
 import StudioShell, {
@@ -1931,7 +1932,17 @@ const StudioPage: React.FC = () => {
       ),
     [roleCatalogDraft, rolesQuery.data?.roles],
   );
-  const studioHostMode = appContextQuery.data?.mode ?? 'embedded';
+  const studioHostMode = appContextQuery.data?.mode ?? 'proxy';
+  const canAskAiGenerate =
+    studioHostMode === 'embedded' && !appContextQuery.isError;
+  const askAiUnavailableMessage = appContextQuery.isError
+    ? describeError(
+        appContextQuery.error,
+        '当前环境暂时无法连接 Studio 服务，请稍后再试。',
+      )
+    : studioHostMode !== 'embedded'
+      ? 'AI 辅助需要内嵌 Studio 环境，当前环境暂不支持。'
+      : '';
   const settingsDirty = useMemo(
     () =>
       JSON.stringify(
@@ -2799,6 +2810,15 @@ const StudioPage: React.FC = () => {
   };
 
   const handleAskAiGenerate = async () => {
+    if (!canAskAiGenerate) {
+      setAskAiNotice({
+        type: 'error',
+        message:
+          askAiUnavailableMessage || '当前环境暂不支持 AI 辅助，请稍后再试。',
+      });
+      return;
+    }
+
     if (!askAiPrompt.trim()) {
       setAskAiNotice({
         type: 'error',
@@ -2848,10 +2868,10 @@ const StudioPage: React.FC = () => {
     } catch (error) {
       setAskAiNotice({
         type: 'error',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to generate workflow YAML in Studio.',
+        message: describeError(
+          error,
+          '当前环境暂时无法完成 AI 辅助，请稍后再试。',
+        ),
       });
     } finally {
       setAskAiPending(false);
@@ -4519,6 +4539,8 @@ const StudioPage: React.FC = () => {
           askAiNotice={askAiNotice}
           askAiReasoning={askAiReasoning}
           askAiAnswer={askAiAnswer}
+          canAskAiGenerate={canAskAiGenerate}
+          askAiUnavailableMessage={askAiUnavailableMessage}
           runPrompt={runPrompt}
           recentPromptHistory={recentPromptHistory}
           promptHistoryCount={promptHistory.length}

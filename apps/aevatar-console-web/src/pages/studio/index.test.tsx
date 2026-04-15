@@ -133,6 +133,55 @@ const defaultStudioAppContext = {
   },
 };
 
+function mockCreateDefaultStudioAppContext() {
+  return {
+    ...defaultStudioAppContext,
+    features: {
+      ...defaultStudioAppContext.features,
+    },
+    scriptContract: {
+      ...defaultStudioAppContext.scriptContract,
+    },
+  };
+}
+
+function mockCreateDefaultStudioAuthSession() {
+  return {
+    enabled: false,
+    authenticated: false,
+    providerDisplayName: "NyxID",
+  };
+}
+
+function mockCreateDefaultWorkflowSummaries() {
+  return [
+    {
+      workflowId: "workflow-1",
+      name: "workspace-demo",
+      description: "Workspace workflow",
+      fileName: "workspace-demo.yaml",
+      filePath: "/tmp/workflows/workspace-demo.yaml",
+      directoryId: "dir-1",
+      directoryLabel: "Workspace",
+      stepCount: 2,
+      hasLayout: true,
+      updatedAtUtc: "2026-03-18T00:00:00Z",
+    },
+  ];
+}
+
+async function mockAuthorWorkflowSuccess(
+  _input: { prompt: string },
+  options?: {
+    onText?: (text: string) => void;
+    onReasoning?: (text: string) => void;
+  }
+) {
+  options?.onReasoning?.("Thinking through the workflow structure.");
+  options?.onText?.("name: ai-generated\nsteps: []\n");
+  return "name: ai-generated\nsteps: []\n";
+}
+
 function resetMockState(): void {
   mockParsedDocument = mockCloneValue(mockWorkflowDocument);
   mockWorkflowFile = {
@@ -329,12 +378,8 @@ const mockServicesApi = servicesApi as unknown as {
 
 jest.mock("@/shared/studio/api", () => ({
   studioApi: {
-    getAppContext: jest.fn(async () => defaultStudioAppContext),
-    getAuthSession: jest.fn(async () => ({
-      enabled: false,
-      authenticated: false,
-      providerDisplayName: "NyxID",
-    })),
+    getAppContext: jest.fn(async () => mockCreateDefaultStudioAppContext()),
+    getAuthSession: jest.fn(async () => mockCreateDefaultStudioAuthSession()),
     getWorkspaceSettings: jest.fn(async () => ({
       runtimeBaseUrl: "https://aevatar-console-backend-api.aevatar.ai",
       directories: [
@@ -383,20 +428,7 @@ jest.mock("@/shared/studio/api", () => ({
         },
       ],
     })),
-    listWorkflows: jest.fn(async () => [
-      {
-        workflowId: "workflow-1",
-        name: "workspace-demo",
-        description: "Workspace workflow",
-        fileName: "workspace-demo.yaml",
-        filePath: "/tmp/workflows/workspace-demo.yaml",
-        directoryId: "dir-1",
-        directoryLabel: "Workspace",
-        stepCount: 2,
-        hasLayout: true,
-        updatedAtUtc: "2026-03-18T00:00:00Z",
-      },
-    ]),
+    listWorkflows: jest.fn(async () => mockCreateDefaultWorkflowSummaries()),
     getTemplateWorkflow: jest.fn(async () => ({
       catalog: {
         name: "published-demo",
@@ -888,19 +920,7 @@ jest.mock("@/shared/studio/api", () => ({
       ],
     })),
     removeWorkflowDirectory: jest.fn(async () => undefined),
-    authorWorkflow: jest.fn(
-      async (
-        _input: { prompt: string },
-        options?: {
-          onText?: (text: string) => void;
-          onReasoning?: (text: string) => void;
-        }
-      ) => {
-        options?.onReasoning?.("Thinking through the workflow structure.");
-        options?.onText?.("name: ai-generated\nsteps: []\n");
-        return "name: ai-generated\nsteps: []\n";
-      }
-    ),
+    authorWorkflow: jest.fn(mockAuthorWorkflowSuccess),
   },
 }));
 
@@ -1174,6 +1194,13 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           "AI 已更新当前草稿",
           "AI 生成失败"
         ),
+        props.askAiNotice
+          ? React.createElement(
+              "div",
+              { key: "ask-ai-notice-message" },
+              props.askAiNotice.message
+            )
+          : null,
         React.createElement("input", {
           key: "workflow-name",
           "aria-label": "定义名称",
@@ -1412,6 +1439,8 @@ jest.mock("./components/StudioWorkbenchSections", () => {
           {
             key: "ask-ai-toggle",
             type: "button",
+            disabled: props.canAskAiGenerate === false,
+            title: props.askAiUnavailableMessage ?? "",
             onClick: () => setAskAiOpen(true),
           },
           "Open Ask AI"
@@ -1589,13 +1618,25 @@ describe("StudioPage", () => {
         ],
       },
     ]);
-    (studioApi.getAuthSession as jest.Mock).mockResolvedValue({
-      enabled: false,
-      authenticated: false,
-      providerDisplayName: "NyxID",
-    });
+    (studioApi.getAuthSession as jest.Mock).mockReset();
+    (studioApi.getAuthSession as jest.Mock).mockResolvedValue(
+      mockCreateDefaultStudioAuthSession()
+    );
+    (studioApi.getAppContext as jest.Mock).mockReset();
     (studioApi.getAppContext as jest.Mock).mockResolvedValue(
-      defaultStudioAppContext
+      mockCreateDefaultStudioAppContext()
+    );
+    (studioApi.listWorkflows as jest.Mock).mockReset();
+    (studioApi.listWorkflows as jest.Mock).mockResolvedValue(
+      mockCreateDefaultWorkflowSummaries()
+    );
+    (studioApi.getWorkflow as jest.Mock).mockReset();
+    (studioApi.getWorkflow as jest.Mock).mockImplementation(
+      async () => mockWorkflowFile
+    );
+    (studioApi.authorWorkflow as jest.Mock).mockReset();
+    (studioApi.authorWorkflow as jest.Mock).mockImplementation(
+      mockAuthorWorkflowSuccess
     );
   });
 
@@ -2439,9 +2480,18 @@ describe("StudioPage", () => {
   });
 
   it("generates workflow YAML with Studio AI and applies it to the draft", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
+      ...mockCreateDefaultStudioAppContext(),
+      mode: "embedded",
+    });
+
     renderStudioPage("/studio?draft=new&tab=studio");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Open Ask AI" }));
+    const askAiButton = await screen.findByRole("button", { name: "Open Ask AI" });
+    await waitFor(() => {
+      expect(askAiButton).toBeEnabled();
+    });
+    fireEvent.click(askAiButton);
     fireEvent.change(
       await screen.findByLabelText("Studio AI workflow prompt"),
       {
@@ -2472,6 +2522,54 @@ describe("StudioPage", () => {
         ).value.trim()
       ).toBe("name: ai-generated\nsteps: []");
     });
+  });
+
+  it("disables workflow AI when Studio app context is unavailable", async () => {
+    (studioApi.getAppContext as jest.Mock).mockRejectedValue(
+      new Error("Error occurred while trying to proxy: 127.0.0.1:5174/api/app/context")
+    );
+
+    renderStudioPage("/studio?draft=new&tab=studio");
+
+    const askAiButton = await screen.findByRole("button", { name: "Open Ask AI" });
+    await waitFor(() => {
+      expect(askAiButton).toBeDisabled();
+    });
+  });
+
+  it("sanitizes workflow AI proxy failures for end users", async () => {
+    (studioApi.getAppContext as jest.Mock).mockResolvedValue({
+      ...mockCreateDefaultStudioAppContext(),
+      mode: "embedded",
+    });
+    (studioApi.authorWorkflow as jest.Mock).mockRejectedValueOnce(
+      new Error("Error occurred while trying to proxy: 127.0.0.1:5174/api/workflows/generator")
+    );
+
+    renderStudioPage("/studio?draft=new&tab=studio");
+
+    const askAiButton = await screen.findByRole("button", { name: "Open Ask AI" });
+    await waitFor(() => {
+      expect(askAiButton).toBeEnabled();
+    });
+    fireEvent.click(askAiButton);
+    fireEvent.change(
+      await screen.findByLabelText("Studio AI workflow prompt"),
+      {
+        target: {
+          value: "Create a short review workflow",
+        },
+      }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    expect(await screen.findByText("AI 生成失败")).toBeTruthy();
+    expect(
+      await screen.findByText("当前服务暂时不可用，请稍后再试。")
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/Error occurred while trying to proxy/i)
+    ).toBeNull();
   });
 
   it("applies a saved role to the current workflow from the roles catalog", async () => {

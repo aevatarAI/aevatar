@@ -179,6 +179,8 @@ function createBaseProps(overrides = {}) {
     askAiNotice: null,
     askAiReasoning: '',
     askAiAnswer: '',
+    canAskAiGenerate: true,
+    askAiUnavailableMessage: '',
     runPrompt: '',
     recentPromptHistory: [],
     promptHistoryCount: 0,
@@ -286,6 +288,33 @@ describe('StudioEditorPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /生\s*成/ }));
 
     expect(onAskAiGenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Ask AI when workflow generation is unavailable', async () => {
+    render(
+      React.createElement(
+        StudioEditorPage,
+        createBaseProps({
+          canAskAiGenerate: false,
+          askAiUnavailableMessage: '当前环境暂时无法连接 Studio 服务，请稍后再试。',
+        }) as any,
+      ),
+    );
+
+    expect(screen.getByRole('button', { name: /AI 辅助/i })).toBeDisabled();
+  });
+
+  it('keeps the inspector column in a constrained scroll shell', () => {
+    render(React.createElement(StudioEditorPage, createBaseProps() as any));
+
+    expect(screen.getByTestId('studio-editor-shell')).toHaveStyle({
+      height: 'calc(100vh - 176px)',
+      overflow: 'hidden',
+    });
+    expect(screen.getByTestId('studio-inspector-scroll')).toHaveStyle({
+      overflowY: 'auto',
+      minHeight: '0',
+    });
   });
 
   it('hides legacy recommendation notices for dirty drafts', async () => {

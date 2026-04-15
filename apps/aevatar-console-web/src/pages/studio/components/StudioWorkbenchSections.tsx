@@ -3634,6 +3634,8 @@ export type StudioEditorPageProps = {
   readonly askAiNotice: StudioNoticeLike | null;
   readonly askAiReasoning: string;
   readonly askAiAnswer: string;
+  readonly canAskAiGenerate: boolean;
+  readonly askAiUnavailableMessage: string;
   readonly runPrompt: string;
   readonly recentPromptHistory: readonly PlaygroundPromptHistoryEntry[];
   readonly promptHistoryCount: number;
@@ -3751,6 +3753,8 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   askAiNotice,
   askAiReasoning,
   askAiAnswer,
+  canAskAiGenerate,
+  askAiUnavailableMessage,
   runPrompt,
   runPending,
   canOpenRunWorkflow,
@@ -4062,11 +4066,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
     setToolDrawerMode(null);
   };
 
-  const askAiStatusText = askAiPending
-    ? '正在生成并校验 YAML...'
-    : askAiAnswer.trim()
-      ? '校验通过的 YAML 已写回当前草稿。'
-      : '返回格式仅限 workflow YAML。';
+  const askAiStatusText = !canAskAiGenerate
+    ? askAiUnavailableMessage || '当前环境暂不支持 AI 辅助。'
+    : askAiPending
+      ? '正在生成并校验 YAML...'
+      : askAiAnswer.trim()
+        ? '校验通过的 YAML 已写回当前草稿。'
+        : '返回格式仅限 workflow YAML。';
   const toolDrawerVisible = Boolean(draftYaml) && toolDrawerMode !== null;
   const toolDrawerTitle =
     toolDrawerMode === 'palette' ? '添加步骤' : 'AI 辅助';
@@ -4236,7 +4242,13 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
       ) : null}
     </div>
   );
-  const askAiDrawerContent = (
+  const askAiDrawerContent = !canAskAiGenerate ? (
+    <StudioNoticeCard
+      type="error"
+      title="AI 辅助暂不可用"
+      description={askAiUnavailableMessage || '当前环境暂不支持 AI 辅助。'}
+    />
+  ) : (
     <div style={cardStackStyle}>
       <div style={studioToolDrawerSectionStyle}>
         <Typography.Text strong>行为描述</Typography.Text>
@@ -4396,6 +4408,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
   ) : null;
   const inspectorPanelBody = (
     <div
+      data-testid="studio-inspector-scroll"
       style={{
         display: 'flex',
         flex: 1,
@@ -4435,6 +4448,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
           />
 
           <div
+            data-testid="studio-editor-shell"
             style={{
               background: '#F2F1EE',
               border: '1px solid #E6E3DE',
@@ -4442,7 +4456,7 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
               boxShadow: '0 30px 72px rgba(15,23,42,0.08)',
               display: 'flex',
               flexDirection: 'column',
-              minHeight: 'calc(100vh - 176px)',
+              height: 'calc(100vh - 176px)',
               overflow: 'hidden',
             }}
           >
@@ -4542,7 +4556,9 @@ export const StudioEditorPage: React.FC<StudioEditorPageProps> = ({
                   size="small"
                   icon={<RobotOutlined />}
                   type={toolDrawerMode === 'ask-ai' ? 'primary' : 'default'}
+                  disabled={!canAskAiGenerate}
                   onClick={() => setToolDrawerMode('ask-ai')}
+                  title={!canAskAiGenerate ? askAiUnavailableMessage : undefined}
                 >
                   AI 辅助
                 </Button>
