@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { savePlaygroundDraft } from "@/shared/playground/playgroundDraft";
 import { ensureActiveAuthSession } from "@/shared/auth/client";
@@ -1532,6 +1532,15 @@ function renderStudioPage(route = "/studio") {
   return renderWithQueryClient(React.createElement(StudioPage));
 }
 
+async function replaceStudioRoute(route: string) {
+  await act(async () => {
+    window.history.replaceState({}, "", route);
+    window.dispatchEvent(
+      new PopStateEvent("popstate", { state: window.history.state })
+    );
+  });
+}
+
 describe("StudioPage", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/studio");
@@ -1644,12 +1653,55 @@ describe("StudioPage", () => {
     expect(searchParams.get("memberLabel")).toBe("成员 Alpha");
     expect(searchParams.get("workflow")).toBe("workflow-1");
     expect(searchParams.get("tab")).toBe("studio");
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "行为定义" }));
+  it("resyncs the Studio team context when the route changes after mount", async () => {
+    renderStudioPage(
+      "/studio?scopeId=scope-a&scopeLabel=%E5%9B%A2%E9%98%9F+A&memberId=service-alpha&memberLabel=%E6%88%90%E5%91%98+Alpha&workflow=workflow-1&tab=studio"
+    );
+
+    expect(await screen.findByRole("button", { name: "← 团队 A" })).toBeTruthy();
+    expect(screen.getByText(/成员 Alpha/)).toBeTruthy();
+
+    await replaceStudioRoute(
+      "/studio?scopeId=scope-b&scopeLabel=%E5%9B%A2%E9%98%9F+B&memberId=service-beta&memberLabel=%E6%88%90%E5%91%98+Beta&tab=workflows"
+    );
+
+    expect(await screen.findByRole("button", { name: "← 团队 B" })).toBeTruthy();
+    expect(screen.getByText(/成员 Beta/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Workflows" })).toBeTruthy();
+      expect(studioApi.getScopeBinding).toHaveBeenCalledWith("scope-b");
     });
+
+    const searchParams = new URLSearchParams(window.location.search);
+    expect(searchParams.get("scopeId")).toBe("scope-b");
+    expect(searchParams.get("scopeLabel")).toBe("团队 B");
+    expect(searchParams.get("memberId")).toBe("service-beta");
+    expect(searchParams.get("memberLabel")).toBe("成员 Beta");
+    expect(searchParams.get("tab")).toBe("workflows");
+  });
+
+  it("resyncs the Studio deep link when the target workflow changes after mount", async () => {
+    renderStudioPage("/studio?workflow=workflow-1&tab=studio");
+
+    expect(await screen.findByText("Current draft")).toBeTruthy();
+
+    await replaceStudioRoute(
+      "/studio?template=published-demo&prompt=Continue%20this%20workflow%20in%20Studio&tab=studio"
+    );
+
+    await waitFor(() => {
+      expect(studioApi.getTemplateWorkflow).toHaveBeenCalledWith(
+        "published-demo"
+      );
+    });
+
+    expect(await screen.findByText("Published template draft")).toBeTruthy();
+    expect(await screen.findByTestId("studio-run-prompt-state")).toHaveTextContent(
+      "Continue this workflow in Studio"
+    );
   });
 
   it("falls back to behaviors when the removed files tab is requested", async () => {

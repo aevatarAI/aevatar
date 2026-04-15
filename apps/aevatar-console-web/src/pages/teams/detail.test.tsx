@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 import { studioApi } from "@/shared/studio/api";
@@ -610,6 +610,56 @@ describe("TeamDetailPage", () => {
     expect(screen.getByText("当前选中连接器")).toBeTruthy();
     expect(screen.getByRole("button", { name: "选择连接器 web-search" })).toBeTruthy();
     expect(window.location.search).toContain("tab=connectors");
+  });
+
+  it("resyncs tab and run state when the team detail URL changes after mount", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    await screen.findByRole("button", { name: "服务映射" });
+
+    await act(async () => {
+      window.history.replaceState(
+        {},
+        "",
+        "/teams/scope-1?scopeId=scope-1&tab=events&workflowId=workflow-1&serviceId=default&runId=run-good",
+      );
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: window.history.state }),
+      );
+    });
+
+    expect(await screen.findByText("当前任务事件流")).toBeTruthy();
+    expect(await screen.findByText("LLM_CALL")).toBeTruthy();
+    expect(
+      screen.getByText((_, node) => {
+        return node?.textContent === "Aevatar / Teams / 团队详情 / 事件流";
+      }),
+    ).toBeTruthy();
+  });
+
+  it("resyncs the active workflow when the deep link changes after mount", async () => {
+    renderWithQueryClient(React.createElement(TeamDetailPage));
+
+    expect(await screen.findByText("Support Escalation Triage")).toBeTruthy();
+
+    await act(async () => {
+      window.history.replaceState(
+        {},
+        "",
+        "/teams/scope-1?scopeId=scope-1&tab=advanced&workflowId=workflow-2&serviceId=default",
+      );
+      window.dispatchEvent(
+        new PopStateEvent("popstate", { state: window.history.state }),
+      );
+    });
+
+    expect(await screen.findByText("Support Escalation Triage v1")).toBeTruthy();
+    expect(await screen.findByText("当前配置主线")).toBeTruthy();
+    expect(
+      screen.getByText((_, node) => {
+        return node?.textContent === "Aevatar / Teams / 团队详情 / 配置";
+      }),
+    ).toBeTruthy();
   });
 
   it("shows a team-first configuration view", async () => {
