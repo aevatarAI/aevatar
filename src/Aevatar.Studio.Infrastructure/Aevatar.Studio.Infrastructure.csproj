@@ -18,6 +18,8 @@
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserConfig\Aevatar.GAgents.UserConfig.csproj" />
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserMemory\Aevatar.GAgents.UserMemory.csproj" />
+    <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
+    <ProjectReference Include="..\Aevatar.Studio.Projection\Aevatar.Studio.Projection.csproj" />
   </ItemGroup>
 
   <ItemGroup>

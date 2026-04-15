@@ -1,35 +1,46 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ChatHistory;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IChatHistoryStore"/>.
-/// Reads the write actors' state directly.
+/// Reads from the projection document store (CQRS read model).
 /// Writes send commands only to <see cref="ChatConversationGAgent"/>
 /// (index updates are handled internally by the conversation actor).
 /// </summary>
 internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
 {
     private readonly IActorRuntime _runtime;
+    private readonly IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> _indexDocumentReader;
+    private readonly IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> _conversationDocumentReader;
     private readonly ILogger<ActorBackedChatHistoryStore> _logger;
 
     public ActorBackedChatHistoryStore(
         IActorRuntime runtime,
+        IProjectionDocumentReader<ChatHistoryIndexCurrentStateDocument, string> indexDocumentReader,
+        IProjectionDocumentReader<ChatConversationCurrentStateDocument, string> conversationDocumentReader,
         ILogger<ActorBackedChatHistoryStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _indexDocumentReader = indexDocumentReader ?? throw new ArgumentNullException(nameof(indexDocumentReader));
+        _conversationDocumentReader = conversationDocumentReader ?? throw new ArgumentNullException(nameof(conversationDocumentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<ChatHistoryIndex> GetIndexAsync(string scopeId, CancellationToken ct = default)
     {
-        var state = await ReadIndexActorStateAsync(scopeId, ct);
-        if (state is null)
+        var actorId = IndexActorId(scopeId);
+        var document = await _indexDocumentReader.GetAsync(actorId, ct);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(ChatHistoryIndexState.Descriptor))
             return new ChatHistoryIndex([]);
 
+        var state = document.StateRoot.Unpack<ChatHistoryIndexState>();
         return new ChatHistoryIndex(state.Conversations
             .Select(ToConversationMeta)
             .OrderByDescending(static c => c.UpdatedAt)
@@ -41,8 +52,14 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
     public async Task<IReadOnlyList<StoredChatMessage>> GetMessagesAsync(
         string scopeId, string conversationId, CancellationToken ct = default)
     {
-        var state = await ReadConversationActorStateAsync(scopeId, conversationId, ct);
-        if (state is null || state.Messages.Count == 0)
+        var actorId = ConversationActorId(scopeId, conversationId);
+        var document = await _conversationDocumentReader.GetAsync(actorId, ct);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(ChatConversationState.Descriptor))
+            return [];
+
+        var state = document.StateRoot.Unpack<ChatConversationState>();
+        if (state.Messages.Count == 0)
             return [];
 
         return state.Messages
@@ -76,24 +93,6 @@ internal sealed class ActorBackedChatHistoryStore : IChatHistoryStore
             ScopeId = scopeId,
         };
         await ActorCommandDispatcher.SendAsync(conversationActor, deleteEvt, ct);
-    }
-
-    // ── Read write actor state directly ───
-
-    private async Task<ChatHistoryIndexState?> ReadIndexActorStateAsync(
-        string scopeId, CancellationToken ct)
-    {
-        var actorId = IndexActorId(scopeId);
-        var actor = await _runtime.GetAsync(actorId);
-        return (actor?.Agent as IAgent<ChatHistoryIndexState>)?.State;
-    }
-
-    private async Task<ChatConversationState?> ReadConversationActorStateAsync(
-        string scopeId, string conversationId, CancellationToken ct)
-    {
-        var actorId = ConversationActorId(scopeId, conversationId);
-        var actor = await _runtime.GetAsync(actorId);
-        return (actor?.Agent as IAgent<ChatConversationState>)?.State;
     }
 
     // ── Actor resolution ───────────────────────────────────────

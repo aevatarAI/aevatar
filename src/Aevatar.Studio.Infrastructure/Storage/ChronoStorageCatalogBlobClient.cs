@@ -3,7 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Application.Studio.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 

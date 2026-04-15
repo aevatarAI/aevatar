@@ -2,6 +2,7 @@ syntax = "proto3";
 package aevatar.studio.projection;
 option csharp_namespace = "Aevatar.Studio.Projection.ReadModels";
 
+import "google/protobuf/any.proto";
 import "google/protobuf/timestamp.proto";
 
 // ─── UserConfig Current State ReadModel ───
@@ -20,4 +21,81 @@ message UserConfigCurrentStateDocument {
   string local_runtime_base_url = 13;
   string remote_runtime_base_url = 14;
   int32 max_tool_rounds = 15;
+}
+
+// ─── GAgentRegistry Current State ReadModel ───
+
+message GAgentRegistryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── ConnectorCatalog Current State ReadModel ───
+
+message ConnectorCatalogCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── RoleCatalog Current State ReadModel ───
+
+message RoleCatalogCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── UserMemory Current State ReadModel ───
+
+message UserMemoryCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── StreamingProxyParticipant Current State ReadModel ───
+
+message StreamingProxyParticipantCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── ChatHistoryIndex Current State ReadModel ───
+
+message ChatHistoryIndexCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
+}
+
+// ─── ChatConversation Current State ReadModel ───
+
+message ChatConversationCurrentStateDocument {
+  string id = 1;
+  string actor_id = 2;
+  int64 state_version = 3;
+  string last_event_id = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  google.protobuf.Any state_root = 10;
 }

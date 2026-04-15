@@ -1,14 +1,15 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.Registry;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IGAgentActorStore"/>.
-/// Reads the write actor's state directly.
+/// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
 /// </summary>
 internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
@@ -17,25 +18,31 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
 
     private readonly IActorRuntime _runtime;
     private readonly IAppScopeResolver _scopeResolver;
+    private readonly IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedGAgentActorStore> _logger;
 
     public ActorBackedGAgentActorStore(
         IActorRuntime runtime,
         IAppScopeResolver scopeResolver,
+        IProjectionDocumentReader<GAgentRegistryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedGAgentActorStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<IReadOnlyList<GAgentActorGroup>> GetAsync(
         CancellationToken cancellationToken = default)
     {
-        var state = await ReadWriteActorStateAsync(cancellationToken);
-        if (state is null)
+        var actorId = ResolveWriteActorId();
+        var document = await _documentReader.GetAsync(actorId, cancellationToken);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(GAgentRegistryState.Descriptor))
             return [];
 
+        var state = document.StateRoot.Unpack<GAgentRegistryState>();
         return state.Groups
             .Select(g => new GAgentActorGroup(
                 g.GagentType,
@@ -66,15 +73,6 @@ internal sealed class ActorBackedGAgentActorStore : IGAgentActorStore
             GagentType = gagentType,
             ActorId = actorId,
         }, cancellationToken);
-    }
-
-    // ── Read write actor state directly ──
-
-    private async Task<GAgentRegistryState?> ReadWriteActorStateAsync(CancellationToken ct)
-    {
-        var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return (actor?.Agent as IAgent<GAgentRegistryState>)?.State;
     }
 
     // ── Actor resolution ──

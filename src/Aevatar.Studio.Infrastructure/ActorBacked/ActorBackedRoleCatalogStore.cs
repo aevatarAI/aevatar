@@ -1,7 +1,8 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.RoleCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -9,7 +10,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IRoleCatalogStore"/>.
-/// Reads the write actor's state directly.
+/// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
 /// Local workspace operations (import, draft backup) delegate to
 /// <see cref="IStudioWorkspaceStore"/>.
@@ -24,23 +25,26 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
     private readonly IActorRuntime _runtime;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _localWorkspaceStore;
+    private readonly IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedRoleCatalogStore> _logger;
 
     public ActorBackedRoleCatalogStore(
         IActorRuntime runtime,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore localWorkspaceStore,
+        IProjectionDocumentReader<RoleCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedRoleCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _localWorkspaceStore = localWorkspaceStore ?? throw new ArgumentNullException(nameof(localWorkspaceStore));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<StoredRoleCatalog> GetRoleCatalogAsync(CancellationToken cancellationToken = default)
     {
-        var state = await ReadWriteActorStateAsync(cancellationToken);
+        var state = await ReadProjectedStateAsync(cancellationToken);
         var roles = state?.Roles
             .Select(ToStoredRoleDefinition)
             .ToList()
@@ -94,7 +98,7 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
 
     public async Task<StoredRoleDraft> GetRoleDraftAsync(CancellationToken cancellationToken = default)
     {
-        var state = await ReadWriteActorStateAsync(cancellationToken);
+        var state = await ReadProjectedStateAsync(cancellationToken);
         var draftEntry = state?.Draft;
         if (draftEntry is null)
         {
@@ -145,13 +149,17 @@ internal sealed class ActorBackedRoleCatalogStore : IRoleCatalogStore
         await _localWorkspaceStore.DeleteRoleDraftAsync(cancellationToken);
     }
 
-    // ── Read write actor state directly ──
+    // ── Read from projection ──
 
-    private async Task<RoleCatalogState?> ReadWriteActorStateAsync(CancellationToken ct)
+    private async Task<RoleCatalogState?> ReadProjectedStateAsync(CancellationToken ct)
     {
         var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return (actor?.Agent as IAgent<RoleCatalogState>)?.State;
+        var document = await _documentReader.GetAsync(actorId, ct);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(RoleCatalogState.Descriptor))
+            return null;
+
+        return document.StateRoot.Unpack<RoleCatalogState>();
     }
 
     // ── Actor resolution ──

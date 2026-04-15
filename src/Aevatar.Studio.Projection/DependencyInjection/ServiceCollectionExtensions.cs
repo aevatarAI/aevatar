@@ -43,15 +43,73 @@ public static class ServiceCollectionExtensions
             },
             context => new StudioMaterializationRuntimeLease(context));
 
-        // UserConfig projector
+        // ── Projectors ──
+
         services.AddCurrentStateProjectionMaterializer<
             StudioMaterializationContext,
             UserConfigCurrentStateProjector>();
 
-        // Document metadata providers (for index creation in Elasticsearch)
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            GAgentRegistryCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            ConnectorCatalogCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            RoleCatalogCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            UserMemoryCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            StreamingProxyParticipantCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            ChatHistoryIndexCurrentStateProjector>();
+
+        services.AddCurrentStateProjectionMaterializer<
+            StudioMaterializationContext,
+            ChatConversationCurrentStateProjector>();
+
+        // ── Document metadata providers (for index creation in Elasticsearch) ──
+
         services.TryAddSingleton<
             IProjectionDocumentMetadataProvider<UserConfigCurrentStateDocument>,
             UserConfigCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<GAgentRegistryCurrentStateDocument>,
+            GAgentRegistryCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ConnectorCatalogCurrentStateDocument>,
+            ConnectorCatalogCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<RoleCatalogCurrentStateDocument>,
+            RoleCatalogCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<UserMemoryCurrentStateDocument>,
+            UserMemoryCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<StreamingProxyParticipantCurrentStateDocument>,
+            StreamingProxyParticipantCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ChatHistoryIndexCurrentStateDocument>,
+            ChatHistoryIndexCurrentStateDocumentMetadataProvider>();
+
+        services.TryAddSingleton<
+            IProjectionDocumentMetadataProvider<ChatConversationCurrentStateDocument>,
+            ChatConversationCurrentStateDocumentMetadataProvider>();
 
         // Query ports (read side)
         services.TryAddSingleton<IUserConfigQueryPort, ProjectionUserConfigQueryPort>();

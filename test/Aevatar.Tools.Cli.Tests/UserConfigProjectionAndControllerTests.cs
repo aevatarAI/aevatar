@@ -7,7 +7,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
 using Aevatar.Studio.Hosting.Controllers;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Aevatar.Studio.Projection.DependencyInjection;
 using Aevatar.Studio.Projection.Metadata;
 using Aevatar.Studio.Projection.Orchestration;

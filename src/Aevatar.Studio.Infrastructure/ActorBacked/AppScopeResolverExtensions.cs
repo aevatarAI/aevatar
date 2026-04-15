@@ -1,4 +1,4 @@
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Application.Studio.Abstractions;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 

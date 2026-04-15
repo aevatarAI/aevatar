@@ -1,7 +1,6 @@
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserConfig;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 

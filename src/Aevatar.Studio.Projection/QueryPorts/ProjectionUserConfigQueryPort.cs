@@ -1,6 +1,5 @@
 using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Aevatar.Studio.Projection.ReadModels;
 
 namespace Aevatar.Studio.Projection.QueryPorts;

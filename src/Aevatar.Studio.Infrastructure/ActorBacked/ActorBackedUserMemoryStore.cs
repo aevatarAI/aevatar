@@ -1,16 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
 using Aevatar.AI.Abstractions.LLMProviders;
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.UserMemory;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.ReadModels;
 using Microsoft.Extensions.Logging;
 
 namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IUserMemoryStore"/>.
-/// Reads the write actor's state directly.
+/// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
 /// </summary>
 internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
@@ -19,21 +21,24 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     private readonly IActorRuntime _runtime;
     private readonly IAppScopeResolver _scopeResolver;
+    private readonly IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedUserMemoryStore> _logger;
 
     public ActorBackedUserMemoryStore(
         IActorRuntime runtime,
         IAppScopeResolver scopeResolver,
+        IProjectionDocumentReader<UserMemoryCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedUserMemoryStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<UserMemoryDocument> GetAsync(CancellationToken ct = default)
     {
-        var state = await ReadWriteActorStateAsync(ct);
+        var state = await ReadProjectedStateAsync(ct);
         if (state is null)
             return UserMemoryDocument.Empty;
 
@@ -117,7 +122,7 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
 
     public async Task<bool> RemoveEntryAsync(string id, CancellationToken ct = default)
     {
-        var state = await ReadWriteActorStateAsync(ct);
+        var state = await ReadProjectedStateAsync(ct);
         if (state is null || !state.Entries.Any(e => string.Equals(e.Id, id, StringComparison.Ordinal)))
             return false;
 
@@ -186,13 +191,17 @@ internal sealed class ActorBackedUserMemoryStore : IUserMemoryStore
             : truncated;
     }
 
-    // ── Read write actor state directly ──
+    // ── Read from projection ──
 
-    private async Task<UserMemoryState?> ReadWriteActorStateAsync(CancellationToken ct)
+    private async Task<UserMemoryState?> ReadProjectedStateAsync(CancellationToken ct)
     {
         var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return (actor?.Agent as IAgent<UserMemoryState>)?.State;
+        var document = await _documentReader.GetAsync(actorId, ct);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(UserMemoryState.Descriptor))
+            return null;
+
+        return document.StateRoot.Unpack<UserMemoryState>();
     }
 
     // ── Actor resolution ──

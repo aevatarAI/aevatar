@@ -1,7 +1,8 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.ConnectorCatalog;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
+using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -9,7 +10,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IConnectorCatalogStore"/>.
-/// Reads the write actor's state directly.
+/// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
 /// Local workspace operations (import, draft backup) delegate to <see cref="IStudioWorkspaceStore"/>.
 /// Per-scope isolation: each scope gets its own <c>connector-catalog-{scopeId}</c> actor.
@@ -23,24 +24,27 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     private readonly IActorRuntime _runtime;
     private readonly IAppScopeResolver _scopeResolver;
     private readonly IStudioWorkspaceStore _workspaceStore;
+    private readonly IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedConnectorCatalogStore> _logger;
 
     public ActorBackedConnectorCatalogStore(
         IActorRuntime runtime,
         IAppScopeResolver scopeResolver,
         IStudioWorkspaceStore workspaceStore,
+        IProjectionDocumentReader<ConnectorCatalogCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedConnectorCatalogStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _scopeResolver = scopeResolver ?? throw new ArgumentNullException(nameof(scopeResolver));
         _workspaceStore = workspaceStore ?? throw new ArgumentNullException(nameof(workspaceStore));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<StoredConnectorCatalog> GetConnectorCatalogAsync(
         CancellationToken cancellationToken = default)
     {
-        var state = await ReadWriteActorStateAsync(cancellationToken);
+        var state = await ReadProjectedStateAsync(cancellationToken);
         if (state is null)
         {
             return new StoredConnectorCatalog(
@@ -105,7 +109,7 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
     public async Task<StoredConnectorDraft> GetConnectorDraftAsync(
         CancellationToken cancellationToken = default)
     {
-        var state = await ReadWriteActorStateAsync(cancellationToken);
+        var state = await ReadProjectedStateAsync(cancellationToken);
         var draftEntry = state?.Draft;
         if (draftEntry is null)
         {
@@ -157,13 +161,17 @@ internal sealed class ActorBackedConnectorCatalogStore : IConnectorCatalogStore
         await _workspaceStore.DeleteConnectorDraftAsync(cancellationToken);
     }
 
-    // ── Read write actor state directly ──
+    // ── Read from projection ──
 
-    private async Task<ConnectorCatalogState?> ReadWriteActorStateAsync(CancellationToken ct)
+    private async Task<ConnectorCatalogState?> ReadProjectedStateAsync(CancellationToken ct)
     {
         var actorId = ResolveWriteActorId();
-        var actor = await _runtime.GetAsync(actorId);
-        return (actor?.Agent as IAgent<ConnectorCatalogState>)?.State;
+        var document = await _documentReader.GetAsync(actorId, ct);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(ConnectorCatalogState.Descriptor))
+            return null;
+
+        return document.StateRoot.Unpack<ConnectorCatalogState>();
     }
 
     // ── Actor resolution ──

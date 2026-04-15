@@ -7,7 +7,6 @@ using Aevatar.Studio.Application;
 using Aevatar.Studio.Application.Scripts.Contracts;
 using Aevatar.Studio.Application.Studio;
 using Aevatar.Studio.Application.Studio.Abstractions;
-using Aevatar.Studio.Infrastructure.ScopeResolution;
 using Aevatar.Studio.Infrastructure.Storage;
 using Aevatar.Scripting.Hosting.CapabilityApi;
 using System.Security.Cryptography;

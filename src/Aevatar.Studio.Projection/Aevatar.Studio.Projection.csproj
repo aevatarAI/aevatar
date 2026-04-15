@@ -14,8 +14,14 @@
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Stores.Abstractions\Aevatar.CQRS.Projection.Stores.Abstractions.csproj" />
     <ProjectReference Include="..\Aevatar.CQRS.Projection.Runtime\Aevatar.CQRS.Projection.Runtime.csproj" />
     <ProjectReference Include="..\Aevatar.Studio.Application\Aevatar.Studio.Application.csproj" />
-    <ProjectReference Include="..\Aevatar.Studio.Infrastructure\Aevatar.Studio.Infrastructure.csproj" /> <!-- IAppScopeResolver -->
+    <!-- IAppScopeResolver is now in Aevatar.Studio.Application (no Infrastructure dep needed) -->
     <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserConfig\Aevatar.GAgents.UserConfig.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.Registry\Aevatar.GAgents.Registry.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ConnectorCatalog\Aevatar.GAgents.ConnectorCatalog.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.RoleCatalog\Aevatar.GAgents.RoleCatalog.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.UserMemory\Aevatar.GAgents.UserMemory.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.StreamingProxyParticipant\Aevatar.GAgents.StreamingProxyParticipant.csproj" />
+    <ProjectReference Include="..\..\agents\Aevatar.GAgents.ChatHistory\Aevatar.GAgents.ChatHistory.csproj" />
   </ItemGroup>
 
   <ItemGroup>

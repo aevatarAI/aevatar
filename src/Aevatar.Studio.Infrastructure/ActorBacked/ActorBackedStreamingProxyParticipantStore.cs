@@ -1,6 +1,8 @@
+using Aevatar.CQRS.Projection.Stores.Abstractions;
 using Aevatar.Foundation.Abstractions;
 using Aevatar.GAgents.StreamingProxyParticipant;
 using Aevatar.Studio.Application.Studio.Abstractions;
+using Aevatar.Studio.Projection.ReadModels;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Logging;
 
@@ -8,7 +10,7 @@ namespace Aevatar.Studio.Infrastructure.ActorBacked;
 
 /// <summary>
 /// Actor-backed implementation of <see cref="IStreamingProxyParticipantStore"/>.
-/// Reads the write actor's state directly.
+/// Reads from the projection document store (CQRS read model).
 /// Writes send commands to the Write GAgent.
 /// </summary>
 internal sealed class ActorBackedStreamingProxyParticipantStore
@@ -17,23 +19,28 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
     private const string WriteActorId = "streaming-proxy-participants";
 
     private readonly IActorRuntime _runtime;
+    private readonly IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> _documentReader;
     private readonly ILogger<ActorBackedStreamingProxyParticipantStore> _logger;
 
     public ActorBackedStreamingProxyParticipantStore(
         IActorRuntime runtime,
+        IProjectionDocumentReader<StreamingProxyParticipantCurrentStateDocument, string> documentReader,
         ILogger<ActorBackedStreamingProxyParticipantStore> logger)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _documentReader = documentReader ?? throw new ArgumentNullException(nameof(documentReader));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public async Task<IReadOnlyList<StreamingProxyParticipant>> ListAsync(
         string roomId, CancellationToken cancellationToken = default)
     {
-        var state = await ReadWriteActorStateAsync(cancellationToken);
-        if (state is null)
+        var document = await _documentReader.GetAsync(WriteActorId, cancellationToken);
+        if (document?.StateRoot == null ||
+            !document.StateRoot.Is(StreamingProxyParticipantGAgentState.Descriptor))
             return [];
 
+        var state = document.StateRoot.Unpack<StreamingProxyParticipantGAgentState>();
         if (!state.Rooms.TryGetValue(roomId, out var list))
             return [];
 
@@ -82,14 +89,6 @@ internal sealed class ActorBackedStreamingProxyParticipantStore
             RoomId = roomId,
         };
         await ActorCommandDispatcher.SendAsync(actor, evt, cancellationToken);
-    }
-
-    // ── Read write actor state directly ──
-
-    private async Task<StreamingProxyParticipantGAgentState?> ReadWriteActorStateAsync(CancellationToken ct)
-    {
-        var actor = await _runtime.GetAsync(WriteActorId);
-        return (actor?.Agent as IAgent<StreamingProxyParticipantGAgentState>)?.State;
     }
 
     // ── Actor resolution ──
