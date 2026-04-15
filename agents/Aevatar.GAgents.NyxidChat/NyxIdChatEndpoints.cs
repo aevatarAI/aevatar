@@ -505,21 +505,21 @@ public static class NyxIdChatEndpoints
 
         try
         {
-            // Use IMemoryCache with 60s TTL to avoid calling DiscoverProxyServices on every request.
-            var cache = http.RequestServices.GetService<IMemoryCache>();
+            var memCache = http.RequestServices.GetService<IMemoryCache>();
             var cacheKey = $"nyxid:services:{ComputeTokenHash(accessToken)}";
 
             string? servicesJson = null;
-            if (cache is not null)
-                servicesJson = cache.Get<string>(cacheKey);
+            if (memCache is not null)
+                servicesJson = memCache.Get<string>(cacheKey);
 
             if (servicesJson is null)
             {
                 servicesJson = await client.DiscoverProxyServicesAsync(accessToken, ct);
-                cache?.Set(cacheKey, servicesJson, TimeSpan.FromSeconds(60));
+                memCache?.Set(cacheKey, servicesJson, TimeSpan.FromSeconds(60));
             }
 
-            var context = BuildConnectedServicesContext(servicesJson);
+            var specSource = http.RequestServices.GetService<IConnectedServiceSpecSource>();
+            var context = await BuildConnectedServicesContextAsync(servicesJson, specSource, accessToken, ct);
             if (!string.IsNullOrWhiteSpace(context))
                 metadata[LLMRequestMetadataKeys.ConnectedServicesContext] = context;
         }
@@ -529,20 +529,23 @@ public static class NyxIdChatEndpoints
         }
     }
 
-    private static string BuildConnectedServicesContext(string servicesJson)
+    internal static async Task<string> BuildConnectedServicesContextAsync(
+        string servicesJson,
+        IConnectedServiceSpecSource? specSource,
+        string accessToken,
+        CancellationToken ct)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<connected-services>");
         sb.AppendLine("Your capabilities based on connected services:");
 
-        var slugs = new List<string>();
+        var hintRequests = new List<ServiceHintRequest>();
 
         try
         {
             using var doc = JsonDocument.Parse(servicesJson);
             var root = doc.RootElement;
 
-            // Handle both array and object-with-array responses
             JsonElement items = root;
             if (root.ValueKind == JsonValueKind.Object)
             {
@@ -556,17 +559,20 @@ public static class NyxIdChatEndpoints
             {
                 foreach (var item in items.EnumerateArray())
                 {
+                    var serviceId = item.TryGetProperty("id", out var id) ? id.GetString()
+                                  : item.TryGetProperty("service_id", out var sid) ? sid.GetString()
+                                  : null;
                     var slug = item.TryGetProperty("slug", out var s) ? s.GetString() : null;
                     var name = item.TryGetProperty("name", out var n) ? n.GetString()
                              : item.TryGetProperty("label", out var l) ? l.GetString()
                              : slug;
-                    var proxyUrl = item.TryGetProperty("proxy_url", out var p) ? p.GetString() : null;
                     var baseUrl = item.TryGetProperty("endpoint_url", out var e) ? e.GetString()
                                 : item.TryGetProperty("base_url", out var b) ? b.GetString()
                                 : null;
+                    var openapiUrl = item.TryGetProperty("openapi_url", out var oa) ? oa.GetString() : null;
 
                     if (string.IsNullOrWhiteSpace(slug)) continue;
-                    slugs.Add(slug);
+                    hintRequests.Add(new ServiceHintRequest(slug, serviceId, name, openapiUrl));
 
                     sb.Append($"- **{name ?? slug}** (slug: `{slug}`)");
                     if (!string.IsNullOrWhiteSpace(baseUrl))
@@ -580,7 +586,7 @@ public static class NyxIdChatEndpoints
             // Parse failure — return what we have
         }
 
-        if (slugs.Count == 0)
+        if (hintRequests.Count == 0)
         {
             sb.AppendLine("No services connected yet. Use nyxid_catalog to browse and connect services.");
         }
@@ -588,8 +594,16 @@ public static class NyxIdChatEndpoints
         sb.AppendLine("Use nyxid_proxy with slug + path to call any service. Use code_execute for sandbox.");
         sb.AppendLine("</connected-services>");
 
-        // Append API hints for connected services
-        var hints = NyxIdServiceApiHints.BuildHintsSection(slugs);
+        string hints;
+        if (specSource is not null && !string.IsNullOrWhiteSpace(accessToken))
+        {
+            hints = await NyxIdServiceApiHints.BuildHintsSectionAsync(hintRequests, specSource, accessToken, ct);
+        }
+        else
+        {
+            hints = NyxIdServiceApiHints.BuildHintsSection(hintRequests.Select(r => r.Slug));
+        }
+
         if (!string.IsNullOrEmpty(hints))
         {
             sb.AppendLine();
