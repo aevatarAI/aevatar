@@ -591,28 +591,26 @@ public class NyxIdChatEndpointsCoverageTests
     }
 
     [Fact]
-    public void BuildConnectedServicesContext_ShouldRenderServiceHintsAndFallbackMessage()
+    public async Task BuildConnectedServicesContext_ShouldRenderServiceHintsAndFallbackMessage()
     {
-        var method = EndpointsType.GetMethod("BuildConnectedServicesContext", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         var arrayPayload = """
             [
               {"slug":"calendar","label":"Calendar","base_url":"https://api.example.com"}
             ]
             """;
-        var arrayContext = (string)method.Invoke(null, [arrayPayload])!;
+        var arrayContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            arrayPayload, null, "", CancellationToken.None);
         arrayContext.Should().Contain("calendar");
         arrayContext.Should().Contain("Use nyxid_proxy");
 
-        var emptyContext = (string)method.Invoke(null, ["""{"services":[]}"""])!;
+        var emptyContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            """{"services":[]}""", null, "", CancellationToken.None);
         emptyContext.Should().Contain("No services connected yet");
     }
 
     [Fact]
-    public void BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
+    public async Task BuildConnectedServicesContext_ShouldHandleDataShape_AndInvalidJson()
     {
-        var method = EndpointsType.GetMethod("BuildConnectedServicesContext", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         var dataPayload = """
             {
               "data":[
@@ -620,11 +618,13 @@ public class NyxIdChatEndpointsCoverageTests
               ]
             }
             """;
-        var dataContext = (string)method.Invoke(null, [dataPayload])!;
+        var dataContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            dataPayload, null, "", CancellationToken.None);
         dataContext.Should().Contain("GitHub");
         dataContext.Should().Contain("https://api.github.com");
 
-        var invalidContext = (string)method.Invoke(null, ["{ invalid"])!;
+        var invalidContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            "{ invalid", null, "", CancellationToken.None);
         invalidContext.Should().Contain("No services connected yet");
         invalidContext.Should().Contain("Use nyxid_proxy");
     }

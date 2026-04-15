@@ -17,9 +17,6 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
         .GetMethod("TryExtractJwtSubject", BindingFlags.NonPublic | BindingFlags.Static)
         ?? throw new InvalidOperationException("TryExtractJwtSubject not found.");
 
-    private static readonly MethodInfo BuildConnectedServicesContextMethod = typeof(NyxIdChatEndpoints)
-        .GetMethod("BuildConnectedServicesContext", BindingFlags.NonPublic | BindingFlags.Static)
-        ?? throw new InvalidOperationException("BuildConnectedServicesContext not found.");
 
     [Theory]
     [InlineData("image", ChatContentPartKind.Image)]
@@ -80,10 +77,9 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
     }
 
     [Fact]
-    public void BuildConnectedServicesContext_ShouldUseFallbackNamesAndNoServicesMessage()
+    public async Task BuildConnectedServicesContext_ShouldUseFallbackNamesAndNoServicesMessage()
     {
-        var context = InvokePrivateStatic<string>(
-            BuildConnectedServicesContextMethod,
+        var context = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
             """
             {
               "data": [
@@ -99,7 +95,8 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
                 }
               ]
             }
-            """);
+            """,
+            null, "", CancellationToken.None);
 
         context.Should().Contain("Calendar");
         context.Should().Contain("docs");
@@ -107,9 +104,8 @@ public sealed class NyxIdChatEndpointsHelperCoverageTests
         context.Should().Contain("https://docs.example.com");
         context.Should().Contain("nyxid_proxy");
 
-        var emptyContext = InvokePrivateStatic<string>(
-            BuildConnectedServicesContextMethod,
-            "{\"services\":[]}");
+        var emptyContext = await NyxIdChatEndpoints.BuildConnectedServicesContextAsync(
+            "{\"services\":[]}", null, "", CancellationToken.None);
         emptyContext.Should().Contain("No services connected yet");
     }
 
