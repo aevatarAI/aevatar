@@ -1,7 +1,5 @@
-import { ProCard } from '@ant-design/pro-components';
-import { Button, Input, Select, Space, Typography } from 'antd';
+import { Button, Input, Select, Space } from 'antd';
 import React, { useEffect, useMemo } from 'react';
-import { moduleCardProps } from '@/shared/ui/proComponents';
 import {
   applyGovernanceServiceSelection,
   findGovernanceServiceOption,
@@ -68,7 +66,14 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
   }, [draft, onChange, selectedServiceOption]);
 
   return (
-    <ProCard {...moduleCardProps}>
+    <div
+      style={{
+        background: '#ffffff',
+        border: '1px solid #e8e8e8',
+        borderRadius: 12,
+        padding: 16,
+      }}
+    >
       <Space wrap>
         <Input
           placeholder="tenantId (scopeId)"
@@ -175,15 +180,7 @@ const GovernanceQueryCard: React.FC<GovernanceQueryCardProps> = ({
         </Button>
         {onReset ? <Button onClick={onReset}>Reset</Button> : null}
       </Space>
-      <Typography.Text
-        type="secondary"
-        style={{ display: 'block', marginTop: 12 }}
-      >
-        {serviceSearchEnabled
-          ? 'Select a service to hydrate the identity fields for this Governance view.'
-          : 'This Governance view needs tenantId and namespace first. Most user flows should stay on Project pages or open this page from Services.'}
-      </Typography.Text>
-    </ProCard>
+    </div>
   );
 };
 

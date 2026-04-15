@@ -20,6 +20,10 @@ cp .env.example .env.local
 pnpm install
 ```
 
+`max` is provided by the local `@umijs/max` dependency in this workspace. Do not assume a global `max` CLI is installed.
+Use `pnpm dev`, `pnpm build`, `pnpm preview`, or `pnpm exec max <command>` from `apps/aevatar-console-web`.
+If you see `max: command not found`, install dependencies first with `pnpm install` in this directory.
+
 `pnpm dev` reads proxy targets from `.env.local`. If you also want your shell to reuse the same values for manually starting backend processes, export the file first:
 
 ```bash
@@ -40,12 +44,14 @@ NYXID_BASE_URL=http://127.0.0.1:3001
 NYXID_CLIENT_ID=your-public-client-id
 NYXID_REDIRECT_URI=http://127.0.0.1:5173/auth/callback
 NYXID_SCOPE="openid profile email"
+ORNN_BASE_URL=https://ornn.chrono-ai.fun
 # Optional when deploying under a sub-path such as /console/
 AEVATAR_CONSOLE_PUBLIC_PATH=/
 ```
 
 `NYXID_BASE_URL` and `NYXID_CLIENT_ID` are required. The console no longer ships a baked-in NyxID tenant or client id.
 `NYXID_REDIRECT_URI` must exactly match the public client registration in NyxID.
+`ORNN_BASE_URL` controls the Ornn skills endpoint used by Studio Settings. If you omit it, the frontend falls back to the public Ornn instance.
 If you change `.env.local`, restart `pnpm dev` so Umi reloads the injected env values.
 
 ## Available scripts
@@ -83,6 +89,7 @@ env Cli__App__NyxId__Enabled=true Cli__App__ScopeId=aevatar \
 cd apps/aevatar-console-web
 AEVATAR_API_TARGET=http://127.0.0.1:5080 \
 AEVATAR_STUDIO_API_TARGET=http://127.0.0.1:6690 \
+ORNN_BASE_URL=https://ornn.chrono-ai.fun \
 pnpm dev
 ```
 

@@ -164,7 +164,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
               marginBottom: 12,
             }}
           >
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Space orientation="vertical" size={10} style={{ width: '100%' }}>
               <Space wrap size={[8, 8]}>
                 <Tag color="gold">
                   <PauseCircleOutlined /> {formatInterventionLabel(showIntervention.kind)}
@@ -273,7 +273,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
         ) : null}
 
         {focusNode ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={12} style={{ width: '100%' }}>
             <Card
               size="small"
               styles={{ body: { padding: 14 } }}
@@ -283,7 +283,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 borderRadius: 4,
               }}
             >
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={10} style={{ width: '100%' }}>
                 <Space wrap size={[8, 8]}>
                   <Tag color="processing">{focusNode.lane}</Tag>
                   <Tag color={resolveMissionStatusTone(token, focusNode.status)}>
@@ -342,7 +342,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 borderRadius: 4,
               }}
             >
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                 <Space size={8}>
                   <AlertOutlined />
                   <Typography.Text strong style={{ color: token.colorTextHeading }}>
@@ -396,7 +396,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 borderRadius: 4,
               }}
             >
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                 <Space size={8}>
                   <ToolOutlined />
                   <Typography.Text strong style={{ color: token.colorTextHeading }}>
@@ -447,7 +447,7 @@ const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 borderRadius: 4,
               }}
             >
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                 <Typography.Text strong style={{ color: token.colorTextHeading }}>
                   Reasoning Summary
                 </Typography.Text>

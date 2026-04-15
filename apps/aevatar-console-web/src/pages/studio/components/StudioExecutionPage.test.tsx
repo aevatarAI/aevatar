@@ -58,6 +58,7 @@ function createBaseProps(overrides = {}) {
     savePending: false,
     canSaveWorkflow: true,
     runPending: false,
+    canOpenRunWorkflow: true,
     canRunWorkflow: true,
     executionCanStop: true,
     executionStopPending: false,
@@ -78,6 +79,18 @@ function createBaseProps(overrides = {}) {
 }
 
 describe('StudioExecutionPage', () => {
+  it('renders the current execution runtime chrome', () => {
+    render(
+      React.createElement(StudioExecutionPage, createBaseProps() as any),
+    );
+
+    expect(screen.getByText('运行中')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新运行' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /停\s*止/ })).toBeInTheDocument();
+    expect(screen.getByText('执行日志')).toBeInTheDocument();
+    expect(screen.getByLabelText('选择测试运行')).toBeInTheDocument();
+  });
+
   it('shows the selected execution actor id and lets users copy it', async () => {
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {

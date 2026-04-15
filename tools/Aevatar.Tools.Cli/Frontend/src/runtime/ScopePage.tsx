@@ -32,6 +32,11 @@ import { createPortal } from 'react-dom';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
+const NYXID_CHAT_SERVICE_ID = 'nyxid-chat';
+const STREAMING_PROXY_SERVICE_ID = 'streaming-proxy';
+const STREAMING_PROXY_FIRST_REPLY_BASE_DELAY_MS = 1500;
+const STREAMING_PROXY_BETWEEN_REPLY_BASE_DELAY_MS = 2200;
+const STREAMING_PROXY_MAX_REPLY_DELAY_MS = 4200;
 const USER_LLM_ROUTE_GATEWAY = '';
 
 /**
@@ -87,6 +92,10 @@ function genId() {
   return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2);
 }
 
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function normalizeUserLlmRoute(value: unknown): string {
   const normalized = String(value || '').trim();
   if (!normalized || /^auto$/i.test(normalized) || /^gateway$/i.test(normalized)) {
@@ -112,6 +121,16 @@ function routePathFromProviderSlug(slug: string) {
 function trimOptional(value: string | undefined) {
   const trimmed = String(value || '').trim();
   return trimmed || undefined;
+}
+
+function buildStreamingProxyConversationId(roomId: string) {
+  return `${STREAMING_PROXY_SERVICE_ID}:${roomId}`;
+}
+
+function tryParseStreamingProxyRoomId(conversationId?: string | null) {
+  if (!conversationId) return null;
+  const prefix = `${STREAMING_PROXY_SERVICE_ID}:`;
+  return conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : null;
 }
 
 /**
@@ -193,6 +212,64 @@ function describeRoute(route: string | undefined, routeOptions: Array<{ value: s
   }
 
   return routeOptions.find(option => option.value === route)?.label || route;
+}
+
+function buildStreamingProxyProgressMessage(
+  joinedParticipants: Iterable<string>,
+  phase: 'starting' | 'topic-started' | 'participants-joined',
+) {
+  const participants = Array.from(joinedParticipants).filter(Boolean);
+  if (participants.length > 0) {
+    return `正在让这些 participants 参与讨论：${participants.join('、')}。回复生成中...`;
+  }
+
+  if (phase === 'topic-started') {
+    return '话题已经发到 room 里了，正在连接 Nyx participants...';
+  }
+
+  return '正在初始化 Streaming Proxy 讨论...';
+}
+
+function buildStreamingProxyTurnMessage(participantName: string, turnIndex: number) {
+  const name = participantName.trim() || '下一位 participant';
+  if (turnIndex <= 0) {
+    return `${name} 正在整理开场观点...`;
+  }
+
+  return `${name} 正在斟酌上一轮观点，准备继续回应...`;
+}
+
+function buildStreamingProxyWaitingMessage() {
+  return '房间里短暂停顿了一下，下一位 participant 正在组织回应...';
+}
+
+function getStreamingProxyRevealDelay(content: string, turnIndex: number) {
+  const trimmed = content.trim();
+  const baseDelay = turnIndex <= 0
+    ? STREAMING_PROXY_FIRST_REPLY_BASE_DELAY_MS
+    : STREAMING_PROXY_BETWEEN_REPLY_BASE_DELAY_MS;
+  const lengthDelay = Math.min(1400, trimmed.length * 4);
+  const punctuationMatches = trimmed.match(/[，。！？；：,.!?;:]/g);
+  const punctuationDelay = Math.min(500, (punctuationMatches?.length ?? 0) * 70);
+  return Math.min(STREAMING_PROXY_MAX_REPLY_DELAY_MS, baseDelay + lengthDelay + punctuationDelay);
+}
+
+function isStreamingProxyServiceCandidate(
+  serviceId: string,
+  label: string,
+  endpoints: Array<{ endpointId: string; displayName: string; kind: string }>,
+) {
+  if (serviceId === STREAMING_PROXY_SERVICE_ID) return true;
+
+  const normalizedLabel = label.trim().toLowerCase();
+  if (normalizedLabel.includes('streamingproxy') || normalizedLabel.includes('streaming proxy')) {
+    return true;
+  }
+
+  const endpointIds = new Set(endpoints.map(endpoint => endpoint.endpointId.trim().toLowerCase()));
+  return endpointIds.has('initializeroom')
+    && endpointIds.has('postmessage')
+    && endpointIds.has('joinroom');
 }
 
 type LlmModelGroup = {
@@ -503,6 +580,45 @@ function getThinkingDurationLabel(msg: ChatMessage): string | null {
   return `${(durationMs / 1000).toFixed(3)} 秒`;
 }
 
+function hashAssistantIdentity(value: string) {
+  let hash = 0;
+  for (const ch of value) {
+    hash = ((hash << 5) - hash) + ch.charCodeAt(0);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function getAssistantBadgeClasses(seed: string) {
+  const variants = [
+    'bg-gradient-to-br from-sky-500 to-cyan-500 text-white',
+    'bg-gradient-to-br from-emerald-500 to-teal-500 text-white',
+    'bg-gradient-to-br from-amber-500 to-orange-500 text-white',
+    'bg-gradient-to-br from-rose-500 to-pink-500 text-white',
+    'bg-gradient-to-br from-indigo-500 to-violet-500 text-white',
+    'bg-gradient-to-br from-fuchsia-500 to-purple-500 text-white',
+  ];
+  return variants[hashAssistantIdentity(seed) % variants.length];
+}
+
+function getAssistantBadgeLabel(name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return 'AI';
+  }
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return words
+      .slice(0, 2)
+      .map(word => Array.from(word)[0] ?? '')
+      .join('')
+      .toUpperCase();
+  }
+
+  return Array.from(trimmed).slice(0, 2).join('').toUpperCase();
+}
+
 // ── Step Indicator ─────────────────────────────────────────────────────────────
 
 function StepIndicator({ step }: { step: StepInfo }) {
@@ -782,6 +898,18 @@ function ChatBubble({
   const hasTools = msg.toolCalls && msg.toolCalls.length > 0;
   const displayContent = getVisibleMessageContent(msg);
   const thinkingDurationLabel = getThinkingDurationLabel(msg);
+  const authorName = !isUser ? msg.authorName?.trim() : '';
+  const isParticipantMessage = !isUser && !!authorName && !/^streaming proxy$/i.test(authorName);
+  const assistantIdentity = msg.authorId?.trim() || authorName || 'assistant';
+  const assistantBadgeClass = isParticipantMessage
+    ? getAssistantBadgeClasses(assistantIdentity)
+    : 'bg-gradient-to-br from-violet-500 to-indigo-600 text-white';
+  const assistantBadgeLabel = isParticipantMessage
+    ? getAssistantBadgeLabel(authorName)
+    : '';
+  const assistantCardClass = isParticipantMessage
+    ? 'rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm shadow-slate-200/70'
+    : 'rounded-2xl border border-[#E6E3DE] bg-white/90 px-4 py-3 shadow-sm shadow-stone-200/60';
 
   useEffect(() => {
     return () => {
@@ -979,175 +1107,197 @@ function ChatBubble({
   }
 
   return (
-    <div className="max-w-[94%]">
-      {msg.thinking && (
-        <ThinkingBlock
-          text={msg.thinking}
-          isStreaming={msg.status === 'streaming'}
-          durationLabel={thinkingDurationLabel}
-        />
-      )}
-
-      {(hasSteps || hasTools) && (
-        <div className="mb-2">
-          <button
-            type="button"
-            onClick={() => setStepsOpen(v => !v)}
-            className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 py-1"
-          >
-            <ChevronDown size={15} className={`transition-transform ${stepsOpen ? 'rotate-180' : ''}`} />
-            <span>
-              {(msg.steps?.length || 0) + (msg.toolCalls?.length || 0)} action{((msg.steps?.length || 0) + (msg.toolCalls?.length || 0)) > 1 ? 's' : ''}
-            </span>
-            {(msg.steps?.some(s => s.status === 'running') || msg.toolCalls?.some(t => t.status === 'running')) && (
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
-            )}
-          </button>
-          {stepsOpen && (
-            <div className="pl-1 border-l-2 border-gray-100 ml-1.5 mb-2">
-              {msg.steps?.map((step, i) => <StepIndicator key={`s-${i}`} step={step} />)}
-              {msg.toolCalls?.map((tool, i) => <ToolCallIndicator key={`t-${i}`} tool={tool} />)}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="text-[14px] leading-[2.05] text-gray-900">
-        <div className="break-words">
-          {renderContent(displayContent, 'assistant')}
-          {msg.status === 'streaming' && displayContent && (
-            <span className="ml-0.5 inline-block h-[18px] w-[2px] animate-blink align-text-bottom bg-gray-400" />
-          )}
-        </div>
-        {msg.mediaParts?.map((part, i) => (
-          <MediaPartRenderer key={`media-${i}`} part={part} />
-        ))}
-        {!displayContent && !msg.mediaParts?.length && msg.status === 'streaming' && (
-          <div className="flex items-center gap-1.5 py-2">
-            <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />
-            <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '400ms' }} />
-          </div>
-        )}
-      </div>
-
-      {msg.status === 'error' && msg.error && (
-        <div className="mt-3 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2.5">
-          <svg className="mt-0.5 h-4 w-4 shrink-0 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          <span className="text-[13px] text-red-600">{msg.error}</span>
-        </div>
-      )}
-
-      {msg.pendingHumanInput && (() => {
-        // Resolve choices: prefer structured options, fall back to prompt parsing
-        const structuredOptions = msg.pendingHumanInput.options;
-        const parsed = structuredOptions && structuredOptions.length >= 2
-          ? { questionText: msg.pendingHumanInput.prompt, choices: structuredOptions.map((o, i) => ({ key: String(i + 1), label: o })) }
-          : parseChoicesFromPrompt(msg.pendingHumanInput.prompt);
-        const hasChoices = parsed.choices.length >= 2;
-
-        return hasChoices ? (
-          <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
-            <div className="flex items-center gap-2 mb-2.5">
-              <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="text-[13px] font-medium text-blue-700">Choose an option</span>
-            </div>
-            {parsed.questionText && (
-              <div className="text-[13px] text-blue-600 mb-3 whitespace-pre-wrap">{parsed.questionText}</div>
-            )}
-            <div className="flex flex-col gap-1.5">
-              {parsed.choices.map((choice) => (
-                <button
-                  key={choice.key}
-                  onClick={() => onResumeHumanInput?.(msg, choice.key)}
-                  className="w-full text-left px-3 py-2 rounded-xl border border-blue-200 bg-white text-[13px] text-gray-700 hover:bg-blue-100 hover:border-blue-300 transition-colors flex items-center gap-2.5"
-                >
-                  <span className="flex-shrink-0 w-6 h-6 rounded-lg bg-blue-100 text-blue-600 text-[12px] font-semibold flex items-center justify-center">
-                    {choice.key}
-                  </span>
-                  <span>{choice.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+    <div className="flex gap-3 max-w-[94%]">
+      <div className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${assistantBadgeClass}`}>
+        {isParticipantMessage ? (
+          <span className="text-[10px] font-semibold tracking-wide">{assistantBadgeLabel}</span>
         ) : (
-          <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <svg className="h-4 w-4 text-blue-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-              </svg>
-              <span className="text-[13px] text-blue-600">Waiting for your input — type your answer below</span>
-            </div>
-          </div>
-        );
-      })()}
+          <svg className="h-3.5 w-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+          </svg>
+        )}
+      </div>
 
-      {msg.pendingApproval && (
-        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <div className="flex items-center gap-2 mb-2">
-            <svg className="h-4 w-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" />
-            </svg>
-            <span className="text-[13px] font-medium text-amber-700">Tool Approval Required</span>
-          </div>
-          <div className="text-[12px] text-amber-600 mb-3">
-            <span className="font-mono bg-amber-100 px-1.5 py-0.5 rounded">{msg.pendingApproval.toolName}</span>
-            {msg.pendingApproval.isDestructive && (
-              <span className="ml-2 text-red-500 text-[11px]">destructive</span>
+      <div className={`min-w-0 max-w-[85%] flex-1 ${assistantCardClass}`}>
+        {msg.thinking && (
+          <ThinkingBlock
+            text={msg.thinking}
+            isStreaming={msg.status === 'streaming'}
+            durationLabel={thinkingDurationLabel}
+          />
+        )}
+
+        {authorName && (
+          <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-gray-900">
+            <span>{authorName}</span>
+            {isParticipantMessage && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+                Participant
+              </span>
             )}
           </div>
-          <div className="flex gap-2">
+        )}
+
+        {(hasSteps || hasTools) && (
+          <div className="mb-2">
             <button
-              onClick={() => onApprove?.(msg.pendingApproval!.requestId, true)}
-              className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-green-500 text-white hover:bg-green-600 transition-colors"
+              type="button"
+              onClick={() => setStepsOpen(v => !v)}
+              className="flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-600 py-1"
             >
-              Approve
+              <ChevronDown size={15} className={`transition-transform ${stepsOpen ? 'rotate-180' : ''}`} />
+              <span>
+                {(msg.steps?.length || 0) + (msg.toolCalls?.length || 0)} action{((msg.steps?.length || 0) + (msg.toolCalls?.length || 0)) > 1 ? 's' : ''}
+              </span>
+              {(msg.steps?.some(s => s.status === 'running') || msg.toolCalls?.some(t => t.status === 'running')) && (
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+              )}
             </button>
-            <button
-              onClick={() => onApprove?.(msg.pendingApproval!.requestId, false)}
-              className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-gray-200 text-gray-700 hover:bg-gray-300 transition-colors"
+            {stepsOpen && (
+              <div className="pl-1 border-l-2 border-gray-100 ml-1.5 mb-2">
+                {msg.steps?.map((step, i) => <StepIndicator key={`s-${i}`} step={step} />)}
+                {msg.toolCalls?.map((tool, i) => <ToolCallIndicator key={`t-${i}`} tool={tool} />)}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="text-[14px] leading-[2.05] text-gray-900">
+          <div className="break-words">
+            {renderContent(displayContent, 'assistant')}
+            {msg.status === 'streaming' && displayContent && (
+              <span className="ml-0.5 inline-block h-[18px] w-[2px] animate-blink align-text-bottom bg-gray-400" />
+            )}
+          </div>
+          {msg.mediaParts?.map((part, i) => (
+            <MediaPartRenderer key={`media-${i}`} part={part} />
+          ))}
+          {!displayContent && !msg.mediaParts?.length && msg.status === 'streaming' && (
+            <div className="flex items-center gap-1.5 py-2">
+              <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '200ms' }} />
+              <span className="block h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" style={{ animationDelay: '400ms' }} />
+            </div>
+          )}
+        </div>
+
+        {msg.status === 'error' && msg.error && (
+          <div className="mt-3 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-3 py-2.5">
+            <svg className="mt-0.5 h-4 w-4 shrink-0 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <span className="text-[13px] text-red-600">{msg.error}</span>
+          </div>
+        )}
+
+        {msg.pendingHumanInput && (() => {
+          const structuredOptions = msg.pendingHumanInput.options;
+          const parsed = structuredOptions && structuredOptions.length >= 2
+            ? { questionText: msg.pendingHumanInput.prompt, choices: structuredOptions.map((option, index) => ({ key: String(index + 1), label: option })) }
+            : parseChoicesFromPrompt(msg.pendingHumanInput.prompt);
+          const hasChoices = parsed.choices.length >= 2;
+
+          return hasChoices ? (
+            <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+              <div className="mb-2.5 flex items-center gap-2">
+                <svg className="h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-[13px] font-medium text-blue-700">Choose an option</span>
+              </div>
+              {parsed.questionText && (
+                <div className="mb-3 whitespace-pre-wrap text-[13px] text-blue-600">{parsed.questionText}</div>
+              )}
+              <div className="flex flex-col gap-1.5">
+                {parsed.choices.map(choice => (
+                  <button
+                    key={choice.key}
+                    onClick={() => onResumeHumanInput?.(msg, choice.key)}
+                    className="flex w-full items-center gap-2.5 rounded-xl border border-blue-200 bg-white px-3 py-2 text-left text-[13px] text-gray-700 transition-colors hover:border-blue-300 hover:bg-blue-100"
+                  >
+                    <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg bg-blue-100 text-[12px] font-semibold text-blue-600">
+                      {choice.key}
+                    </span>
+                    <span>{choice.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <svg className="h-4 w-4 animate-pulse text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+                </svg>
+                <span className="text-[13px] text-blue-600">Waiting for your input — type your answer below</span>
+              </div>
+            </div>
+          );
+        })()}
+
+        {msg.pendingApproval && (
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+            <div className="mb-2 flex items-center gap-2">
+              <svg className="h-4 w-4 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" />
+              </svg>
+              <span className="text-[13px] font-medium text-amber-700">Tool Approval Required</span>
+            </div>
+            <div className="mb-3 text-[12px] text-amber-600">
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 font-mono">{msg.pendingApproval.toolName}</span>
+              {msg.pendingApproval.isDestructive && (
+                <span className="ml-2 text-[11px] text-red-500">destructive</span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onApprove?.(msg.pendingApproval!.requestId, true)}
+                className="rounded-lg bg-green-500 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-green-600"
+              >
+                Approve
+              </button>
+              <button
+                onClick={() => onApprove?.(msg.pendingApproval!.requestId, false)}
+                className="rounded-lg bg-gray-200 px-3 py-1.5 text-[12px] font-medium text-gray-700 transition-colors hover:bg-gray-300"
+              >
+                Deny
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="relative mt-3.5 flex items-center gap-1.5">
+          <MessageIconButton
+            title={activeAction === 'copy' ? '已复制' : '复制回复'}
+            active={activeAction === 'copy'}
+            onClick={() => { void handleCopyClick('copy', onCopy); }}
+          >
+            <CopyIcon size={17} />
+          </MessageIconButton>
+          {canRegenerate && (
+            <MessageIconButton
+              title="重新生成回复"
+              active={activeAction === 'regenerate'}
+              onClick={() => {
+                onRegenerate();
+                showActionFeedback('regenerate');
+              }}
             >
-              Deny
-            </button>
+              <RotateCcw size={17} />
+            </MessageIconButton>
+          )}
+          <div ref={menuTriggerRef} className="relative">
+            <MessageIconButton
+              title="更多操作"
+              emphasis
+              onClick={() => setMenuOpen(v => !v)}
+            >
+              <MoreHorizontal size={17} />
+            </MessageIconButton>
           </div>
         </div>
-      )}
-
-      <div className="relative mt-3.5 flex items-center gap-1.5">
-        <MessageIconButton
-          title={activeAction === 'copy' ? '已复制' : '复制回复'}
-          active={activeAction === 'copy'}
-          onClick={() => { void handleCopyClick('copy', onCopy); }}
-        >
-          <CopyIcon size={17} />
-        </MessageIconButton>
-        {canRegenerate && (
-          <MessageIconButton
-            title="重新生成回复"
-            active={activeAction === 'regenerate'}
-            onClick={() => {
-              onRegenerate();
-              showActionFeedback('regenerate');
-            }}
-          >
-            <RotateCcw size={17} />
-          </MessageIconButton>
-        )}
-        <div ref={menuTriggerRef} className="relative">
-          <MessageIconButton
-            title="更多操作"
-            emphasis
-            onClick={() => setMenuOpen(v => !v)}
-          >
-            <MoreHorizontal size={17} />
-          </MessageIconButton>
-        </div>
+        {menuOpen ? renderMenu() : null}
       </div>
-      {menuOpen ? renderMenu() : null}
     </div>
   );
 }
@@ -1177,6 +1327,7 @@ function ServiceSelector({
 }
 
 function ConversationLlmConfigBar({
+  mode = 'conversation',
   routeValue,
   routeOptions,
   modelValue,
@@ -1190,6 +1341,7 @@ function ConversationLlmConfigBar({
   onModelChange,
   onReset,
 }: {
+  mode?: 'conversation' | 'streaming-proxy';
   routeValue: string | undefined;
   routeOptions: Array<{ value: string; label: string }>;
   modelValue: string | undefined;
@@ -1212,6 +1364,18 @@ function ConversationLlmConfigBar({
   const selectedModel = trimOptional(modelValue) || effectiveModel;
   const routeSelectValue = encodeRouteSelectValue(routeValue);
   const normalizedQuery = query.trim().toLowerCase();
+  const isStreamingProxyMode = mode === 'streaming-proxy';
+  const panelTitle = isStreamingProxyMode ? 'Room model preferences' : 'Conversation model';
+  const routeLabel = isStreamingProxyMode ? 'Preferred route' : 'Route';
+  const defaultRouteLabel = isStreamingProxyMode ? 'Room default' : 'Config default';
+  const emptyStateLabel = isStreamingProxyMode
+    ? `No room models for ${effectiveRouteLabel}`
+    : `No models for ${effectiveRouteLabel}`;
+  const inlineRouteLabel = isStreamingProxyMode
+    ? `room prefers ${effectiveRouteLabel}`
+    : effectiveRoute === USER_LLM_ROUTE_GATEWAY
+      ? effectiveRouteLabel
+      : `via ${effectiveRouteLabel}`;
   const filteredGroups = modelGroups
     .map(group => ({
       ...group,
@@ -1308,7 +1472,7 @@ function ConversationLlmConfigBar({
         } : { visibility: 'hidden', top: 0, left: 0 }}
       >
         <div className="scope-chat-llm-panel-header">
-          <div className="scope-chat-llm-panel-title">Conversation model</div>
+          <div className="scope-chat-llm-panel-title">{panelTitle}</div>
           {hasOverride ? (
             <button
               type="button"
@@ -1322,6 +1486,11 @@ function ConversationLlmConfigBar({
             </button>
           ) : null}
         </div>
+        {isStreamingProxyMode ? (
+          <div className="px-4 pb-2 text-[12px] text-[#8A877F]">
+            Used to rank room participants, not to direct-chat a single node.
+          </div>
+        ) : null}
 
         <div className="scope-chat-llm-search">
           <Search size={15} className="scope-chat-llm-search-icon" />
@@ -1340,13 +1509,13 @@ function ConversationLlmConfigBar({
         </div>
 
         <div className="scope-chat-llm-route-row">
-          <span className="scope-chat-llm-route-label">Route</span>
+          <span className="scope-chat-llm-route-label">{routeLabel}</span>
           <select
             value={routeSelectValue}
             onChange={event => onRouteChange(decodeRouteSelectValue(event.target.value))}
             className="scope-chat-llm-route-select"
           >
-            <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>Config default</option>
+            <option value={CONVERSATION_ROUTE_DEFAULT_VALUE}>{defaultRouteLabel}</option>
             {routeOptions.map(option => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -1371,7 +1540,7 @@ function ConversationLlmConfigBar({
           ) : null}
 
           {!modelsLoading && filteredGroups.length === 0 ? (
-            <div className="scope-chat-llm-empty">No models for {effectiveRouteLabel}</div>
+            <div className="scope-chat-llm-empty">{emptyStateLabel}</div>
           ) : null}
 
           {filteredGroups.map(group => (
@@ -1416,7 +1585,7 @@ function ConversationLlmConfigBar({
           className={`scope-chat-llm-chevron shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
         />
       </button>
-      <span className="scope-chat-llm-inline-route">{effectiveRoute === USER_LLM_ROUTE_GATEWAY ? effectiveRouteLabel : `via ${effectiveRouteLabel}`}</span>
+      <span className="scope-chat-llm-inline-route">{inlineRouteLabel}</span>
       {renderPanel()}
     </div>
   );
@@ -1747,9 +1916,10 @@ export default function ScopePage() {
   // Services
   const [services, setServices] = useState<ServiceOption[]>([
     { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-    { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+    { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+    { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
   ]);
-  const [selectedService, setSelectedService] = useState('nyxid-chat');
+  const [selectedService, setSelectedService] = useState(NYXID_CHAT_SERVICE_ID);
 
 
   // ── Onboarding: frontend-driven state machine ──
@@ -1757,6 +1927,7 @@ export default function ScopePage() {
 
   // NyxID Chat: track whether we've ensured the scope binding this session
   const nyxidChatBoundRef = useRef(false);
+  const streamingProxyRoomRef = useRef<string | null>(null);
 
   // Chat
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1791,7 +1962,8 @@ export default function ScopePage() {
     api.scope.listServices(scopeId).then(svcList => {
       const base: ServiceOption[] = [
         { id: 'onboarding', label: 'Onboarding', kind: 'onboarding', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
-        { id: 'nyxid-chat', label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+        { id: NYXID_CHAT_SERVICE_ID, label: 'NyxID Chat', kind: 'nyxid-chat', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
+        { id: STREAMING_PROXY_SERVICE_ID, label: 'Streaming Proxy', kind: 'streaming-proxy', endpoints: [{ endpointId: 'chat', displayName: 'Chat', kind: 'chat' }] },
       ];
       if (Array.isArray(svcList)) {
         const builtinIds = new Set(base.map(b => b.id));
@@ -1803,9 +1975,12 @@ export default function ScopePage() {
             displayName: ep?.displayName || ep?.DisplayName || ep?.endpointId || '',
             kind: ep?.kind || ep?.Kind || 'command',
           }));
+          const kind: ServiceOption['kind'] = isStreamingProxyServiceCandidate(String(sid || ''), String(name || ''), eps)
+            ? 'streaming-proxy'
+            : 'service';
           const isDuplicate = builtinIds.has(sid)
             || base.some(b => b.label === name);
-          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind: 'service', endpoints: eps });
+          if (sid && !isDuplicate) base.push({ id: sid, label: name, kind, endpoints: eps });
         }
       }
       setServices(base);
@@ -1964,6 +2139,7 @@ export default function ScopePage() {
       setMessages([]);
       setDebugEvents([]);
       setActiveConvId(null);
+      streamingProxyRoomRef.current = null;
       setComposerText('');
       setConversationRoute(undefined);
       setConversationModel(undefined);
@@ -1973,6 +2149,7 @@ export default function ScopePage() {
   // Reset NyxID Chat binding flag when scope changes
   useEffect(() => {
     nyxidChatBoundRef.current = false;
+    streamingProxyRoomRef.current = null;
     setOnboardingState(null);
   }, [scopeId]);
 
@@ -1986,7 +2163,13 @@ export default function ScopePage() {
 
   // Save current conversation to chrono-storage (called after streaming completes)
   const saveCurrentConversation = useCallback((msgs: ChatMessage[], actorIdOverride?: string) => {
-    const actorId = trimOptional(actorIdOverride) || trimOptional(activeConvId ?? undefined);
+    const actorId = trimOptional(actorIdOverride)
+      || trimOptional(activeConvId ?? undefined)
+      || (
+        activeService.kind === 'streaming-proxy' && streamingProxyRoomRef.current
+          ? buildStreamingProxyConversationId(streamingProxyRoomRef.current)
+          : undefined
+      );
     if (!scopeId || msgs.length === 0 || !actorId) return;
     const convId = actorId;
     const firstUserMsg = msgs.find(m => m.role === 'user');
@@ -1997,6 +2180,8 @@ export default function ScopePage() {
       .map(m => ({
         id: m.id, role: m.role, content: m.content, timestamp: m.timestamp,
         status: m.status === 'streaming' ? 'complete' : m.status,
+        ...(m.authorId ? { authorId: m.authorId } : {}),
+        ...(m.authorName ? { authorName: m.authorName } : {}),
         ...(m.error ? { error: m.error } : {}),
         ...(m.thinking ? { thinking: m.thinking } : {}),
         ...(m.attachments?.length ? { attachments: m.attachments.map(({ file, previewUrl, ...rest }) => rest) } : {}),
@@ -2027,6 +2212,18 @@ export default function ScopePage() {
     }, 500);
   }, [scopeId, activeConvId, activeService, conversationModel, conversationRoute, conversations]);
 
+  const ensureStreamingProxyRoom = useCallback(async () => {
+    const existingRoomId = streamingProxyRoomRef.current || tryParseStreamingProxyRoomId(activeConvId);
+    if (existingRoomId) {
+      streamingProxyRoomRef.current = existingRoomId;
+      return existingRoomId;
+    }
+
+    const created = await api.streamingProxy.createRoom(scopeId, 'Console Chat');
+    streamingProxyRoomRef.current = created.roomId;
+    return created.roomId;
+  }, [scopeId, activeConvId]);
+
   const persistConversationOverrides = useCallback((
     nextRoute: string | undefined,
     nextModel: string | undefined,
@@ -2047,6 +2244,8 @@ export default function ScopePage() {
         content: message.content,
         timestamp: message.timestamp,
         status: message.status === 'streaming' ? 'complete' : message.status,
+        ...(message.authorId ? { authorId: message.authorId } : {}),
+        ...(message.authorName ? { authorName: message.authorName } : {}),
         ...(message.error ? { error: message.error } : {}),
         ...(message.thinking ? { thinking: message.thinking } : {}),
         ...(message.attachments?.length ? { attachments: message.attachments.map(({ file, previewUrl, ...rest }) => rest) } : {}),
@@ -2117,6 +2316,10 @@ export default function ScopePage() {
       id: genId(), role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming',
       steps: [], toolCalls: [], thinking: '',
     };
+    if (activeService.kind === 'streaming-proxy') {
+      assistantMsg.authorName = 'Streaming Proxy';
+      assistantMsg.content = buildStreamingProxyProgressMessage([], 'starting');
+    }
     const nextMessages = userMsg
       ? [...baseMessages, userMsg, assistantMsg]
       : [...baseMessages, assistantMsg];
@@ -2135,6 +2338,16 @@ export default function ScopePage() {
     let thinking = '';
     let contentText = '';
     let lastWasReasoning = false;
+    const joinedParticipants = new Map<string, string>();
+    const progressMessageId = assistantMsg.id;
+    const pendingParticipantMessages: ChatMessage[] = [];
+    let streamingProxyPhase: 'starting' | 'topic-started' | 'participants-joined' = 'starting';
+    let activeProgressMessageId: string | null = progressMessageId;
+    let hasParticipantReply = false;
+    let displayedParticipantReplyCount = 0;
+    let streamFinished = false;
+    let pendingStreamError: string | null = null;
+    let participantQueueTask: Promise<void> | null = null;
 
     const updateAssistant = (patch: Partial<ChatMessage>) => {
       setMessages(prev => {
@@ -2145,6 +2358,90 @@ export default function ScopePage() {
         }
         return updated;
       });
+    };
+
+    const updateMessageById = (messageId: string | null, patch: Partial<ChatMessage>) => {
+      if (!messageId) {
+        return;
+      }
+
+      setMessages(prev => prev.map(message => (
+        message.id === messageId
+          ? { ...message, ...patch }
+          : message
+      )));
+    };
+
+    const updateCurrentAssistant = (patch: Partial<ChatMessage>) => {
+      if (activeService.kind === 'streaming-proxy') {
+        updateMessageById(activeProgressMessageId, patch);
+        return;
+      }
+
+      updateAssistant(patch);
+    };
+
+    const flushParticipantQueue = async () => {
+      if (participantQueueTask) {
+        await participantQueueTask;
+      }
+    };
+
+    const queueParticipantMessage = (message: ChatMessage) => {
+      pendingParticipantMessages.push(message);
+      if (!participantQueueTask) {
+        participantQueueTask = (async () => {
+          while (pendingParticipantMessages.length > 0) {
+            const nextMessage = pendingParticipantMessages.shift();
+            if (!nextMessage) {
+              continue;
+            }
+
+            const currentProgressMessageId = activeProgressMessageId;
+
+            updateMessageById(currentProgressMessageId, {
+              authorName: 'Streaming Proxy',
+              status: 'streaming',
+              content: buildStreamingProxyTurnMessage(nextMessage.authorName || 'Participant', displayedParticipantReplyCount),
+            });
+
+            await sleep(getStreamingProxyRevealDelay(nextMessage.content, displayedParticipantReplyCount));
+
+            if (controller.signal.aborted) {
+              pendingParticipantMessages.length = 0;
+              break;
+            }
+
+            const shouldAppendNextProgress = !streamFinished || pendingParticipantMessages.length > 0;
+            const nextProgressId = shouldAppendNextProgress ? genId() : null;
+            setMessages(prev => {
+              const updated = prev.flatMap(existing => (
+                existing.id === currentProgressMessageId
+                  ? [{ ...nextMessage, timestamp: Date.now() }]
+                  : [existing]
+              ));
+
+              if (shouldAppendNextProgress && nextProgressId) {
+                updated.push({
+                  id: nextProgressId,
+                  role: 'assistant',
+                  content: buildStreamingProxyWaitingMessage(),
+                  authorName: 'Streaming Proxy',
+                  timestamp: Date.now(),
+                  status: 'streaming',
+                });
+              }
+
+              return updated;
+            });
+
+            activeProgressMessageId = nextProgressId;
+            displayedParticipantReplyCount += 1;
+          }
+        })().finally(() => {
+          participantQueueTask = null;
+        });
+      }
     };
 
     const onFrame = (frame: any) => {
@@ -2162,17 +2459,73 @@ export default function ScopePage() {
       lastWasReasoning = false;
 
       switch (evt.type) {
+        case 'TOPIC_STARTED': {
+          if (activeService.kind === 'streaming-proxy' && !contentText) {
+            streamingProxyPhase = 'topic-started';
+            updateMessageById(activeProgressMessageId, {
+              content: buildStreamingProxyProgressMessage(joinedParticipants.values(), streamingProxyPhase),
+            });
+          }
+          break;
+        }
+
         case 'TEXT_MESSAGE_CONTENT': {
           const delta = String(evt.delta || '');
           contentText += delta;
-          updateAssistant({ content: contentText });
+          updateCurrentAssistant({ content: contentText });
+          break;
+        }
+
+        case 'AGENT_MESSAGE': {
+          const agentName = String(evt.agentName || evt.agentId || 'Agent');
+          const agentContent = String(evt.content || '');
+          if (activeService.kind === 'streaming-proxy') {
+            hasParticipantReply = true;
+            queueParticipantMessage({
+              id: genId(),
+              role: 'assistant',
+              content: agentContent,
+              authorId: String(evt.agentId || ''),
+              authorName: agentName,
+              timestamp: Date.now(),
+              status: 'complete',
+            });
+          } else {
+            contentText = agentContent;
+            updateCurrentAssistant({ content: contentText });
+          }
+          break;
+        }
+
+        case 'PARTICIPANT_JOINED': {
+          const agentId = String(evt.agentId || '').trim();
+          const displayName = String(evt.displayName || evt.agentId || '').trim();
+          if (agentId && displayName) joinedParticipants.set(agentId, displayName);
+          if (activeService.kind === 'streaming-proxy' && !contentText) {
+            streamingProxyPhase = 'participants-joined';
+            updateMessageById(activeProgressMessageId, {
+              content: buildStreamingProxyProgressMessage(joinedParticipants.values(), streamingProxyPhase),
+            });
+          }
+          break;
+        }
+
+        case 'PARTICIPANT_LEFT': {
+          const agentId = String(evt.agentId || '').trim();
+          if (agentId) joinedParticipants.delete(agentId);
+          if (activeService.kind === 'streaming-proxy' && !contentText) {
+            streamingProxyPhase = 'participants-joined';
+            updateMessageById(activeProgressMessageId, {
+              content: buildStreamingProxyProgressMessage(joinedParticipants.values(), streamingProxyPhase),
+            });
+          }
           break;
         }
 
         case 'STEP_STARTED': {
           const stepName = String(evt.stepName || '');
           steps.push({ name: stepName, status: 'running', startedAt: Date.now() });
-          updateAssistant({ steps: [...steps] });
+          updateCurrentAssistant({ steps: [...steps] });
           break;
         }
 
@@ -2183,7 +2536,7 @@ export default function ScopePage() {
             existing.status = 'done';
             existing.finishedAt = Date.now();
           }
-          updateAssistant({ steps: [...steps] });
+          updateCurrentAssistant({ steps: [...steps] });
           break;
         }
 
@@ -2191,7 +2544,7 @@ export default function ScopePage() {
           const toolName = String(evt.toolName || '');
           const toolCallId = String(evt.toolCallId || '');
           toolCalls.push({ id: toolCallId, name: toolName, status: 'running' });
-          updateAssistant({ toolCalls: [...toolCalls] });
+          updateCurrentAssistant({ toolCalls: [...toolCalls] });
           break;
         }
 
@@ -2202,12 +2555,12 @@ export default function ScopePage() {
             existing.status = 'done';
             existing.result = String(evt.result || '');
           }
-          updateAssistant({ toolCalls: [...toolCalls] });
+          updateCurrentAssistant({ toolCalls: [...toolCalls] });
           break;
         }
 
         case 'TOOL_APPROVAL_REQUEST': {
-          updateAssistant({
+          updateCurrentAssistant({
             pendingApproval: {
               requestId: String(evt.requestId || ''),
               toolName: String(evt.toolName || ''),
@@ -2248,7 +2601,7 @@ export default function ScopePage() {
           const rawOpts = evt.options;
           const options = Array.isArray(rawOpts) ? rawOpts.filter((o): o is string => typeof o === 'string') : undefined;
           setIsStreaming(false);
-          updateAssistant({
+          updateCurrentAssistant({
             content: prompt || 'Waiting for your input...',
             status: 'complete',
             pendingHumanInput: {
@@ -2264,7 +2617,12 @@ export default function ScopePage() {
         }
 
         case 'RUN_ERROR': {
-          updateAssistant({ status: 'error', error: String(evt.message || 'Unknown error') });
+          const errorText = String(evt.message || 'Unknown error');
+          if (activeService.kind === 'streaming-proxy' && (hasParticipantReply || pendingParticipantMessages.length > 0)) {
+            pendingStreamError = errorText;
+          } else {
+            updateCurrentAssistant({ status: 'error', error: errorText });
+          }
           break;
         }
 
@@ -2274,7 +2632,7 @@ export default function ScopePage() {
           if (String(evt.name || '') === 'TOOL_APPROVAL_REQUEST') {
             const raw = (evt.payload ?? evt.value ?? {}) as any;
             const p = (raw?.value ?? raw) as any;
-            updateAssistant({
+            updateCurrentAssistant({
               pendingApproval: {
                 requestId: String(p.requestId ?? p.request_id ?? ''),
                 toolName: String(p.toolName ?? p.tool_name ?? ''),
@@ -2296,7 +2654,7 @@ export default function ScopePage() {
             const rawOpts = p?.options ?? p?.Options;
             const options = Array.isArray(rawOpts) ? rawOpts.filter((o: unknown): o is string => typeof o === 'string') : undefined;
             setIsStreaming(false);
-            updateAssistant({
+            updateCurrentAssistant({
               content: prompt || 'Waiting for your input...',
               status: 'complete',
               pendingHumanInput: {
@@ -2314,7 +2672,7 @@ export default function ScopePage() {
           const stepOutput = extractStepCompletedOutput(evt);
           if (stepOutput && !contentText) {
             contentText = stepOutput;
-            updateAssistant({ content: contentText });
+            updateCurrentAssistant({ content: contentText });
             break;
           }
 
@@ -2325,7 +2683,7 @@ export default function ScopePage() {
             }
             thinking += reasoningDelta;
             lastWasReasoning = true;
-            updateAssistant({ thinking });
+            updateCurrentAssistant({ thinking });
             break;
           }
 
@@ -2338,26 +2696,84 @@ export default function ScopePage() {
 
     try {
       const requestActorId = trimOptional(activeConvId ?? undefined) || undefined;
-      if (activeService.kind === 'nyxid-chat') {
+      if (activeService.kind === 'streaming-proxy') {
+        const roomId = await ensureStreamingProxyRoom();
+        resolvedActorId = buildStreamingProxyConversationId(roomId);
+        await api.streamingProxy.streamChat(
+          scopeId,
+          roomId,
+          text,
+          onFrame,
+          controller.signal,
+          activeConvId || undefined,
+          conversationRoute,
+          conversationModel,
+        );
+        streamFinished = true;
+        await flushParticipantQueue();
+      } else if (activeService.kind === 'nyxid-chat') {
         if (!nyxidChatBoundRef.current) {
           await api.scope.bindGAgent(
             scopeId,
             'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent',
             'NyxID Chat',
-            'nyxid-chat',
+            NYXID_CHAT_SERVICE_ID,
           );
           nyxidChatBoundRef.current = true;
         }
-        await api.scope.streamInvoke(scopeId, 'nyxid-chat', text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
+        await api.scope.streamInvoke(scopeId, NYXID_CHAT_SERVICE_ID, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
       } else {
         await api.scope.streamInvoke(scopeId, activeService.id, text, onFrame, controller.signal, 'chat', conversationHeaders, requestActorId, options?.inputParts);
       }
 
       setMessages(prev => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last?.role === 'assistant' && last.status !== 'error') {
-          updated[updated.length - 1] = { ...last, status: 'complete', events, steps: [...steps], toolCalls: [...toolCalls], thinking };
+        let updated = [...prev];
+        if (activeService.kind === 'streaming-proxy') {
+          if (hasParticipantReply) {
+            if (activeProgressMessageId) {
+              updated = updated.filter(message => message.id !== activeProgressMessageId);
+            }
+            if (pendingStreamError) {
+              updated = [...updated, {
+                id: genId(),
+                role: 'assistant',
+                content: '',
+                authorName: 'Streaming Proxy',
+                timestamp: Date.now(),
+                status: 'error',
+                error: pendingStreamError || 'Unknown error',
+              }];
+            }
+          } else {
+            updated = updated.map(message => (
+              message.id === activeProgressMessageId && message.status !== 'error'
+                ? {
+                    ...message,
+                    status: 'complete',
+                    events,
+                    steps: [...steps],
+                    toolCalls: [...toolCalls],
+                    thinking,
+                  content: joinedParticipants.size > 0
+                      ? `Streaming Proxy 已经把消息发到 room 里了，但当前还没有 participant 回复。已加入: ${Array.from(joinedParticipants.values()).join(', ')}`
+                      : 'Streaming Proxy 已经把消息发到 room 里了，但当前没有 participant 回复。它本身不会直接回答，只有 joinRoom/postMessage 的 agent 回消息后，这里才会显示内容。',
+                }
+                : message
+            ));
+          }
+        } else {
+          const last = updated[updated.length - 1];
+          if (last?.role === 'assistant' && last.status !== 'error') {
+            updated[updated.length - 1] = {
+              ...last,
+              status: 'complete',
+              events,
+              steps: [...steps],
+              toolCalls: [...toolCalls],
+              thinking,
+              content: contentText,
+            };
+          }
         }
         saveCurrentConversation(updated, resolvedActorId);
         return updated;
@@ -2365,19 +2781,41 @@ export default function ScopePage() {
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
         const errorText = e?.message || e?.code || JSON.stringify(e);
-        updateAssistant({
-          status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
-        });
-        setMessages(prev => {
-          saveCurrentConversation(prev, resolvedActorId);
-          return prev;
-        });
+        if (activeService.kind === 'streaming-proxy' && (hasParticipantReply || pendingParticipantMessages.length > 0)) {
+          pendingStreamError = errorText;
+          streamFinished = true;
+          await flushParticipantQueue();
+          setMessages(prev => {
+            const withoutProgress = activeProgressMessageId
+              ? prev.filter(message => message.id !== activeProgressMessageId)
+              : [...prev];
+            const updated = [...withoutProgress, {
+              id: genId(),
+              role: 'assistant' as const,
+              content: '',
+              authorName: 'Streaming Proxy',
+              timestamp: Date.now(),
+              status: 'error' as const,
+              error: pendingStreamError || 'Unknown error',
+            }];
+            saveCurrentConversation(updated, resolvedActorId);
+            return updated;
+          });
+        } else {
+          updateCurrentAssistant({
+            status: 'error', error: errorText, events, steps: [...steps], toolCalls: [...toolCalls], thinking,
+          });
+          setMessages(prev => {
+            saveCurrentConversation(prev, resolvedActorId);
+            return prev;
+          });
+        }
       }
     } finally {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [scopeId, isStreaming, messages, activeService, conversationHeaders, saveCurrentConversation]);
+  }, [scopeId, isStreaming, messages, activeService, activeConvId, conversationHeaders, saveCurrentConversation, ensureStreamingProxyRoom]);
 
   const handleAttach = useCallback((files: FileList) => {
     const maxSize = 50 * 1024 * 1024; // 50 MB
@@ -2653,12 +3091,17 @@ export default function ScopePage() {
     if (nextMessages.length === 0) {
       if (scopeId && activeConvId) {
         try {
+          const roomId = tryParseStreamingProxyRoomId(activeConvId);
+          if (roomId) {
+            await api.streamingProxy.deleteRoom(scopeId, roomId).catch(() => {});
+          }
           await api.chatHistory.deleteConversation(scopeId, activeConvId);
         } catch {
           // Ignore delete failures and still clear local state.
         }
       }
       setActiveConvId(null);
+      streamingProxyRoomRef.current = null;
       setConversationRoute(undefined);
       setConversationModel(undefined);
       setConversations(prev => prev.filter(conv => conv.id !== activeConvId));
@@ -2682,6 +3125,7 @@ export default function ScopePage() {
     setMessages(messages.slice(0, messageIndex));
     setDebugEvents([]);
     setActiveConvId(null);
+    streamingProxyRoomRef.current = null;
   }, [messages]);
 
   const handleCopyMessage = useCallback((msg: ChatMessage) => {
@@ -2871,6 +3315,7 @@ export default function ScopePage() {
     setMessages([]);
     setDebugEvents([]);
     setActiveConvId(null);
+    streamingProxyRoomRef.current = null;
     setComposerText('');
     setConversationRoute(undefined);
     setConversationModel(undefined);
@@ -2886,9 +3331,14 @@ export default function ScopePage() {
         prevServiceRef.current = conv.serviceId; // prevent auto-clear
         setSelectedService(conv.serviceId);
       }
+      streamingProxyRoomRef.current = conv?.serviceId === STREAMING_PROXY_SERVICE_ID || conv?.serviceKind === 'streaming-proxy'
+        ? tryParseStreamingProxyRoomId(conv.id)
+        : null;
       const msgs = await api.chatHistory.getConversation(scopeId, convId);
       setMessages(msgs.map(m => ({
         id: m.id, role: m.role as 'user' | 'assistant', content: m.content,
+        authorId: m.authorId ?? undefined,
+        authorName: m.authorName ?? undefined,
         timestamp: m.timestamp, status: (m.status || 'complete') as ChatMessage['status'],
         error: m.error ?? undefined, thinking: m.thinking ?? undefined,
       })));
@@ -2903,11 +3353,16 @@ export default function ScopePage() {
   const handleDeleteConversation = useCallback(async (convId: string) => {
     if (!scopeId) return;
     try {
+      const roomId = tryParseStreamingProxyRoomId(convId);
+      if (roomId) {
+        await api.streamingProxy.deleteRoom(scopeId, roomId).catch(() => {});
+      }
       await api.chatHistory.deleteConversation(scopeId, convId);
       setConversations(prev => prev.filter(c => c.id !== convId));
       if (activeConvId === convId) {
         setMessages([]);
         setActiveConvId(null);
+        streamingProxyRoomRef.current = null;
         setConversationRoute(undefined);
         setConversationModel(undefined);
         setDebugEvents([]);
@@ -2991,15 +3446,30 @@ export default function ScopePage() {
     try {
       const parsed = JSON.parse(invokeBody);
       const prompt = parsed.prompt || '';
-      const serviceId = activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id;
+      const serviceId = activeService.kind === 'nyxid-chat' ? NYXID_CHAT_SERVICE_ID : activeService.id;
       if (activeService.kind === 'nyxid-chat' && !nyxidChatBoundRef.current) {
-        await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', 'NyxID Chat', 'nyxid-chat');
+        await api.scope.bindGAgent(scopeId, 'Aevatar.GAgents.NyxidChat.NyxIdChatGAgent', 'NyxID Chat', NYXID_CHAT_SERVICE_ID);
         nyxidChatBoundRef.current = true;
       }
-      await api.scope.streamInvoke(scopeId, serviceId, prompt, (frame) => {
+      const pushFrame = (frame: any) => {
         const evt = normalizeBackendSseFrame(frame);
         if (evt) { collected.push({ type: evt.type, data: evt }); setInvokeEvents([...collected]); }
-      }, controller.signal, invokeEndpointId);
+      };
+      if (activeService.kind === 'streaming-proxy') {
+        const roomId = await ensureStreamingProxyRoom();
+        await api.streamingProxy.streamChat(
+          scopeId,
+          roomId,
+          prompt,
+          pushFrame,
+          controller.signal,
+          activeConvId || undefined,
+          conversationRoute,
+          conversationModel,
+        );
+      } else {
+        await api.scope.streamInvoke(scopeId, serviceId, prompt, pushFrame, controller.signal, invokeEndpointId);
+      }
       if (collected.length === 0) collected.push({ type: 'info', data: { message: 'No events received' } });
       setInvokeEvents([...collected]);
     } catch (e: any) {
@@ -3491,6 +3961,7 @@ export default function ScopePage() {
             onRemoveAttachment={handleRemoveAttachment}
             footer={(
               <ConversationLlmConfigBar
+                mode={activeService.kind === 'streaming-proxy' ? 'streaming-proxy' : 'conversation'}
                 routeValue={conversationRoute}
                 routeOptions={routeOptions}
                 modelValue={conversationModel}
@@ -3508,8 +3979,8 @@ export default function ScopePage() {
           />
           <div className="mt-1.5 text-center text-[11px] text-gray-300">
             Service: {activeService.kind === 'nyxid-chat' ? 'nyxid-chat' : activeService.id}
-            {' · Route: '}{effectiveRouteLabel}
-            {' · Model: '}{effectiveModel || 'provider default'}
+            {activeService.kind === 'streaming-proxy' ? ' · Room route: ' : ' · Route: '}{effectiveRouteLabel}
+            {activeService.kind === 'streaming-proxy' ? ' · Room model: ' : ' · Model: '}{effectiveModel || 'provider default'}
             {' · Scope: '}{scopeId.slice(0, 16)}...
           </div>
         </div>

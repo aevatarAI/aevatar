@@ -2,7 +2,6 @@ using Aevatar.Foundation.Abstractions;
 using Aevatar.Foundation.Abstractions.Runtime.Callbacks;
 using Aevatar.Scripting.Abstractions.Behaviors;
 using Aevatar.Scripting.Abstractions.Definitions;
-using Aevatar.Scripting.Abstractions.Queries;
 using Aevatar.Scripting.Core;
 using Aevatar.Scripting.Core.AI;
 using Aevatar.Scripting.Core.Ports;
@@ -26,8 +25,10 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
     private readonly IScriptRuntimeProvisioningPort _runtimeProvisioningPort;
     private readonly IScriptRuntimeCommandPort _runtimeCommandPort;
     private readonly IScriptCatalogCommandPort _catalogCommandPort;
-    private readonly IScriptAuthorityReadModelActivationPort _authorityReadModelActivationPort;
-    private readonly Dictionary<string, ScriptDefinitionSnapshot> _definitionSnapshots =
+    // Activation-local snapshot cache for the current runtime capability instance.
+    // This cache is non-durable and only short-circuits immediate follow-up calls
+    // that already carry write-side authority facts in the same interaction.
+    private readonly Dictionary<string, ScriptDefinitionSnapshot> _activationLocalDefinitionSnapshots =
         new(StringComparer.Ordinal);
     private readonly string _scopeId;
     private readonly string _runId;
@@ -48,8 +49,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
-        IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
+        IScriptCatalogCommandPort catalogCommandPort)
         : this(
             scopeId: string.Empty,
             runId,
@@ -66,8 +66,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             definitionCommandPort,
             runtimeProvisioningPort,
             runtimeCommandPort,
-            catalogCommandPort,
-            authorityReadModelActivationPort)
+            catalogCommandPort)
     {
     }
 
@@ -87,8 +86,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         IScriptDefinitionCommandPort definitionCommandPort,
         IScriptRuntimeProvisioningPort runtimeProvisioningPort,
         IScriptRuntimeCommandPort runtimeCommandPort,
-        IScriptCatalogCommandPort catalogCommandPort,
-        IScriptAuthorityReadModelActivationPort authorityReadModelActivationPort)
+        IScriptCatalogCommandPort catalogCommandPort)
     {
         _scopeId = scopeId?.Trim() ?? string.Empty;
         _runId = runId ?? string.Empty;
@@ -106,7 +104,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         _runtimeProvisioningPort = runtimeProvisioningPort ?? throw new ArgumentNullException(nameof(runtimeProvisioningPort));
         _runtimeCommandPort = runtimeCommandPort ?? throw new ArgumentNullException(nameof(runtimeCommandPort));
         _catalogCommandPort = catalogCommandPort ?? throw new ArgumentNullException(nameof(catalogCommandPort));
-        _authorityReadModelActivationPort = authorityReadModelActivationPort ?? throw new ArgumentNullException(nameof(authorityReadModelActivationPort));
     }
 
     public Task<string> AskAIAsync(string prompt, CancellationToken ct) =>
@@ -139,7 +136,6 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         var agentType = System.Type.GetType(agentTypeAssemblyQualifiedName, throwOnError: true)
             ?? throw new InvalidOperationException($"Agent type `{agentTypeAssemblyQualifiedName}` could not be resolved.");
         var actor = await _runtime.CreateAsync(agentType, actorId, ct);
-        await PrimeAuthorityProjectionIfNeededAsync(agentType, actor.Id, ct);
         return actor.Id;
     }
 
@@ -246,7 +242,7 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         var decision = await _proposalPort.ProposeAsync(proposal, ct);
         if (decision.Accepted && decision.DefinitionSnapshot != null)
         {
-            RememberDefinitionSnapshot(
+            RememberTransientDefinitionSnapshot(
                 decision.DefinitionActorId,
                 decision.CandidateRevision,
                 decision.DefinitionSnapshot.ToSnapshot());
@@ -271,26 +267,28 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
             definitionActorId,
             _scopeId,
             ct);
-        RememberDefinitionSnapshot(result.ActorId, result.Snapshot.Revision, result.Snapshot);
+        RememberTransientDefinitionSnapshot(result.ActorId, result.Snapshot.Revision, result.Snapshot);
         return result.ActorId;
     }
 
-    private void RememberDefinitionSnapshot(
+    private void RememberTransientDefinitionSnapshot(
         string definitionActorId,
         string scriptRevision,
         ScriptDefinitionSnapshot? snapshot)
     {
+        // This cache is bounded to the capability lifetime and must not be treated
+        // as cross-request or cross-node authority state.
         if (snapshot == null || string.IsNullOrWhiteSpace(definitionActorId))
             return;
 
-        _definitionSnapshots[BuildDefinitionSnapshotKey(definitionActorId, scriptRevision)] = snapshot;
+        _activationLocalDefinitionSnapshots[BuildDefinitionSnapshotKey(definitionActorId, scriptRevision)] = snapshot;
     }
 
-    private ScriptDefinitionSnapshot? ResolveDefinitionSnapshot(
+    private ScriptDefinitionSnapshot? TryGetTransientDefinitionSnapshot(
         string definitionActorId,
         string scriptRevision)
     {
-        _definitionSnapshots.TryGetValue(
+        _activationLocalDefinitionSnapshots.TryGetValue(
             BuildDefinitionSnapshotKey(definitionActorId, scriptRevision),
             out var snapshot);
         return snapshot;
@@ -309,24 +307,12 @@ public sealed class ScriptBehaviorRuntimeCapabilities : IScriptBehaviorRuntimeCa
         string scriptRevision,
         CancellationToken ct)
     {
-        var snapshot = ResolveDefinitionSnapshot(definitionActorId, scriptRevision);
+        var snapshot = TryGetTransientDefinitionSnapshot(definitionActorId, scriptRevision);
         if (snapshot != null)
             return snapshot;
 
         snapshot = await _definitionSnapshotPort.GetRequiredAsync(definitionActorId, scriptRevision, ct);
-        RememberDefinitionSnapshot(definitionActorId, snapshot.Revision, snapshot);
+        RememberTransientDefinitionSnapshot(definitionActorId, snapshot.Revision, snapshot);
         return snapshot;
-    }
-
-    private async Task PrimeAuthorityProjectionIfNeededAsync(
-        System.Type agentType,
-        string actorId,
-        CancellationToken ct)
-    {
-        if (agentType.IsAssignableTo(typeof(ScriptDefinitionGAgent)) ||
-            agentType.IsAssignableTo(typeof(ScriptCatalogGAgent)))
-        {
-            await _authorityReadModelActivationPort.ActivateAsync(actorId, ct);
-        }
     }
 }

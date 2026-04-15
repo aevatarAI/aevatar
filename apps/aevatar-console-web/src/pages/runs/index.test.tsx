@@ -9,6 +9,7 @@ import {
 import { saveRecentRun } from "@/shared/runs/recentRuns";
 import { runtimeCatalogApi } from "@/shared/api/runtimeCatalogApi";
 import { runtimeRunsApi } from "@/shared/api/runtimeRunsApi";
+import { parseBackendSSEStream } from "@/shared/agui/sseFrameNormalizer";
 import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
 import RunsPage from "./index";
 
@@ -82,6 +83,188 @@ jest.mock("@/shared/api/runtimeRunsApi", () => ({
   },
 }));
 
+jest.mock("./components/RunsLaunchRail", () => {
+  const React = require("react");
+
+  type MockRunFormValues = {
+    actorId?: string;
+    endpointId?: string;
+    endpointKind?: "chat" | "command";
+    payloadBase64?: string;
+    payloadTypeUrl?: string;
+    prompt: string;
+    routeName?: string;
+    scopeId?: string;
+    serviceOverrideId?: string;
+    transport: "sse" | "ws";
+  };
+
+  const normalizeValues = (
+    value: Record<string, unknown> = {}
+  ): MockRunFormValues => ({
+    actorId:
+      typeof value.actorId === "string" ? value.actorId : undefined,
+    endpointId:
+      typeof value.endpointId === "string" ? value.endpointId : "chat",
+    endpointKind:
+      value.endpointKind === "command" ? "command" : "chat",
+    payloadBase64:
+      typeof value.payloadBase64 === "string" ? value.payloadBase64 : undefined,
+    payloadTypeUrl:
+      typeof value.payloadTypeUrl === "string" ? value.payloadTypeUrl : undefined,
+    prompt: typeof value.prompt === "string" ? value.prompt : "",
+    routeName:
+      typeof value.routeName === "string" ? value.routeName : undefined,
+    scopeId: typeof value.scopeId === "string" ? value.scopeId : undefined,
+    serviceOverrideId:
+      typeof value.serviceOverrideId === "string"
+        ? value.serviceOverrideId
+        : undefined,
+    transport: value.transport === "ws" ? "ws" : "sse",
+  });
+
+  const normalizePatch = (
+    value: Record<string, unknown> = {}
+  ): Partial<MockRunFormValues> => ({
+    ...(Object.prototype.hasOwnProperty.call(value, "actorId")
+      ? { actorId: normalizeValues({ actorId: value.actorId }).actorId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "endpointId")
+      ? { endpointId: normalizeValues({ endpointId: value.endpointId }).endpointId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "endpointKind")
+      ? {
+          endpointKind: normalizeValues({
+            endpointKind: value.endpointKind,
+          }).endpointKind,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "payloadBase64")
+      ? {
+          payloadBase64: normalizeValues({
+            payloadBase64: value.payloadBase64,
+          }).payloadBase64,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "payloadTypeUrl")
+      ? {
+          payloadTypeUrl: normalizeValues({
+            payloadTypeUrl: value.payloadTypeUrl,
+          }).payloadTypeUrl,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "prompt")
+      ? { prompt: normalizeValues({ prompt: value.prompt }).prompt }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "routeName")
+      ? { routeName: normalizeValues({ routeName: value.routeName }).routeName }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "scopeId")
+      ? { scopeId: normalizeValues({ scopeId: value.scopeId }).scopeId }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "serviceOverrideId")
+      ? {
+          serviceOverrideId: normalizeValues({
+            serviceOverrideId: value.serviceOverrideId,
+          }).serviceOverrideId,
+        }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "transport")
+      ? { transport: normalizeValues({ transport: value.transport }).transport }
+      : {}),
+  });
+
+  const RunsLaunchRail = (props: any) => {
+    const [values, setValues] = React.useState(() =>
+      normalizeValues(props.initialFormValues)
+    );
+
+    React.useEffect(() => {
+      setValues((current: Record<string, unknown>) => ({
+        ...current,
+        ...normalizeValues(props.initialFormValues),
+      }));
+    }, [props.initialFormValues]);
+
+    React.useEffect(() => {
+      if (!props.composerFormRef) {
+        return;
+      }
+
+      props.composerFormRef.current = {
+        getFieldValue: (name: string) => (values as Record<string, unknown>)[name],
+        getFieldsValue: () => values,
+        resetFields: () => setValues(normalizeValues(props.initialFormValues)),
+        setFieldValue: (name: string, value: unknown) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            [name]: value,
+          })),
+        setFieldsValue: (nextValues: Record<string, unknown>) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            ...normalizePatch(nextValues),
+          })),
+        submit: () => props.onSubmitRun(values),
+        validateFields: async () => values,
+      };
+
+      return () => {
+        props.composerFormRef.current = undefined;
+      };
+    }, [props.composerFormRef, props.initialFormValues, props.onSubmitRun, values]);
+
+    return React.createElement(
+      "section",
+      null,
+      React.createElement("div", null, "Launch rail"),
+      React.createElement("textarea", {
+        "aria-label": "Prompt",
+        onChange: (event: any) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            prompt: event.target.value,
+          })),
+        placeholder: "Describe the task to run.",
+        value: values.prompt,
+      }),
+      React.createElement("input", {
+        "aria-label": "Scope ID",
+        onChange: (event: any) =>
+          setValues((current: Record<string, unknown>) => ({
+            ...current,
+            scopeId: event.target.value,
+          })),
+        value: values.scopeId ?? "",
+      }),
+      React.createElement(
+        "button",
+        {
+          onClick: () => props.onSubmitRun(values),
+          type: "button",
+        },
+        "Start run"
+      ),
+      props.recentRunRows.map((row: any) =>
+        React.createElement(
+          "button",
+          {
+            key: row.key,
+            onClick: () => row.onRestore?.(),
+            type: "button",
+          },
+          "Restore"
+        )
+      )
+    );
+  };
+
+  return {
+    __esModule: true,
+    default: RunsLaunchRail,
+  };
+});
+
 describe("RunsPage", () => {
   const mockedRuntimeCatalogApi = runtimeCatalogApi as unknown as {
     listWorkflowCatalog: jest.Mock;
@@ -94,6 +277,7 @@ describe("RunsPage", () => {
     signal: jest.Mock;
     stop: jest.Mock;
   };
+  const mockedParseBackendSSEStream = parseBackendSSEStream as jest.Mock;
 
   beforeEach(() => {
     window.history.replaceState({}, "", "/runtime/runs");
@@ -121,6 +305,9 @@ describe("RunsPage", () => {
     });
     mockedRuntimeRunsApi.streamDraftRun.mockResolvedValue({});
     mockedRuntimeCatalogApi.listWorkflowCatalog.mockResolvedValue([]);
+    mockedParseBackendSSEStream.mockImplementation(
+      () => (async function* () {})()
+    );
   });
 
   it("renders the runtime run console header and navigation actions", async () => {
@@ -134,6 +321,9 @@ describe("RunsPage", () => {
       screen.getByRole("button", { name: "Catalog" })
     ).toBeTruthy();
     expect(
+      screen.queryByRole("button", { name: "返回团队高级编辑" })
+    ).toBeNull();
+    expect(
       screen.getByRole("button", { name: "Explorer" })
     ).toBeTruthy();
     expect(
@@ -146,6 +336,68 @@ describe("RunsPage", () => {
     expect(container.textContent).toContain("Launch rail");
     expect(container.textContent).toContain("Run trace");
     expect(container.textContent).toContain("Inspector");
+  });
+
+  it("navigates back to the team advanced tab from the runs console", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "返回团队高级编辑" })
+    );
+
+    expect(window.location.pathname).toBe("/teams/scope-1");
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
+      "advanced"
+    );
+  });
+
+  it("returns to the originating studio route when a return target is provided", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&returnTo=%2Fstudio%3FscopeId%3Dscope-1%26tab%3Dstudio%26template%3Dhello-chat"
+    );
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "返回团队高级编辑" })
+    );
+
+    expect(window.location.pathname).toBe("/studio");
+    expect(new URLSearchParams(window.location.search).get("scopeId")).toBe(
+      "scope-1"
+    );
+    expect(new URLSearchParams(window.location.search).get("tab")).toBe(
+      "studio"
+    );
+    expect(new URLSearchParams(window.location.search).get("template")).toBe(
+      "hello-chat"
+    );
+  });
+
+  it("keeps the trace workspace viewport stretchable so the inner console can scroll", async () => {
+    const { container } = renderWithQueryClient(React.createElement(RunsPage));
+
+    const tabs = container.querySelectorAll(".ant-tabs");
+    expect(tabs[0]).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+    });
+
+    const contentHolder = tabs[0]?.querySelector(".ant-tabs-content-holder");
+    expect(contentHolder).not.toBeNull();
+    expect(contentHolder).toHaveStyle({
+      flex: "1",
+      minHeight: "0",
+      overflow: "hidden",
+    });
   });
 
   it("uses the generic invoke path for prepared service invocation drafts", async () => {
@@ -225,6 +477,120 @@ describe("RunsPage", () => {
 
     expect(new URLSearchParams(window.location.search).get("draftKey")).toBeNull();
     expect(loadDraftRunPayload(draftKey)).toBeNull();
+  });
+
+  it("retries chat runs against the scope default binding when a stale service id is missing", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D"
+    );
+
+    mockedRuntimeRunsApi.streamChat
+      .mockRejectedValueOnce(
+        new Error(
+          "Service 'scope-1:default:default:hello-chat' was not found."
+        )
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {},
+      });
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("scope-1");
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      1,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: "scope-1:default:default:hello-chat",
+      }
+    );
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      2,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: undefined,
+      }
+    );
+  });
+
+  it("retries streamed chat runs against the scope default binding when the stream reports a missing service", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/runtime/runs?scopeId=scope-1&route=hello-chat&serviceOverrideId=scope-1:default:default:hello-chat&prompt=%E4%BD%A0%E5%A5%BD%EF%BC%8C%E8%AF%B7%E5%81%9A%E4%B8%AA%E8%87%AA%E6%88%91%E4%BB%8B%E7%BB%8D"
+    );
+
+    mockedRuntimeRunsApi.streamChat
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {},
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: {},
+      });
+    mockedParseBackendSSEStream
+      .mockImplementationOnce(
+        () =>
+          (async function* () {
+            yield {
+              type: "RUN_ERROR",
+              message: "Service 'scope-1:default:default:hello-chat' was not found.",
+            };
+          })()
+      )
+      .mockImplementationOnce(() => (async function* () {})());
+
+    renderWithQueryClient(React.createElement(RunsPage));
+
+    await screen.findByDisplayValue("scope-1");
+    fireEvent.click(screen.getByRole("button", { name: "Start run" }));
+
+    await waitFor(() => {
+      expect(mockedRuntimeRunsApi.streamChat).toHaveBeenCalledTimes(2);
+    });
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      1,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: "scope-1:default:default:hello-chat",
+      }
+    );
+
+    expect(mockedRuntimeRunsApi.streamChat).toHaveBeenNthCalledWith(
+      2,
+      "scope-1",
+      expect.objectContaining({
+        prompt: "你好，请做个自我介绍",
+      }),
+      expect.any(AbortSignal),
+      {
+        serviceId: undefined,
+      }
+    );
   });
 
   it("hydrates observed run sessions without starting a new invoke", async () => {

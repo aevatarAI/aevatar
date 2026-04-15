@@ -38,21 +38,30 @@ import { parseBackendSSEStream } from '@/shared/agui/sseFrameNormalizer';
 import { runtimeRunsApi } from '@/shared/api/runtimeRunsApi';
 import { servicesApi } from '@/shared/api/servicesApi';
 import { history } from '@/shared/navigation/history';
+import { buildTeamWorkspaceRoute } from '@/shared/navigation/scopeRoutes';
 import {
   buildRuntimeGAgentsHref,
   buildRuntimeRunsHref,
 } from '@/shared/navigation/runtimeRoutes';
 import { saveObservedRunSessionPayload } from '@/shared/runs/draftRunSession';
+import {
+  buildScopeConsoleServiceOptions,
+  createNyxIdChatBindingInput,
+  extractRuntimeInvokeReceipt,
+  getPreferredScopeConsoleServiceId,
+  isChatServiceEndpoint,
+  nyxIdChatServiceId,
+  scopeServiceAppId,
+  scopeServiceNamespace,
+} from '@/shared/runs/scopeConsole';
 import { studioApi } from '@/shared/studio/api';
-import type {
-  ServiceCatalogSnapshot,
-  ServiceEndpointSnapshot,
-} from '@/shared/models/services';
+import type { ServiceCatalogSnapshot } from '@/shared/models/services';
 import {
   describeStudioScopeBindingRevisionContext,
   describeStudioScopeBindingRevisionTarget,
   getStudioScopeBindingCurrentRevision,
 } from '@/shared/studio/models';
+import { buildStudioWorkflowWorkspaceRoute } from '@/shared/studio/navigation';
 import {
   AevatarContextDrawer,
   AevatarHelpTooltip,
@@ -111,8 +120,6 @@ type MonacoEditorComponentProps = {
 };
 
 const initialDraft = readScopeQueryDraft();
-const scopeServiceAppId = 'default';
-const scopeServiceNamespace = 'default';
 const monoFontFamily =
   "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
 const viewportShellStyle: React.CSSProperties = {
@@ -143,15 +150,16 @@ const pageHeaderStyle: React.CSSProperties = {
 };
 const workspaceViewportStyle: React.CSSProperties = {
   display: 'flex',
-  flex: '1 0 auto',
+  flex: '1 1 auto',
   minHeight: 0,
-  overflow: 'visible',
+  overflow: 'hidden',
 };
 const workspaceGridStyle: React.CSSProperties = {
-  alignItems: 'start',
+  alignItems: 'stretch',
   display: 'grid',
   gap: 12,
   gridTemplateColumns: '250px minmax(0, 1fr) 300px',
+  height: '100%',
   minHeight: 0,
   minWidth: 0,
   width: '100%',
@@ -281,7 +289,7 @@ const playgroundChatComposerStyle: React.CSSProperties = {
   background: '#ffffff',
   borderTop: '1px solid #e7e5e4',
   flexShrink: 0,
-  padding: '14px 20px',
+  padding: '14px 20px 18px',
 };
 const consoleShellStyle: React.CSSProperties = {
   background: 'var(--ant-color-bg-container)',
@@ -328,30 +336,70 @@ function createClientId(): string {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function buildServiceOptions(
+function compareServicePriority(
+  left: ServiceCatalogSnapshot,
+  right: ServiceCatalogSnapshot,
+  defaultServiceId?: string,
+): number {
+  const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
+  const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+
+  if (leftIsDefault !== rightIsDefault) {
+    return rightIsDefault - leftIsDefault;
+  }
+
+  const endpointDelta = right.endpoints.length - left.endpoints.length;
+  if (endpointDelta !== 0) {
+    return endpointDelta;
+  }
+
+  const leftHasDisplayName = left.displayName.trim() ? 1 : 0;
+  const rightHasDisplayName = right.displayName.trim() ? 1 : 0;
+  if (leftHasDisplayName !== rightHasDisplayName) {
+    return rightHasDisplayName - leftHasDisplayName;
+  }
+
+  const updatedAtDelta = right.updatedAt.localeCompare(left.updatedAt);
+  if (updatedAtDelta !== 0) {
+    return updatedAtDelta;
+  }
+
+  const serviceIdDelta = left.serviceId.localeCompare(right.serviceId);
+  if (serviceIdDelta !== 0) {
+    return serviceIdDelta;
+  }
+
+  return left.serviceKey.localeCompare(right.serviceKey);
+}
+
+export function buildServiceOptions(
   services: readonly ServiceCatalogSnapshot[],
   defaultServiceId?: string,
 ): ServiceCatalogSnapshot[] {
-  return [...services].sort((left, right) => {
-    const leftIsDefault = left.serviceId === defaultServiceId ? 1 : 0;
-    const rightIsDefault = right.serviceId === defaultServiceId ? 1 : 0;
+  const deduped = new Map<string, ServiceCatalogSnapshot>();
 
-    if (leftIsDefault !== rightIsDefault) {
-      return rightIsDefault - leftIsDefault;
+  services.forEach((service) => {
+    const current = deduped.get(service.serviceId);
+    if (!current) {
+      deduped.set(service.serviceId, service);
+      return;
     }
 
-    return left.serviceId.localeCompare(right.serviceId);
+    if (compareServicePriority(service, current, defaultServiceId) < 0) {
+      deduped.set(service.serviceId, service);
+    }
   });
+
+  return [...deduped.values()].sort((left, right) =>
+    compareServicePriority(left, right, defaultServiceId),
+  );
 }
 
-function isChatEndpoint(
-  endpoint: ServiceEndpointSnapshot | undefined,
-): boolean {
-  if (!endpoint) {
-    return false;
-  }
-
-  return endpoint.kind === 'chat' || endpoint.endpointId.trim() === 'chat';
+function buildPublishedServiceCatalog(
+  services: readonly ServiceCatalogSnapshot[],
+  defaultServiceId?: string,
+): ServiceCatalogSnapshot[] {
+  return buildServiceOptions(services, defaultServiceId);
 }
 
 function createIdleResult(): InvokeResultState {
@@ -406,12 +454,17 @@ function resolveMonacoEditorComponent(): React.ComponentType<MonacoEditorCompone
 
 const ScopeInvokePage: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null);
+  const nyxIdChatBoundRef = useRef(false);
   const previousChatBindingKeyRef = useRef('');
+  const initialSelectedServiceId = readQueryValue('serviceId');
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const serviceSelectionSourceRef = useRef<'auto' | 'manual'>(
+    initialSelectedServiceId ? 'manual' : 'auto',
+  );
   const [draft, setDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [activeDraft, setActiveDraft] = useState<ScopeQueryDraft>(initialDraft);
   const [selectedServiceId, setSelectedServiceId] = useState(
-    readQueryValue('serviceId'),
+    initialSelectedServiceId,
   );
   const [selectedEndpointId, setSelectedEndpointId] = useState(
     readQueryValue('endpointId'),
@@ -490,9 +543,13 @@ const ScopeInvokePage: React.FC = () => {
       }),
   });
 
-  const services = useMemo(
+  useEffect(() => {
+    nyxIdChatBoundRef.current = false;
+  }, [scopeId]);
+
+  const publishedServices = useMemo(
     () =>
-      buildServiceOptions(
+      buildPublishedServiceCatalog(
         scopeServicesQuery.data ?? [],
         bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
       ),
@@ -502,32 +559,63 @@ const ScopeInvokePage: React.FC = () => {
       scopeServicesQuery.data,
     ],
   );
+  const services = useMemo(
+    () =>
+      scopeId
+        ? buildScopeConsoleServiceOptions(
+            publishedServices,
+            bindingQuery.data?.available
+              ? bindingQuery.data.serviceId
+              : undefined,
+            {
+              sortBy: 'serviceId',
+            },
+          )
+        : [],
+    [
+      bindingQuery.data?.available,
+      bindingQuery.data?.serviceId,
+      publishedServices,
+      scopeId,
+    ],
+  );
 
   useEffect(() => {
     if (!services.length) {
+      serviceSelectionSourceRef.current = 'auto';
       setSelectedServiceId('');
-      return;
-    }
-
-    if (
-      selectedServiceId &&
-      services.some((service) => service.serviceId === selectedServiceId)
-    ) {
       return;
     }
 
     if (preserveEmptySelection) {
-      setSelectedServiceId('');
+      serviceSelectionSourceRef.current = 'auto';
+      if (selectedServiceId) {
+        setSelectedServiceId('');
+      }
       return;
     }
 
-    setSelectedServiceId(
-      services.find(
-        (service) => service.serviceId === bindingQuery.data?.serviceId,
-      )?.serviceId ||
-        services[0]?.serviceId ||
-        '',
+    const preferredServiceId = getPreferredScopeConsoleServiceId(
+      services,
+      bindingQuery.data?.available ? bindingQuery.data.serviceId : undefined,
     );
+    const hasSelectedService =
+      selectedServiceId &&
+      services.some((service) => service.serviceId === selectedServiceId);
+
+    if (!hasSelectedService) {
+      serviceSelectionSourceRef.current = 'auto';
+      setSelectedServiceId(preferredServiceId);
+      return;
+    }
+
+    if (
+      serviceSelectionSourceRef.current === 'auto' &&
+      preferredServiceId &&
+      selectedServiceId !== preferredServiceId
+    ) {
+      setSelectedServiceId(preferredServiceId);
+    }
   }, [
     bindingQuery.data?.serviceId,
     preserveEmptySelection,
@@ -567,7 +655,7 @@ const ScopeInvokePage: React.FC = () => {
       (endpoint) => endpoint.endpointId === selectedEndpointId,
     ) ?? null;
   const isChatPlayground = Boolean(
-    selectedEndpoint && isChatEndpoint(selectedEndpoint),
+    selectedEndpoint && isChatServiceEndpoint(selectedEndpoint),
   );
   const currentBindingRevision = getStudioScopeBindingCurrentRevision(
     bindingQuery.data,
@@ -584,7 +672,7 @@ const ScopeInvokePage: React.FC = () => {
     '';
 
   useEffect(() => {
-    if (!selectedEndpoint || isChatEndpoint(selectedEndpoint)) {
+    if (!selectedEndpoint || isChatServiceEndpoint(selectedEndpoint)) {
       setPayloadTypeUrl('');
       setPayloadBase64('');
       return;
@@ -617,6 +705,15 @@ const ScopeInvokePage: React.FC = () => {
     label: service.displayName || service.serviceId,
     value: service.serviceId,
   }));
+
+  const ensureNyxIdChatBound = useCallback(async () => {
+    if (!scopeId || nyxIdChatBoundRef.current) {
+      return;
+    }
+
+    await studioApi.bindScopeGAgent(createNyxIdChatBindingInput(scopeId));
+    nyxIdChatBoundRef.current = true;
+  }, [scopeId]);
   const endpointOptions = (selectedService?.endpoints ?? []).map(
     (endpoint) => ({
       label: endpoint.displayName || endpoint.endpointId,
@@ -642,7 +739,7 @@ const ScopeInvokePage: React.FC = () => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
 
-    if (isChatEndpoint(selectedEndpoint)) {
+    if (isChatServiceEndpoint(selectedEndpoint)) {
       const trimmedPrompt = prompt.trim();
       const userMessageId = createClientId();
       const assistantMessageId = createClientId();
@@ -679,6 +776,10 @@ const ScopeInvokePage: React.FC = () => {
       });
 
       try {
+        if (selectedService.kind === 'nyxid-chat') {
+          await ensureNyxIdChatBound();
+        }
+
         const response = await runtimeRunsApi.streamChat(
           scopeId,
           {
@@ -834,27 +935,16 @@ const ScopeInvokePage: React.FC = () => {
           serviceId: selectedService.serviceId,
         },
       );
-      const responseRunId = String(
-        response.request_id ?? response.requestId ?? response.commandId ?? '',
-      ).trim();
-      const responseActorId = String(
-        response.target_actor_id ??
-          response.targetActorId ??
-          response.actorId ??
-          '',
-      ).trim();
-      const responseCommandId = String(
-        response.command_id ?? response.commandId ?? responseRunId,
-      ).trim();
+      const {
+        actorId: responseActorId,
+        commandId: responseCommandId,
+        correlationId: responseCorrelationId,
+        runId: responseRunId,
+      } = extractRuntimeInvokeReceipt(response);
       const events: RuntimeEvent[] = [
         {
           runId: responseRunId || undefined,
-          threadId:
-            String(
-              response.correlation_id ??
-                response.correlationId ??
-                responseRunId,
-            ).trim() || undefined,
+          threadId: responseCorrelationId || undefined,
           timestamp: Date.now(),
           type: AGUIEventType.RUN_STARTED,
         } as RuntimeEvent,
@@ -903,19 +993,19 @@ const ScopeInvokePage: React.FC = () => {
     }
 
     const observedDraftKey =
-      invokeResult.events.length > 0
+      observedEvents.length > 0
         ? saveObservedRunSessionPayload({
             actorId: invokeResult.actorId || undefined,
             commandId: invokeResult.commandId || undefined,
             endpointId:
               invokeResult.endpointId || selectedEndpoint?.endpointId || 'chat',
-            events: invokeResult.events,
+            events: observedEvents,
             payloadBase64:
-              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+              selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint)
                 ? payloadBase64 || undefined
                 : undefined,
             payloadTypeUrl:
-              selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+              selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint)
                 ? payloadTypeUrl || undefined
                 : undefined,
             prompt,
@@ -931,7 +1021,7 @@ const ScopeInvokePage: React.FC = () => {
         draftKey: observedDraftKey || undefined,
         endpointId: selectedEndpoint?.endpointId,
         payloadTypeUrl:
-          selectedEndpoint && !isChatEndpoint(selectedEndpoint)
+          selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint)
             ? payloadTypeUrl || undefined
             : undefined,
         prompt: prompt || undefined,
@@ -984,29 +1074,25 @@ const ScopeInvokePage: React.FC = () => {
   };
 
   const recommendedNextStep = !scopeId
-    ? {
-        action: () => history.push('/scopes/overview'),
-        actionLabel: 'Open projects',
+      ? {
+        action: () => history.push(buildTeamWorkspaceRoute('')),
+        actionLabel: 'Open Team Home',
         description:
-          'Invoke Lab only becomes useful after you anchor the console to a scope.',
-        title: 'Load a project first',
+          'This legacy lab only becomes useful after you anchor the console to a team.',
+        title: 'Load a team first',
       }
     : services.length === 0
       ? {
           action: () =>
             history.push(
-              buildRuntimeGAgentsHref({
+              buildStudioWorkflowWorkspaceRoute({
                 scopeId,
-                actorId:
-                  currentBindingRevision?.primaryActorId || undefined,
-                actorTypeName:
-                  currentBindingRevision?.staticActorTypeName || undefined,
               }),
             ),
-          actionLabel: 'Open GAgents',
+          actionLabel: 'Open Team Builder',
           description:
-            'No published scope services were discovered. Manage the current binding before invoking.',
-          title: 'Publish or switch the default binding',
+            'No published team services were discovered. Switch the live team setup before you keep probing this legacy lab.',
+          title: 'Fix the live team setup',
         }
       : invokeResult.status === 'success'
         ? {
@@ -1038,13 +1124,31 @@ const ScopeInvokePage: React.FC = () => {
       ),
     [invokeResult.responseJson],
   );
+  const latestChatObservedEvents = useMemo(() => {
+    const latestAssistantMessage = [...chatMessages]
+      .reverse()
+      .find(
+        (message) =>
+          message.role === 'assistant' && (message.events?.length ?? 0) > 0,
+      );
+
+    return latestAssistantMessage?.events ?? [];
+  }, [chatMessages]);
+  const observedEvents = useMemo(
+    () =>
+      invokeResult.events.length > 0
+        ? invokeResult.events
+        : latestChatObservedEvents,
+    [invokeResult.events, latestChatObservedEvents],
+  );
+  const observedEventCount = observedEvents.length;
 
   const bindingStatus =
     bindingQuery.data?.deploymentStatus ||
     (bindingQuery.data?.available ? 'ready' : 'missing');
 
   return (
-    <AevatarPageShell pageHeaderRender={false} title="Invoke Lab">
+    <AevatarPageShell pageHeaderRender={false} title="Legacy Invoke Lab">
       <div style={viewportShellStyle}>
         <style>
           {`
@@ -1065,12 +1169,10 @@ const ScopeInvokePage: React.FC = () => {
           <Space size={12}>
             <Button
               icon={<ArrowLeftOutlined />}
-              onClick={() =>
-                history.push(buildScopeHref('/scopes/overview', activeDraft))
-              }
+              onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}
               type="text"
             >
-              Back
+              Team Home
             </Button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div
@@ -1083,9 +1185,9 @@ const ScopeInvokePage: React.FC = () => {
                 }}
               >
                 <Typography.Text strong style={{ fontSize: 16 }}>
-                  Invoke Lab
+                  Legacy Invoke Lab
                 </Typography.Text>
-                <AevatarHelpTooltip content="IDE-style runtime playground with a fixed console and inspector." />
+                <AevatarHelpTooltip content="Legacy deep-link playground for direct endpoint probing. Team home stays the primary surface, while this lab handles raw payloads and older operator flows." />
               </div>
             </div>
           </Space>
@@ -1096,6 +1198,20 @@ const ScopeInvokePage: React.FC = () => {
                 {scopeId}
               </Typography.Text>
             ) : null}
+            <Button onClick={() => history.push(buildTeamWorkspaceRoute(activeDraft.scopeId))}>
+              Open Team Home
+            </Button>
+            <Button
+              onClick={() =>
+                history.push(
+                  buildStudioWorkflowWorkspaceRoute({
+                    scopeId: activeDraft.scopeId.trim(),
+                  }),
+                )
+              }
+            >
+              Open Team Builder
+            </Button>
             <Button onClick={() => setContextSurface('service')}>
               Browse services
             </Button>
@@ -1107,9 +1223,16 @@ const ScopeInvokePage: React.FC = () => {
           </Space>
         </div>
 
-        <div style={workspaceViewportStyle}>
-          <div style={workspaceGridStyle}>
+        <div data-testid="invoke-lab-workspace-viewport" style={workspaceViewportStyle}>
+          <div data-testid="invoke-lab-workspace-grid" style={workspaceGridStyle}>
             <div style={columnStyle}>
+              {scopeId ? (
+                <Alert
+                  description="Team home is now the primary surface. Use this legacy lab when you need direct endpoint probes, raw payload testing, or older deep links."
+                  showIcon
+                  type="warning"
+                />
+              ) : null}
               <ProCard
                 bodyStyle={viewportCardBodyStyle}
                 boxShadow={false}
@@ -1118,19 +1241,19 @@ const ScopeInvokePage: React.FC = () => {
                 title={
                   <PaneTitle
                     icon={<DeploymentUnitOutlined />}
-                    subtitle="Scope selector and reset controls."
-                    title="Invocation Controls"
+                    subtitle="Team selector and reset controls for the legacy lab."
+                    title="Legacy Lab Controls"
                   />
                 }
               >
                 <div style={scrollColumnStyle}>
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Scope ID
+                      Team ID
                     </Typography.Text>
                     <Input
                       allowClear
-                      placeholder="Enter project scopeId"
+                      placeholder="Enter team ID"
                       value={draft.scopeId}
                       onChange={(event) =>
                         setDraft({
@@ -1141,7 +1264,7 @@ const ScopeInvokePage: React.FC = () => {
                     />
                     <Space size={[8, 8]} wrap>
                       <Button type="primary" onClick={handleLoad}>
-                        Load invoke lab
+                        Load legacy lab
                       </Button>
                       <Button onClick={handleReset}>Reset</Button>
                     </Space>
@@ -1149,7 +1272,7 @@ const ScopeInvokePage: React.FC = () => {
 
                   <div style={sectionStyle}>
                     <Typography.Text style={fieldLabelStyle}>
-                      Resolved project
+                      Resolved team
                     </Typography.Text>
                     {resolvedScope?.scopeId ? (
                       <>
@@ -1163,14 +1286,14 @@ const ScopeInvokePage: React.FC = () => {
                         {draft.scopeId.trim() !== resolvedScope.scopeId ? (
                           <div>
                             <Button size="small" onClick={handleUseResolvedScope}>
-                              Use resolved project
+                              Use resolved team
                             </Button>
                           </div>
                         ) : null}
                       </>
                     ) : (
                       <Typography.Text type="secondary">
-                        No project scope was resolved from the current session.
+                        No team context was resolved from the current session.
                       </Typography.Text>
                     )}
                   </div>
@@ -1193,7 +1316,7 @@ const ScopeInvokePage: React.FC = () => {
                 {!bindingQuery.data?.available || !currentBindingRevision ? (
                   <Alert
                     showIcon
-                    title="No published default binding is active for this project yet."
+                    title="No published default binding is active for this team yet."
                     type="info"
                   />
                 ) : (
@@ -1244,7 +1367,7 @@ const ScopeInvokePage: React.FC = () => {
                           )
                         }
                       >
-                        Manage in GAgents
+                        Open Member Runtime
                       </Button>
                     </div>
                   </div>
@@ -1303,7 +1426,7 @@ const ScopeInvokePage: React.FC = () => {
                           {!scopeId ? (
                             <Alert
                               showIcon
-                              title="Select a project to start chatting with a published service."
+                              title="Select a team to start chatting with a published service."
                               type="info"
                             />
                           ) : !selectedService || !selectedEndpoint ? (
@@ -1314,7 +1437,7 @@ const ScopeInvokePage: React.FC = () => {
                             />
                           ) : chatMessages.length === 0 ? (
                             <EmptyChatState
-                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through Invoke Lab while keeping raw runtime observation close by.`}
+                              description={`Chat with ${selectedService.displayName || selectedService.serviceId} through the legacy lab while keeping raw runtime observation close by.`}
                               title={
                                 selectedService.displayName ||
                                 selectedService.serviceId
@@ -1331,7 +1454,7 @@ const ScopeInvokePage: React.FC = () => {
                           <div ref={scrollAnchorRef} />
                         </div>
                       }
-                      events={invokeResult.events}
+                      events={observedEvents}
                       fillHeight
                       hasChatContent={chatMessages.length > 0}
                       onClear={handleClearConsole}
@@ -1420,7 +1543,7 @@ const ScopeInvokePage: React.FC = () => {
                     <InvokeLabConsole
                       activeTab={dockTab}
                       chatPanel={null}
-                      events={invokeResult.events}
+                      events={observedEvents}
                       hasChatContent={false}
                       onClear={handleClearConsole}
                       onTabChange={setDockTab}
@@ -1453,6 +1576,7 @@ const ScopeInvokePage: React.FC = () => {
                   <Select
                     onChange={(value) => {
                       setPreserveEmptySelection(false);
+                      serviceSelectionSourceRef.current = 'manual';
                       setSelectedServiceId(value);
                     }}
                     options={serviceOptions}
@@ -1469,7 +1593,7 @@ const ScopeInvokePage: React.FC = () => {
                     placeholder="Select endpoint"
                     value={selectedEndpointId || undefined}
                   />
-                  {selectedEndpoint && !isChatEndpoint(selectedEndpoint) ? (
+                  {selectedEndpoint && !isChatServiceEndpoint(selectedEndpoint) ? (
                     <>
                       <Typography.Text style={fieldLabelStyle}>
                         Payload Type URL
@@ -1503,13 +1627,13 @@ const ScopeInvokePage: React.FC = () => {
                   {!scopeId ? (
                     <Alert
                       showIcon
-                      title="Select a project to load its published services."
+                      title="Select a team to load its published services."
                       type="info"
                     />
                   ) : !selectedService ? (
                     <Alert
                       showIcon
-                      title="No published project service is selected yet."
+                      title="No published team service is selected yet."
                       type="warning"
                     />
                   ) : (
@@ -1590,7 +1714,7 @@ const ScopeInvokePage: React.FC = () => {
                             {recommendedNextStep.actionLabel}
                           </Button>
                           <Typography.Text type="secondary">
-                            {invokeResult.eventCount} observed events
+                            {observedEventCount} observed events
                           </Typography.Text>
                         </Space>
                       </div>
@@ -1620,17 +1744,19 @@ const ScopeInvokePage: React.FC = () => {
             <ScopeServiceRuntimeWorkbench
               onSelectService={(serviceId) => {
                 setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
                 setSelectedServiceId(serviceId);
               }}
               onUseEndpoint={(serviceId, endpointId) => {
                 setPreserveEmptySelection(false);
+                serviceSelectionSourceRef.current = 'manual';
                 setSelectedServiceId(serviceId);
                 setSelectedEndpointId(endpointId);
               }}
               scopeId={scopeId}
               selectedEndpointId={selectedEndpointId}
               selectedServiceId={selectedServiceId}
-              services={services}
+              services={publishedServices}
             />
           </AevatarContextDrawer>
         ) : null}

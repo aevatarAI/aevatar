@@ -53,6 +53,31 @@ export AEVATAR_Orleans__SiloPort=11111
 export AEVATAR_Orleans__GatewayPort=30000
 ```
 
+## 本地持久化开发模式（Orleans + Garnet）
+
+如果只是想避免本地 scope workflow / actor state 因后端重启而完全丢失，而当前机器又没有 Kafka / Elasticsearch / Neo4j，可以先用仓库内置的 `PersistentLocal` 环境：
+
+```bash
+ASPNETCORE_ENVIRONMENT=PersistentLocal dotnet run --project src/Aevatar.Mainnet.Host.Api
+```
+
+该模式默认启用：
+
+- `ActorRuntime:Provider=Orleans`
+- `ActorRuntime:OrleansStreamBackend=InMemory`
+- `ActorRuntime:OrleansPersistenceBackend=Garnet`
+- `Projection:Document:Providers:InMemory:Enabled=true`
+- `Projection:Graph:Providers:InMemory:Enabled=true`
+
+前提：
+
+- 本机 `localhost:6379` 可用（Redis / Garnet 兼容连接）
+
+说明：
+
+- 该模式的目标是保住本地 actor 持久态与 workflow 存储回补能力，适合单机开发验证。
+- 它不是完整的 distributed / production profile；若需要 durable document / graph projection，仍应使用 `Distributed` 环境并启动 Kafka、Elasticsearch、Neo4j。
+
 ## 多机集群测试（Docker）
 
 仓库提供的集群启动脚本会拉起 3 节点 Mainnet + Kafka + Garnet + Elasticsearch + Neo4j。
@@ -92,7 +117,7 @@ bash tools/ci/orleans_3node_real_env_smoke.sh
 
 当前推荐使用的 scope-first 入口：
 
-- `POST /api/scopes/{scopeId}/draft-run`
+- `POST /api/scopes/{scopeId}/workflow/draft-run`
 - `PUT /api/scopes/{scopeId}/binding`
 - `GET /api/scopes/{scopeId}/binding`
 - `GET /api/scopes/{scopeId}/revisions`

@@ -127,6 +127,8 @@ public sealed class StreamingToolExecutor : IDisposable
         while (true)
         {
             TrackedTool? waitFor = null;
+            var hasUnyieldedCompletedResult = false;
+            var hasRemainingTool = false;
 
             // Yield any completed results in order
             foreach (var result in GetCompletedResults())
@@ -140,9 +142,14 @@ public sealed class StreamingToolExecutor : IDisposable
                     if (tracked.Status == ToolStatus.Yielded)
                         continue;
 
+                    hasRemainingTool = true;
+
                     if (tracked.Status == ToolStatus.Completed)
                     {
-                        // Will be picked up by next GetCompletedResults() call
+                        // A tool completed after GetCompletedResults() drained the previous batch.
+                        // Loop again so we can surface this contiguous completed tail instead of
+                        // mistakenly treating the executor as fully drained.
+                        hasUnyieldedCompletedResult = true;
                         break;
                     }
 
@@ -151,9 +158,12 @@ public sealed class StreamingToolExecutor : IDisposable
                     break;
                 }
 
-                if (waitFor == null)
+                if (!hasRemainingTool)
                     yield break; // All done
             }
+
+            if (hasUnyieldedCompletedResult)
+                continue;
 
             // Wait for the next tool to complete
             var discarded = false;

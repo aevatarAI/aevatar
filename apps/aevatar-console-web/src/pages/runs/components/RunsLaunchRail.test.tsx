@@ -62,11 +62,7 @@ describe("RunsLaunchRail", () => {
       screen.getByLabelText("Chat route (optional)")
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Endpoint")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Selecting a route targets the published scope service with the same id. Leave it empty to use the scope default binding; binding override wins when provided."
-      )
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Binding override (optional)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Presets (1)" }));
 
     expect(screen.getByText("Direct chat")).toBeInTheDocument();

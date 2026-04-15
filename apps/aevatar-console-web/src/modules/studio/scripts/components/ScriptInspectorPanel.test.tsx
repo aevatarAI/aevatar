@@ -70,19 +70,17 @@ describe('ScriptInspectorPanel', () => {
       />,
     );
 
-    expect(screen.getAllByText('script-1').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('script-1')).toBeTruthy();
     expect(screen.getByText('rev-2')).toBeTruthy();
-    expect(screen.getByText('Resolved scope · scope-1')).toBeTruthy();
+    expect(screen.getByText('当前团队 · scope-1')).toBeTruthy();
     expect(screen.getByText('type.googleapis.com/example.Command')).toBeTruthy();
-    expect(screen.getByText('Embedded')).toBeTruthy();
-    expect(
-      screen.getByText('Validate, Save, Promote, Draft Run, Ask AI'),
-    ).toBeTruthy();
-    expect(screen.getByText('None')).toBeTruthy();
+    expect(screen.getByText('嵌入式 Host')).toBeTruthy();
+    expect(screen.getByText('校验, 保存, 发布, 测试运行, AI 辅助')).toBeTruthy();
+    expect(screen.getByText('无')).toBeTruthy();
     expect(screen.getByText('definition-1')).toBeTruthy();
     expect(screen.getByText('runtime-1')).toBeTruthy();
     expect(screen.getByText('catalog-1')).toBeTruthy();
-    expect(screen.getByText('DraftBehavior')).toBeTruthy();
+    expect(screen.getAllByText('DraftBehavior').length).toBeGreaterThanOrEqual(2);
   });
 
   it('explains proxy host capability limits', () => {
@@ -97,16 +95,16 @@ describe('ScriptInspectorPanel', () => {
       />,
     );
 
-    expect(screen.getByText('Proxy')).toBeTruthy();
-    expect(screen.getByText('Validate, Save, Promote')).toBeTruthy();
+    expect(screen.getByText('代理 Host')).toBeTruthy();
+    expect(screen.getByText('校验, 保存, 发布')).toBeTruthy();
     expect(
       screen.getByText(
-        'Draft Run (requires embedded host), Ask AI (requires embedded host)',
+        '测试运行（需要嵌入式 Host）, AI 辅助（需要嵌入式 Host）',
       ),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        'Proxy host. Validate is available here, and Save or Promote still work after Studio resolves the current scope. Draft Run and Ask AI require an embedded host.',
+        '当前 Studio 会话运行在代理 Host 中。这里可以继续校验、保存和发布，但测试运行与 AI 辅助需要切换到嵌入式 Host。',
       ),
     ).toBeTruthy();
   });
@@ -120,6 +118,6 @@ describe('ScriptInspectorPanel', () => {
       />,
     );
 
-    expect(screen.getByText('No draft selected.')).toBeTruthy();
+    expect(screen.getByText('还没有选中脚本。')).toBeTruthy();
   });
 });

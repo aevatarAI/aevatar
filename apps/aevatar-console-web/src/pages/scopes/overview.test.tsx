@@ -1,229 +1,252 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
-import React from 'react';
-import { renderWithQueryClient } from '../../../tests/reactQueryTestUtils';
-import ScopeOverviewPage from './overview';
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import React from "react";
+import { scopesApi } from "@/shared/api/scopesApi";
+import { renderWithQueryClient } from "../../../tests/reactQueryTestUtils";
+import ScopeOverviewPage from "./overview";
 
-jest.mock('@/shared/api/scopesApi', () => ({
+jest.mock("@/shared/api/scopesApi", () => ({
   scopesApi: {
     listWorkflows: jest.fn(async () => [
       {
-        scopeId: 'scope-a',
-        workflowId: 'workflow-alpha',
-        displayName: 'Workflow Alpha',
-        serviceKey: 'scope-a/default',
-        workflowName: 'direct_chat',
-        actorId: 'actor://workflow-alpha',
-        activeRevisionId: 'rev-2',
-        deploymentStatus: 'Published',
-        deploymentId: 'deploy-1',
-        updatedAt: '2026-03-25T10:00:00Z',
+        scopeId: "scope-a",
+        workflowId: "workflow-alpha",
+        displayName: "客服团队",
+        serviceKey: "scope-a:alpha",
+        workflowName: "customer-support-triage",
+        actorId: "actor://workflow-alpha",
+        activeRevisionId: "rev-2",
+        deploymentStatus: "Active",
+        deploymentId: "deploy-1",
+        updatedAt: "2026-04-13T10:00:00Z",
       },
-    ]),
-    listScripts: jest.fn(async () => [
       {
-        scopeId: 'scope-a',
-        scriptId: 'script-alpha',
-        catalogActorId: 'catalog://script-alpha',
-        definitionActorId: 'definition://script-alpha',
-        activeRevision: 'script-rev-1',
-        activeSourceHash: 'hash-1',
-        updatedAt: '2026-03-25T10:05:00Z',
+        scopeId: "scope-a",
+        workflowId: "workflow-draft",
+        displayName: "草稿团队",
+        serviceKey: "",
+        workflowName: "draft-team",
+        actorId: "actor://workflow-draft",
+        activeRevisionId: "rev-draft",
+        deploymentStatus: "Draft",
+        deploymentId: "",
+        updatedAt: "2026-04-13T09:00:00Z",
       },
     ]),
-    getWorkflowDetail: jest.fn(async () => ({
-      available: true,
-      scopeId: 'scope-a',
-      workflow: {
-        scopeId: 'scope-a',
-        workflowId: 'workflow-alpha',
-        displayName: 'Workflow Alpha',
-        serviceKey: 'scope-a/default',
-        workflowName: 'direct_chat',
-        actorId: 'actor://workflow-alpha',
-        activeRevisionId: 'rev-2',
-        deploymentStatus: 'Published',
-        deploymentId: 'deploy-1',
-        updatedAt: '2026-03-25T10:00:00Z',
+  },
+}));
+
+jest.mock("@/shared/api/servicesApi", () => ({
+  servicesApi: {
+    listServices: jest.fn(async () => [
+      {
+        serviceKey: "scope-a:alpha",
+        tenantId: "scope-a",
+        appId: "default",
+        namespace: "default",
+        serviceId: "service-alpha",
+        displayName: "客服运行时",
+        defaultServingRevisionId: "rev-2",
+        activeServingRevisionId: "rev-2",
+        deploymentId: "deploy-1",
+        primaryActorId: "actor://workflow-alpha",
+        deploymentStatus: "Active",
+        endpoints: [],
+        policyIds: [],
+        updatedAt: "2026-04-13T10:01:00Z",
       },
-      source: {
-        workflowYaml: 'name: workflow-alpha',
-        definitionActorId: 'definition://workflow-alpha',
-        inlineWorkflowYamls: null,
-      },
-    })),
-    getScriptDetail: jest.fn(async () => ({
-      available: true,
-      scopeId: 'scope-a',
-      script: {
-        scopeId: 'scope-a',
-        scriptId: 'script-alpha',
-        catalogActorId: 'catalog://script-alpha',
-        definitionActorId: 'definition://script-alpha',
-        activeRevision: 'script-rev-1',
-        activeSourceHash: 'hash-1',
-        updatedAt: '2026-03-25T10:05:00Z',
-      },
-      source: {
-        sourceText: 'print(\"hello\")',
-        definitionActorId: 'definition://script-alpha',
-        revision: 'script-rev-1',
-        sourceHash: 'hash-1',
-      },
+    ]),
+  },
+}));
+
+jest.mock("@/shared/api/scopeRuntimeApi", () => ({
+  scopeRuntimeApi: {
+    listServiceRuns: jest.fn(async () => ({
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+      serviceKey: "scope-a:alpha",
+      displayName: "客服运行时",
+      runs: [
+        {
+          scopeId: "scope-a",
+          serviceId: "service-alpha",
+          runId: "run-latest",
+          actorId: "actor://workflow-alpha",
+          definitionActorId: "definition://workflow-alpha",
+          revisionId: "rev-2",
+          deploymentId: "deploy-1",
+          workflowName: "customer-support-triage",
+          completionStatus: "waiting_approval",
+          stateVersion: 2,
+          lastEventId: "evt-2",
+          lastUpdatedAt: "2026-04-13T10:05:00Z",
+          boundAt: "2026-04-13T10:00:00Z",
+          bindingUpdatedAt: "2026-04-13T10:00:00Z",
+          lastSuccess: false,
+          totalSteps: 4,
+          completedSteps: 2,
+          roleReplyCount: 1,
+          lastOutput: "",
+          lastError: "Waiting on approval",
+        },
+      ],
     })),
   },
 }));
 
-jest.mock('@/shared/studio/api', () => ({
+jest.mock("@/shared/studio/api", () => ({
   studioApi: {
     getAuthSession: jest.fn(async () => ({
       enabled: false,
-      scopeId: 'scope-a',
-      scopeSource: 'nyxid',
+      scopeId: "scope-a",
+      scopeSource: "nyxid",
     })),
     getScopeBinding: jest.fn(async () => ({
       available: true,
-      scopeId: 'scope-a',
-      serviceId: 'default',
-      displayName: 'Workspace Demo',
-      serviceKey: 'scope-a:default',
-      defaultServingRevisionId: 'rev-2',
-      activeServingRevisionId: 'rev-2',
-      deploymentId: 'deploy-2',
-      deploymentStatus: 'Active',
-      primaryActorId: 'actor://scope-a/default',
-      updatedAt: '2026-03-26T08:00:00Z',
+      scopeId: "scope-a",
+      serviceId: "service-alpha",
+      displayName: "客服团队",
+      serviceKey: "scope-a:alpha",
+      defaultServingRevisionId: "rev-2",
+      activeServingRevisionId: "rev-2",
+      deploymentId: "deploy-1",
+      deploymentStatus: "Active",
+      primaryActorId: "actor://workflow-alpha",
+      updatedAt: "2026-04-13T10:00:00Z",
       revisions: [
         {
-          revisionId: 'rev-2',
-          implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'hash-2',
-          failureReason: '',
+          revisionId: "rev-2",
+          implementationKind: "workflow",
+          status: "Published",
+          artifactHash: "hash-2",
+          failureReason: "",
           isDefaultServing: true,
           isActiveServing: true,
           isServingTarget: true,
           allocationWeight: 100,
-          servingState: 'Active',
-          deploymentId: 'deploy-2',
-          primaryActorId: 'actor://scope-a/default',
-          createdAt: '2026-03-26T07:00:00Z',
-          preparedAt: '2026-03-26T07:01:00Z',
-          publishedAt: '2026-03-26T07:02:00Z',
+          servingState: "Active",
+          deploymentId: "deploy-1",
+          primaryActorId: "actor://workflow-alpha",
+          createdAt: "2026-04-13T09:00:00Z",
+          preparedAt: "2026-04-13T09:01:00Z",
+          publishedAt: "2026-04-13T09:02:00Z",
           retiredAt: null,
-          workflowName: 'Workspace Demo',
-          workflowDefinitionActorId: 'definition://workflow/workspace-demo',
+          workflowName: "customer-support-triage",
+          workflowDefinitionActorId: "definition://workflow-alpha",
           inlineWorkflowCount: 1,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
-        },
-        {
-          revisionId: 'rev-1',
-          implementationKind: 'workflow',
-          status: 'Published',
-          artifactHash: 'hash-1',
-          failureReason: '',
-          isDefaultServing: false,
-          isActiveServing: false,
-          isServingTarget: false,
-          allocationWeight: 0,
-          servingState: 'Inactive',
-          deploymentId: '',
-          primaryActorId: '',
-          createdAt: '2026-03-25T07:00:00Z',
-          preparedAt: '2026-03-25T07:01:00Z',
-          publishedAt: '2026-03-25T07:02:00Z',
-          retiredAt: null,
-          workflowName: 'Workspace Demo v1',
-          workflowDefinitionActorId: 'definition://workflow/workspace-demo-v1',
-          inlineWorkflowCount: 1,
-          scriptId: '',
-          scriptRevision: '',
-          scriptDefinitionActorId: '',
-          scriptSourceHash: '',
-          staticActorTypeName: '',
+          scriptId: "",
+          scriptRevision: "",
+          scriptDefinitionActorId: "",
+          scriptSourceHash: "",
+          staticActorTypeName: "",
         },
       ],
-    })),
-    activateScopeBindingRevision: jest.fn(async () => ({
-      scopeId: 'scope-a',
-      serviceId: 'default',
-      displayName: 'Workspace Demo',
-      revisionId: 'rev-1',
-    })),
-    retireScopeBindingRevision: jest.fn(async () => ({
-      scopeId: 'scope-a',
-      serviceId: 'default',
-      revisionId: 'rev-1',
-      status: 'Retiring',
     })),
   },
 }));
 
-import { studioApi } from '@/shared/studio/api';
+import { scopeRuntimeApi } from "@/shared/api/scopeRuntimeApi";
 
-describe('ScopeOverviewPage', () => {
+describe("ScopeOverviewPage", () => {
   beforeEach(() => {
-    window.history.replaceState({}, '', '/scopes/overview?scopeId=scope-a');
+    window.history.replaceState({}, "", "/teams?scopeId=scope-a");
     jest.clearAllMocks();
   });
 
-  it('renders the scope status board and asset summaries', async () => {
+  it("renders the team homepage in the new summary-plus-cards layout", async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Scope Status Board')).toBeTruthy();
+    expect(await screen.findByText("Aevatar / Teams")).toBeTruthy();
+    expect(await screen.findByText("我的 AI 团队")).toBeTruthy();
+    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(screen.getByText("活跃团队")).toBeTruthy();
+    expect(screen.getByText("运行中成员")).toBeTruthy();
+    expect(screen.getByText("健康团队率")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "组建新团队" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "切换到卡片视图" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "切换到列表视图" })).toBeTruthy();
+    expect(screen.getByLabelText("团队卡片视图")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看团队" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "更多" }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "显示草稿团队 (1)" })).toBeTruthy();
+    expect(screen.queryByText("草稿团队")).toBeNull();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "更多" })[0]);
+
+    expect(await screen.findByText("查看运行")).toBeTruthy();
+    expect(screen.getByText("进入 Builder")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "显示草稿团队 (1)" }));
+
+    expect(await screen.findByText("草稿团队")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "更多" })[0]);
+    expect(screen.getAllByText("进入 Builder").length).toBeGreaterThan(0);
     expect(
       screen.queryByText(
-        'Project Overview is now a true scope-level status board: binding posture, asset surface, and next-step actions all live on one stage.',
+        "先看到“我有哪些团队、这些团队在做什么、哪里需要我关注”，而不是先看到工程术语和底层模块。",
       ),
     ).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Show help' }).length).toBeGreaterThan(0);
-    expect(await screen.findByText('Current Binding')).toBeTruthy();
-    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
-    expect(screen.getByText('Revision Rollout')).toBeTruthy();
-    expect(await screen.findByText('Workflow Alpha')).toBeTruthy();
-    expect(await screen.findByText('script-alpha')).toBeTruthy();
+    expect(screen.queryByText("产品意图：")).toBeNull();
+  });
+
+  it("lets the user switch from cards to the compact roster manually", async () => {
+    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+
+    await screen.findByText("客服团队");
+    fireEvent.click(screen.getByRole("button", { name: "切换到列表视图" }));
+
+    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
+    expect(screen.queryByLabelText("团队卡片视图")).toBeNull();
+  });
+
+  it("keeps the homepage visible when runtime sampling partially fails", async () => {
+    (scopeRuntimeApi.listServiceRuns as jest.Mock).mockRejectedValueOnce(
+      new Error("No stub for /api/scopes/scope-a/services/service-alpha/runs"),
+    );
+
+    renderWithQueryClient(React.createElement(ScopeOverviewPage));
+
+    expect(await screen.findByText("客服团队")).toBeTruthy();
+    expect(screen.getByText("部分团队信号暂时不可见")).toBeTruthy();
     expect(
-      screen.getByRole('button', { name: 'Open workflow workspace' })
-    ).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open assets' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Open invoke lab' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Invoke Services' })).toBeNull();
+      screen.queryByText("No stub for /api/scopes/scope-a/services/service-alpha/runs"),
+    ).toBeNull();
   });
 
-  it('activates a historical revision from the overview page', async () => {
+  it("opens the workflow-focused team detail handoff from the primary card action", async () => {
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
-    const activateButtons = await screen.findAllByRole('button', {
-      name: 'Activate',
-    });
-    fireEvent.click(activateButtons[1]);
+    fireEvent.click(await screen.findByRole("button", { name: "查看团队" }));
 
     await waitFor(() => {
-      expect(studioApi.activateScopeBindingRevision).toHaveBeenCalledWith({
-        scopeId: 'scope-a',
-        revisionId: 'rev-1',
-      });
+      expect(window.location.pathname).toBe("/teams/scope-a");
     });
+
+    const params = new URLSearchParams(window.location.search);
+    expect(params.get("workflowId")).toBe("workflow-alpha");
+    expect(params.get("serviceId")).toBe("service-alpha");
+    expect(params.get("runId")).toBe("run-latest");
   });
 
-  it('retires a historical revision from the overview page', async () => {
+  it("switches to the compact roster when many teams are visible", async () => {
+    (scopesApi.listWorkflows as jest.Mock).mockResolvedValueOnce(
+      Array.from({ length: 7 }, (_, index) => ({
+        scopeId: "scope-a",
+        workflowId: `workflow-${index + 1}`,
+        displayName: `团队 ${index + 1}`,
+        serviceKey: "scope-a:alpha",
+        workflowName: `team-${index + 1}`,
+        actorId: `actor://workflow-${index + 1}`,
+        activeRevisionId: "rev-2",
+        deploymentStatus: "Active",
+        deploymentId: "deploy-1",
+        updatedAt: `2026-04-13T10:0${Math.min(index, 5)}:00Z`,
+      })),
+    );
+
     renderWithQueryClient(React.createElement(ScopeOverviewPage));
 
-    expect(await screen.findByText('Revision Rollout')).toBeTruthy();
-    const retireButtons = await screen.findAllByRole('button', {
-      name: 'Retire',
-    });
-    fireEvent.click(retireButtons[1]);
-
-    await waitFor(() => {
-      expect(studioApi.retireScopeBindingRevision).toHaveBeenCalledWith({
-        scopeId: 'scope-a',
-        revisionId: 'rev-1',
-      });
-    });
+    expect(await screen.findByLabelText("团队紧凑视图")).toBeTruthy();
+    expect(screen.getByText("团队 1")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "查看团队" }).length).toBe(7);
   });
 });

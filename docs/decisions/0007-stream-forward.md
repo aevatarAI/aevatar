@@ -20,11 +20,7 @@ owner: eanzhao
 不包含内容：
 
 1. 业务域事件建模（由 Domain/Application 文档负责）。
-<<<<<<<< HEAD:docs/history/2026-03/STREAM_FORWARD_ARCHITECTURE.md
-2. CQRS 读模型投影细节（由 `docs/architecture/CQRS_ARCHITECTURE.md` 负责）。
-========
 2. CQRS 读模型投影细节（由 `docs/canon/cqrs-projection.md` 负责）。
->>>>>>>> c20fc87ec173e49be645ea287f4bb54ecd975935:docs/decisions/0007-stream-forward.md
 
 ## 2. 设计原则
 

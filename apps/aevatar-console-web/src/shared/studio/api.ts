@@ -17,6 +17,8 @@ import type {
   StudioRoleCatalogImportResult,
   StudioRoleCatalog,
   StudioRoleDraftResponse,
+  StudioOrnnHealthResult,
+  StudioOrnnSkillSearchResult,
   StudioScopeScriptBindingActivationResult,
   StudioScopeScriptBindingInput,
   StudioScopeBindingResult,
@@ -29,6 +31,8 @@ import type {
   StudioSerializeYamlResult,
   StudioSettings,
   StudioStartExecutionInput,
+  StudioUserConfig,
+  StudioUserConfigModelsResponse,
   StudioWorkflowDocument,
   StudioWorkflowFile,
   StudioWorkflowSummary,
@@ -39,6 +43,7 @@ import type { WorkflowCatalogItemDetail } from "@/shared/api/models";
 import {
   expectArray,
   expectRecord,
+  expectString,
   normalizeEnumValue,
   readBoolean,
   readNullableString,
@@ -48,12 +53,12 @@ import {
 import { readResponseError } from "@/shared/api/http/error";
 import { decodeWorkflowCatalogItemDetailResponse } from "@/shared/api/runtimeDecoders";
 import { authFetch } from "@/shared/auth/fetch";
+import { getOrnnRuntimeConfig } from "./ornnConfig";
 
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
 };
-
 async function studioHostFetch(
   input: string,
   init?: RequestInit
@@ -61,6 +66,21 @@ async function studioHostFetch(
   const headers = new Headers(init?.headers);
   return authFetch(input, {
     credentials: "same-origin",
+    ...init,
+    headers,
+  });
+}
+
+async function externalFetch(
+  input: string,
+  init?: RequestInit
+): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+
+  return authFetch(input, {
     ...init,
     headers,
   });
@@ -80,6 +100,154 @@ function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
     Object.entries(value).filter(([, entry]) => entry !== undefined)
   ) as T;
+}
+
+function normalizeOrnnBaseUrl(baseUrl?: string | null): string {
+  return trimOptional(baseUrl)?.replace(/\/+$/, "") ?? "";
+}
+
+function readOptionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && !Number.isNaN(value) ? value : undefined;
+}
+
+function readOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function decodeOrnnSkillSearchResult(
+  value: unknown,
+  baseUrl: string,
+  fallbackPage: number,
+  fallbackPageSize: number
+): StudioOrnnSkillSearchResult {
+  const record = expectRecord(value, "Ornn search response");
+  const payload =
+    record.data === undefined
+      ? record
+      : expectRecord(record.data, "Ornn search response.data");
+
+  const items = Array.isArray(payload.items)
+    ? payload.items.map((entry, index) => {
+        const skill = expectRecord(entry, `Ornn search response.items[${index}]`);
+        return {
+          guid: readNullableString(
+            skill,
+            "guid",
+            `Ornn search response.items[${index}].guid`
+          ) ?? "",
+          name:
+            readNullableString(
+              skill,
+              "name",
+              `Ornn search response.items[${index}].name`
+            ) ?? "Unnamed skill",
+          description:
+            readNullableString(
+              skill,
+              "description",
+              `Ornn search response.items[${index}].description`
+            ) ?? "",
+          isPrivate:
+            readOptionalBoolean(skill.isPrivate) ??
+            readOptionalBoolean(skill.private) ??
+            false,
+        };
+      })
+    : [];
+
+  return {
+    baseUrl,
+    total: readOptionalNumber(payload.total) ?? items.length,
+    totalPages: readOptionalNumber(payload.totalPages) ?? 1,
+    page: readOptionalNumber(payload.page) ?? fallbackPage,
+    pageSize: readOptionalNumber(payload.pageSize) ?? fallbackPageSize,
+    items,
+    message:
+      readNullableString(payload, "message", "Ornn search response.message") ??
+      undefined,
+  };
+}
+
+function decodeStudioUserConfigModelsResponse(
+  value: unknown,
+  label = "StudioUserConfigModelsResponse"
+): StudioUserConfigModelsResponse {
+  const record = expectRecord(value, label);
+  const providersSource = record.providers ?? [];
+  const supportedModelsSource =
+    record.supportedModels ?? record.supported_models ?? [];
+  return {
+    providers: expectArray(
+      providersSource,
+      `${label}.providers`,
+      (entry, providerLabel) => {
+        const resolvedProviderLabel =
+          providerLabel ?? `${label}.providers[]`;
+        const provider = expectRecord(entry, resolvedProviderLabel);
+        return {
+          providerSlug: readNullableString(
+            provider,
+            ["providerSlug", "provider_slug"],
+            `${resolvedProviderLabel}.providerSlug`
+          ) ?? "",
+          providerName: readNullableString(
+            provider,
+            ["providerName", "provider_name"],
+            `${resolvedProviderLabel}.providerName`
+          ) ?? "",
+          status:
+            readNullableString(
+              provider,
+              "status",
+              `${resolvedProviderLabel}.status`
+            )?.trim().toLowerCase() ?? "",
+          proxyUrl:
+            readNullableString(
+              provider,
+              ["proxyUrl", "proxy_url"],
+              `${resolvedProviderLabel}.proxyUrl`
+            ) ?? "",
+          source:
+            readNullableString(
+              provider,
+              "source",
+              `${resolvedProviderLabel}.source`
+            ) ?? undefined,
+        };
+      }
+    ),
+    gatewayUrl:
+      readNullableString(
+        record,
+        ["gatewayUrl", "gateway_url"],
+        `${label}.gatewayUrl`
+      ) ?? "",
+    supportedModels: expectArray(
+      supportedModelsSource,
+      `${label}.supportedModels`,
+      (entry, entryLabel) =>
+        expectString(entry, entryLabel ?? `${label}.supportedModels[]`)
+    ),
+    modelsByProvider: Object.fromEntries(
+      Object.entries(
+        expectRecord(
+          record.modelsByProvider ?? record.models_by_provider ?? {},
+          `${label}.modelsByProvider`
+        )
+      ).map(([providerSlug, models]) => [
+        providerSlug,
+        expectArray(
+          models,
+          `${label}.modelsByProvider.${providerSlug}`,
+          (entry, entryLabel) =>
+            expectString(
+              entry,
+              entryLabel ?? `${label}.modelsByProvider.${providerSlug}[]`
+            )
+        ),
+      ])
+    ),
+  };
 }
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -1069,6 +1237,123 @@ export const studioApi = {
         runtimeBaseUrl: trimOptional(input.runtimeBaseUrl),
       }),
     });
+  },
+
+  getUserConfig(): Promise<StudioUserConfig> {
+    return requestJson("/api/user-config");
+  },
+
+  saveUserConfig(input: StudioUserConfig): Promise<StudioUserConfig> {
+    return requestJson("/api/user-config", {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        defaultModel: input.defaultModel.trim(),
+        preferredLlmRoute: trimOptional(input.preferredLlmRoute),
+        runtimeBaseUrl: trimOptional(input.runtimeBaseUrl) ?? "",
+      }),
+    });
+  },
+
+  getUserConfigModels(): Promise<StudioUserConfigModelsResponse> {
+    return requestDecodedJson(
+      "/api/user-config/models",
+      decodeStudioUserConfigModelsResponse
+    );
+  },
+
+  async getSkillsHealth(): Promise<StudioOrnnHealthResult> {
+    const ornnConfig = getOrnnRuntimeConfig();
+    const baseUrl = normalizeOrnnBaseUrl(ornnConfig.baseUrl);
+    if (ornnConfig.configurationError || !baseUrl) {
+      return {
+        baseUrl,
+        reachable: false,
+        message:
+          ornnConfig.configurationError ?? "Ornn base URL is not configured.",
+      };
+    }
+
+    const url = `${baseUrl}/api/web/skill-search?query=&scope=public&page=1&pageSize=1`;
+
+    try {
+      const response = await externalFetch(url);
+      if (!response.ok) {
+        return {
+          baseUrl,
+          reachable: false,
+          message: `Cannot reach Ornn (${response.status}).`,
+        };
+      }
+
+      return {
+        baseUrl,
+        reachable: true,
+        message: "Connected to Ornn.",
+      };
+    } catch (error) {
+      return {
+        baseUrl,
+        reachable: false,
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : "Cannot reach Ornn.",
+      };
+    }
+  },
+
+  async searchSkills(input?: {
+    query?: string | null;
+    scope?: string | null;
+    page?: number | null;
+    pageSize?: number | null;
+  }): Promise<StudioOrnnSkillSearchResult> {
+    const ornnConfig = getOrnnRuntimeConfig();
+    const baseUrl = normalizeOrnnBaseUrl(ornnConfig.baseUrl);
+    const query = trimOptional(input?.query) ?? "";
+    const scope = trimOptional(input?.scope) ?? "mixed";
+    const page = input?.page && input.page > 0 ? input.page : 1;
+    const pageSize = input?.pageSize && input.pageSize > 0 ? input.pageSize : 50;
+    if (ornnConfig.configurationError || !baseUrl) {
+      return {
+        baseUrl,
+        total: 0,
+        totalPages: 0,
+        page,
+        pageSize,
+        items: [],
+        message:
+          ornnConfig.configurationError ?? "Ornn base URL is not configured.",
+      };
+    }
+
+    const params = new URLSearchParams({
+      query,
+      mode: "keyword",
+      scope,
+      page: String(page),
+      pageSize: String(pageSize),
+    });
+
+    const response = await externalFetch(
+      `${baseUrl}/api/web/skill-search?${params.toString()}`
+    );
+    if (!response.ok) {
+      throw new Error(await readResponseError(response));
+    }
+
+    const contentType = response.headers?.get?.("content-type") ?? null;
+    if (contentType !== null && !isJsonContentType(contentType)) {
+      throw new Error("Ornn API returned an unexpected response format.");
+    }
+
+    return decodeOrnnSkillSearchResult(
+      await response.json(),
+      baseUrl,
+      page,
+      pageSize
+    );
   },
 
   addWorkflowDirectory(input: {
